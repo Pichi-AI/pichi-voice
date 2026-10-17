@@ -24,13 +24,15 @@ private final class SyntheticPrivacyReplayDiagnostics: TranscriptTextRedacting {
         let length: Int
         let replacement: String
     }
-    private let wrapped: any TranscriptTextRedacting
+    private nonisolated let wrapped: any TranscriptTextRedacting
     private let startedAt = ProcessInfo.processInfo.systemUptime
     private var observations: [Observation] = []
     private var retainedUTF16 = 0
     private var omittedObservations = 0
 
     init(wrapping wrapped: any TranscriptTextRedacting) { self.wrapped = wrapped }
+    nonisolated var checkpointIdentity: String? { wrapped.checkpointIdentity }
+    func prepareForMeeting() async throws { try await wrapped.prepareForMeeting() }
 
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         let result = try await wrapped.redactWithSpans(text)
@@ -57,6 +59,15 @@ private final class SyntheticPrivacyReplayDiagnostics: TranscriptTextRedacting {
 }
 
 private struct SyntheticDiagnosticEchoRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        .init(text: text, spans: [], provisionalSafeUTF16: text.utf16.count)
+    }
+}
+
+private actor CombinedPrivacyPreparationSpy: TranscriptTextRedacting {
+    nonisolated let checkpointIdentity: String? = "synthetic-preparation-spy-v1"
+    private(set) var preparations = 0
+    func prepareForMeeting() async throws { preparations += 1 }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         .init(text: text, spans: [], provisionalSafeUTF16: text.utf16.count)
     }
@@ -157,7 +168,7 @@ private struct CombinedMeetingReference: Decodable {
 /// successful removal. Inference and every returned span still come from production.
 @MainActor
 private final class CombinedPrivacyObservations: TranscriptTextRedacting {
-    let wrapped: any TranscriptTextRedacting
+    nonisolated let wrapped: any TranscriptTextRedacting
     let aliases: [[String]]
     private(set) var observed: Set<Int> = []
     private(set) var fullyMasked: Set<Int> = []
@@ -165,6 +176,8 @@ private final class CombinedPrivacyObservations: TranscriptTextRedacting {
     init(wrapping wrapped: any TranscriptTextRedacting, aliases: [[String]]) {
         self.wrapped = wrapped; self.aliases = aliases
     }
+    nonisolated var checkpointIdentity: String? { wrapped.checkpointIdentity }
+    func prepareForMeeting() async throws { try await wrapped.prepareForMeeting() }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.privacyRedact)
         var succeeded = false
@@ -213,19 +226,31 @@ private final class CombinedPrivacyObservations: TranscriptTextRedacting {
 private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
     private var factory: IOSMeetingCaptureEngine.MemoryConsumerFactory?
     private var consumer: (any MeetingMemoryAudioConsuming)?
+    private var retainedWriter: MeetingAudioChunkWriter?
     private var active: (MeetingSessionID, MeetingAudioTrack)?
     func setFactory(_ factory: IOSMeetingCaptureEngine.MemoryConsumerFactory?) { self.factory = factory }
     func preflightPermissions() async throws { }
     func start(session: MeetingSession, configuration: MeetingCaptureConfiguration, sessionDirectory: URL,
                eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
                liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?) async throws -> MeetingCaptureStartResult {
-        guard active == nil, let factory, configuration.audioStorageMode == .memoryOnly else {
-            throw MeetingCaptureError.captureStartFailed("Synthetic input requires strict PCM")
+        guard active == nil, let factory,
+              configuration.audioStorageMode == .memoryOnly
+                || configuration.effectiveSpeakerProcessingMode == .streaming else {
+            throw MeetingCaptureError.captureStartFailed("Synthetic input requires strict or streaming PCM")
         }
         let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
             sourceDisplayName: "Synthetic microphone", format: .init(codec: "lpcm-f32", sampleRate: 16_000,
             channelCount: 1, bitRate: nil), timebase: session.timebase, health: .waiting, chunks: [])
-        consumer = try await factory(session, configuration, track, eventHandler)
+        if configuration.audioStorageMode != .memoryOnly {
+            retainedWriter = try MeetingAudioChunkWriter(track: track, sessionDirectory: sessionDirectory,
+                chunkDuration: configuration.chunkDuration, eventHandler: eventHandler)
+        }
+        do { consumer = try await factory(session, configuration, track, eventHandler) }
+        catch {
+            _ = await retainedWriter?.stop()
+            retainedWriter = nil
+            throw error
+        }
         active = (session.id, track)
         return .init(tracks: [track], firstPresentationTime: nil)
     }
@@ -241,14 +266,16 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
             for frame in start..<end { target[frame - start] = samples[frame] }
             let buffer = try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm,
                 presentationTime: CMTime(value: Int64(sampleOffset + start), timescale: 16_000))
+            if let retainedWriter, !retainedWriter.enqueue(buffer) { throw MeetingMemoryAudioError.overload }
             guard consumer.enqueue(buffer) else { throw MeetingMemoryAudioError.overload }
         }
     }
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
         guard let (id, original) = active, id == sessionID else { throw MeetingCaptureError.wrongActiveSession }
+        var track = if let retainedWriter { await retainedWriter.stop() } else { original }
         try await consumer?.finish()
-        var track = original; track.health.status = .stopped
-        active = nil; consumer = nil
+        track.health.status = .stopped
+        active = nil; consumer = nil; retainedWriter = nil
         return .init(tracks: [track], stoppedAt: Date())
     }
     func shutdownForTermination() async {
@@ -556,6 +583,14 @@ private nonisolated enum CombinedStreamingDiagnostics {
 /// Detects persistent audio/media creation in the app container, including its temporary
 /// directory. Files deleted between observations remain an explicit limitation.
 private nonisolated enum CombinedStreamingAudioInventory {
+    static func onlyAllowed(_ paths: Set<String>, retainedRoot: URL?) -> Bool {
+        guard let retainedRoot else { return paths.isEmpty }
+        let prefix = retainedRoot.standardizedFileURL.resolvingSymlinksInPath().path + "/"
+        return paths.allSatisfy {
+            URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path.hasPrefix(prefix)
+        }
+    }
+
     static func paths(in root: URL) throws -> Set<String> {
         let extensions: Set<String> = ["wav", "aif", "aiff", "caf", "m4a", "aac", "mp3", "flac", "ogg", "opus", "mp4", "mov"]
         guard let iterator = FileManager.default.enumerator(at: root,
@@ -621,8 +656,39 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         #endif
     }
 
+    /// A retained recording still streams live. Recovery then uses a different coordinator
+    /// and pipeline against those real test-owned files, with no in-memory attempt to adopt.
+    func testRetainedStreamingRussianMeetingAndFreshPipelineRetry() async throws {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_MEETING_STREAMING_RETAINED_E2E"] == "1" else {
+            throw XCTSkip("Explicitly enable retained streaming and fresh-pipeline recovery inference")
+        }
+        let options = try CombinedEvaluationOptions(environment: environment)
+        guard options.privateEvaluation, !options.longEvaluation, options.repetitions == 1,
+              environment["PICHI_MEETING_DETAILED_PROFILE"] == "1" else {
+            throw NSError(domain: "RetainedStreamingMeetingRequiresPrivateSingleRunAndDetailedProfile", code: 1)
+        }
+        let revision = RuntimeBuildProvenance.sanitizedSourceRevision(environment["PICHI_COMBINED_MEETING_TESTED_REVISION"])
+        guard revision != "unavailable",
+              RuntimeBuildProvenance.sanitizedSourceRevision(Bundle.main.object(forInfoDictionaryKey: "AppSourceRevision")) == revision else {
+            throw NSError(domain: "RetainedStreamingMeetingRequiresMatchingFrozenRevision", code: 1)
+        }
+        var pinned = environment
+        pinned["PICHI_COMBINED_MEETING_ASR"] = SettingsStore.SpeechModel.gigaam.rawValue
+        try await runCombinedRussianMeeting(environment: pinned, options: options, repetition: 1,
+            streaming: true, saveAudio: true, recoverAfterStop: true)
+        #else
+        throw XCTSkip("Retained streaming private evaluation requires a Debug test host")
+        #endif
+    }
+
     private func runCombinedRussianMeeting(environment: [String: String], options: CombinedEvaluationOptions,
-                                           repetition: Int, streaming: Bool = false) async throws {
+        repetition: Int, streaming: Bool = false, saveAudio: Bool = false,
+        recoverAfterStop: Bool = false) async throws {
+        guard !saveAudio || streaming, !recoverAfterStop || (streaming && saveAudio) else {
+            throw NSError(domain: "CombinedMeetingInvalidRetainedTestOptions", code: 1)
+        }
         let asrModel = try XCTUnwrap(SettingsStore.SpeechModel(rawValue:
             environment["PICHI_COMBINED_MEETING_ASR"] ?? SettingsStore.SpeechModel.whisperTiny.rawValue),
             "An explicit ASR identifier must resolve without a model fallback")
@@ -674,7 +740,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let settings = SettingsStore(defaults: defaults)
         settings.selectedSpeechModel = asrModel
         settings.meetingRecordingDefaults.languageCode = "ru"
-        settings.meetingSaveAudio = false
+        settings.meetingSaveAudio = saveAudio
         settings.meetingSpeakerLabelsEnabled = true
         settings.meetingSpeakerProcessingMode = streaming ? .streaming : .afterRecording
         settings.meetingPIIRedactionEnabled = true
@@ -733,7 +799,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             resourceSamples.setPhase(phase)
             try await Task.sleep(nanoseconds: 300_000_000)
             let recording = try await coordinator.startRecording(configuration: configuration)
-            XCTAssertEqual(recording.audioStorageMode, .memoryOnly)
+            XCTAssertEqual(recording.audioStorageMode, saveAudio ? .retainedFiles : .memoryOnly)
             XCTAssertEqual(recording.piiRedactionEnabled, true)
             if streaming { XCTAssertEqual(recording.effectiveSpeakerProcessingMode, .streaming) }
             phase = "capture"
@@ -796,7 +862,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 XCTAssertFalse(checkpointBeforeStop.isEmpty, "Live partial text alone is not evidence of streaming canonical output")
                 XCTAssertNotNil(firstKnownSpeakerSeconds, "At least one actual voice must label protected canonical words before Stop")
                 observedNewAudioPaths.formUnion(try CombinedStreamingAudioInventory.paths(in: containerRoot).subtracting(existingAudioPaths))
-                XCTAssertTrue(observedNewAudioPaths.isEmpty, "Memory-only processing must not create persistent audio/media files in the app container")
+                XCTAssertTrue(CombinedStreamingAudioInventory.onlyAllowed(observedNewAudioPaths, retainedRoot: saveAudio ? root : nil),
+                              "Only explicitly retained audio in this isolated test root may be created")
             }
             phase = "postStop"
             resourceSamples.setPhase(phase)
@@ -833,7 +900,11 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertFalse(completed.transcriptSegments.isEmpty, "Actual ASR must produce final protected text")
             XCTAssertTrue(completed.transcriptSegments.contains { $0.text.range(of: "[А-Яа-яЁё]", options: .regularExpression) != nil },
                           "Actual ASR must produce Russian text")
-            XCTAssertFalse(completed.hasFinalizedAudio)
+            XCTAssertEqual(completed.hasFinalizedAudio, saveAudio)
+            if saveAudio {
+                XCTAssertTrue(completed.hasRetryableAudio)
+                XCTAssertTrue(completed.audioTracks.flatMap(\.chunks).allSatisfy { $0.finalizationState == .finalized && $0.byteCount > 0 })
+            }
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
             if streaming {
                 streamingEvidence = try await streamingEvaluation(completed: completed,
@@ -841,10 +912,11 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     captureStarted: captureStart, stopStarted: stopStart, completedAt: started + completedWallSeconds,
                     firstKnownSpeakerSeconds: firstKnownSpeakerSeconds,
                     canonicalCheckpointsObserved: canonicalCheckpointsObserved,
-                    maximumProtectedSegmentsBeforeStop: maximumProtectedSegmentsBeforeStop)
+                    maximumProtectedSegmentsBeforeStop: maximumProtectedSegmentsBeforeStop, saveAudio: saveAudio)
                 observedNewAudioPaths.formUnion(try CombinedStreamingAudioInventory.paths(in: containerRoot).subtracting(existingAudioPaths))
-                XCTAssertTrue(observedNewAudioPaths.isEmpty)
+                XCTAssertTrue(CombinedStreamingAudioInventory.onlyAllowed(observedNewAudioPaths, retainedRoot: saveAudio ? root : nil))
                 streamingEvidence["newPersistentAudioOrMediaPathsObserved"] = observedNewAudioPaths.count
+                streamingEvidence["retainedTestRootAudioPermitted"] = saveAudio
                 streamingEvidence["audioInventoryCadenceSeconds"] = 15
                 streamingEvidence["audioInventoryScope"] = "App container including temporary directory; before preparation, paced input and completion; transient create/delete between observations not proven absent"
                 let currentArtifact = try MeetingNemotronModelLocator(profile: expectedProfile).locate()
@@ -881,13 +953,44 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertFalse(payload.includesAudio)
             let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]))
             for case let file as URL in files where try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
-                XCTAssertEqual(file.pathExtension, "json", "Strict storage may persist protected JSON only")
+                if !saveAudio { XCTAssertEqual(file.pathExtension, "json", "Strict storage may persist protected JSON only") }
             }
             XCTAssertTrue(coordinator.pendingSpeech.tokens.isEmpty)
             XCTAssertNil(services.asr.activeExclusiveActivity)
             XCTAssertFalse(services.asr.hasActiveModelPreparation)
             XCTAssertFalse(services.asr.hasActiveModelDownload)
             await coordinator.shutdownForTermination()
+            if recoverAfterStop {
+                resourceSamples.capture(since: started)
+                phase = "betweenAttemptsRelease"
+                resourceSamples.setPhase(phase)
+                let firstASRReadyBeforeRelease = services.asr.isAsrReady
+                try await services.asr.meetingResidencyParticipant().suspend()
+                let firstASRReadyAfterRelease = services.asr.isAsrReady
+                XCTAssertFalse(firstASRReadyAfterRelease, "Release the first composition's cached ASR before constructing another")
+                streamingEvidence["firstASRReadyBeforeRelease"] = firstASRReadyBeforeRelease
+                streamingEvidence["firstASRReadyAfterRelease"] = firstASRReadyAfterRelease
+                streamingEvidence["firstASRResidencyReleaseJoined"] = true
+                try await privacy.unload()
+                let previousPrivacyStillReady = await privacy.isReady
+                XCTAssertFalse(previousPrivacyStillReady, "The first inference owner must unload before cold privacy recovery begins")
+                phase = "retainedRecovery"
+                resourceSamples.setPhase(phase)
+                progress?.update(phase: phase, deliveredFrames: Int(input.length), protectedUtterances: 0,
+                    protectedPartials: 0, protectedFinalSegments: completed.transcriptSegments.count)
+                progress?.emit(force: true)
+                streamingEvidence["retainedRecovery"] = try await retainedStreamingRecovery(completed: completed,
+                    store: store, settings: settings, privacyModelDirectory: assets.appendingPathComponent("models/privacy"), reference: reference,
+                    root: root, sourceFrames: Int(input.length), expectedProfile: expectedProfile)
+                progress?.update(phase: "retainedRecoveryEnd", deliveredFrames: Int(input.length), protectedUtterances: 0,
+                    protectedPartials: 0, protectedFinalSegments: completed.transcriptSegments.count)
+                progress?.emit(force: true)
+                observedNewAudioPaths.formUnion(try CombinedStreamingAudioInventory.paths(in: containerRoot).subtracting(existingAudioPaths))
+                XCTAssertTrue(CombinedStreamingAudioInventory.onlyAllowed(observedNewAudioPaths, retainedRoot: root),
+                              "Fresh retained retry must not write media outside this test-owned root")
+                streamingEvidence["newPersistentAudioOrMediaPathsObserved"] = observedNewAudioPaths.count
+                streamingEvidence["audioInventoryScope"] = "App container including temporary directory; before preparation, every15seconds during paced capture, and before/after joined Stop and retained retry; transient create/delete between observations not proven absent"
+            }
             try await privacy.unload()
             let privacyStillReady = await privacy.isReady
             XCTAssertFalse(privacyStillReady)
@@ -912,6 +1015,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "longEvaluationEnabled": options.longEvaluation,
                 "detailedProfilingEnabled": detailedProfiling,
                 "streamingEvaluationEnabled": streaming,
+                "saveAudioEnabled": saveAudio,
+                "freshPipelineRetainedRecoveryEnabled": recoverAfterStop,
                 "candidateArtifactValidatedBeforeMeasurement": streaming,
                 "computeUnitsDiagnosticOverride": detailedProfiling && environment["PICHI_MEETING_PROFILE_COMPUTE_UNITS"] == "cpuOnly" ? "cpuOnly" : "automatic",
                 "legacySimulatorReviewEnabled": Self.isSimulator && environment["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW"] == "1"
@@ -984,9 +1089,21 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "unscoredSensitiveCases": reference.sensitiveAliases.count - observations.observed.count,
                 "limitations": "Sampled process footprint, not system-wide peak. Transcript attribution agreement is not DER. PCM injection excludes microphone, background and power validation. Idle ASR caches may remain resident."
             ]
+            if recoverAfterStop {
+                let firstPhases: Set<String> = ["preparation", "privacyReady", "capture", "postStop", "completedPrivacyReady"]
+                let firstSamples = resources.samples.filter { firstPhases.contains($0.phase) }
+                let retrySamples = resources.samples.filter { $0.phase == "retainedRecovery" }
+                report["firstStreamingPeakFootprintBytes"] = firstSamples.map(\.bytes).max() as Any? ?? NSNull()
+                report["firstStreamingFootprintSampleCount"] = firstSamples.count
+                report["retainedRetryPeakFootprintBytes"] = retrySamples.map(\.bytes).max() as Any? ?? NSNull()
+                report["retainedRetryFootprintSampleCount"] = retrySamples.count
+                report["peakFootprintScope"] = "peakFootprintBytes covers both attempts and joined cleanup; firstStreamingPeakFootprintBytes excludes fresh retained retry; retainedRetryPeakFootprintBytes covers its own phase including source verification"
+                report["sampleScope"] = "Two attempts and joined cleanup, with explicit phase tags; includes the private recovery attachment allocation; excludes the following combined report/attachment serialization"
+                report["processCPUScope"] = "Whole process across first streaming attempt, inter-attempt release, fresh retained retry and cleanup"
+            }
             if streaming { report["streaming"] = streamingEvidence }
             let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
-            attachment.name = (streaming ? "Streaming-Russian-meeting-metadata-only" : "Combined-Russian-meeting-metadata-only") + (options.repetitions > 1 ? "-run-\(repetition)" : "")
+            attachment.name = (recoverAfterStop ? "Retained-Streaming-Russian-meeting-metadata-only" : streaming ? "Streaming-Russian-meeting-metadata-only" : "Combined-Russian-meeting-metadata-only") + (options.repetitions > 1 ? "-run-\(repetition)" : "")
             attachment.lifetime = .keepAlways
             add(attachment)
             // Physical private evaluation is separately gated. Legacy visual review
@@ -1016,7 +1133,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     throw NSError(domain: "CombinedMeetingProtectedEvidenceSize", code: 2)
                 }
                 let review = XCTAttachment(data: reviewData, uniformTypeIdentifier: "public.json")
-                review.name = streaming ? "Streaming-Russian-meeting-private-protected-evaluation" : (options.privateEvaluation ? "Combined-Russian-meeting-private-protected-evaluation" : "Combined-Russian-meeting-private-visual-review")
+                review.name = recoverAfterStop ? "Retained-Streaming-Russian-meeting-private-protected-evaluation" : streaming ? "Streaming-Russian-meeting-private-protected-evaluation" : (options.privateEvaluation ? "Combined-Russian-meeting-private-protected-evaluation" : "Combined-Russian-meeting-private-visual-review")
                     + (options.repetitions > 1 ? "-run-\(repetition)" : "")
                 review.lifetime = .keepAlways
                 add(review)
@@ -1024,6 +1141,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         } catch {
             progress?.emit(force: true)
             await coordinator.shutdownForTermination()
+            if recoverAfterStop { try? await services.asr.meetingResidencyParticipant().suspend() }
             try? await privacy.unload()
             sampler.cancel()
             await sampler.value
@@ -1037,10 +1155,234 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         }
     }
 
+    private func retainedStreamingRecovery(completed: MeetingSession, store: MeetingSessionStore,
+        settings: SettingsStore, privacyModelDirectory: URL, reference: CombinedMeetingReference,
+        root: URL, sourceFrames: Int, expectedProfile: MeetingNemotronModelProfile) async throws -> [String: Any] {
+        let directory = try await store.sessionDirectory(for: completed.id)
+        let sourceBefore = try retainedAudioProof(session: completed, directory: directory, root: root)
+        XCTAssertEqual(sourceBefore.frames, sourceFrames, "The real retained writer must finalize every paced source frame")
+        XCTAssertFalse(sourceBefore.digests.isEmpty)
+        let attemptsBefore = Set(completed.processingAttempts.map(\.id))
+        let originalAttempt = try XCTUnwrap(completed.processingAttempts.last(where: { $0.completedAt != nil }))
+        let freshPrivacy = PichiTranscriptPrivacyService(modelStore: .init(directory: privacyModelDirectory))
+        let privacyReadyBeforeRetry = await freshPrivacy.isReady
+        XCTAssertFalse(privacyReadyBeforeRetry, "Fresh privacy runtime must start unprepared")
+        // The previous redactor has unloaded. Live controller, queue, native speaker,
+        // privacy runtime and coordinator references are new, in this same OS process.
+        let savedCompleted = try await store.load(id: completed.id)
+        var interrupted = try XCTUnwrap(savedCompleted)
+        interrupted.state = .interrupted
+        interrupted.recoveryResolvedAt = nil
+        interrupted.updatedAt = Date()
+        try await store.save(interrupted)
+        let savedInterrupted = try await store.load(id: completed.id)
+        let reloaded = try XCTUnwrap(savedInterrupted)
+        XCTAssertEqual(reloaded.state, .interrupted)
+        XCTAssertTrue(reloaded.hasRetryableAudio)
+        XCTAssertEqual(reloaded.effectiveSpeakerProcessingMode, .streaming)
+        let observations = CombinedPrivacyObservations(wrapping: freshPrivacy, aliases: reference.sensitiveAliases)
+        let recoveryCapture = SyntheticMeetingMicrophone()
+        let fresh = AppServices(store: store, capture: recoveryCapture, settings: settings,
+            privacy: freshPrivacy, privacyRedactor: observations,
+            microphoneResolver: { _ in .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone") })
+        XCTAssertTrue(fresh.meetingProcessingPipeline.memoryAttempts.isEmpty,
+                      "A restored session must not depend on the previous live PCM attempt")
+        let coordinator = fresh.meetingSessionCoordinator
+        let began = ProcessInfo.processInfo.systemUptime
+        let recoveryRunID = UUID().uuidString
+        DebugLogger.shared.info("recoveryID=\(recoveryRunID) event=begin", source: "MeetingRetainedStreamingEvaluation")
+        do {
+            await coordinator.ensureRestored()
+            let restoreSeconds = ProcessInfo.processInfo.systemUptime - began
+            XCTAssertEqual(coordinator.activeSession?.id, completed.id)
+            XCTAssertFalse(coordinator.isRecording)
+            XCTAssertTrue(fresh.meetingProcessingPipeline.memoryAttempts.isEmpty)
+            let retryBegan = ProcessInfo.processInfo.systemUptime
+            // This is the existing History/Resume service operation. It plans its own
+            // retained-file backend and prepares required resources through production code.
+            let recovered = try await coordinator.retryProcessing(sessionID: completed.id)
+            let privacyReadyAfterRetry = await freshPrivacy.isReady
+            XCTAssertTrue(privacyReadyAfterRetry, "The existing retry operation must prepare its fresh privacy capability before publication")
+            let finished = ProcessInfo.processInfo.systemUptime
+            XCTAssertEqual(recovered.state, .completed)
+            XCTAssertEqual(recovered.id, completed.id)
+            XCTAssertEqual(recovered.audioStorageMode, .retainedFiles)
+            XCTAssertEqual(recovered.effectiveSpeakerProcessingMode, .streaming)
+            XCTAssertEqual(recovered.recordingBackendID, completed.recordingBackendID)
+            XCTAssertEqual(recovered.recordingASRArtifactFingerprint, completed.recordingASRArtifactFingerprint)
+            XCTAssertEqual(recovered.languageCode, completed.languageCode)
+            XCTAssertEqual(recovered.piiRedactionEnabled, true)
+            XCTAssertTrue(recovered.hasRetryableAudio)
+            XCTAssertEqual(recovered.transcriptIsComplete, true, "A successful retry must cover its finalized retained source")
+            let newAttempts = recovered.processingAttempts.filter { !attemptsBefore.contains($0.id) }
+            XCTAssertEqual(newAttempts.count, 1, "Exactly one new attempt should replace interrupted processing")
+            let attempt = try XCTUnwrap(newAttempts.last)
+            XCTAssertEqual(attempt.stage, .completed)
+            XCTAssertNotNil(attempt.completedAt)
+            XCTAssertEqual(attempt.asrModel, SettingsStore.SpeechModel.gigaam.rawValue)
+            XCTAssertEqual(attempt.asrArtifactFingerprint, originalAttempt.asrArtifactFingerprint,
+                           "Recovery must retain the same actual ASR artifact")
+            XCTAssertEqual(attempt.diarizationModel, expectedProfile.implementationFingerprint,
+                           "Retained recovery must use the pinned streaming profile, with no W8A8 fallback")
+            XCTAssertEqual(attempt.backendID, originalAttempt.backendID)
+            XCTAssertTrue(fresh.meetingProcessingPipeline.memoryAttempts.isEmpty,
+                          "Retained retry must not manufacture a replacement live capture attempt")
+            let segments = recovered.transcriptSegments
+            XCTAssertFalse(segments.isEmpty)
+            XCTAssertTrue(segments.contains { $0.nativePrecision == .word })
+            XCTAssertEqual(Set(segments.map(\.id)).count, segments.count)
+            let nativeIDs = segments.compactMap(\.nativeUnitID)
+            XCTAssertEqual(Set(nativeIDs).count, nativeIDs.count, "Fresh attempts may change IDs but may never duplicate their own units")
+            XCTAssertTrue(segments.allSatisfy { $0.originalText == nil && $0.status == .final })
+            XCTAssertTrue(segments.allSatisfy {
+                guard let timing = $0.nativeTiming else { return true }
+                return timing.start.isFinite && timing.end.isFinite && timing.start >= 0
+                    && timing.end > timing.start && timing.end <= Double(sourceFrames) / 16_000 + 0.001
+            })
+            let known = segments.filter { segment in
+                segment.speakerID.map { id in recovered.speakers.contains { $0.id == id } } == true
+            }.count
+            XCTAssertGreaterThan(known, 0, "Retained recovery must recover actual speaker-labelled words")
+            let protectedText = segments.map(\.text).joined(separator: " ")
+            XCTAssertEqual(observations.unmaskedPublishableObservations, 0)
+            XCTAssertEqual(observations.remainingCases(in: protectedText), 0)
+            let savedRecovery = try await store.load(id: recovered.id)
+            let saved = try XCTUnwrap(savedRecovery)
+            XCTAssertTrue(saved.transcriptSegments == segments)
+            let sourceAfter = try retainedAudioProof(session: saved, directory: directory, root: root)
+            XCTAssertTrue(sourceBefore.digests == sourceAfter.digests, "Retry must preserve every finalized source audio file byte for byte")
+            XCTAssertEqual(sourceAfter.frames, sourceFrames)
+            XCTAssertEqual(saved.audioTracks.flatMap(\.chunks), completed.audioTracks.flatMap(\.chunks))
+            XCTAssertNil(fresh.asr.activeExclusiveActivity)
+            XCTAssertFalse(fresh.asr.hasActiveModelPreparation)
+            XCTAssertFalse(fresh.asr.hasActiveModelDownload)
+            await coordinator.shutdownForTermination()
+            try await fresh.asr.meetingResidencyParticipant().suspend()
+            let recoveryASRReadyAfterRelease = fresh.asr.isAsrReady
+            XCTAssertFalse(recoveryASRReadyAfterRelease)
+            try await freshPrivacy.unload()
+            let privacyReadyAfterCleanup = await freshPrivacy.isReady
+            XCTAssertFalse(privacyReadyAfterCleanup)
+            let sourceTokens = completed.transcriptSegments.flatMap { $0.text.lowercased().split(whereSeparator: \.isWhitespace).map(String.init) }
+            let retryTokens = segments.flatMap { $0.text.lowercased().split(whereSeparator: \.isWhitespace).map(String.init) }
+            guard sourceTokens.count <= 4_096, retryTokens.count <= 4_096 else {
+                throw NSError(domain: "RetainedStreamingProtectedComparisonBudget", code: 1)
+            }
+            let differences = Self.protectedTokenEditDistance(sourceTokens, retryTokens)
+            let barrierID = UUID().uuidString
+            DebugLogger.shared.info("evaluationID=\(barrierID)", source: "MeetingStreamingEvaluation")
+            var lines: [String] = []
+            var sawBarrier = false
+            for _ in 0..<20 {
+                lines = try CombinedStreamingDiagnostics.lines()
+                sawBarrier = lines.contains { $0.contains("[MeetingStreamingEvaluation]")
+                    && CombinedStreamingDiagnostics.fields($0)["evaluationID"] == barrierID }
+                if sawBarrier { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            XCTAssertTrue(sawBarrier)
+            XCTAssertTrue(lines.contains { $0.contains("[MeetingRetainedStreamingEvaluation]")
+                && CombinedStreamingDiagnostics.fields($0)["recoveryID"] == recoveryRunID
+                && CombinedStreamingDiagnostics.fields($0)["event"] == "begin" },
+                "The bounded diagnostic log must retain the beginning of this whole recovery attempt")
+            var protectedValues = try CombinedProtectedEvaluation.values(segments: segments, speakers: recovered.speakers)
+            protectedValues["schema"] = 2
+            protectedValues["purpose"] = "Fresh retained-file retry in this test process, after live streaming finalized"
+            protectedValues["asrArtifactFingerprints"] = recovered.processingAttempts.compactMap(\.asrArtifactFingerprint)
+            protectedValues["diarizationModels"] = recovered.processingAttempts.compactMap(\.diarizationModel)
+            protectedValues["audioSeconds"] = Double(sourceFrames) / 16_000
+            protectedValues["referenceProvenance"] = reference.provenance
+            protectedValues["limitations"] = "Protected canonical values only. Fresh attempt IDs and wording may differ; not source-separated speech or a new-process checkpoint continuation."
+            let protectedEvidence = try JSONSerialization.data(withJSONObject: protectedValues, options: [.prettyPrinted, .sortedKeys])
+            guard protectedEvidence.count <= 16 * 1_048_576 else {
+                throw NSError(domain: "RetainedStreamingProtectedEvidenceBudget", code: 1)
+            }
+            let attachment = XCTAttachment(data: protectedEvidence, uniformTypeIdentifier: "public.json")
+            attachment.name = "Retained-Streaming-fresh-pipeline-private-protected-evaluation"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            return [
+                "operation": "retryProcessing(sessionID:) against real retained chunks",
+                "freshCoordinatorAndPipeline": true, "freshProcess": false,
+                "freshPrivacyRuntimeInitiallyReady": privacyReadyBeforeRetry,
+                "freshPrivacyRuntimePreparedByRetry": privacyReadyAfterRetry,
+                "freshPrivacyRuntimeUnloadedAfterJoin": !privacyReadyAfterCleanup,
+                "freshASRReadyAfterJoinedRelease": recoveryASRReadyAfterRelease,
+                "noLiveMemoryAttemptBeforeOrAfter": fresh.meetingProcessingPipeline.memoryAttempts.isEmpty,
+                "restorationSeconds": restoreSeconds, "retrySeconds": finished - retryBegan,
+                "totalRecoverySeconds": finished - began, "sourceAudioFrameCount": sourceAfter.frames,
+                "sourceAudioFileCount": sourceAfter.digests.count, "sourceAudioBytesPreserved": sourceBefore.digests == sourceAfter.digests,
+                "asr": attempt.asrModel as Any? ?? NSNull(),
+                "asrArtifactFingerprint": attempt.asrArtifactFingerprint as Any? ?? NSNull(),
+                "diarizationModel": attempt.diarizationModel as Any? ?? NSNull(),
+                "backendID": attempt.backendID as Any? ?? NSNull(),
+                "originalCanonicalSegmentCount": completed.transcriptSegments.count,
+                "recoveredCanonicalSegmentCount": segments.count,
+                "recoveredNativeWordCount": segments.filter { $0.nativePrecision == .word }.count,
+                "recoveredNativeTimingCount": segments.filter { $0.nativeTiming != nil }.count,
+                "recoveredKnownSpeakerSegmentCount": known,
+                "recoveredUnknownSpeakerSegmentCount": segments.filter { $0.speakerID == nil }.count,
+                "recoveredOverlapSegmentCount": segments.filter { $0.overlap != .none }.count,
+                "originalProtectedTokenCount": sourceTokens.count, "recoveredProtectedTokenCount": retryTokens.count,
+                "protectedTokenEditDistance": differences,
+                "protectedTokenDifferenceRate": sourceTokens.isEmpty ? NSNull() as Any : Double(differences) / Double(sourceTokens.count) as Any,
+                "comparisonMetric": "Visible protected whitespace-token sequence difference between two real inference paths; not WER or speaker-identity accuracy",
+                "phaseTimings": CombinedStreamingDiagnostics.phaseTotals(lines, from: Int64(began * 1_000), through: Int64(finished * 1_000)),
+                "limitations": "New pipeline and initially unprepared A1 runtime in the same OS process; ASR and OS file caches may be warm. This tests durable retained-file retry without live memory state, not checkpoint continuation after process termination. Different fresh-attempt word IDs and model wording are allowed."
+            ]
+        } catch {
+            await coordinator.shutdownForTermination()
+            try? await fresh.asr.meetingResidencyParticipant().suspend()
+            try? await freshPrivacy.unload()
+            throw error
+        }
+    }
+
+    private func retainedAudioProof(session: MeetingSession, directory: URL, root: URL) throws
+        -> (digests: [String: String], frames: Int) {
+        var digests: [String: String] = [:]
+        var frames = 0
+        for chunk in session.audioTracks.flatMap(\.chunks) {
+            XCTAssertEqual(chunk.finalizationState, .finalized)
+            let url = chunk.fileURL(relativeTo: directory)
+            guard CombinedStreamingAudioInventory.onlyAllowed([url.path], retainedRoot: root) else {
+                throw NSError(domain: "RetainedStreamingAudioEscapesTestRoot", code: 1)
+            }
+            let file = try FileHandle(forReadingFrom: url)
+            defer { try? file.close() }
+            var hasher = SHA256()
+            while let data = try file.read(upToCount: 65_536), !data.isEmpty { hasher.update(data: data) }
+            let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+            XCTAssertEqual(digest, chunk.sha256)
+            XCTAssertEqual(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize.map(Int64.init), chunk.byteCount)
+            let audio = try AVAudioFile(forReading: url)
+            XCTAssertEqual(audio.processingFormat.sampleRate, 16_000)
+            XCTAssertEqual(audio.processingFormat.channelCount, 1)
+            frames += Int(audio.length)
+            guard digests[chunk.relativeFilePath] == nil else { throw NSError(domain: "RetainedStreamingDuplicateSourcePath", code: 1) }
+            digests[chunk.relativeFilePath] = digest
+        }
+        return (digests, frames)
+    }
+
+    private static func protectedTokenEditDistance(_ first: [String], _ second: [String]) -> Int {
+        var previous = Array(0...second.count)
+        for (index, token) in first.enumerated() {
+            var current = [index + 1]
+            current.reserveCapacity(second.count + 1)
+            for (otherIndex, other) in second.enumerated() {
+                current.append(min(current[otherIndex] + 1, previous[otherIndex + 1] + 1,
+                                   previous[otherIndex] + (token == other ? 0 : 1)))
+            }
+            previous = current
+        }
+        return previous[second.count]
+    }
+
     private func streamingEvaluation(completed: MeetingSession, checkpoint: [MeetingTranscriptSegment],
         sourceFrames: Int, started: Double, captureStarted: Double, stopStarted: Double, completedAt: Double,
         firstKnownSpeakerSeconds: Double?, canonicalCheckpointsObserved: Int,
-        maximumProtectedSegmentsBeforeStop: Int) async throws -> [String: Any] {
+        maximumProtectedSegmentsBeforeStop: Int, saveAudio: Bool = false) async throws -> [String: Any] {
         let segments = completed.transcriptSegments
         let attempts = Set(completed.processingAttempts.map(\.id))
         XCTAssertEqual(completed.effectiveSpeakerProcessingMode, .streaming)
@@ -1066,7 +1408,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             segment.speakerID.map { id in completed.speakers.contains { $0.id == id } } == true
         }.count
         XCTAssertGreaterThan(known, 0)
-        XCTAssertTrue(completed.audioTracks.allSatisfy { $0.chunks.isEmpty }, "Strict streaming must not produce audio chunks")
+        if !saveAudio {
+            XCTAssertTrue(completed.audioTracks.allSatisfy { $0.chunks.isEmpty }, "Strict streaming must not produce audio chunks")
+        }
 
         var lines: [String] = []
         var rows: [CombinedStreamingDiagnostics.Row] = []
@@ -1207,6 +1551,27 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         ], from: 100, through: 200), 1)
     }
 
+    func testEvaluationPrivacyDecoratorsPreservePreparationAndCheckpointIdentity() async throws {
+        let service = CombinedPrivacyPreparationSpy()
+        let combined = CombinedPrivacyObservations(wrapping: service, aliases: [])
+        let diagnostics = SyntheticPrivacyReplayDiagnostics(wrapping: service)
+        XCTAssertEqual(combined.checkpointIdentity, service.checkpointIdentity)
+        XCTAssertEqual(diagnostics.checkpointIdentity, service.checkpointIdentity)
+        try await combined.prepareForMeeting()
+        try await diagnostics.prepareForMeeting()
+        let preparations = await service.preparations
+        XCTAssertEqual(preparations, 2)
+    }
+
+    func testProtectedRetryTokenDifferenceHandlesEmptyInsertDeleteAndSubstitute() {
+        XCTAssertEqual(Self.protectedTokenEditDistance([], []), 0)
+        XCTAssertEqual(Self.protectedTokenEditDistance(["один"], []), 1)
+        XCTAssertEqual(Self.protectedTokenEditDistance([], ["один"]), 1)
+        XCTAssertEqual(Self.protectedTokenEditDistance(["один", "два"], ["один", "два"]), 0)
+        XCTAssertEqual(Self.protectedTokenEditDistance(["один", "два"], ["один", "три"]), 1)
+        XCTAssertEqual(Self.protectedTokenEditDistance(["один", "два"], ["один", "и", "два"]), 1)
+    }
+
     func testStreamingAudioInventoryFindsNewNestedMediaWithoutReadingPayloads() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("StreamingInventory.\(UUID())")
         let nested = root.appendingPathComponent("nested", isDirectory: true)
@@ -1220,6 +1585,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let added = try CombinedStreamingAudioInventory.paths(in: root).subtracting(before)
         XCTAssertEqual(added.count, 1)
         XCTAssertTrue(added.allSatisfy { $0.hasSuffix("accidental.CAF") })
+        XCTAssertTrue(CombinedStreamingAudioInventory.onlyAllowed(added, retainedRoot: root))
+        XCTAssertFalse(CombinedStreamingAudioInventory.onlyAllowed(added, retainedRoot: nil))
+        XCTAssertFalse(CombinedStreamingAudioInventory.onlyAllowed([root.path + "-sibling/foreign.caf"], retainedRoot: root))
     }
 
     private static var isSimulator: Bool {
