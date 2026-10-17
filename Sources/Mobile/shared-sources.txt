@@ -53,6 +53,7 @@ Sources/Fluid/Services/Meeting/Backend/MeetingLegacyCompatibilityBackend.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingModelInstaller.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingNemotronCompiledModelOwner.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingFast32NemotronDiarizer.swift
+Sources/Fluid/Services/Meeting/Backend/MeetingCoreMLComputeDiagnostics.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingResumableNemotronDiarizerSession.swift
 Sources/Fluid/Services/Meeting/Backend/Nemotron3/Nemotron3Diarizer.swift
 Sources/Fluid/Services/Meeting/Backend/Nemotron3/Nemotron3Models.swift
