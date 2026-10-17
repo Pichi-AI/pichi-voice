@@ -295,7 +295,7 @@ private nonisolated struct CombinedEvaluationOptions {
 }
 
 /// Reads the process counter off MainActor. The caller owns and joins its sampling Task.
-private nonisolated final class CombinedResourceSamples: @unchecked Sendable {
+nonisolated final class CombinedResourceSamples: @unchecked Sendable {
     struct Sample: Sendable {
         let phase: String
         let elapsed: Double
