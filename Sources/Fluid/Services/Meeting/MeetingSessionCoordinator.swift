@@ -385,8 +385,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             timestampDefaultTitle: true,
             audioStorageMode: storageMode,
             speakerLabelsEnabled: speakerLabelsEnabled,
-            piiRedactionEnabled: piiRedactionEnabled,
-            speakerProcessingMode: speakerProcessingMode
+            speakerProcessingMode: speakerProcessingMode,
+            piiRedactionEnabled: piiRedactionEnabled
         )
         #else
         throw MeetingProcessingError.modelUnavailable
