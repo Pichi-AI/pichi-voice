@@ -56,6 +56,8 @@ struct MeetingStreamingProtectedWordTailTests {
         try independentWatermarksAndTextBound()
         try finalization()
         try knownIdentity()
+        try knownNeighborIdentity()
+        try knownNeighborSafety()
         try longStream(mode: 0)
         try longStream(mode: 1)
         try longStream(mode: 2)
@@ -279,6 +281,92 @@ struct MeetingStreamingProtectedWordTailTests {
         let unsafeOutput = try update(&unsafeValue, words: [word(57, 20, 26), unsafe],
             activity: [activity("a", 20, 26), activity("b", 26.1, 26.3)], end: 26.3)
         check(unsafeOutput.inserted[1].speakerID == nil, "An unsafe short word bypassed publication safety")
+    }
+
+    static func knownNeighborIdentity() throws {
+        let established = try MeetingPCMRecordingAttribution.assemble(
+            transcript: .init(segments: [word(70, 0, 6), word(71, 7, 13)]),
+            activity: [activity("a", 0, 6), activity("b", 7, 13)],
+            epoch: epoch, attemptID: attempt, duration: 13, speakerNameFormat: "Speaker %lld")
+        let knownID = established.segments[1].speakerID
+        check(knownID != nil)
+        for sameSpeaker in [true, false] {
+            var value = try tail(prior: established.speakers)
+            let source = sameSpeaker
+                ? [word(72, 20, 26), word(73, 26.1, 26.3), word(74, 26.3, 26.4, text: "<PERSON>"), word(75, 26.4, 26.6)]
+                : [word(72, 20, 26), word(74, 26, 26.2, text: "<PERSON>"), word(75, 26.2, 26.6)]
+            let gapIndex = source.count - 2
+            let support = sameSpeaker
+                ? [activity("a", 20, 26), activity("b", 26.1, 26.3), activity("b", 26.4, 26.6)]
+                : [activity("a", 20, 26), activity("b", 26.2, 26.6)]
+            let first = try update(&value, words: Array(source.dropLast()),
+                activity: Array(support.dropLast()), end: source[gapIndex].nativeTiming!.end)
+            check(first.inserted[gapIndex].speakerID == nil)
+            let second = try update(&value, words: [source.last!], activity: support, end: 26.6)
+            guard let patch = second.revisions.first(where: { $0.segmentID == source[gapIndex].id }) else {
+                check(false, "The future anchor did not revise the retained gap"); continue
+            }
+            check(patch.speakerAttribution?.rule == (sameSpeaker ? .neighborAgreement : .incomingSpeaker))
+            check(patch.speakerAttribution?.selectedToken?.label == "b")
+            check(patch.speakerID == knownID, "A canonical neighbor choice lost its globally admitted identity")
+            check(patch.speakerAttribution?.selectedSpeakerID == knownID)
+            check(patch.speakerAttribution?.rawAssignment == .unassigned)
+            check(patch.speakerAttribution?.candidates.isEmpty == true, "Context invented support inside a silent word")
+            var projected = first.inserted[gapIndex]
+            _ = try patch.apply(to: &projected)
+            let original = source[gapIndex]
+            check(projected.id == original.id && projected.text == original.text && projected.originalText == original.originalText)
+            check(projected.start == original.start && projected.end == original.end && projected.nativeTiming == original.nativeTiming)
+            check(projected.nativeUnitID == original.nativeUnitID && projected.nativeSpeakerAssignment == original.nativeSpeakerAssignment)
+            check(projected.status == original.status && projected.completeness == original.completeness)
+            let final = try value.finish(activity: support, watermarks: marks(26.6), attemptID: attempt, epoch: epoch)
+            check(final.revisions.isEmpty, "Finalization changed a canonical known neighbor identity")
+
+            var fresh = try tail()
+            let unadmitted = try update(&fresh, words: source, activity: support, end: 26.6)
+            check(unadmitted.inserted[gapIndex].speakerAttribution?.rule == (sameSpeaker ? .neighborAgreement : .incomingSpeaker))
+            check(unadmitted.inserted[gapIndex].speakerID == nil,
+                  "A never-admitted short token gained an identity through context")
+            check(unadmitted.inserted[gapIndex].speakerAttribution?.selectedSpeakerID == nil)
+            check(unadmitted.speakers.count == 1)
+        }
+    }
+
+    static func knownNeighborSafety() throws {
+        let established = try MeetingPCMRecordingAttribution.assemble(
+            transcript: .init(segments: [word(80, 0, 6), word(81, 7, 13)]),
+            activity: [activity("a", 0, 6), activity("b", 7, 13)],
+            epoch: epoch, attemptID: attempt, duration: 13, speakerNameFormat: "Speaker %lld")
+        let source = [word(82, 20, 26), word(83, 26.1, 26.3), word(84, 26.3, 26.4), word(85, 26.4, 26.6)]
+        let support = [activity("a", 20, 26), activity("b", 26.1, 26.3), activity("b", 26.4, 26.6)]
+        for unsafeIndex in 1...3 {
+            for unsafeKind in 0..<4 {
+                var words = source
+                switch unsafeKind {
+                case 0: words[unsafeIndex].completeness = .incompleteTrack
+                case 1: words[unsafeIndex].status = .provisional
+                case 2: words[unsafeIndex].isLikelyEcho = true
+                default: words[unsafeIndex].attributionState = .timingUncertain
+                }
+                var value = try tail(prior: established.speakers)
+                let blocked = try update(&value, words: words, activity: support, end: 26.6)
+                check(blocked.inserted[2].speakerID == nil, "An unsafe target or cue restored a neighbor identity")
+                check(blocked.inserted[2].speakerAttribution?.rule != .neighborAgreement)
+            }
+        }
+        var mixed = try tail(prior: established.speakers)
+        let ambiguous = try update(&mixed, words: source,
+            activity: support + [activity("a", 26.3, 26.4), activity("b", 26.3, 26.4), activity("c", 26.3, 26.4)], end: 26.6)
+        check(ambiguous.inserted[2].speakerID == nil && ambiguous.inserted[2].overlap == .ambiguous,
+              "A mixed word gained a contextual identity")
+        check(ambiguous.inserted[2].speakerAttribution?.rule != .neighborAgreement)
+        var manualWords = source
+        manualWords[2].speakerID = UUID()
+        manualWords[2].attributionState = .assigned
+        var manual = try tail(prior: established.speakers)
+        let manualOutput = try update(&manual, words: manualWords, activity: support, end: 26.6)
+        check(manualOutput.inserted[2].speakerID != established.segments[1].speakerID,
+              "A manually assigned target was replaced by a contextual known identity")
     }
 
     static func longStream(mode: Int) throws {
