@@ -169,3 +169,37 @@ evidence remains available for offline scoring. Ordinary non-overlap fixtures ke
 the existing numeric metric and quality assertions. Resource sampling ends after
 inference and cleanup, before protected JSON serialization and attachment allocation;
 the metadata records this scope explicitly.
+
+## Reading old archives and complete speaker turns
+
+The readable paragraph projection is separate from canonical timed evidence. A direct
+word and a neighboring estimated word from the same foreground speaker belong to the
+same paragraph. Per-word rule names and suppressed candidate lists remain available in
+JSON and correction rows, but do not create extra speaker headers. The paragraph keeps
+an estimated label if any member used a heuristic. Changes in foreground identity,
+overlap or known background on an identified turn, unsafe identified attribution,
+source, status, completeness or an explicit policy fingerprint remain boundaries.
+Consecutive unidentified fragments can still flow under one unknown-speaker header;
+their separate uncertainty states remain on the original correction/JSON members.
+
+Completed pre-canonical attempts with pipeline versions below 14 can contain short
+unknown fragments without native precision, timing or speaker activity. They cannot
+be replayed as current canonical word evidence. Their reading-only compatibility
+projection can bridge an untouched unknown run between the same known speaker on the
+same source. It reuses the canonical neighbor timing admission and default bounds.
+The completed archive must have no known coverage gaps, failed attempt, incomplete
+transcript or canonical sidecar. Every bridge and both anchors must remain final,
+complete, unedited and without overlap or native/canonical attribution metadata.
+The members must also be contiguous in the original archive, including hidden echo
+rows, so filtering cannot remove a barrier. A full-source temporal overlap sweep also
+blocks nested/enclosing envelopes and start ties, including an earlier hidden row;
+half-open end touches remain admissible. Invalid source timing disables compatibility
+bridging. Different-speaker gaps remain unknown.
+
+This compatibility projection qualifies the paragraph with the existing localized
+estimated-speaker label. It does not assign a native speaker, fabricate word times,
+change the stored pipeline/policy, rewrite an archive, or alter JSON evidence. The
+mobile paragraph editor still opens the original independently revision-checked
+members. Correcting a formerly unknown member makes it a compatibility barrier;
+Undo restores its original eligibility through the existing correction operation.
+Current attempts continue to use only their canonical attribution decisions.

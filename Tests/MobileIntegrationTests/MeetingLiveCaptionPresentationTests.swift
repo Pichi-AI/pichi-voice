@@ -773,6 +773,86 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
               status: .final, overlap: .none, completeness: .complete, attributionState: attribution)
     }
 
+    func testLegacyOrphanWordsReadWithinTheirSameSpeakerTurnInBothLanguages() throws {
+        let track = UUID(), speaker = UUID()
+        var source = session()
+        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(120)
+        source.speakers = [.init(id: speaker, displayName: "Анна", diarizationClusterID: nil,
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
+        source.processingAttempts = [.init(id: UUID(), startedAt: source.startedAt, completedAt: source.endedAt,
+            stage: .completed, pipelineVersion: 13)]
+        func legacy(_ text: String, start: Double, end: Double, identified: Bool) -> MeetingTranscriptSegment {
+            var row = segment(text, track: track, start: start, speaker: identified ? speaker : nil,
+                              attribution: identified ? .assigned : .unassigned)
+            row.end = .init(value: Int64((end * 1000).rounded()), timescale: 1000)
+            row.originalText = nil; row.revision = 0
+            return row
+        }
+        let cases = [(2.96, 3.28, 3.32, 3.44), (17.52, 17.64, 17.68, 17.84),
+                     (69.32, 69.88, 69.92, 70.04), (97.80, 97.88, 97.92, 98.40)]
+        for (before, start, end, after) in cases {
+            let rows = [legacy("Начало", start: before - 0.1, end: before, identified: true),
+                        legacy("и", start: start, end: end, identified: false),
+                        legacy("продолжение.", start: after, end: after + 0.1, identified: true)]
+            source.transcriptSegments = rows
+            let original = source
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: source)
+            XCTAssertEqual(paragraphs.count, 1)
+            let paragraph = try XCTUnwrap(paragraphs.first)
+            XCTAssertEqual(paragraph.text, "Начало и продолжение.")
+            XCTAssertTrue(paragraph.containsLegacySpeakerBridge)
+            XCTAssertEqual(paragraph.segments, rows)
+            XCTAssertNil(paragraph.segments[1].speakerID)
+            XCTAssertNil(paragraph.segments[1].nativePrecision)
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
+                speakerNames: [speaker: "Анна"], language: .english), "Estimated speaker: Анна")
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
+                speakerNames: [speaker: "Анна"], language: .russian), "Предположительно: Анна")
+            XCTAssertEqual(source, original)
+            XCTAssertEqual(try MeetingTranscriptExporter.json(for: source), try MeetingTranscriptExporter.json(for: original))
+            var manual = rows; manual[1].revision += 1
+            XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: manual, in: source).count, 3)
+            var current = source; current.processingAttempts[0].pipelineVersion = 15
+            XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: rows, in: current).count, 3)
+            var enclosing = legacy("Enclosing envelope", start: before - 0.2, end: after + 1, identified: true)
+            enclosing.isLikelyEcho = true
+            var hiddenOverlap = source; hiddenOverlap.transcriptSegments.insert(enclosing, at: 0)
+            let blocked = MeetingTranscriptExporter.displayParagraphs(for: rows, in: hiddenOverlap)
+            XCTAssertEqual(blocked.count, 3)
+            XCTAssertFalse(blocked.contains(where: \.containsLegacySpeakerBridge),
+                "An earlier hidden envelope remains a temporal barrier after echo filtering")
+        }
+    }
+
+    func testCurrentNeighborRuleDoesNotSplitTheSameForegroundTurn() throws {
+        let track = UUID(), speaker = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "speaker")
+        var source = session()
+        source.speakers = [.init(id: speaker, displayName: "Анна", diarizationClusterID: nil,
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
+        var rows = [segment("Начало", track: track, start: 0, speaker: speaker, attribution: .assigned),
+                    segment("и", track: track, start: 0.5, speaker: speaker, attribution: .assigned),
+                    segment("конец.", track: track, start: 1, speaker: speaker, attribution: .assigned)]
+        let decision = MeetingSpeakerAttributionDecision(unitID: "synthetic-word", rawAssignment: .unassigned,
+            candidates: [], activeSupportSeconds: 0, simultaneousIntervals: [], relation: .none,
+            selectedToken: token, rule: .neighborAgreement, cueUnitIDs: [], backgroundTokens: [],
+            policyVersion: 2, policyFingerprint: MeetingSpeakerAttributionPolicy.standard.fingerprint)
+        rows[1].speakerAttribution = .init(decision: decision, speakerIDs: [token: speaker])
+        source.transcriptSegments = rows
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: source)
+        XCTAssertEqual(paragraphs.count, 1)
+        let paragraph = try XCTUnwrap(paragraphs.first)
+        XCTAssertFalse(paragraph.containsLegacySpeakerBridge)
+        XCTAssertEqual(paragraph.segments, rows)
+        XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
+            speakerNames: [speaker: "Анна"], language: .english), "Estimated speaker: Анна")
+        XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
+            speakerNames: [speaker: "Анна"], language: .russian), "Предположительно: Анна")
+        XCTAssertEqual(MeetingTranscriptExporter.displayRows(for: rows, in: source).map(\.showsLabel), [true, true, true],
+            "The evidence/correction row projection still describes each changed attribution")
+    }
+
     func testWordFragmentsReadAsParagraphWithoutRewritingEvidence() {
         let track = UUID()
         let words = ["Здравствуйте", ",", "давайте", "обсудим", "[PERSON]", ".", "English", "response", "."]

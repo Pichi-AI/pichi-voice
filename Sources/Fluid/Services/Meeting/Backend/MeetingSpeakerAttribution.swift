@@ -738,15 +738,28 @@ nonisolated enum MeetingSpeakerAttribution {
     /// An overlapping cluster is a contextual barrier, regardless of ID sort order. Words are
     /// still individually described, but equal or nested envelopes never establish chronology.
     private static func overlappingUnits(_ units: [MeetingFinalTextUnit], tolerance: Double) throws -> Set<String> {
-        var blocked = Set<String>(), cluster: [String] = [], maximumEnd = -Double.infinity
+        let blocked = try self.overlappingIntervalIndices(units.map {
+            .init(start: $0.analysisStart, end: $0.analysisEnd)
+        }, tolerance: tolerance, checkpoint: { try self.checkCancellation(at: $0) })
+        return Set(blocked.map { units[$0].id })
+    }
+
+    /// Chronologically sorted intervals can overlap an earlier enclosing envelope even when
+    /// adjacent rows merely touch. Mark the complete overlap cluster in one linear sweep.
+    /// Reading old archives uses this same safety boundary without inventing native text units.
+    static func overlappingIntervalIndices(
+        _ intervals: [MeetingSpeakerAttributionInterval], tolerance: Double,
+        checkpoint: (Int) throws -> Void
+    ) rethrows -> Set<Int> {
+        var blocked = Set<Int>(), cluster: [Int] = [], maximumEnd = -Double.infinity
         var clusterIsBlocked = false
-        for (position, unit) in units.enumerated() {
-            try self.checkCancellation(at: position)
-            if unit.analysisStart < maximumEnd - tolerance {
+        for (position, interval) in intervals.enumerated() {
+            try checkpoint(position)
+            if interval.start < maximumEnd - tolerance {
                 if !clusterIsBlocked { blocked.formUnion(cluster); clusterIsBlocked = true }
-                blocked.insert(unit.id)
-                maximumEnd = max(maximumEnd, unit.analysisEnd)
-            } else { cluster = [unit.id]; maximumEnd = unit.analysisEnd; clusterIsBlocked = false }
+                blocked.insert(position)
+                maximumEnd = max(maximumEnd, interval.end)
+            } else { cluster = [position]; maximumEnd = interval.end; clusterIsBlocked = false }
         }
         return blocked
     }
@@ -757,6 +770,25 @@ nonisolated enum MeetingSpeakerAttribution {
               decision.relation == .none || decision.relation == .single,
               decision.candidates.allSatisfy(\.isSuppressed)
         else { return false }
+        return true
+    }
+
+    /// Shared chronological admission for a gap between two independent anchors. This checks
+    /// timing only, never identities, acoustic evidence or native word precision. Historical
+    /// reading projections can reuse the same bounds without manufacturing canonical evidence.
+    static func admitsNeighborRun(
+        _ intervals: [MeetingSpeakerAttributionInterval], policy: MeetingSpeakerAttributionPolicy
+    ) -> Bool {
+        guard intervals.count >= 3, policy.enableNeighborResolution,
+              intervals.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start }),
+              intervals[intervals.count - 2].end - intervals[1].start
+                <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance
+        else { return false }
+        for index in 1..<intervals.count {
+            let gap = intervals[index].start - intervals[index - 1].end
+            guard gap >= -policy.comparisonTolerance,
+                  gap <= policy.maximumNeighborGapSeconds + policy.comparisonTolerance else { return false }
+        }
         return true
     }
 
@@ -779,17 +811,14 @@ nonisolated enum MeetingSpeakerAttribution {
             }
             let last = position - 1
             guard first > 0, position < units.count, anchors[first - 1], anchors[position],
-                  units[last].analysisEnd - units[first].analysisStart <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance,
                   let previous = decisions[first - 1].selectedToken,
                   let next = decisions[position].selectedToken,
                   contextBarriers?.intersects(start: units[first - 1].analysisStart,
                                               end: units[position].analysisEnd) != true
             else { continue }
-            let range = (first...position)
-            guard range.allSatisfy({ index in
-                let gap = units[index].analysisStart - units[index - 1].analysisEnd
-                return gap >= -policy.comparisonTolerance && gap <= policy.maximumNeighborGapSeconds + policy.comparisonTolerance
-            }) else { continue }
+            guard self.admitsNeighborRun(units[(first - 1)...position].map {
+                .init(start: $0.analysisStart, end: $0.analysisEnd)
+            }, policy: policy) else { continue }
             let runCandidates = decisions[first...last].flatMap(\.candidates).filter { $0.supportSeconds > policy.comparisonTolerance }
             guard runCandidates.allSatisfy({ $0.token == previous || $0.token == next }) else { continue }
             let cues = [units[first - 1].id, units[position].id]

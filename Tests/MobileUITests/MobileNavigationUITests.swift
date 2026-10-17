@@ -340,6 +340,53 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
+    func testLegacyOrphanWordReadsInsideOneEstimatedParagraphInBothLanguagesAndThemes() throws {
+        let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9021"
+        let firstID = "00000000-0000-0000-0000-202610170001"
+        for (language, appearance, historyTitle, estimatedLabel, cancelTitle) in [
+            ("en", "light", "History", "Estimated speaker: Анна", "Cancel"),
+            ("ru", "dark", "История", "Предположительно: Анна", "Отмена")
+        ] {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launch()
+            waitForOrientation(portrait: true)
+            capture("legacy-attribution-\(language)-ready")
+            openNavigation("history", title: historyTitle)
+            capture("legacy-attribution-\(language)-history")
+            let meeting = app.buttons["history.session.\(fixtureID)"]
+            guard meeting.waitForExistence(timeout: 5) else {
+                throw XCTSkip("Stage the synthetic LegacyAttributionMeeting.json in the simulator meeting store")
+            }
+            meeting.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+            capture("legacy-attribution-\(language)-opened")
+            let label = app.staticTexts[estimatedLabel].firstMatch
+            XCTAssertTrue(label.waitForExistence(timeout: 5))
+            let paragraph = app.staticTexts["Обсудим и продолжим."].firstMatch
+            XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
+            try revealParagraphAboveNavigation(paragraph, step: "legacy-attribution-\(language)-portrait")
+            XCTAssertFalse(app.staticTexts[language == "ru" ? "Неизвестный участник" : "Unknown speaker"].exists)
+            capture("legacy-attribution-\(language)-portrait-merged")
+            app.buttons["transcript.edit.\(firstID)"].tap()
+            XCTAssertTrue(app.descendants(matching: .any)["transcript.edit.fragments"].firstMatch.waitForExistence(timeout: 5))
+            for fragment in 1...3 {
+                XCTAssertTrue(app.descendants(matching: .any)["transcript.edit.fragment.00000000-0000-0000-0000-20261017000\(fragment)"].firstMatch.exists,
+                              "Reading grouping must preserve every independently correctable original member")
+            }
+            capture("legacy-attribution-\(language)-original-members")
+            app.buttons[cancelTitle].firstMatch.tap()
+            capture("legacy-attribution-\(language)-editor-cancelled")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            waitForOrientation(portrait: false)
+            // Landscape can virtualize the whole paragraph below the meeting header.
+            try revealParagraphAboveNavigation(paragraph, step: "legacy-attribution-\(language)-landscape")
+            XCTAssertTrue(label.exists && paragraph.exists)
+            capture("legacy-attribution-\(language)-landscape-merged")
+        }
+    }
+
     func testRetainedProcessingRecoveryActionsInBothLanguagesAndThemes() throws {
         let fixtureID = "2C920909-152B-4050-9ACB-454E82411015"
         for (language, appearance, historyTitle, restartTitle) in [

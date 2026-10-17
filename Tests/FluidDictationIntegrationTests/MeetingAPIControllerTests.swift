@@ -67,6 +67,13 @@ final class MeetingAPIControllerTests: XCTestCase {
             earlier.end = MeetingMediaTime(value: 500, timescale: 1000)
             earlier.text = "Echo"
             earlier.isLikelyEcho = true
+            earlier.nativePrecision = .word
+            earlier.nativeUnitID = "api-word-echo"
+            let nativeToken = MeetingBackendSpeakerToken(
+                analysisEpochID: .init(trackID: earlier.sourceTrackID, ordinal: 0), label: "slot-0"
+            )
+            earlier.nativeSpeakerAssignment = .assigned(nativeToken)
+            earlier.nativeTiming = .init(start: 0.000125, end: 0.499875)
             session.transcriptSegments.append(earlier)
             try await store.create(session)
 
@@ -75,16 +82,30 @@ final class MeetingAPIControllerTests: XCTestCase {
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(response.headers["Content-Type"], "application/json; charset=utf-8")
             let body = try self.json(response)
-            XCTAssertEqual(body["schemaVersion"] as? Int, 1)
+            XCTAssertEqual(body["schemaVersion"] as? Int, 2)
             XCTAssertEqual(body["title"] as? String, "API meeting")
             let segments = try XCTUnwrap(body["segments"] as? [[String: Any]])
             XCTAssertEqual(segments.count, 2)
+            XCTAssertEqual(segments[0]["id"] as? String, earlier.id.uuidString)
             XCTAssertEqual(segments[0]["text"] as? String, "Echo")
             XCTAssertEqual(segments[0]["isLikelyEcho"] as? Bool, true)
+            XCTAssertEqual(segments[0]["startSeconds"] as? Double, 0)
+            XCTAssertEqual(segments[0]["endSeconds"] as? Double, 0.5)
+            XCTAssertEqual(segments[0]["nativePrecision"] as? String, "word")
+            XCTAssertEqual(segments[0]["nativeUnitID"] as? String, earlier.nativeUnitID)
+            let timing = try XCTUnwrap(segments[0]["nativeTiming"] as? [String: Any])
+            XCTAssertEqual(try XCTUnwrap(timing["start"] as? Double), 0.000125, accuracy: 1e-12)
+            XCTAssertEqual(try XCTUnwrap(timing["end"] as? Double), 0.499875, accuracy: 1e-12)
+            let nativeAssignment = try XCTUnwrap(segments[0]["nativeSpeakerAssignment"] as? [String: Any])
+            let decodedAssignment = try JSONDecoder().decode(MeetingBackendSpeakerAssignment.self,
+                from: JSONSerialization.data(withJSONObject: nativeAssignment))
+            XCTAssertEqual(decodedAssignment, .assigned(nativeToken))
             XCTAssertEqual(segments[1]["text"] as? String, session.transcriptSegments[0].text)
             XCTAssertEqual(segments[1]["startSeconds"] as? Double, 1.25)
             XCTAssertEqual(segments[1]["endSeconds"] as? Double, 2.5)
             XCTAssertEqual(segments[1]["speakerID"] as? String, session.speakers[0].id.uuidString)
+            XCTAssertNil(segments[1]["nativePrecision"], "Legacy envelopes do not acquire invented word metadata")
+            XCTAssertNil(segments[1]["nativeTiming"])
             let speakers = try XCTUnwrap(body["speakers"] as? [[String: Any]])
             XCTAssertEqual(speakers.first?["displayName"] as? String, "Maya")
             XCTAssertNil(body["selectedMicrophone"])
