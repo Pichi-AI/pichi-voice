@@ -205,10 +205,13 @@ nonisolated enum PichiMeetingSummaryInput {
             let endedAt: Date?
             let turns: [PichiMeetingSummaryTurn]
             let gaps: [MeetingTranscriptCoverageGap]?
+            let attribution: [MeetingTranscriptSpeakerAttribution]?
         }
         let data = (try? encoder.encode(Snapshot(title: session.title, language: session.languageCode,
                                                 startedAt: session.startedAt, endedAt: session.endedAt,
-                                                turns: turns(for: session), gaps: session.transcriptCoverageGaps))) ?? Data()
+                                                turns: turns(for: session), gaps: session.transcriptCoverageGaps,
+                                                attribution: session.transcriptSegments.contains { $0.speakerAttribution != nil }
+                                                    ? session.transcriptSegments.compactMap(\.speakerAttribution) : nil))) ?? Data()
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 

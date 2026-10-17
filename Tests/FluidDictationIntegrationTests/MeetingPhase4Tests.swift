@@ -197,7 +197,7 @@ final class MeetingPhase4ClassificationTests: XCTestCase {
     // MARK: - 7. pipelineVersion bump
 
     func testPipelineVersionIncludesShortTurnContinuity() {
-        XCTAssertEqual(MeetingProcessingPipeline.pipelineVersion, 14)
+        XCTAssertEqual(MeetingProcessingPipeline.pipelineVersion, 15)
         XCTAssertEqual(MeetingFinalProcessingConfiguration.defaultPipelineVersion, MeetingProcessingPipeline.pipelineVersion)
     }
 

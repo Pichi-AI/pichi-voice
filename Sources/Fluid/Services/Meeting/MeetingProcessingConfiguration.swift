@@ -1,31 +1,14 @@
 import Foundation
 
-/// Versioned, length-framed key/value encoding so arbitrary string fields cannot collide on
-/// delimiters (`asr=a@b,lang=c` vs `asr=a,lang=b@c`). Values stay human-readable; no hashing.
-/// Strings are canonicalized to precomposed form because Swift `==` treats canonically
-/// equivalent Unicode as equal while raw UTF8 lengths differ.
-nonisolated enum MeetingConfigFingerprintEncoding {
-    static let version = 1
-
-    static func encode(_ pairs: [(key: String, value: String)]) -> String {
-        let framed = pairs.map { pair in
-            let key = pair.key.precomposedStringWithCanonicalMapping
-            let value = pair.value.precomposedStringWithCanonicalMapping
-            return "\(key.utf8.count):\(key)=\(value.utf8.count):\(value)"
-        }
-        return (["v\(Self.version)"] + framed).joined(separator: ";")
-    }
-}
-
 /// Immutable value snapshot of meeting post-processing ASR configuration. The pipeline builds it
 /// once per attempt and the meeting preparation owner constructs a fixed provider from it, so an
 /// active run never follows later dictation-setting changes.
-nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
+nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Sendable {
     static let defaultASRModel = "parakeet-tdt-v2"
     static let defaultLanguageCode = "en"
     /// Mirrors `MeetingProcessingPipeline.pipelineVersion`; that class is `@MainActor`, so a
     /// MainActor test guards this literal against drift instead of referencing it here.
-    static let defaultPipelineVersion = 14
+    static let defaultPipelineVersion = 15
 
     let asrModel: String
     let asrArtifactFingerprint: String?
@@ -38,6 +21,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     let diarizationFingerprint: String
     let pipelineVersion: Int
     let speakerLabelsEnabled: Bool
+    /// Nil identifies an older configuration and retains its legacy presentation policy.
+    let speakerAttributionPolicy: MeetingSpeakerAttributionPolicy?
 
     init(
         asrModel: String? = nil,
@@ -50,7 +35,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
         experimentalUnifiedFinalEnabled: Bool = false,
         diarizationFingerprint: String = MeetingProcessingCheckpoint.currentDiarizationFingerprint,
         pipelineVersion: Int = Self.defaultPipelineVersion,
-        speakerLabelsEnabled: Bool = true
+        speakerLabelsEnabled: Bool = true,
+        speakerAttributionPolicy: MeetingSpeakerAttributionPolicy? = .standard
     ) {
         self.asrModel = asrModel ?? (languageCode == Self.defaultLanguageCode ? Self.defaultASRModel : "parakeet-tdt")
         self.asrArtifactFingerprint = asrArtifactFingerprint
@@ -63,6 +49,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
         self.diarizationFingerprint = diarizationFingerprint
         self.pipelineVersion = pipelineVersion
         self.speakerLabelsEnabled = speakerLabelsEnabled
+        self.speakerAttributionPolicy = speakerAttributionPolicy
     }
 
     /// Identity of this inert configuration snapshot only. It does not by itself prove the runtime
@@ -78,6 +65,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
             ("diarizer", self.diarizationFingerprint),
             ("pipeline", String(self.pipelineVersion)),
             ("speakerLabels", String(self.speakerLabelsEnabled)),
+            ("speakerAttribution", self.speakerAttributionPolicy?.fingerprint ?? "legacy-raw"),
         ]
         if let asrArtifactFingerprint { pairs.append(("asrArtifact", asrArtifactFingerprint)) }
         return MeetingConfigFingerprintEncoding.encode(pairs)

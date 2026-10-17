@@ -1,6 +1,6 @@
 // Adapted from FluidInference/FluidAudio 82eb4c1e0ab67e1c7d8de5092aa42a8f74cbd7b8.
 // Apache-2.0. See Resources/Notices/FluidAudio-Nemotron3.txt.
-// Changes: app isolation, existing FluidAudio helpers, local-only loading, joined cancellation.
+// Changes: app isolation, local-only loading, joined cancellation, bounded streaming snapshots.
 #if arch(arm64)
 import FluidAudio
 import Foundation
@@ -11,7 +11,7 @@ import Foundation
 ///
 /// Mirrors NeMo `SortformerModules` parameters for `nvidia/Nemotron-3-Diarization`.
 /// Latency = (chunkLen + chunkRightContext) * 80 ms.
-public nonisolated struct Nemotron3Config: Sendable {
+public nonisolated struct Nemotron3Config: Sendable, Encodable {
 
     // MARK: Architecture (fixed by the checkpoint)
 
@@ -222,7 +222,8 @@ public nonisolated struct Nemotron3Config: Sendable {
 ///
 /// `spkcache`/`fifo` are always full physical capacity (zero-padded past the valid length),
 /// matching the CoreML model's fixed input shapes.
-public nonisolated struct Nemotron3StreamingState: Sendable {
+public nonisolated struct Nemotron3StreamingState: Sendable, Codable, Equatable {
+    static let checkpointConfigurationKey = CodingUserInfoKey(rawValue: "Nemotron3CheckpointConfiguration")!
     /// [spkcacheLen, 512] flattened, valid frames left-packed.
     public var spkcache: [Float]
     public var spkcacheLength: Int
@@ -246,6 +247,29 @@ public nonisolated struct Nemotron3StreamingState: Sendable {
         self.fifo = [Float](repeating: 0, count: config.fifoLen * d)
         self.fifoPreds = [Float](repeating: 0, count: config.fifoLen * s)
         self.fifoLength = 0
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case spkcache, spkcacheLength, spkcachePreds, spkcacheCompressed, fifo, fifoLength, fifoPreds
+    }
+
+    public init(from decoder: Decoder) throws {
+        guard let config = decoder.userInfo[Self.checkpointConfigurationKey] as? Nemotron3Config else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                                                    debugDescription: "Missing checkpoint configuration"))
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.spkcache = try MeetingDiarizerCheckpointDecoding.array(Float.self, from: container, forKey: .spkcache,
+                                                                   maximumCount: config.spkcacheLen * config.preEncoderDims)
+        self.spkcachePreds = try MeetingDiarizerCheckpointDecoding.array(Float.self, from: container, forKey: .spkcachePreds,
+                                                                        maximumCount: config.spkcacheLen * config.numSpeakers)
+        self.fifo = try MeetingDiarizerCheckpointDecoding.array(Float.self, from: container, forKey: .fifo,
+                                                               maximumCount: config.fifoLen * config.preEncoderDims)
+        self.fifoPreds = try MeetingDiarizerCheckpointDecoding.array(Float.self, from: container, forKey: .fifoPreds,
+                                                                    maximumCount: config.fifoLen * config.numSpeakers)
+        self.spkcacheLength = try container.decode(Int.self, forKey: .spkcacheLength)
+        self.spkcacheCompressed = try container.decode(Bool.self, forKey: .spkcacheCompressed)
+        self.fifoLength = try container.decode(Int.self, forKey: .fifoLength)
     }
 }
 

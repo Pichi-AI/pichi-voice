@@ -1395,16 +1395,10 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             pcmAdmissionRestrictions: restrictions)
     }
 
-    /// An injected policy exercises exact restriction matching independently of the production
-    /// registrations. The former capture-time GigaAM workload restriction was retired when
-    /// speaker analysis moved to the post-Stop RAM replay operation.
-    private func restrictedDescriptor() -> MeetingBackendDescriptor {
-        self.descriptor(id: .gigaam, languages: ["ru"], restrictions: [
-            .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10",
-                asrArtifactFingerprint: "synthetic-restricted-export", speakerLabelsEnabled: true,
-                piiRedactionEnabled: true, modelDisplayName: "Synthetic restricted model",
-                alternativeModelDisplayName: "Synthetic alternative model")
-        ])
+    private func syntheticRestriction() -> MeetingPCMAdmissionRestriction {
+        MeetingPCMAdmissionRestriction(physicalDeviceModel: "fixture-tablet-v1", operatingSystemVersion: "99.4.2",
+            asrArtifactFingerprint: "fixture-asr-export@sha256:exact-identity", speakerLabelsEnabled: true,
+            piiRedactionEnabled: true, modelDisplayName: "Synthetic model", alternativeModelDisplayName: "Synthetic alternative")
     }
 
     private func session(backendID: MeetingBackendID = backendID, language: String = "en",
@@ -1506,11 +1500,16 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             expected: .unsupportedInput(backend: Self.backendID, input: .boundedMicrophonePCM), probe: probe)
     }
 
-    func testRecordedChunkPathAlsoHonoursItsDeclaredInputCapability() async {
+    func testRecordedChunkPathAlsoHonoursItsDeclaredInputCapability() async throws {
         let descriptor = self.descriptor(inputs: [.boundedMicrophonePCM])
         let probe = Probe()
         let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: Self.backendID)
         registry.register(Self.backendID, descriptor: descriptor) { context in PCMBackend(descriptor: descriptor, context: context, probe: probe) }
+        // Retained processing authenticates an existing checkpoint before selecting a backend.
+        // Use an owned recording directory so invalid-directory validation cannot mask admission.
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("RecordedAdmission.\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
         var session = self.session()
         session.audioStorageMode = .retainedFiles
         session.audioTracks = [MeetingAudioTrack(id: UUID(), kind: .microphone,
@@ -1520,23 +1519,29 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
                 discontinuities: [], sha256: "synthetic", byteCount: 1, finalizationState: .finalized)])]
         do {
             _ = try await self.pipeline(registry, probe: probe).process(session: session,
-                sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"), progress: { _ in })
+                sessionDirectory: directory, progress: { _ in })
             XCTFail("PCM-only registration cannot be silently treated as a file executor")
         } catch { XCTAssertEqual(error as? MeetingBackendError, .unsupportedInput(backend: Self.backendID, input: .recordedChunks)) }
         XCTAssertEqual(probe.dependencies, 0)
         XCTAssertEqual(probe.runtime, 0)
         XCTAssertEqual(probe.service, 0)
         XCTAssertEqual(probe.pcmExecutor, 0)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty,
+            "Unsupported input cannot create inference caches or publish a processing result")
     }
 
-    func testSelectedBackendOwnsPCMExecutorRatherThanSubstitutingHostRuntime() async {
+    func testSelectedBackendOwnsPCMExecutorRatherThanSubstitutingHostRuntime() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let descriptor = self.descriptor()
         let probe = Probe()
         let registry = MeetingTranscriptionBackendRegistry()
         registry.register(Self.backendID, descriptor: descriptor) { context in PCMBackend(descriptor: descriptor, context: context, probe: probe, refuseExecutor: true) }
         do {
             try await self.pipeline(registry, probe: probe).prepareMemoryAudio(session: self.session(),
-                sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"), checkpoint: { _ in })
+                sessionDirectory: sessionDirectory, checkpoint: { _ in })
             XCTFail("The selected backend's refusal must be respected")
         } catch is BackendReached { } catch { XCTFail("Unexpected error: \(error)") }
         XCTAssertEqual(probe.pcmExecutor, 1)
@@ -1544,7 +1549,11 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(probe.service, 0)
     }
 
-    func testPCMHostCapabilityRejectsSubstitutedFrozenRequest() async {
+    func testPCMHostCapabilityRejectsSubstitutedFrozenRequest() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let descriptor = self.descriptor()
         let probe = Probe()
         let registry = MeetingTranscriptionBackendRegistry()
@@ -1556,7 +1565,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         }
         do {
             try await self.pipeline(registry, probe: probe).prepareMemoryAudio(session: self.session(),
-                sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"), checkpoint: { _ in })
+                sessionDirectory: sessionDirectory, checkpoint: { _ in })
             XCTFail("PCM cannot borrow a runtime for a substituted attempt")
         } catch { XCTAssertEqual(error as? MeetingBackendError, .hostCapabilityRequestMismatch(backend: Self.backendID)) }
         XCTAssertEqual(probe.pcmExecutor, 1)
@@ -1564,7 +1573,11 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(probe.service, 0)
     }
 
-    func testBareFactoryCannotChangeCapabilitiesBetweenAdmissionAndFrozenExecution() async {
+    func testBareFactoryCannotChangeCapabilitiesBetweenAdmissionAndFrozenExecution() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let probe = Probe()
         let admitted = self.descriptor()
         let changed = self.descriptor(version: "2")
@@ -1576,7 +1589,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         }
         do {
             try await self.pipeline(registry, probe: probe).prepareMemoryAudio(session: self.session(),
-                sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"), checkpoint: { _ in })
+                sessionDirectory: sessionDirectory, checkpoint: { _ in })
             XCTFail("Admitted capabilities must survive dependency preparation")
         } catch { XCTAssertEqual(error as? MeetingBackendError, .backendDescriptorMismatch(backend: Self.backendID)) }
         XCTAssertEqual(constructions, 2)
@@ -1603,6 +1616,10 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
     }
 
     func testPreinstalledArtifactIdentityStaysPinnedAcrossDependencyPreparation() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let suite = "PinnedPCMArtifact.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -1617,7 +1634,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             meetingRuntimeFactory: { request in frozenRequest = request; throw RuntimeReached() },
             prepareDiarizationDependencies: { _ in source.recordingASRArtifactFingerprint = "later-unapproved-identity" })
         do {
-            try await pipeline.prepareMemoryAudio(session: source, sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"),
+            try await pipeline.prepareMemoryAudio(session: source, sessionDirectory: sessionDirectory,
                 checkpoint: { _ in XCTFail("The runtime marker cannot publish a checkpoint") })
             XCTFail("Expected the requested runtime marker")
         } catch is RuntimeReached { }
@@ -1630,7 +1647,11 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
     }
 
-    func testAllProductionPCMRegistrationsDispatchThroughTheirRuntimeOperation() async {
+    func testAllProductionPCMRegistrationsDispatchThroughTheirRuntimeOperation() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         for backendID in [MeetingBackendID.gigaam, .whisperTiny, .parakeetV3, .parakeetNemotron] {
             let language = backendID == .gigaam ? "ru" : "en"
             let probe = Probe()
@@ -1638,7 +1659,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             XCTAssertTrue(registry.descriptor(for: backendID)?.supportedInputs.contains(.boundedMicrophonePCM) == true)
             do {
                 try await self.pipeline(registry, probe: probe).prepareMemoryAudio(session: self.session(backendID: backendID, language: language),
-                    sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"), checkpoint: { _ in })
+                    sessionDirectory: sessionDirectory, checkpoint: { _ in })
                 XCTFail("Injected runtime marker must be reached through the selected backend")
             } catch is RuntimeReached { } catch { XCTFail("Unexpected error: \(error)") }
             XCTAssertEqual(probe.dependencies, 1)
@@ -1647,7 +1668,11 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         }
     }
 
-    func testRegisteredProviderValidatesPinnedASRModelBeforeDependencyPreparation() async {
+    func testRegisteredProviderValidatesPinnedASRModelBeforeDependencyPreparation() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let probe = Probe()
         let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: "whisper-tiny")!
         let registry = MeetingTranscriptionBackendRegistry()
@@ -1656,7 +1681,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         }
         do {
             try await self.pipeline(registry, probe: probe).prepareMemoryAudio(session: self.session(backendID: .whisperTiny),
-                sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"), checkpoint: { _ in })
+                sessionDirectory: sessionDirectory, checkpoint: { _ in })
             XCTFail("Factory/provider mismatch cannot reach model work")
         } catch { XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedASRModel("whisper-tiny")) }
         XCTAssertEqual(probe.dependencies, 0)
@@ -1664,72 +1689,94 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(probe.service, 0)
     }
 
-    func testRegisteredPCMRestrictionIsExactAndPreservesNeighborConfigurations() throws {
-        let descriptor = self.restrictedDescriptor()
-        let restriction = try XCTUnwrap(descriptor.pcmAdmissionRestrictions.first)
-        XCTAssertEqual(descriptor.pcmAdmissionRestrictions.count, 1)
-        XCTAssertEqual(restriction.asrArtifactFingerprint, "synthetic-restricted-export")
-        let configuration = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.gigaamModelID,
-            asrArtifactFingerprint: restriction.asrArtifactFingerprint, languageCode: "ru", speakerLabelsEnabled: true)
-        let context = MeetingPCMAdmissionContext(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10", piiRedactionEnabled: true)
-        XCTAssertThrowsError(try descriptor.validatePCMInput(configuration: configuration, mode: .inRoom, admissionContext: context)) { error in
-            XCTAssertEqual(error as? MeetingBackendError, .unsupportedPCMConfiguration(backend: descriptor.id, restriction: restriction))
-            XCTAssertTrue(error.localizedDescription.contains(restriction.modelDisplayName))
-            XCTAssertTrue(error.localizedDescription.contains(restriction.alternativeModelDisplayName))
+    func testDeclaredPCMRestrictionIsExactAcrossConfigurationMatrix() throws {
+        // Catalog restrictions change when measured execution routes change. Test the generic
+        // restriction contract with fixed synthetic metadata rather than an obsolete device ban.
+        let restriction = self.syntheticRestriction()
+        let descriptor = self.descriptor(restrictions: [restriction])
+        let deviceModels: [String?] = [restriction.physicalDeviceModel, "fixture-tablet-v2", nil]
+        let systemVersions = [restriction.operatingSystemVersion, "99.4.1", "100.0.0"]
+        let artifacts: [String?] = [restriction.asrArtifactFingerprint, "fixture-other-export", nil]
+        var rejected = 0
+        for device in deviceModels {
+            for systemVersion in systemVersions {
+                for artifact in artifacts {
+                    for speakers in [false, true] {
+                        for pii in [false, true] {
+                            let configuration = MeetingFinalProcessingConfiguration(asrModel: "fixture-asr",
+                                asrArtifactFingerprint: artifact, languageCode: "en", speakerLabelsEnabled: speakers)
+                            let context = MeetingPCMAdmissionContext(physicalDeviceModel: device,
+                                operatingSystemVersion: systemVersion, piiRedactionEnabled: pii)
+                            let mustReject = device == restriction.physicalDeviceModel
+                                && systemVersion == restriction.operatingSystemVersion
+                                && artifact == restriction.asrArtifactFingerprint && speakers && pii
+                            do {
+                                try descriptor.validatePCMInput(configuration: configuration, mode: .inRoom, admissionContext: context)
+                                XCTAssertFalse(mustReject, "The exact declared combination must be rejected")
+                            } catch {
+                                rejected += 1
+                                XCTAssertTrue(mustReject, "Neighbor configurations must remain admissible")
+                                XCTAssertEqual(error as? MeetingBackendError,
+                                    .unsupportedPCMConfiguration(backend: descriptor.id, restriction: restriction))
+                                XCTAssertTrue(error.localizedDescription.contains(restriction.modelDisplayName))
+                                XCTAssertTrue(error.localizedDescription.contains(restriction.alternativeModelDisplayName))
+                            }
+                        }
+                    }
+                }
+            }
         }
-        for neighbor in [
-            MeetingPCMAdmissionContext(physicalDeviceModel: "iPad7,2", operatingSystemVersion: "17.7.10", piiRedactionEnabled: true),
-            .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.9", piiRedactionEnabled: true),
-            .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "18.0.0", piiRedactionEnabled: true),
-            .init(physicalDeviceModel: nil, operatingSystemVersion: "17.7.10", piiRedactionEnabled: true),
-            .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10", piiRedactionEnabled: false)
-        ] {
-            XCTAssertNoThrow(try descriptor.validatePCMInput(configuration: configuration, mode: .inRoom, admissionContext: neighbor))
-        }
-        let artifactNeighbors: [(String?, Bool)] = [(restriction.asrArtifactFingerprint, false), ("unmeasured-fp16-export", true), (nil, true)]
-        for (fingerprint, speakers) in artifactNeighbors {
-            let neighbor = MeetingFinalProcessingConfiguration(asrModel: configuration.asrModel,
-                asrArtifactFingerprint: fingerprint, languageCode: "ru", speakerLabelsEnabled: speakers)
-            XCTAssertNoThrow(try descriptor.validatePCMInput(configuration: neighbor, mode: .inRoom, admissionContext: context))
-        }
-        let tiny = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: PichiMeetingProviderFactory.whisperTinyModelID))
-        XCTAssertNoThrow(try tiny.validatePCMInput(configuration: .init(asrModel: PichiMeetingProviderFactory.whisperTinyModelID,
-            languageCode: "auto", speakerLabelsEnabled: true), mode: .inRoom, admissionContext: context))
-        var retained = self.session(backendID: descriptor.id, language: "ru")
+        XCTAssertEqual(rejected, 1, "Only one of the 108 synthetic combinations is restricted")
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: "fixture-asr",
+            asrArtifactFingerprint: restriction.asrArtifactFingerprint, languageCode: "en", speakerLabelsEnabled: true)
+        let context = MeetingPCMAdmissionContext(physicalDeviceModel: restriction.physicalDeviceModel,
+            operatingSystemVersion: restriction.operatingSystemVersion, piiRedactionEnabled: true)
+        let unrestricted = self.descriptor()
+        XCTAssertNoThrow(try unrestricted.validatePCMInput(configuration: configuration, mode: .inRoom, admissionContext: context))
+        var retained = self.session(backendID: descriptor.id)
         retained.audioStorageMode = .retainedFiles
         retained.piiRedactionEnabled = true
         let wrongInput = MeetingBackendRequest(attemptID: UUID(), session: retained,
             sessionDirectory: URL(fileURLWithPath: "/synthetic"), configuration: configuration)
         XCTAssertThrowsError(try descriptor.validatePCMInput(wrongInput, admissionContext: context)) { error in
             XCTAssertEqual(error as? MeetingBackendError, .unsupportedTrackTopology(backend: descriptor.id),
-                "The deployment restriction must not reinterpret retained-file input as strict PCM")
+                "A deployment restriction must not reinterpret retained-file input as strict PCM")
         }
     }
 
-    func testFrozenRegisteredRestrictionRejectsBeforeResourcePreparation() async throws {
-        let descriptor = self.restrictedDescriptor()
-        let restriction = try XCTUnwrap(descriptor.pcmAdmissionRestrictions.first)
+    func testFrozenArtifactAndPIIRestrictionRejectBeforeResourcePreparation() async {
+        let restriction = self.syntheticRestriction()
+        // A synthetic factory at a registered configuration boundary exercises the real frozen
+        // artifact override without depending on restrictions in the current production catalog.
+        let descriptor = self.descriptor(id: .whisperTiny, restrictions: [restriction])
         let probe = Probe()
-        let registry = MeetingTranscriptionBackendRegistry()
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: descriptor.id)
         registry.register(descriptor.id, descriptor: descriptor) { context in
             PCMBackend(descriptor: descriptor, context: context, probe: probe)
         }
         let pipeline = MeetingProcessingPipeline(asrServiceProvider: {
             probe.service += 1; XCTFail("Admission must precede ASR residency"); return ASRService()
-        }, managesModelResidency: false, pcmAdmissionContextProvider: { pii in
-            .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10", piiRedactionEnabled: pii)
+        }, managesModelResidency: false, privacyRedactorProvider: {
+            XCTFail("Unsupported input must not prepare the privacy model"); return nil
+        }, pcmAdmissionContextProvider: { pii in
+            .init(physicalDeviceModel: restriction.physicalDeviceModel,
+                operatingSystemVersion: restriction.operatingSystemVersion, piiRedactionEnabled: pii)
         }, backendRegistry: registry, meetingRuntimeFactory: { _ in
             probe.runtime += 1; throw RuntimeReached()
         }, prepareDiarizationDependencies: { _ in probe.dependencies += 1 })
-        var session = self.session(backendID: .gigaam, language: "ru")
+        var session = self.session(backendID: descriptor.id)
         session.piiRedactionEnabled = true
         session.speakerLabelsEnabled = true
         session.recordingASRArtifactFingerprint = restriction.asrArtifactFingerprint
         await self.reject(pipeline, session: session,
             expected: .unsupportedPCMConfiguration(backend: descriptor.id, restriction: restriction), probe: probe)
+        XCTAssertEqual(probe.pcmExecutor, 0)
     }
 
     func testFrozenPublicExportAndA1PrivacyAdmissionPreserveTheRegisteredRoute() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
         struct UnusedRedactor: TranscriptTextRedacting {
             func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
                 XCTFail("Admission cannot transcribe or redact text")
@@ -1764,7 +1811,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             session.recordingASRArtifactFingerprint = fingerprint
             do {
                 try await pipeline.prepareMemoryAudio(session: session,
-                    sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"),
+                    sessionDirectory: sessionDirectory,
                     checkpoint: { _ in XCTFail("Admission cannot publish") })
                 XCTFail("An unavailable privacy adapter or runtime marker must stop preparation")
             } catch is RuntimeReached {

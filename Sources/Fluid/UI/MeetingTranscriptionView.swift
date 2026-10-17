@@ -271,6 +271,7 @@ struct MeetingTranscriptionView: View {
                         onStart: self.startRecording,
                         onStop: self.stopAndTranscribe,
                         onRetrySession: { self.retryProcessingSession(id: $0.id) },
+                        onRestartSession: { self.retryProcessingSession(id: $0.id, restarting: true) },
                         onRevealAudio: self.revealCapturedAudio,
                         onRecordAgain: self.recordAgain,
                         onCopyTranscript: self.copyTranscript,
@@ -869,7 +870,7 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func retryProcessingSession(id: MeetingSessionID) {
+    private func retryProcessingSession(id: MeetingSessionID, restarting: Bool = false) {
         guard !self.isRetrying, self.summaryActivity.selectionLock == nil else { return }
         self.isRetrying = true
         self.actionErrorMessage = nil
@@ -877,7 +878,11 @@ struct MeetingTranscriptionView: View {
         Task {
             defer { self.isRetrying = false }
             do {
-                _ = try await self.coordinator.retryProcessing(sessionID: id)
+                if restarting {
+                    _ = try await self.coordinator.restartProcessing(sessionID: id)
+                } else {
+                    _ = try await self.coordinator.retryProcessing(sessionID: id)
+                }
             } catch {
                 self.actionErrorMessage = error.localizedDescription
             }
@@ -1417,6 +1422,7 @@ struct MeetingTranscriptionCanvas: View {
     let onStart: () -> Void
     let onStop: () -> Void
     let onRetrySession: (MeetingSession) -> Void
+    var onRestartSession: ((MeetingSession) -> Void)? = nil
     let onRevealAudio: (MeetingSession) -> Void
     let onRecordAgain: (MeetingSession) -> Void
     let onCopyTranscript: (MeetingSession, Bool) -> Void
@@ -1558,6 +1564,7 @@ struct MeetingTranscriptionCanvas: View {
                     message: self.errorMessage ?? message,
                     isRetrying: self.isRetrying,
                     onRetrySession: self.onRetrySession,
+                    onRestartSession: self.onRestartSession,
                     onRevealAudio: self.onRevealAudio,
                     onRecordAgain: self.onRecordAgain,
                     onClose: self.onCloseSelection

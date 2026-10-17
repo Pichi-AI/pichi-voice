@@ -26,11 +26,11 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         let result = ASRTranscriptionResult(text: timings.map(\.text).joined(separator: " "), segmentTimings: timings)
         let activity = [MeetingBackendSpeakerActivity(token: first, start: 0, end: 5.8),
                         .init(token: second, start: 5.8, end: 12)]
-        let coarse = MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: result.text), words: [],
+        let coarse = try MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: result.text), words: [],
             epoch: epoch, duration: 12, activity: activity, identityTokens: [first, second])
         XCTAssertEqual(coarse.count, 1)
         guard case .ambiguous = coarse[0].speaker else { return XCTFail("Whole-window timing cannot choose between two voices") }
-        let units = MeetingParakeetNemotronBackend.pcmUnits(result: result, words: [],
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(result: result, words: [],
             epoch: epoch, duration: 12, activity: activity, identityTokens: [first, second])
         XCTAssertEqual(units.map(\.precision), [.utterance, .utterance, .utterance])
         XCTAssertEqual(units.map(\.analysisStart), [0.2, 3.2, 6])
@@ -52,16 +52,16 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         XCTAssertEqual(firstParagraph.text, "Здравствуйте, обсудим документ. Я уточню результаты.")
         XCTAssertEqual(secondParagraph.text, "Хорошо, я вас слушаю.")
         XCTAssertEqual(paragraphs.flatMap(\.segments), batch.segments, "Presentation must retain canonical boundaries")
-        let noIdentity = MeetingParakeetNemotronBackend.pcmUnits(result: result, words: [], epoch: epoch,
+        let noIdentity = try MeetingParakeetNemotronBackend.pcmUnits(result: result, words: [], epoch: epoch,
             duration: 12, activity: activity, identityTokens: [])
         XCTAssertTrue(noIdentity.allSatisfy { $0.speaker == .unassigned }, "Timing alone cannot mint identity")
     }
 
-    func testNativeSegmentThatCrossesTwoVoicesRemainsAmbiguous() {
+    func testNativeSegmentThatCrossesTwoVoicesRemainsAmbiguous() throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         let first = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
         let second = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-1")
-        let units = MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Mixed native segment.",
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Mixed native segment.",
             segmentTimings: [.init(text: "Mixed native segment.", start: 0.2, end: 9)]), words: [],
             epoch: epoch, duration: 12, activity: [.init(token: first, start: 0, end: 6),
                 .init(token: second, start: 6, end: 12)], identityTokens: [first, second])
@@ -70,14 +70,14 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         guard case .ambiguous = units[0].speaker else { return XCTFail("Never split a native utterance at fabricated word boundaries") }
     }
 
-    func testInvalidNativeSegmentMetadataFallsBackWithoutDroppingUnalignedText() {
+    func testInvalidNativeSegmentMetadataFallsBackWithoutDroppingUnalignedText() throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         for segments: [ASRSegmentTiming] in [
             [.init(text: "Keep", start: 0, end: 1)],
             [.init(text: "Keep every word.", start: 0, end: 13)],
             [.init(text: "Keep every", start: 0, end: 8), .init(text: "word.", start: 7, end: 9)]
         ] {
-            let units = MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Keep every word.",
+            let units = try MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Keep every word.",
                 segmentTimings: segments), words: [], epoch: epoch, duration: 12, activity: [], identityTokens: [])
             XCTAssertEqual(units.count, 1)
             XCTAssertEqual(units[0].text, "Keep every word.")
@@ -101,7 +101,7 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         let words = [ASRWordTiming(text: "Синтетическая", start: 0.2, end: 0.7),
                      ASRWordTiming(text: "фраза.", start: 0.8, end: 1.4)]
         func batch(tokens: Set<MeetingBackendSpeakerToken>) throws -> MeetingPCMTranscriptBatch {
-            let units = MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Синтетическая фраза."),
+            let units = try MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Синтетическая фраза."),
                 words: words, epoch: epoch, duration: 12, activity: activity, identityTokens: tokens)
             return try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: attempt, epoch: epoch,
                 offset: 0, duration: 12, units: units)

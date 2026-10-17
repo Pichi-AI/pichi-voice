@@ -77,7 +77,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
     func testPCMInvalidWordTimingPreservesCompleteUntimedTextWithUncertainAttribution() throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
-        let units = MeetingParakeetNemotronBackend.pcmUnits(
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(
             result: ASRTranscriptionResult(text: "Keep the complete phrase"),
             words: [.init(text: "Keep", start: 0, end: 0.5), .init(text: "invalid", start: 20, end: 21)],
             epoch: epoch, duration: 6,
@@ -93,6 +93,231 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertTrue(batch.speakers.isEmpty)
         XCTAssertNil(batch.segments.first?.speakerID)
         XCTAssertEqual(batch.segments.first?.attributionState, .unassigned)
+    }
+
+    func testWholeRecordingAttributionPreservesNativeWordPrecisionAndInterruptionEvidence() throws {
+        let attempt = UUID(), track = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let main = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "voice-a")
+        let other = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "voice-b")
+        let specs: [(String, Double, Double)] = [
+            ("main", 0, 5.5), ("before", 5.6, 6), ("mixed", 6, 6.8),
+            ("after", 6.8, 7.2), ("known second speaker", 8, 14)]
+        let units = specs.enumerated().map { index, item in
+            MeetingFinalTextUnit(id: "native-\(index)", trackID: track, analysisEpochID: epoch,
+                precision: .word, text: item.0, analysisStart: item.1, analysisEnd: item.2,
+                speaker: .unassigned, analysisSpanIDs: [])
+        }
+        let assembler = MeetingTranscriptAssembler()
+        let transcript = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch,
+            offset: 0, duration: 14, units: units)
+        let activity: [MeetingBackendSpeakerActivity] = [
+            .init(token: main, start: 0, end: 7.2), .init(token: other, start: 6.2, end: 6.6),
+            .init(token: other, start: 8, end: 14)]
+        let result = try MeetingPCMRecordingAttribution.assemble(transcript: transcript,
+            activity: activity, epoch: epoch, attemptID: attempt, duration: 14, speakerNameFormat: "Speaker %lld")
+        XCTAssertEqual(result.segments.map(\.id), transcript.segments.map(\.id))
+        XCTAssertEqual(result.segments.map(\.text), transcript.segments.map(\.text))
+        XCTAssertEqual(result.segments.map(\.start), transcript.segments.map(\.start))
+        XCTAssertEqual(result.segments.map(\.end), transcript.segments.map(\.end))
+        XCTAssertTrue(result.segments.allSatisfy { $0.nativePrecision == .word })
+        let mixed = result.segments[2]
+        let attribution = try XCTUnwrap(mixed.speakerAttribution)
+        XCTAssertEqual(attribution.rawAssignment, .ambiguous([main, other]))
+        XCTAssertEqual(attribution.selectedToken, other)
+        XCTAssertEqual(attribution.rule, .briefInterruption)
+        XCTAssertEqual(attribution.background.map(\.token), [main])
+        XCTAssertEqual(Set(attribution.candidates.map(\.token)), [main, other])
+        XCTAssertNotNil(mixed.speakerID)
+        XCTAssertEqual(mixed.speakerID, result.segments[4].speakerID)
+        XCTAssertEqual(mixed.overlap, .ambiguous, "Selecting a reading owner does not erase simultaneous speech")
+    }
+
+    func testVoiceAdmissionCountsActualSupportInsteadOfASRWordEnvelope() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let main = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")
+        let weak = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "b")
+        let units = [
+            MeetingFinalTextUnit(id: "main", trackID: epoch.trackID, analysisEpochID: epoch,
+                precision: .word, text: "Main voice", analysisStart: 0, analysisEnd: 6,
+                speaker: .assigned(main), analysisSpanIDs: []),
+            MeetingFinalTextUnit(id: "weak", trackID: epoch.trackID, analysisEpochID: epoch,
+                precision: .word, text: "This long recognized phrase has more than ten words but only a short voice",
+                analysisStart: 7, analysisEnd: 13, speaker: .assigned(weak), analysisSpanIDs: [])]
+        let result = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: UUID(), epoch: epoch,
+            offset: 0, duration: 13, units: units,
+            activity: [.init(token: main, start: 0, end: 6), .init(token: weak, start: 7, end: 7.1)])
+        XCTAssertEqual(result.speakers.count, 1)
+        XCTAssertNil(result.segments[1].speakerID)
+        XCTAssertEqual(result.segments[1].speakerAttribution?.selectedToken, weak,
+            "The native candidate survives even when it cannot establish a product person")
+    }
+
+    func testSidecarAttributionReplaysAndRejectsChangedPolicyWithoutRewritingNativeEvidence() throws {
+        let (plan, manifest, span) = try self.onlineMicFixture()
+        let unit = self.unit(id: "native", span: span, analysisStart: 1, analysisEnd: 2)
+        let activity = [MeetingBackendSpeakerActivity(token: try XCTUnwrap(unit.speaker.tokens.first), start: 0, end: 3)]
+        let evidence = MeetingFinalTranscriptEvidence(backendID: plan.backendID, attemptID: plan.attemptID,
+            units: [unit], speakerActivity: activity)
+        let assembled = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+            evidence: evidence, coverageReceipts: self.receipts(for: manifest), echoVerdicts: [unit.id: .notEcho]))
+        XCTAssertEqual(assembled.sidecar.units, [unit])
+        XCTAssertEqual(assembled.sidecar.speakerActivity, activity)
+        XCTAssertEqual(assembled.sidecar.speakerAttributionPolicy, .standard)
+        XCTAssertEqual(assembled.sidecar.speakerAttributionDecisions.first?.rawAssignment, unit.speaker)
+        let decoded = try JSONDecoder().decode(MeetingResultSidecar.self, from: JSONEncoder().encode(assembled.sidecar))
+        XCTAssertEqual(try decoded.validated(), assembled.sidecar)
+        let forged = MeetingResultSidecar(backendID: plan.backendID, backendVersion: plan.backendVersion,
+            attemptID: plan.attemptID, analysisManifest: manifest, units: [unit],
+            dispositions: assembled.sidecar.dispositions, coverageReceipts: assembled.sidecar.coverageReceipts,
+            speakerActivity: activity, speakerAttributionPolicy: nil,
+            speakerAttributionDecisions: assembled.sidecar.speakerAttributionDecisions)
+        XCTAssertThrowsError(try forged.validated()) { error in
+            XCTAssertEqual(error as? MeetingResultSidecarError, .invalidSpeakerAttribution)
+        }
+    }
+
+    func testExcludedAndTimingUncertainWordsCannotBecomeContextAnchors() throws {
+        let (plan, manifest, span) = try self.onlineMicFixture()
+        let token = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "a")
+        let before = self.unit(id: "before", span: span, analysisStart: 1, analysisEnd: 2, speaker: .assigned(token))
+        let excluded = self.unit(id: "excluded", span: span, analysisStart: 2, analysisEnd: 2.5, speaker: .unassigned)
+        let after = self.unit(id: "after", span: span, analysisStart: 2.5, analysisEnd: 3, speaker: .assigned(token))
+        let units = [before, excluded, after]
+        let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+            evidence: .init(backendID: plan.backendID, attemptID: plan.attemptID, units: units,
+                speakerActivity: [.init(token: token, start: 1, end: 3)]),
+            coverageReceipts: self.receipts(for: manifest),
+            echoVerdicts: [before.id: .notEcho, excluded.id: .echoSuppressed(duplicateOfUnitID: nil), after.id: .notEcho]))
+        XCTAssertEqual(result.segments.count, 2)
+        let decision = try XCTUnwrap(result.sidecar.speakerAttributionDecisions.first { $0.unitID == excluded.id })
+        XCTAssertEqual(decision.rule, .barrier)
+        XCTAssertNil(decision.selectedToken)
+        XCTAssertEqual(result.sidecar.units, units.sorted { $0.id < $1.id })
+    }
+
+    func testPostStopIndexedBatchHandlesNestedUtteranceWithoutMovingNativeWords() throws {
+        let attempt = UUID(), track = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let first = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")
+        let second = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "b")
+        let count = 2_000
+        let duration = Double(count * 2)
+        let coarse = MeetingTranscriptSegment(id: UUID(), start: self.mediaTime(0), end: self.mediaTime(duration),
+            sourceTrackID: track, speakerID: nil, text: "Synthetic coarse utterance", revision: 0,
+            status: .final, overlap: .none, completeness: .complete, nativePrecision: .utterance,
+            nativeUnitID: "coarse", nativeTiming: .init(start: 0, end: duration))
+        let words = (0..<count).map { index in
+            MeetingTranscriptSegment(id: UUID(), start: self.mediaTime(Double(index * 2)),
+                end: self.mediaTime(Double(index * 2 + 1)), sourceTrackID: track, speakerID: nil,
+                text: "word-\(index)", revision: 0, status: .final, overlap: .none, completeness: .complete,
+                nativePrecision: .word, nativeUnitID: "native-\(index)",
+                nativeTiming: .init(start: Double(index * 2), end: Double(index * 2 + 1)))
+        }
+        let transcript = MeetingPCMTranscriptBatch(segments: [coarse] + words)
+        let activity = (0..<count).flatMap { index in [
+            MeetingBackendSpeakerActivity(token: first, start: Double(index * 2), end: Double(index * 2 + 1)),
+            MeetingBackendSpeakerActivity(token: second, start: Double(index * 2 + 1), end: Double(index * 2 + 2))]
+        }
+        let result = try MeetingPCMRecordingAttribution.assemble(transcript: transcript, activity: activity,
+            epoch: epoch, attemptID: attempt, duration: duration, speakerNameFormat: "Speaker %lld")
+        XCTAssertEqual(result.segments.map(\.id), transcript.segments.map(\.id))
+        XCTAssertEqual(result.segments.map(\.text), transcript.segments.map(\.text))
+        XCTAssertEqual(result.segments.map(\.nativeTiming), transcript.segments.map(\.nativeTiming))
+        XCTAssertEqual(result.segments.map(\.nativePrecision), transcript.segments.map(\.nativePrecision))
+        XCTAssertEqual(result.segments[0].speakerAttribution?.rawAssignment, .ambiguous([first, second]))
+        XCTAssertNil(result.segments[0].speakerID)
+        XCTAssertTrue(result.segments.dropFirst().allSatisfy { $0.speakerID != nil })
+    }
+
+    func testCancelledSidecarReplayPreservesCancellationInsteadOfReportingCorruptAttribution() async throws {
+        let (plan, manifest, span) = try self.onlineMicFixture()
+        let unit = self.unit(id: "native", span: span, analysisStart: 1, analysisEnd: 2)
+        let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+            evidence: self.evidence(plan: plan, units: [unit]), coverageReceipts: self.receipts(for: manifest),
+            echoVerdicts: [unit.id: .notEcho]))
+        let replay = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try result.sidecar.validated()
+        }
+        do { _ = try await replay.value; XCTFail("Cancelled replay must not publish a result") }
+        catch is CancellationError { }
+        catch { XCTFail("Cancellation was converted into a different error: \(error)") }
+    }
+
+    func testSkippedReceiptBlocksInterruptionContextAndSurvivesSidecarReplay() throws {
+        let (plan, manifest, span) = try self.onlineMicFixture()
+        let main = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "a")
+        let other = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "b")
+        let units = [
+            self.unit(id: "before", span: span, text: "before", analysisStart: 5.6, analysisEnd: 6, speaker: .assigned(main)),
+            self.unit(id: "mixed", span: span, text: "mixed", analysisStart: 6.1, analysisEnd: 6.8, speaker: .ambiguous([main, other])),
+            self.unit(id: "after", span: span, text: "after", analysisStart: 6.8, analysisEnd: 7.2, speaker: .assigned(main))]
+        let evidence = MeetingFinalTranscriptEvidence(backendID: plan.backendID, attemptID: plan.attemptID,
+            units: units, speakerActivity: [.init(token: main, start: 0, end: 7.2), .init(token: other, start: 6.2, end: 6.6)])
+        let echoes = Dictionary(uniqueKeysWithValues: units.map { ($0.id, MeetingUnitEchoVerdict.notEcho) })
+        func assemble(_ receipts: [MeetingSpanCoverageReceipt]) throws -> MeetingAssemblyResult {
+            try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest, evidence: evidence,
+                coverageReceipts: receipts, echoVerdicts: echoes))
+        }
+        let baseline = try assemble(self.receipts(for: manifest))
+        XCTAssertEqual(baseline.sidecar.speakerAttributionDecisions.first { $0.unitID == "mixed" }?.rule, .briefInterruption)
+        for status in [MeetingSpanCoverageStatus.skipped, .failed, .providerTruncated] {
+            let result = try assemble([
+                .init(id: "processed-before", spanID: span.id, analysisStart: 0, analysisEnd: 6, status: .processed),
+                .init(id: "gap", spanID: span.id, analysisStart: 6, analysisEnd: 6.1, status: status),
+                .init(id: "processed-after", spanID: span.id, analysisStart: 6.1, analysisEnd: 10, status: .processed)])
+            let decision = try XCTUnwrap(result.sidecar.speakerAttributionDecisions.first { $0.unitID == "mixed" })
+            XCTAssertNotEqual(decision.rule, .briefInterruption)
+            XCTAssertNil(decision.selectedToken)
+            XCTAssertEqual(decision.rawAssignment, units[1].speaker)
+            XCTAssertEqual(result.sidecar.units, baseline.sidecar.units)
+            XCTAssertEqual(result.sidecar.speakerActivity, baseline.sidecar.speakerActivity)
+            XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), units.map { Optional($0.speaker) })
+            let replay = try JSONDecoder().decode(MeetingResultSidecar.self, from: JSONEncoder().encode(result.sidecar))
+            XCTAssertEqual(try replay.validated(), result.sidecar)
+        }
+    }
+
+    func testProvenanceQuarantineNeverEntersCoreAndDisablesBothPossibleEpochContexts() throws {
+        let first = self.chunk(sequence: 0, start: 100, end: 110)
+        let second = self.chunk(sequence: 1, start: 110, end: 120,
+            discontinuities: [.init(kind: .clockDiscontinuity, presentationTime: self.mediaTime(110), gapSeconds: nil, detail: "synthetic")])
+        let mic = self.track(kind: .microphone, chunks: [first, second], eras: [self.era(protection: .voiceProcessed, start: 100)])
+        let plan = self.plan(mode: .onlineCall, tracks: [mic])
+        let manifest = try self.buildManifest(plan: plan, observations: [
+            (mic.id, first, self.observed(first, duration: 10)), (mic.id, second, self.observed(second, duration: 10))])
+        let spans = try XCTUnwrap(manifest.track(mic.id)?.spans)
+        var units: [MeetingFinalTextUnit] = [], activity: [MeetingBackendSpeakerActivity] = []
+        for (index, span) in spans.enumerated() {
+            let main = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "a")
+            let other = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "b")
+            let offset = span.analysisInterval.start
+            units += [
+                self.unit(id: "before-\(index)", span: span, analysisStart: offset + 1, analysisEnd: offset + 2, speaker: .assigned(main)),
+                self.unit(id: "mixed-\(index)", span: span, analysisStart: offset + 2.1, analysisEnd: offset + 2.8, speaker: .ambiguous([main, other])),
+                self.unit(id: "after-\(index)", span: span, analysisStart: offset + 2.8, analysisEnd: offset + 3.2, speaker: .assigned(main))]
+            activity += [.init(token: main, start: offset, end: offset + 3.2), .init(token: other, start: offset + 2.2, end: offset + 2.6)]
+        }
+        let echoes = Dictionary(uniqueKeysWithValues: units.map { ($0.id, MeetingUnitEchoVerdict.notEcho) })
+        func assemble(_ source: [MeetingFinalTextUnit]) throws -> MeetingAssemblyResult {
+            try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+                evidence: .init(backendID: plan.backendID, attemptID: plan.attemptID, units: source, speakerActivity: activity),
+                coverageReceipts: self.receipts(for: manifest), echoVerdicts: echoes))
+        }
+        let baseline = try assemble(units)
+        XCTAssertEqual(baseline.sidecar.speakerAttributionDecisions.filter { $0.rule == .briefInterruption }.count, 2)
+        let quarantined = self.unit(id: "invalid-provenance", span: spans[1], analysisStart: 11.9, analysisEnd: 12.05,
+            epoch: spans[0].analysisEpochID, speaker: .unassigned, spanIDs: [spans[1].id])
+        let result = try assemble(units + [quarantined])
+        XCTAssertEqual(result.sidecar.dispositions.first { $0.unitID == quarantined.id }?.disposition, .rejectedInvalidTiming)
+        XCTAssertFalse(result.sidecar.speakerAttributionDecisions.contains { $0.unitID == quarantined.id },
+            "No interval query or clipped support is legal for quarantined provenance")
+        XCTAssertFalse(result.sidecar.speakerAttributionDecisions.contains { $0.rule.isHeuristic })
+        XCTAssertEqual(result.segments.map(\.id), baseline.segments.map(\.id))
+        XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), baseline.segments.map(\.nativeSpeakerAssignment))
+        XCTAssertTrue(result.sidecar.units.contains(quarantined))
+        XCTAssertNoThrow(try result.sidecar.validated())
     }
 
     // MARK: - Session/manifest fixtures
@@ -411,7 +636,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         return (plan, manifest, spans)
     }
 
-    func testRetainedContinuityFillsProductGapWithoutChangingRawSidecar() throws {
+    func testRetainedUnsupportedAmbiguityDoesNotRunLegacyProductContinuity() throws {
         let (plan, manifest, spans) = try self.twoEpochMicrophone()
         let span = spans[0]
         let a = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-0")
@@ -426,8 +651,15 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
             evidence: self.evidence(plan: plan, units: units), coverageReceipts: self.receipts(for: manifest),
             echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, .notEcho) })))
-        XCTAssertEqual(result.segments[1].speakerID, result.segments[2].speakerID)
-        XCTAssertEqual(result.segments[1].speakerAttributionInference?.rule, .incomingSpeaker)
+        XCTAssertNil(result.segments[1].speakerID,
+                     "Raw ambiguity without acoustic supports must not be converted into a guessed incoming voice")
+        XCTAssertNil(result.segments[1].speakerAttributionInference)
+        XCTAssertEqual(result.segments[1].nativeUnitID, "unknown")
+        XCTAssertEqual(result.segments[1].nativeSpeakerAssignment, .ambiguous([a, b]))
+        let decision = try XCTUnwrap(result.sidecar.speakerAttributionDecisions.first { $0.unitID == "unknown" })
+        XCTAssertEqual(decision.rawAssignment, .ambiguous([a, b]))
+        XCTAssertTrue(decision.cueUnitIDs.isEmpty)
+        XCTAssertNil(decision.selectedToken)
         XCTAssertEqual(result.sidecar.units.first { $0.id == "unknown" }?.speaker, .ambiguous([a, b]))
         XCTAssertEqual(result.sidecar.dispositions.first { $0.unitID == "unknown" }?.disposition, .ambiguousUnassigned)
         XCTAssertNoThrow(try result.sidecar.validated())

@@ -192,6 +192,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         if self.fileSystem.manager.fileExists(atPath: checkpointURL.path) {
             try self.fileSystem.manager.removeItem(at: checkpointURL)
         }
+        try MeetingRetainedProcessingCheckpoint.remove(in: directory)
     }
 
     private func writeSession(_ session: MeetingSession) throws {

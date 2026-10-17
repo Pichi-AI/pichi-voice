@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 // Stage E of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md`: the local composite backend.
 // Parakeet TDT v2/v3 produce word-timed ASR; Nemotron-3 produces per-epoch speaker activity. The
@@ -13,7 +14,7 @@ import Foundation
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     nonisolated static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "5",
+        version: "6",
         execution: .local,
         supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs,
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
@@ -127,6 +128,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         let materializer = self.materializer
         let request = plan.request
         let backendID = self.descriptor.id
+        let backendVersion = self.descriptor.version
         let work = Task.detached(priority: .userInitiated) {
             try await Self.runAttempt(
                 request: request,
@@ -134,6 +136,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 runtime: runtime,
                 artifact: artifact,
                 backendID: backendID,
+                backendVersion: backendVersion,
                 materializer: materializer,
                 progress: progress
             )
@@ -157,6 +160,126 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         let track: MeetingAnalysisTrackManifest
         let epoch: MeetingAnalysisEpochRecord
         let spans: [MeetingAnalysisSpan]
+    }
+
+    /// Completed 20-second ASR cores and diarizer-owned opaque streaming state. No PCM or
+    /// owner-voice embeddings are serialized. Raw working text is encrypted by the retained
+    /// store and must still pass the normal privacy publication gate after restoration.
+    private nonisolated struct ASRProgress: Codable, Sendable {
+        var nextSample = 0
+        var text: [String] = []
+        var words: [ASRWordTiming] = []
+        var untimedChunks: [MeetingUntimedASRChunk] = []
+    }
+    private nonisolated struct ResumeState: Codable, Sendable {
+        var completedTracks: Set<UUID> = []
+        var trackSegments: [UUID: [MeetingNemotronSpeakerSegment]] = [:]
+        var streamingStates: [UUID: Data] = [:]
+        var asr: [MeetingAnalysisEpochID: ASRProgress] = [:]
+        var confirmedOwnerTokens: Set<MeetingBackendSpeakerToken>?
+    }
+    private actor ResumeOwner {
+        private let store: MeetingRetainedProcessingCheckpoint
+        private let session: MeetingSession
+        private let pin: MeetingRetainedProcessingCheckpoint.Pin
+        private let inputFingerprint: String
+        private let ownerVoiceIdentity: String?
+        private let runtimeFingerprint: String?
+        private var state: ResumeState
+
+        init(request: MeetingBackendRequest, manifest: MeetingAnalysisManifest,
+             backendID: MeetingBackendID, backendVersion: String, ownerVoiceIdentity: String?, runtimeFingerprint: String?) throws {
+            self.store = .init(sessionDirectory: request.sessionDirectory)
+            self.session = request.session
+            self.pin = .init(schema: 1, sessionID: request.session.id, backendID: backendID,
+                backendVersion: backendVersion, configuration: request.configuration,
+                piiRedactionEnabled: request.session.piiRedactionEnabled == true,
+                privacyFingerprint: request.privacyFingerprint)
+            // A retry has a fresh attempt UUID, but every source byte/hash, timing mapping,
+            // epoch separator and backend version must still describe the same physical input.
+            let neutralAttempt = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+            let stableTracks = try manifest.tracks.map { track in
+                let spans = track.spans.map { span in
+                    MeetingAnalysisSpan(id: MeetingAnalysisSpan.stableID(attemptID: neutralAttempt, chunk: span.chunk, pieceIndex: span.pieceIndex),
+                        chunk: span.chunk, pieceIndex: span.pieceIndex, trackKind: span.trackKind, analysisEpochID: span.analysisEpochID,
+                        recordedInterval: span.recordedInterval, sourceLocalInterval: span.sourceLocalInterval,
+                        analysisInterval: span.analysisInterval, presentationInterval: span.presentationInterval,
+                        presentationMapping: span.presentationMapping, captureEra: span.captureEra, admission: span.admission,
+                        observed: span.observed, discontinuity: span.discontinuity, timing: span.timing)
+                }
+                let ids = Dictionary(uniqueKeysWithValues: zip(track.spans.map(\.id), spans.map(\.id)))
+                let gaps = track.gaps.map { gap in
+                    MeetingAnalysisGap(id: MeetingAnalysisGap.stableID(attemptID: neutralAttempt, chunk: gap.chunk, pieceIndex: gap.pieceIndex),
+                        chunk: gap.chunk, pieceIndex: gap.pieceIndex, reason: gap.reason, recordedInterval: gap.recordedInterval,
+                        captureEra: gap.captureEra, admission: gap.admission, detail: gap.detail)
+                }
+                let epochs = try track.epochs.map { epoch in
+                    MeetingAnalysisEpochRecord(id: epoch.id, resetReason: epoch.resetReason,
+                        spanIDs: try epoch.spanIDs.map { id in
+                            guard let stableID = ids[id] else { throw MeetingRetainedProcessingCheckpoint.Failure.invalid }
+                            return stableID
+                        }, analysisInterval: epoch.analysisInterval)
+                }
+                return MeetingAnalysisTrackManifest(id: track.id, kind: track.kind, spans: spans, gaps: gaps, epochs: epochs)
+            }
+            let stable = MeetingAnalysisManifest(backendID: manifest.backendID, backendVersion: manifest.backendVersion,
+                attemptID: neutralAttempt, sessionID: manifest.sessionID,
+                captureMode: manifest.captureMode, presentationOriginSeconds: manifest.presentationOriginSeconds,
+                analysisSampleRate: manifest.analysisSampleRate, residualBoundSeconds: manifest.residualBoundSeconds,
+                tracks: stableTracks)
+            let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+            self.inputFingerprint = SHA256.hash(data: try encoder.encode(stable)).map { String(format: "%02x", $0) }.joined()
+            self.ownerVoiceIdentity = ownerVoiceIdentity
+            self.runtimeFingerprint = runtimeFingerprint
+            if let saved = try self.store.read(session: request.session) {
+                guard saved.pin == self.pin, saved.ownerVoiceIdentity == ownerVoiceIdentity,
+                      saved.runtimeFingerprint == runtimeFingerprint else {
+                    throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+                }
+                guard saved.inputFingerprint == self.inputFingerprint else {
+                    throw MeetingRetainedProcessingCheckpoint.Failure.changedInput
+                }
+                do { self.state = try PropertyListDecoder().decode(ResumeState.self, from: saved.payload) }
+                catch { throw MeetingRetainedProcessingCheckpoint.Failure.invalid }
+                let trackIDs = Set(manifest.tracks.map(\.id))
+                let epochIDs = Set(manifest.tracks.flatMap(\.epochs).map(\.id))
+                guard self.state.completedTracks.isSubset(of: trackIDs),
+                      Set(self.state.trackSegments.keys) == self.state.completedTracks,
+                      Set(self.state.streamingStates.keys).isSubset(of: trackIDs),
+                      self.state.completedTracks.isDisjoint(with: self.state.streamingStates.keys),
+                      Set(self.state.asr.keys).isSubset(of: epochIDs) else {
+                    throw MeetingRetainedProcessingCheckpoint.Failure.invalid
+                }
+            } else { self.state = ResumeState() }
+        }
+        func snapshot() -> ResumeState { self.state }
+        func saveStreaming(_ data: Data, trackID: UUID) throws {
+            self.state.streamingStates[trackID] = data; try self.persist()
+        }
+        func completeTrack(_ segments: [MeetingNemotronSpeakerSegment], trackID: UUID) throws {
+            self.state.completedTracks.insert(trackID); self.state.trackSegments[trackID] = segments
+            self.state.streamingStates.removeValue(forKey: trackID); try self.persist()
+        }
+        func saveASR(_ progress: ASRProgress, epochID: MeetingAnalysisEpochID) throws {
+            // A model name (or two equal nil fingerprints) does not prove the same weights.
+            // Such adapters can resume the independently pinned diarizer, but must redo ASR.
+            guard self.pin.configuration.asrArtifactFingerprint?.isEmpty == false else { return }
+            self.state.asr[epochID] = progress; try self.persist()
+        }
+        func saveOwnerTokens(_ tokens: Set<MeetingBackendSpeakerToken>) throws {
+            self.state.confirmedOwnerTokens = tokens; try self.persist()
+        }
+        private func persist() throws {
+            try Task.checkCancellation()
+            let encoder = PropertyListEncoder(); encoder.outputFormat = .binary
+            do {
+                try self.store.write(.init(pin: self.pin, inputFingerprint: self.inputFingerprint,
+                    ownerVoiceIdentity: self.ownerVoiceIdentity, runtimeFingerprint: self.runtimeFingerprint,
+                    payload: try encoder.encode(self.state)), session: self.session)
+            } catch let error as CancellationError { throw error }
+            catch let error as MeetingRetainedProcessingCheckpoint.Failure { throw error }
+            catch { throw MeetingRetainedProcessingCheckpoint.Failure.unavailable }
+        }
     }
 
     /// The cache owns only replay handles and small span mappings. A retained recording's
@@ -201,6 +324,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         runtime: any MeetingParakeetNemotronRunning,
         artifact: MeetingNemotronModelArtifact?,
         backendID: MeetingBackendID,
+        backendVersion: String,
         materializer: any MeetingEpochAudioMaterializing,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingCanonicalResultBundle {
@@ -220,6 +344,19 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
         let pcmMaterializations = MaterializationCache()
         let ownerProfile = runtime.ownerVoiceProfileSnapshot
+        let ownerIdentity = ownerProfile.map { "\($0.metadata.generation.uuidString):\($0.encoderFingerprint)" }
+        let runtimeFingerprint = artifact.map { "\($0.implementationFingerprint);manifest=\($0.manifestSHA256)" }
+        let resume = request.session.audioStorageMode == .retainedFiles
+            && (request.session.piiRedactionEnabled != true || request.privacyFingerprint != nil)
+            ? try ResumeOwner(request: request, manifest: manifest, backendID: backendID,
+                              backendVersion: backendVersion, ownerVoiceIdentity: ownerIdentity,
+                              runtimeFingerprint: runtimeFingerprint) : nil
+        var restoredState = await resume?.snapshot() ?? ResumeState()
+        if request.configuration.asrArtifactFingerprint?.isEmpty != false {
+            guard restoredState.asr.isEmpty else { throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration }
+            restoredState.asr = [:]
+        }
+        let restored = restoredState
 
         // Phase A: Nemotron diarization, one continuous state per track, then drained. A track's
         // epochs are diarized in order as one stream, so a voice keeps its slot across a reset;
@@ -259,13 +396,32 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                     trackSampleCount += materialized.source.totalSampleCount
                 }
                 guard let first = pieces.first else { continue }
+                // A transient failed materialization shortens the concatenated source and
+                // shifts every later piece. Such a partial run cannot restore or replace a
+                // checkpoint for the complete physical track, even with the same manifest.
+                let completeTrackInput = pieces.count == epochWork.filter { $0.track.id == track.id }.count
                 try Task.checkCancellation()
                 do {
-                    let diarizer = try await factory.makeDiarizer(epoch: first.work.epoch.id)
                     let source = TrackReplay(pieces: pieces.map { ($0.materialized.source, $0.offset) },
                                              totalSampleCount: trackSampleCount)
-                    let segments = try await diarizer.diarize(source: source)
-                    if ownerProfile != nil {
+                    let segments: [MeetingNemotronSpeakerSegment]
+                    if completeTrackInput, restored.completedTracks.contains(track.id), let saved = restored.trackSegments[track.id] {
+                        guard saved.allSatisfy({ segment in
+                            (0..<8).contains(segment.slotIndex) && segment.start.isFinite && segment.end.isFinite
+                                && segment.start >= 0 && segment.end > segment.start
+                                && segment.end <= Double(trackSampleCount) / 16_000 + 1e-6
+                        }) else { throw MeetingRetainedProcessingCheckpoint.Failure.invalid }
+                        segments = saved
+                    } else {
+                        let diarizer = try await factory.makeDiarizer(epoch: first.work.epoch.id)
+                        if completeTrackInput, let resumable = diarizer as? any MeetingResumableNemotronDiarizerSession, let resume {
+                            segments = try await resumable.diarize(source: source, restoring: restored.streamingStates[track.id]) { data in
+                                try await resume.saveStreaming(data, trackID: track.id)
+                            }
+                        } else { segments = try await diarizer.diarize(source: source) }
+                        if completeTrackInput { try await resume?.completeTrack(segments, trackID: track.id) }
+                    }
+                    if ownerProfile != nil, restored.confirmedOwnerTokens == nil {
                         result.voiceSamples.append(contentsOf: try await MeetingSpeakerVoiceSamples.collect(
                             epoch: first.work.epoch.id, source: source, segments: segments
                         ).prefix(max(0, MeetingSpeakerVoiceSamples.maximumProfiles - result.voiceSamples.count)))
@@ -306,6 +462,10 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                     }
                 } catch let error as CancellationError {
                     throw error
+                } catch let error as MeetingRetainedProcessingCheckpoint.Failure {
+                    throw error
+                } catch is MeetingDiarizerCheckpointError {
+                    throw MeetingRetainedProcessingCheckpoint.Failure.invalid
                 } catch {
                     for piece in pieces {
                         result.failures[piece.work.epoch.id] = "diarizationFailed"
@@ -318,8 +478,19 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         try Task.checkCancellation()
         // Explicit owner identity is optional. The same bounded encoder runs after diarizer
         // weights drain and before ASR loads. Only confirmed token IDs leave this phase.
-        var ownerTokens = Set<MeetingBackendSpeakerToken>()
-        if ownerProfile != nil, !phaseA.voiceSamples.isEmpty {
+        // A transient missing epoch can force fresh diarization of a shortened track. Its
+        // numeric slots no longer have the identity of the saved complete-track intervals.
+        // Preserve cached owner confirmation only for tracks whose complete intervals were
+        // actually reused. Fresh/partial tracks stay unconfirmed unless verified below.
+        let reusedOwnerTrackIDs = Set(manifest.tracks.filter { track in
+            restored.completedTracks.contains(track.id) && restored.trackSegments[track.id] != nil
+                && track.epochs.allSatisfy { phaseA.failures[$0.id] == nil }
+        }.map(\.id))
+        let activeTokens = Set(phaseA.activity.map(\.token))
+        var ownerTokens = Set((restored.confirmedOwnerTokens ?? []).filter {
+            reusedOwnerTrackIDs.contains($0.analysisEpochID.trackID) && activeTokens.contains($0)
+        })
+        if restored.confirmedOwnerTokens == nil, ownerProfile != nil, !phaseA.voiceSamples.isEmpty {
             do {
                 let profiles = try await runtime.speakerVoiceProfiles(samples: phaseA.voiceSamples)
                 let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: ownerProfile, profiles: profiles)
@@ -329,6 +500,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 })
             } catch { try Task.checkCancellation() }
         }
+        if phaseA.failures.isEmpty { try await resume?.saveOwnerTokens(ownerTokens) }
         phaseA.voiceSamples.removeAll()
 
         // Phase B: Parakeet ASR inside the attempt's single prepared-meeting scope. Epochs that
@@ -360,8 +532,11 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 }
                 try Task.checkCancellation()
                 do {
-                    result.outputs.append(try await Self.transcribeReplay(materialized, epochID: work.epoch.id, asr: asr))
+                    result.outputs.append(try await Self.transcribeReplay(materialized, epochID: work.epoch.id,
+                        asr: asr, restoring: restored.asr[work.epoch.id], resume: resume))
                 } catch let error as CancellationError {
+                    throw error
+                } catch let error as MeetingRetainedProcessingCheckpoint.Failure {
                     throw error
                 } catch {
                     result.failures[work.epoch.id] = "asrFailed"
@@ -409,14 +584,27 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     /// midpoint, retaining a boundary word once with its original provider times. Providers
     /// without word timing use contiguous cores; no textual/word alignment is manufactured.
     private nonisolated static func transcribeReplay(_ audio: MeetingEpochAudioReplay,
-        epochID: MeetingAnalysisEpochID, asr: any MeetingParakeetASRSession) async throws -> MeetingParakeetEpochOutput {
+        epochID: MeetingAnalysisEpochID, asr: any MeetingParakeetASRSession,
+        restoring: ASRProgress?, resume: ResumeOwner?) async throws -> MeetingParakeetEpochOutput {
         let count = audio.source.totalSampleCount
         let coreSamples = Int(20 * audio.sampleRate)
         let contextSamples = Int(2 * audio.sampleRate)
-        var start = 0
-        var text: [String] = []
-        var words: [ASRWordTiming] = []
-        var untimedChunks: [MeetingUntimedASRChunk] = []
+        let saved = restoring ?? ASRProgress()
+        guard count > 0, audio.sampleRate.isFinite, audio.sampleRate > 0,
+              saved.nextSample >= 0, saved.nextSample <= count,
+              saved.nextSample == count || saved.nextSample % coreSamples == 0,
+              saved.words.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0
+                  && $0.end > $0.start && $0.end <= Double(count) / audio.sampleRate + 1e-6 }),
+              saved.untimedChunks.allSatisfy({ $0.sampleRange.lowerBound >= 0
+                  && $0.sampleRange.upperBound <= saved.nextSample && !$0.sampleRange.isEmpty
+                  && $0.segmentTimings.allSatisfy({ $0.start.isFinite && $0.end.isFinite
+                      && $0.start >= 0 && $0.end > $0.start && $0.end <= Double(count) / audio.sampleRate + 1e-6 }) }) else {
+            throw MeetingRetainedProcessingCheckpoint.Failure.invalid
+        }
+        var start = saved.nextSample
+        var text = saved.text
+        var words = saved.words
+        var untimedChunks = saved.untimedChunks
         while start < count {
             try Task.checkCancellation()
             let end = min(count, start + coreSamples)
@@ -458,6 +646,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 }
             }
             start = end
+            try await resume?.saveASR(.init(nextSample: start, text: text, words: words,
+                                            untimedChunks: untimedChunks), epochID: epochID)
         }
         return MeetingParakeetEpochOutput(epochID: epochID, text: text.filter { !$0.isEmpty }.joined(separator: " "),
             words: words, sampleRate: audio.sampleRate, sampleCount: count, spanSamples: audio.spanSamples,
@@ -483,7 +673,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             phaseB.outputs.map { ($0.epochID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let activityByEpoch = Dictionary(grouping: phaseA.activity, by: { $0.token.analysisEpochID })
         var failures = phaseA.failures
         failures.merge(phaseB.failures) { first, _ in first }
 
@@ -502,21 +691,33 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 receipts.append(Self.receipt(for: span, status: .processed))
             }
             guard let output = outputsByEpoch[work.epoch.id] else { continue }
-            let epochActivity = activityByEpoch[work.epoch.id] ?? []
             units.append(contentsOf: Self.units(
                 for: output,
                 work: work,
-                activity: epochActivity,
                 attemptID: request.attemptID
             ))
         }
 
+        let activity = phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil }
+        if !activity.isEmpty, !units.isEmpty {
+            // One scoped index serves the entire batch, including nested utterance envelopes.
+            // Contextual reading rules run later in the common assembler, never in this phase.
+            let assignments = try MeetingSpeakerAttribution.acousticAssignments(units: units,
+                activity: activity, policy: request.configuration.speakerAttributionPolicy ?? .standard)
+            units = try units.map { unit in
+                guard let assignment = assignments[unit.id] else {
+                    throw MeetingSpeakerAttributionError.invalidUnit(unit.id)
+                }
+                return unit.assigningSpeaker(assignment)
+            }
+        }
+        try Task.checkCancellation()
         return MeetingCanonicalResultBundle(
             evidence: MeetingFinalTranscriptEvidence(
                 backendID: backendID,
                 attemptID: request.attemptID,
                 units: units,
-                speakerActivity: phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil },
+                speakerActivity: activity,
                 speakerSlotsContinueAcrossEpochs: true
             ),
             coverageReceipts: receipts,
@@ -540,15 +741,17 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     }
 
     /// A PCM window has no removed gaps or file spans. Keep the original speaker
-    /// coverage and handoff decisions while admitting only physically valid word times.
+    /// acoustic coverage while admitting only physically valid word times.
     nonisolated static func pcmUnits(
         result: ASRTranscriptionResult,
         words: [ASRWordTiming],
         epoch: MeetingAnalysisEpochID,
         duration: TimeInterval,
         activity: [MeetingBackendSpeakerActivity],
-        identityTokens: Set<MeetingBackendSpeakerToken>
-    ) -> [MeetingFinalTextUnit] {
+        identityTokens: Set<MeetingBackendSpeakerToken>,
+        speakerAttributionPolicy: MeetingSpeakerAttributionPolicy = .standard
+    ) throws -> [MeetingFinalTextUnit] {
+        try Task.checkCancellation()
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return [] }
         let usable = words.count <= 8_192 && !words.isEmpty && words.allSatisfy {
@@ -556,43 +759,50 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 && $0.start.isFinite && $0.end.isFinite && $0.start >= 0
                 && $0.end > $0.start && $0.end <= duration + 1e-6
         }
-        func admitted(_ assignment: MeetingBackendSpeakerAssignment) -> MeetingBackendSpeakerAssignment {
-            if case let .assigned(token) = assignment, !identityTokens.contains(token) { return .unassigned }
-            return assignment
-        }
-        guard usable else {
+        let units: [MeetingFinalTextUnit]
+        if usable {
+            units = words.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map { index, word in
+                MeetingFinalTextUnit(id: "pcm:\(epoch):\(index)", trackID: epoch.trackID,
+                    analysisEpochID: epoch, precision: .word,
+                    text: word.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                    analysisStart: word.start, analysisEnd: word.end, speaker: .unassigned,
+                    analysisSpanIDs: [], confidence: nil)
+            }
+        } else {
             let segments = ASRSegmentTiming.validated(result.segmentTimings, text: text, duration: duration)
             if !segments.isEmpty {
-                return segments.enumerated().map { index, segment in
+                units = segments.enumerated().map { index, segment in
                     MeetingFinalTextUnit(id: "pcm:\(epoch):segment:\(index)", trackID: epoch.trackID,
                         analysisEpochID: epoch, precision: .utterance,
                         text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                        analysisStart: segment.start, analysisEnd: segment.end,
-                        speaker: admitted(Self.assignment(start: segment.start, end: segment.end,
-                            activity: activity, allowDominance: false)),
+                        analysisStart: segment.start, analysisEnd: segment.end, speaker: .unassigned,
                         analysisSpanIDs: [], confidence: nil)
                 }
+            } else {
+                units = [MeetingFinalTextUnit(id: "pcm:\(epoch):utterance", trackID: epoch.trackID,
+                    analysisEpochID: epoch, precision: .utterance, text: text,
+                    analysisStart: 0, analysisEnd: duration, speaker: .unassigned,
+                    analysisSpanIDs: [], confidence: nil)]
             }
-            return [MeetingFinalTextUnit(
-                id: "pcm:\(epoch):utterance", trackID: epoch.trackID, analysisEpochID: epoch,
-                precision: .utterance, text: text, analysisStart: 0, analysisEnd: duration,
-                speaker: admitted(Self.assignment(start: 0, end: duration, activity: activity, allowDominance: false)),
-                analysisSpanIDs: [], confidence: nil
-            )]
         }
-        var previous: (token: MeetingBackendSpeakerToken, end: TimeInterval)?
-        return words.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map { index, word in
-            let coverage = Self.assignment(start: word.start, end: word.end, activity: activity, allowDominance: true)
-            let assignment = admitted(Self.handoffAssignment(coverage, start: word.start, end: word.end,
-                                                            activity: activity, previousAssignedWord: previous))
-            if case let .assigned(token) = assignment { previous = (token, word.end) } else { previous = nil }
-            return MeetingFinalTextUnit(
-                id: "pcm:\(epoch):\(index)", trackID: epoch.trackID, analysisEpochID: epoch,
-                precision: .word, text: word.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                analysisStart: word.start, analysisEnd: word.end, speaker: assignment,
-                analysisSpanIDs: [], confidence: nil
-            )
+        try Task.checkCancellation()
+        guard !activity.isEmpty else { return units }
+        guard activity.allSatisfy({ $0.token.analysisEpochID == epoch
+            && $0.start.isFinite && $0.end.isFinite && $0.start >= 0
+            && $0.end > $0.start && $0.end <= duration + 1e-6 }) else {
+            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
         }
+        let assignments = try MeetingSpeakerAttribution.acousticAssignments(
+            units: units, activity: activity, policy: speakerAttributionPolicy)
+        let assignedUnits = try units.map { unit in
+            guard var assignment = assignments[unit.id] else {
+                throw MeetingSpeakerAttributionError.invalidUnit(unit.id)
+            }
+            if case let .assigned(token) = assignment, !identityTokens.contains(token) { assignment = .unassigned }
+            return unit.assigningSpeaker(assignment)
+        }
+        try Task.checkCancellation()
+        return assignedUnits
     }
 
     /// Timed units for one successful epoch. Provider times are seconds into the epoch's
@@ -602,7 +812,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     private nonisolated static func units(
         for output: MeetingParakeetEpochOutput,
         work: EpochWork,
-        activity: [MeetingBackendSpeakerActivity],
         attemptID: UUID,
         fallbackRange: Range<Int>? = nil,
         idSuffix: String = ""
@@ -622,16 +831,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         guard physicalEnd > epochStart else { return [] }
 
         var wordUnits: [MeetingFinalTextUnit] = []
-        let untimedAnalysisIntervals = output.untimedChunks.compactMap { chunk -> MeetingAnalysisInterval? in
-            guard let start = Self.analysisTime(forMaterializedSeconds: Double(chunk.sampleRange.lowerBound) / output.sampleRate,
-                boundary: .start, sampleRate: output.sampleRate, sampleCount: output.sampleCount,
-                spanSamples: output.spanSamples, spans: work.spans),
-                  let end = Self.analysisTime(forMaterializedSeconds: Double(chunk.sampleRange.upperBound) / output.sampleRate,
-                boundary: .end, sampleRate: output.sampleRate, sampleCount: output.sampleCount,
-                spanSamples: output.spanSamples, spans: work.spans) else { return nil }
-            return MeetingAnalysisInterval(start: start, end: end)
-        }
-        var previousAssignedWord: (token: MeetingBackendSpeakerToken, end: TimeInterval)?
         let sortedWords = output.words.enumerated()
             .sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }
         for (index, word) in sortedWords {
@@ -657,22 +856,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             guard end > start else { continue }
             guard let spanIDs = Self.intersectingSpanIDs(start: start, end: end, spans: work.spans)
             else { continue }
-            if let previous = previousAssignedWord, untimedAnalysisIntervals.contains(where: {
-                $0.start < start && $0.end > previous.end
-            }) { previousAssignedWord = nil }
-            let coverageAssignment = Self.assignment(
-                start: start,
-                end: end,
-                activity: activity,
-                allowDominance: true
-            )
-            let speaker = Self.handoffAssignment(
-                coverageAssignment,
-                start: start,
-                end: end,
-                activity: activity,
-                previousAssignedWord: previousAssignedWord
-            )
             wordUnits.append(MeetingFinalTextUnit(
                 id: "unit:\(attemptID.uuidString):\(work.epoch.id)\(idSuffix):\(index)",
                 trackID: work.track.id,
@@ -681,22 +864,16 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 text: text,
                 analysisStart: start,
                 analysisEnd: end,
-                speaker: speaker,
+                speaker: .unassigned,
                 analysisSpanIDs: spanIDs,
                 confidence: nil
             ))
-            if case let .assigned(token) = speaker {
-                previousAssignedWord = (token, end)
-            } else {
-                // An uncertain word is a hard context break; never chain a later guess through it.
-                previousAssignedWord = nil
-            }
         }
         for (index, chunk) in output.untimedChunks.enumerated() {
             let bounded = MeetingParakeetEpochOutput(epochID: output.epochID, text: chunk.text, words: [],
                 segmentTimings: chunk.segmentTimings, sampleRate: output.sampleRate,
                 sampleCount: output.sampleCount, spanSamples: output.spanSamples)
-            wordUnits.append(contentsOf: Self.units(for: bounded, work: work, activity: activity,
+            wordUnits.append(contentsOf: Self.units(for: bounded, work: work,
                 attemptID: attemptID, fallbackRange: chunk.sampleRange, idSuffix: ":chunk-\(index)"))
         }
         if !wordUnits.isEmpty {
@@ -723,7 +900,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                     analysisEpochID: work.epoch.id, precision: .utterance,
                     text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines),
                     analysisStart: start, analysisEnd: end,
-                    speaker: Self.assignment(start: start, end: end, activity: activity, allowDominance: false),
+                    speaker: .unassigned,
                     analysisSpanIDs: ids, confidence: nil))
             }
             if !segmentUnits.isEmpty { return segmentUnits }
@@ -738,7 +915,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             text: text,
             analysisStart: epochStart,
             analysisEnd: physicalEnd,
-            speaker: Self.assignment(start: epochStart, end: physicalEnd, activity: activity, allowDominance: false),
+            speaker: .unassigned,
             analysisSpanIDs: spanIDs,
             confidence: nil
         )]
@@ -820,8 +997,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     /// Nemotron emits diarization decisions on this cadence (plan §4); a boundary sliver shorter
     /// than one output hop is model noise, not evidence of a second speaker.
     private nonisolated static let nemotronCadenceMaximumFloorSeconds: TimeInterval = 0.08
-    private nonisolated static let handoffMaximumWordDurationSeconds: TimeInterval = 0.8
-    private nonisolated static let handoffMaximumPreviousWordGapSeconds: TimeInterval = 0.8
 
     /// Conservative initial product policy for multi-candidate words, isolated here so the ratios
     /// are named and covered at exact boundaries instead of living as unexplained literals.
@@ -831,8 +1006,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         static let minimumLeaderToRunnerUpRatio: Double = 2.0
     }
 
-    /// The cadence floor scaled down for short words, so an 80ms boundary hop can never be
-    /// discarded outright from a 150ms word: never more than 20% of the unit's own duration.
+    /// Legacy single-query test seam. Production projection uses the shared indexed batch.
+    /// The floor scales with actual acoustic support, so silence cannot change admission.
     private nonisolated static func boundaryNoiseThresholdSeconds(duration: TimeInterval) -> TimeInterval {
         min(self.nemotronCadenceMaximumFloorSeconds, 0.2 * duration)
     }
@@ -890,7 +1065,12 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         allowDominance: Bool
     ) -> MeetingBackendSpeakerAssignment {
         let duration = end - start
-        let threshold = Self.boundaryNoiseThresholdSeconds(duration: duration)
+        guard start.isFinite, end.isFinite, start >= 0, end > start else { return .unassigned }
+        let activeSupport = Self.unionDurationSeconds(activity.compactMap { entry in
+            let lower = max(start, entry.start), upper = min(end, entry.end)
+            return lower < upper ? (start: lower, end: upper) : nil
+        })
+        let threshold = Self.boundaryNoiseThresholdSeconds(duration: activeSupport)
         let coverage = Self.coverageSeconds(start: start, end: end, activity: activity)
         let aboveThreshold = coverage.filter { $0.value > threshold }
         let ranked = aboveThreshold.sorted { lhs, rhs in
@@ -906,8 +1086,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         default:
             let leader = ranked[0]
             let runnerUp = ranked[1]
-            let leaderFraction = duration > 0 ? leader.value / duration : 0
-            let runnerUpFraction = duration > 0 ? runnerUp.value / duration : 0
+            let leaderFraction = activeSupport > 0 ? leader.value / activeSupport : 0
+            let runnerUpFraction = activeSupport > 0 ? runnerUp.value / activeSupport : 0
             let decision: MeetingBackendSpeakerAssignment
             if allowDominance,
                leaderFraction >= SpeakerDominancePolicy.minimumLeaderCoverageFraction,
@@ -927,61 +1107,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             #endif
             return decision
         }
-    }
-
-    /// Deliberately simple second pass for short turn-boundary words. The user chose the more
-    /// readable handoff behavior despite its known risk for genuine interruption/backchannel
-    /// speech. Coverage remains the first-pass authority; this only resolves an otherwise
-    /// ambiguous two-slot result with immediate assigned-word context.
-    nonisolated static func handoffAssignment(
-        _ coverageAssignment: MeetingBackendSpeakerAssignment,
-        start: TimeInterval,
-        end: TimeInterval,
-        activity: [MeetingBackendSpeakerActivity],
-        previousAssignedWord: (token: MeetingBackendSpeakerToken, end: TimeInterval)?
-    ) -> MeetingBackendSpeakerAssignment {
-        guard case let .ambiguous(candidates) = coverageAssignment,
-              candidates.count == 2,
-              let previousAssignedWord,
-              candidates.contains(previousAssignedWord.token)
-        else { return coverageAssignment }
-
-        let duration = end - start
-        let gap = start - previousAssignedWord.end
-        guard duration.isFinite,
-              duration > 0,
-              duration <= Self.handoffMaximumWordDurationSeconds,
-              gap.isFinite,
-              gap >= -Self.nemotronCadenceMaximumFloorSeconds,
-              gap <= Self.handoffMaximumPreviousWordGapSeconds
-        else { return coverageAssignment }
-
-        guard let other = candidates.first(where: { $0 != previousAssignedWord.token }) else {
-            return coverageAssignment
-        }
-        let otherOnsets = activity.compactMap { entry -> TimeInterval? in
-            guard entry.token == other,
-                  min(entry.end, end) - max(entry.start, start)
-                  > MeetingAnalysisManifestSchema.mappingToleranceSeconds
-            else { return nil }
-            return entry.start
-        }
-        guard let otherOnset = otherOnsets.min() else { return coverageAssignment }
-        let onsetDelta = otherOnset - start
-        let resolved: MeetingBackendSpeakerAssignment = abs(onsetDelta)
-            <= Self.nemotronCadenceMaximumFloorSeconds
-            ? .assigned(other)
-            : .assigned(previousAssignedWord.token)
-
-        #if DEBUG
-        Self.logHandoffDecision(
-            duration: duration,
-            previousWordGap: gap,
-            otherOnsetDelta: onsetDelta,
-            assignedEntrant: abs(onsetDelta) <= Self.nemotronCadenceMaximumFloorSeconds
-        )
-        #endif
-        return resolved
     }
 
     #if DEBUG
@@ -1014,22 +1139,5 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         )
     }
 
-    private nonisolated static func logHandoffDecision(
-        duration: TimeInterval,
-        previousWordGap: TimeInterval,
-        otherOnsetDelta: TimeInterval,
-        assignedEntrant: Bool
-    ) {
-        DebugLogger.shared.info(
-            String(
-                format: "[speakerHandoff] duration=%.3fs previousGap=%.3fs otherOnsetDelta=%.3fs decision=%@",
-                duration,
-                previousWordGap,
-                otherOnsetDelta,
-                assignedEntrant ? "entrant" : "incumbent"
-            ),
-            source: "MeetingParakeetNemotronBackend"
-        )
-    }
     #endif
 }

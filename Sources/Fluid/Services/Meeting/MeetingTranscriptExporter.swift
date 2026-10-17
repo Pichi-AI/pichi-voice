@@ -36,6 +36,43 @@ nonisolated enum MeetingTranscriptExporter {
         language: PichiInterfaceLanguage = .english,
         bundle: Bundle = .main
     ) -> String {
+        if segment.attributionState != .timingUncertain, let attribution = segment.speakerAttribution,
+           attribution.selectedSpeakerID == segment.speakerID {
+            func names(_ references: [MeetingTranscriptSpeakerReference]) -> String {
+                references.map { reference in
+                    Self.resolvedSpeakerName(reference.speakerID, in: session, speakerNames: speakerNames,
+                        language: language, bundle: bundle)
+                        ?? PichiLocalization.text("Unidentified voice", language: language, bundle: bundle)
+                }.joined(separator: " + ")
+            }
+            if let selectedName = Self.resolvedSpeakerName(segment.speakerID, in: session,
+                speakerNames: speakerNames, language: language, bundle: bundle) {
+                if !attribution.background.isEmpty {
+                    return PichiLocalization.format("%@ (interrupting; background: %@)", language: language,
+                        bundle: bundle, arguments: [selectedName, names(attribution.background)])
+                }
+                if attribution.rule.isHeuristic {
+                    return PichiLocalization.format("Estimated speaker: %@", language: language, bundle: bundle, arguments: [selectedName])
+                }
+                return selectedName
+            }
+            if attribution.candidates.count > 1 {
+                let template: String
+                switch attribution.relation {
+                case .simultaneous: template = "Simultaneous speech: %@"
+                case .conflict: template = "Speaker evidence conflicts: %@"
+                default: template = "Several speakers: %@"
+                }
+                return PichiLocalization.format(template, language: language, bundle: bundle, arguments: [names(attribution.candidates)])
+            }
+        }
+        if segment.speakerAttribution == nil, segment.speakerAttributionInference != nil,
+           segment.attributionState == nil || segment.attributionState == .assigned,
+           let name = Self.resolvedSpeakerName(segment.speakerID, in: session,
+               speakerNames: speakerNames, language: language, bundle: bundle) {
+            return PichiLocalization.format("Estimated speaker: %@", language: language,
+                bundle: bundle, arguments: [name])
+        }
         guard let state = segment.attributionState else {
             if let name = resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames, language: language, bundle: bundle) {
                 return name
@@ -65,6 +102,9 @@ nonisolated enum MeetingTranscriptExporter {
             segment.attributionState?.rawValue ?? "legacy",
             segment.overlap.rawValue,
             label,
+            segment.speakerAttribution?.policyFingerprint ?? "legacy-policy",
+            segment.speakerAttribution?.rule.rawValue ?? "legacy-rule",
+            segment.speakerAttribution?.candidates.map { "\($0.token.analysisEpochID):\($0.token.label)" }.joined(separator: ",") ?? "",
         ].joined(separator: "|")
     }
 
@@ -115,7 +155,8 @@ nonisolated enum MeetingTranscriptExporter {
         for segment in segments {
             let startsParagraph = members.last.map { previous in
                 let bothUnknown = previous.speakerID == nil && segment.speakerID == nil
-                return (!bothUnknown && speakerLabelIdentity(for: previous, in: session, speakerNames: names)
+                return ((!bothUnknown || previous.speakerAttribution != nil || segment.speakerAttribution != nil)
+                    && speakerLabelIdentity(for: previous, in: session, speakerNames: names)
                     != speakerLabelIdentity(for: segment, in: session, speakerNames: names))
                     || previous.sourceTrackID != segment.sourceTrackID
                     || previous.status != segment.status || previous.completeness != segment.completeness
@@ -155,11 +196,27 @@ nonisolated enum MeetingTranscriptExporter {
                     completeness: $0.completeness.rawValue,
                     isLikelyEcho: $0.isEcho,
                     attributionState: $0.attributionState?.rawValue,
-                    speakerAttributionInference: $0.speakerAttributionInference
+                    speakerAttributionInference: $0.speakerAttributionInference,
+                    nativePrecision: $0.nativePrecision,
+                    nativeUnitID: $0.nativeUnitID,
+                    nativeSpeakerAssignment: $0.nativeSpeakerAssignment,
+                    nativeTiming: $0.nativeTiming,
+                    speakerAttribution: $0.speakerAttribution.map { attribution in
+                        ExportedSpeakerAttribution(
+                            unitID: attribution.unitID, rawAssignment: attribution.rawAssignment,
+                            selectedToken: attribution.selectedToken,
+                            selectedSpeakerID: Self.resolvedSpeakerID(attribution.selectedSpeakerID, in: session, activeSpeakerIDs: activeSpeakerIDs),
+                            candidates: attribution.candidates.map { .init(token: $0.token,
+                                speakerID: Self.resolvedSpeakerID($0.speakerID, in: session, activeSpeakerIDs: activeSpeakerIDs)) },
+                            background: attribution.background.map { .init(token: $0.token,
+                                speakerID: Self.resolvedSpeakerID($0.speakerID, in: session, activeSpeakerIDs: activeSpeakerIDs)) },
+                            relation: attribution.relation, rule: attribution.rule,
+                            policyVersion: attribution.policyVersion, policyFingerprint: attribution.policyFingerprint)
+                    }
                 )
             }
         let document = ExportedTranscript(
-            schemaVersion: 1,
+            schemaVersion: 2,
             title: session.title,
             languageCode: session.languageCode,
             startedAt: session.startedAt,
@@ -247,6 +304,24 @@ private struct ExportedSegment: Codable {
     var isLikelyEcho: Bool
     var attributionState: String?
     var speakerAttributionInference: MeetingSpeakerAttributionInference?
+    var nativePrecision: MeetingTextUnitPrecision?
+    var nativeUnitID: String?
+    var nativeSpeakerAssignment: MeetingBackendSpeakerAssignment?
+    var nativeTiming: MeetingTranscriptNativeTiming?
+    var speakerAttribution: ExportedSpeakerAttribution?
+}
+
+private struct ExportedSpeakerAttribution: Codable {
+    let unitID: String
+    let rawAssignment: MeetingBackendSpeakerAssignment
+    let selectedToken: MeetingBackendSpeakerToken?
+    let selectedSpeakerID: SessionSpeakerID?
+    let candidates: [MeetingTranscriptSpeakerReference]
+    let background: [MeetingTranscriptSpeakerReference]
+    let relation: MeetingSpeakerAttributionRelation
+    let rule: MeetingSpeakerAttributionRule
+    let policyVersion: Int
+    let policyFingerprint: String
 }
 
 private struct ExportedTranscript: Codable {
