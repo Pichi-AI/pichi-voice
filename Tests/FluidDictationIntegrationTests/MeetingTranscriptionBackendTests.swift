@@ -1252,10 +1252,6 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
     }
 
     func testEvidenceRejectsMismatchedBackendOrAttemptAndBadActivity() throws {
-        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
-
         let fixture = try self.makeEvidenceFixture()
         let otherBackend = MeetingBackendID(rawValue: "someone-else")
 
@@ -1428,7 +1424,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
     private func reject(_ pipeline: MeetingProcessingPipeline, session: MeetingSession,
                         expected: MeetingBackendError, probe: Probe) async {
         do {
-            try await pipeline.prepareMemoryAudio(session: session, sessionDirectory: sessionDirectory,
+            try await pipeline.prepareMemoryAudio(session: session, sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"),
                 checkpoint: { _ in XCTFail("Rejected input cannot publish") })
             XCTFail("Unsupported/mismatched input must fail before microphone admission")
         } catch { XCTAssertEqual(error as? MeetingBackendError, expected) }
