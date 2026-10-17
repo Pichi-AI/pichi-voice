@@ -62,7 +62,208 @@ nonisolated struct MeetingFast32RuntimeTests {
         try self.testDetailedProfiling(config: config, samples: samples)
         try await self.testProfileLogTransport(config: config)
         try self.testThreeMinuteFrontendGeometry(config: config)
-        print("PASS fast32 geometry, intervals, cancellation, frontend parity, exact checkpoint continuation, bounded metadata-only profiling and profile log transport")
+        try self.testIncrementalClock()
+        try self.testIncrementalClockPartitions(config: config, samples: samples)
+        try self.testIncrementalIntervals()
+        try await self.testIncrementalSessionLifecycle(config: config)
+        print("PASS fast32 geometry, intervals, cancellation, frontend parity, exact checkpoint continuation, bounded metadata-only profiling, profile log transport and incremental session ownership")
+    }
+
+    private static func testIncrementalClock() throws {
+        var clock = MeetingIncrementalDiarizationClock()
+        try clock.accept(sampleCount: 46_080, sourceStartSample: 0, outputFrameCount: 256)
+        try require(clock.acceptedThroughSample == 46_080 && clock.processedThroughSample == 40_960,
+                    "Input clock excludes 320 ms of still-buffered right context from processed coverage")
+        for start in [0, 46_079, 46_081, -1] {
+            do { try clock.validateAppend(sampleCount: 1, sourceStartSample: start); throw NSError(domain: "ExpectedGapRejection", code: 1) }
+            catch MeetingIncrementalDiarizationError.nonContiguousInput { }
+        }
+        for count in [0, -1, 320_001, Int.max] {
+            do { try clock.validateAppend(sampleCount: count, sourceStartSample: 46_080); throw NSError(domain: "ExpectedInputRejection", code: 1) }
+            catch MeetingIncrementalDiarizationError.invalidInput { }
+        }
+        try clock.discard(beforeSample: 40_959)
+        for before in [40_958, 40_961, Int.max] {
+            do { try clock.discard(beforeSample: before); throw NSError(domain: "ExpectedWatermarkRejection", code: 1) }
+            catch MeetingIncrementalDiarizationError.invalidWatermark { }
+        }
+        do { try clock.finish(totalSamples: 46_079, outputFrameCount: 289); throw NSError(domain: "ExpectedFinalCursorRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.nonContiguousInput { }
+        do { try clock.finish(totalSamples: 46_080, outputFrameCount: 256); throw NSError(domain: "ExpectedIncompleteFlushRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.invalidWatermark { }
+        try clock.finish(totalSamples: 46_080, outputFrameCount: 289)
+        try require(clock.isFinal && clock.processedThroughSample == 46_080, "Centered final output is clipped to physical samples")
+        do { try clock.finish(totalSamples: 46_080, outputFrameCount: 289); throw NSError(domain: "ExpectedDoubleFinishRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.alreadyFinished { }
+        do { try clock.validateAppend(sampleCount: 1, sourceStartSample: 46_080); throw NSError(domain: "ExpectedPostFinalInputRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.alreadyFinished { }
+        var empty = MeetingIncrementalDiarizationClock()
+        try empty.finish(totalSamples: 0, outputFrameCount: 0)
+        try require(empty.isFinal && empty.processedThroughSample == 0, "Empty stream can finalize without model padding")
+    }
+
+    private static func testIncrementalClockPartitions(config: Nemotron3Config, samples: [Float]) throws {
+        for seed in 1...5 {
+            var random = UInt64(seed)
+            var frontend = Nemotron3StreamingFrontend(config: config)
+            var clock = MeetingIncrementalDiarizationClock()
+            var cursor = 0
+            var outputFrames = 0
+            while cursor < samples.count {
+                random = random &* 6_364_136_223_846_793_005 &+ 1
+                let count = min(Int(random % 7_319) + 1, samples.count - cursor)
+                frontend.append(Array(samples[cursor..<(cursor + count)]))
+                while let chunk = frontend.nextChunk(final: false) {
+                    outputFrames += chunk.length - chunk.leftOffset - chunk.rightOffset
+                }
+                try clock.accept(sampleCount: count, sourceStartSample: cursor, outputFrameCount: outputFrames)
+                cursor += count
+                try require(clock.processedThroughSample <= cursor, "Random PCM partitions never expose future right-context time")
+            }
+            while let chunk = frontend.nextChunk(final: true) {
+                outputFrames += chunk.length - chunk.leftOffset - chunk.rightOffset
+            }
+            try clock.finish(totalSamples: samples.count, outputFrameCount: outputFrames)
+            try require(clock.acceptedThroughSample == samples.count && clock.processedThroughSample == samples.count,
+                        "Random PCM partitions preserve the exact native frontend final source clock")
+        }
+    }
+
+    private static func testIncrementalIntervals() throws {
+        let frameCount = 1_200
+        let probabilities = (0..<frameCount).flatMap { frame in
+            [Float(frame < 380 ? 0.9 : 0), Float((250..<420).contains(frame) ? 0.9 : 0),
+             Float((800..<1_000).contains(frame) ? 0.9 : 0)]
+        }
+        var whole = MeetingFast32SpeakerIntervals(speakerCount: 3)
+        try whole.append(probabilities: probabilities, frameCount: frameCount)
+        let expected = whole.finish(duration: 11.993)
+        for seed in 1...17 {
+            var random = UInt64(seed)
+            var partitioned = MeetingFast32SpeakerIntervals(speakerCount: 3)
+            var cursor = 0
+            while cursor < frameCount {
+                random = random &* 6_364_136_223_846_793_005 &+ 1
+                let count = min(Int(random % 47) + 1, frameCount - cursor)
+                try partitioned.append(probabilities: Array(probabilities[(cursor * 3)..<((cursor + count) * 3)]), frameCount: count)
+                cursor += count
+                let preview = partitioned.snapshot(duration: Double(cursor) / 100)
+                try require(preview == partitioned.snapshot(duration: Double(cursor) / 100), "Preview is non-destructive")
+            }
+            try require(partitioned.finish(duration: 11.993) == expected, "Random partition boundaries preserve slots and overlap")
+        }
+        var compact = MeetingFast32SpeakerIntervals(speakerCount: 2)
+        var baseline = MeetingFast32SpeakerIntervals(speakerCount: 2)
+        for block in 0..<3_000 {
+            let values = Array(repeating: [Float(block % 2 == 0 ? 1 : 0), Float(1)], count: 20).flatMap { $0 }
+            try compact.append(probabilities: values, frameCount: 20)
+            try baseline.append(probabilities: values, frameCount: 20)
+            let end = (block + 1) * 20
+            let acknowledged = max(0, end - 100)
+            compact.discard(beforeFrame: acknowledged)
+            let clipped = compact.snapshot(duration: Double(end) / 100, startingAt: Double(acknowledged) / 100 + 0.003)
+            try require(clipped == baseline.snapshot(duration: Double(end) / 100, startingAt: Double(acknowledged) / 100 + 0.003),
+                        "Acknowledgement evicts only released closed intervals, retaining open voice anchors and fractional clipping")
+            try require(compact.retainedIntervalCount <= 5, "Activity metadata remains bounded through a long stream")
+        }
+    }
+
+    private static func testIncrementalSessionLifecycle(config: Nemotron3Config) async throws {
+        // An unloaded model suffices for sub-latency intake and an empty final flush. No
+        // CoreML prediction, weights, file, microphone or device operation occurs here.
+        let models = try Nemotron3Models(config: config, model: MLModel(), silenceEmbedding: Array(repeating: 0.125, count: 512))
+        let factory = Fast32NemotronDiarizerFactory(config: config, models: models)
+        defer { factory.cleanup() }
+        let base = try await factory.makeDiarizer(epoch: .init())
+        guard let session = base as? any MeetingIncrementalNemotronDiarizerSession else {
+            throw NSError(domain: "MissingIncrementalCapability", code: 1)
+        }
+        let first = try await session.appendStreaming([0, 0.1, -0.1], sourceStartSample: 0)
+        try require(first.acceptedThroughSample == 3 && first.processedThroughSample == 0 && first.activity.isEmpty && !first.isFinal,
+                    "Factory hands out a continuous optional incremental capability")
+        do { _ = try await session.appendStreaming([0], sourceStartSample: 4); throw NSError(domain: "ExpectedGapRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.nonContiguousInput { }
+        do { _ = try await session.appendStreaming([.nan], sourceStartSample: 3); throw NSError(domain: "ExpectedNaNRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.invalidInput { }
+        let next = try await session.appendStreaming([0], sourceStartSample: 3)
+        try require(next.acceptedThroughSample == 4, "Rejected input never advances the native frontend clock")
+        do { try await session.discardActivity(beforeSample: 1); throw NSError(domain: "ExpectedAckRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.invalidWatermark { }
+        await session.cleanupStreaming()
+        do { _ = try await session.appendStreaming([0], sourceStartSample: 4); throw NSError(domain: "ExpectedClosedRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.closed { }
+        let emptyBase = try await factory.makeDiarizer(epoch: .init())
+        let empty = emptyBase as! any MeetingIncrementalNemotronDiarizerSession
+        let finished = try await empty.finishStreaming(totalSamples: 0)
+        try require(finished.isFinal && finished.acceptedThroughSample == 0 && finished.activity.isEmpty, "Empty stream finalizes once")
+        do { _ = try await empty.finishStreaming(totalSamples: 0); throw NSError(domain: "ExpectedDoubleFinishRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.alreadyFinished { }
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            _ = try await empty.appendStreaming([0], sourceStartSample: 0)
+        }
+        do { try await cancelled.value; throw NSError(domain: "ExpectedCancellation", code: 1) }
+        catch is CancellationError { }
+
+        // A non-cooperative source keeps the existing replay call admitted. Retirement must
+        // join it even after cancellation; neither a second stream nor early cleanup is safe.
+        let joinedBase = try await factory.makeDiarizer(epoch: .init())
+        let joined = joinedBase as! any MeetingIncrementalNemotronDiarizerSession
+        let source = SuspendedReplaySource()
+        let replay = Task { try await joined.diarize(source: source) }
+        await source.waitUntilReading()
+        do { _ = try await joined.appendStreaming([0], sourceStartSample: 0); throw NSError(domain: "ExpectedConcurrentRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.concurrentOperation { }
+        replay.cancel()
+        let retired = CompletionProbe()
+        let cleanup = Task {
+            await retired.started()
+            await joined.cleanupStreaming()
+            await retired.completed()
+        }
+        await retired.waitUntilStarted()
+        await Task.yield()
+        try require(await !retired.isComplete, "Cleanup cannot finish while an admitted owner is still suspended")
+        await source.release()
+        do { _ = try await replay.value; throw NSError(domain: "ExpectedReplayFailure", code: 1) }
+        catch ProfileReplayFailure.expected { }
+        await cleanup.value
+        try require(await retired.isComplete, "Cleanup joins the previous owner and then retires")
+        do { _ = try await joined.appendStreaming([0], sourceStartSample: 0); throw NSError(domain: "ExpectedRetiredRejection", code: 1) }
+        catch MeetingIncrementalDiarizationError.closed { }
+    }
+
+    private actor SuspendedReplaySource: MeetingPCMReplaySource {
+        nonisolated let totalSampleCount = 16_000
+        private var reader: CheckedContinuation<[Float], Error>?
+        private var entered: CheckedContinuation<Void, Never>?
+        func readSamples(in range: Range<Int>) async throws -> [Float] {
+            try await withCheckedThrowingContinuation { continuation in
+                self.reader = continuation
+                self.entered?.resume()
+                self.entered = nil
+            }
+        }
+        func waitUntilReading() async {
+            if self.reader != nil { return }
+            await withCheckedContinuation { self.entered = $0 }
+        }
+        func release() {
+            self.reader?.resume(throwing: ProfileReplayFailure.expected)
+            self.reader = nil
+        }
+    }
+
+    private actor CompletionProbe {
+        private var didStart = false
+        private var waiter: CheckedContinuation<Void, Never>?
+        private(set) var isComplete = false
+        func started() { self.didStart = true; self.waiter?.resume(); self.waiter = nil }
+        func completed() { self.isComplete = true }
+        func waitUntilStarted() async {
+            if self.didStart { return }
+            await withCheckedContinuation { self.waiter = $0 }
+        }
     }
 
     private static func testThreeMinuteFrontendGeometry(config: Nemotron3Config) throws {

@@ -59,9 +59,17 @@ final nonisolated class Fast32NemotronDiarizerFactory: MeetingNemotronDiarizerFa
 
 /// Serial per-track state. Only the current chunk's probabilities are retained. Speaker
 /// intervals accumulate as compact metadata; raw audio and mel history remain bounded.
-private final nonisolated class Fast32NemotronDiarizerSession: MeetingResumableNemotronDiarizerSession, @unchecked Sendable {
+private final nonisolated class Fast32NemotronDiarizerSession: MeetingResumableNemotronDiarizerSession, MeetingIncrementalNemotronDiarizerSession, @unchecked Sendable {
     private var diarizer: Nemotron3Diarizer?
     private let config: Nemotron3Config
+    private enum Mode { case unused, replay, streaming, finished, failed, cleaned }
+    private let operation = NSCondition()
+    private var mode = Mode.unused
+    private var busy = false
+    private var closing = false
+    private var clock = MeetingIncrementalDiarizationClock()
+    private var streamingIntervals: MeetingFast32SpeakerIntervals
+    private static let maximumRetainedIntervals = 16_384
 
     init(
         config: Nemotron3Config, models: Nemotron3Models,
@@ -69,12 +77,136 @@ private final nonisolated class Fast32NemotronDiarizerSession: MeetingResumableN
     ) {
         self.diarizer = Nemotron3Diarizer(config: config, models: models, profileLogSink: profileLogSink)
         self.config = config
+        self.streamingIntervals = MeetingFast32SpeakerIntervals(speakerCount: config.numSpeakers)
     }
 
-    func cleanup() { self.diarizer = nil }
+    /// Factory cleanup normally follows its joined body. The condition also protects an
+    /// accidental racing retirement: an admitted native call keeps its model until it ends.
+    func cleanup() {
+        self.operation.lock()
+        self.closing = true
+        while self.busy { self.operation.wait() }
+        self.diarizer = nil
+        self.streamingIntervals = MeetingFast32SpeakerIntervals(speakerCount: self.config.numSpeakers)
+        self.mode = .cleaned
+        self.operation.unlock()
+    }
+
+    func cleanupStreaming() async {
+        // Waiting for a synchronous CoreML prediction must not block the caller's actor.
+        await Task.detached { self.cleanup() }.value
+    }
+
+    private func begin(streaming: Bool) throws -> Nemotron3Diarizer {
+        try self.operation.withLock {
+            guard !self.closing, let diarizer else { throw MeetingIncrementalDiarizationError.closed }
+            guard !self.busy else { throw MeetingIncrementalDiarizationError.concurrentOperation }
+            if streaming {
+                guard self.mode == .unused || self.mode == .streaming else {
+                    throw self.mode == .finished ? MeetingIncrementalDiarizationError.alreadyFinished : .closed
+                }
+                self.mode = .streaming
+            } else {
+                guard self.mode == .unused else { throw MeetingIncrementalDiarizationError.closed }
+                self.mode = .replay
+            }
+            self.busy = true
+            return diarizer
+        }
+    }
+
+    private func end(mode: Mode) {
+        self.operation.withLock {
+            self.mode = mode
+            self.busy = false
+            self.operation.broadcast()
+        }
+    }
+
+    func appendStreaming(_ samples: [Float], sourceStartSample: Int) async throws -> MeetingIncrementalDiarizationUpdate {
+        try Task.checkCancellation()
+        let diarizer = try self.begin(streaming: true)
+        var terminalMode = Mode.streaming
+        defer { self.end(mode: terminalMode) }
+        try self.clock.validateAppend(sampleCount: samples.count, sourceStartSample: sourceStartSample)
+        guard samples.allSatisfy(\.isFinite) else { throw MeetingIncrementalDiarizationError.invalidInput }
+        do {
+            try Task.checkCancellation()
+            try autoreleasepool {
+                diarizer.appendAudio(samples)
+                for chunk in try diarizer.processBufferedAudio() {
+                    try self.appendStreamingChunk(chunk)
+                }
+            }
+            try self.clock.accept(sampleCount: samples.count, sourceStartSample: sourceStartSample,
+                                  outputFrameCount: diarizer.streamedFrameCount)
+            try Task.checkCancellation()
+            return self.streamingUpdate()
+        } catch {
+            // A native call may already have consumed part of the input. This state cannot be
+            // retried under the same cursor. Cancellation joins it before retirement.
+            terminalMode = .failed
+            throw error
+        }
+    }
+
+    func finishStreaming(totalSamples: Int) async throws -> MeetingIncrementalDiarizationUpdate {
+        try Task.checkCancellation()
+        let diarizer = try self.begin(streaming: true)
+        var terminalMode = Mode.streaming
+        defer { self.end(mode: terminalMode) }
+        try self.clock.validateFinish(totalSamples: totalSamples)
+        do {
+            if totalSamples > 0 {
+                for chunk in try autoreleasepool(invoking: { try diarizer.finishStream() }) {
+                    try self.appendStreamingChunk(chunk)
+                }
+            }
+            try self.clock.finish(totalSamples: totalSamples, outputFrameCount: diarizer.streamedFrameCount)
+            terminalMode = .finished
+            try Task.checkCancellation()
+            return self.streamingUpdate()
+        } catch {
+            terminalMode = .failed
+            throw error
+        }
+    }
+
+    func discardActivity(beforeSample: Int) async throws {
+        try Task.checkCancellation()
+        // Acknowledgement after finalization is useful while its final snapshot is consumed.
+        try self.operation.withLock {
+            guard !self.closing, self.mode == .streaming || self.mode == .finished else {
+                throw MeetingIncrementalDiarizationError.closed
+            }
+            guard !self.busy else { throw MeetingIncrementalDiarizationError.concurrentOperation }
+            try self.clock.discard(beforeSample: beforeSample)
+            // Keep a crossing/open voice's original anchor. Snapshot clipping handles an
+            // acknowledgement in the middle of a 10 ms frame without moving acoustic time.
+            self.streamingIntervals.discard(beforeFrame: beforeSample / 160)
+        }
+    }
+
+    private func appendStreamingChunk(_ chunk: Nemotron3ChunkResult) throws {
+        try self.streamingIntervals.append(probabilities: chunk.probabilities, frameCount: chunk.frameCount)
+        guard self.streamingIntervals.retainedIntervalCount <= Self.maximumRetainedIntervals else {
+            throw MeetingIncrementalDiarizationError.activityCapacityExceeded
+        }
+    }
+
+    private func streamingUpdate() -> MeetingIncrementalDiarizationUpdate {
+        .init(activity: self.streamingIntervals.snapshot(
+            duration: Double(self.clock.processedThroughSample) / 16_000,
+            startingAt: Double(self.clock.retainedFromSample) / 16_000),
+              acceptedThroughSample: self.clock.acceptedThroughSample,
+              processedThroughSample: self.clock.processedThroughSample,
+              retainedFromSample: self.clock.retainedFromSample, isFinal: self.clock.isFinal)
+    }
 
     func diarize(source: any MeetingPCMReplaySource) async throws -> [MeetingNemotronSpeakerSegment] {
-        guard let diarizer else { throw CancellationError() }
+        try Task.checkCancellation()
+        let diarizer = try self.begin(streaming: false)
+        defer { self.end(mode: .unused) }
         diarizer.reset()
         defer { diarizer.reset() }
         var intervals = MeetingFast32SpeakerIntervals(speakerCount: self.config.numSpeakers)
@@ -99,7 +231,9 @@ private final nonisolated class Fast32NemotronDiarizerSession: MeetingResumableN
         source: any MeetingPCMReplaySource, restoring: Data?,
         checkpoint: @escaping @Sendable (Data) async throws -> Void
     ) async throws -> [MeetingNemotronSpeakerSegment] {
-        guard let diarizer else { throw CancellationError() }
+        try Task.checkCancellation()
+        let diarizer = try self.begin(streaming: false)
+        defer { self.end(mode: .unused) }
         let count = source.totalSampleCount
         guard count > 0 else { throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow }
         diarizer.reset()
@@ -229,6 +363,8 @@ nonisolated struct MeetingFast32SpeakerIntervals: Codable, Sendable {
     private var segments: [Segment] = []
     private var frames = 0
 
+    var retainedIntervalCount: Int { self.segments.count + self.openFrames.compactMap { $0 }.count }
+
     init(speakerCount: Int = 8) { self.openFrames = Array(repeating: nil, count: speakerCount) }
 
     private enum CodingKeys: String, CodingKey { case openFrames, segments, frames }
@@ -268,16 +404,33 @@ nonisolated struct MeetingFast32SpeakerIntervals: Codable, Sendable {
         self.openFrames[slot] = nil
     }
 
-    mutating func finish(duration: TimeInterval) -> [MeetingNemotronSpeakerSegment] {
+    /// Read without finalizing any open voice. Its true anchor survives preview and eviction,
+    /// so a later chunk extends the same slot rather than manufacturing a new speaking turn.
+    func snapshot(duration: TimeInterval, startingAt minimum: TimeInterval = 0) -> [MeetingNemotronSpeakerSegment] {
+        guard duration.isFinite, minimum.isFinite, duration >= minimum, minimum >= 0 else { return [] }
+        var retained = self.segments
         for slot in self.openFrames.indices {
-            if let start = self.openFrames[slot] { self.close(slot: slot, start: start, end: self.frames) }
+            if let start = self.openFrames[slot], self.frames - start >= 20 {
+                retained.append(.init(slot: slot, start: start, end: self.frames))
+            }
         }
-        return self.segments.compactMap {
-            let start = Double($0.start) / 100
+        return retained.compactMap {
+            let start = max(minimum, Double($0.start) / 100)
             let end = min(duration, Double($0.end) / 100)
             guard end > start else { return nil }
             return MeetingNemotronSpeakerSegment(slotIndex: $0.slot, start: start, end: end)
         }.sorted { $0.start == $1.start ? $0.slotIndex < $1.slotIndex : $0.start < $1.start }
+    }
+
+    mutating func discard(beforeFrame: Int) {
+        self.segments.removeAll { $0.end <= beforeFrame }
+    }
+
+    mutating func finish(duration: TimeInterval) -> [MeetingNemotronSpeakerSegment] {
+        for slot in self.openFrames.indices {
+            if let start = self.openFrames[slot] { self.close(slot: slot, start: start, end: self.frames) }
+        }
+        return self.snapshot(duration: duration)
     }
 
     func validate(speakerCount: Int, frameCount: Int) throws {
