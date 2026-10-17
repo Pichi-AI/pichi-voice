@@ -172,6 +172,9 @@ nonisolated enum MeetingTranscriptExporter {
         let segments: [MeetingTranscriptSegment]
         /// A legacy reading bridge is deliberately not persisted as a native assignment.
         var containsLegacySpeakerBridge = false
+        /// A legacy incoming turn can begin with an unresolved source member. Keep its
+        /// reading identity separate from that member's immutable stored evidence.
+        var projectedSpeakerID: SessionSpeakerID? = nil
         var id: MeetingTranscriptSegmentID { segments[0].id }
         var firstSegment: MeetingTranscriptSegment { segments[0] }
         var text: String {
@@ -195,8 +198,16 @@ nonisolated enum MeetingTranscriptExporter {
         speakerNames: [SessionSpeakerID: String], language: PichiInterfaceLanguage = .english,
         bundle: Bundle = .main
     ) -> String {
-        self.speakerLabel(for: paragraph.firstSegment, in: session, speakerNames: speakerNames,
-                          language: language, bundle: bundle)
+        if let projected = paragraph.projectedSpeakerID {
+            let resolved = self.resolvedAliasID(projected, in: session)
+            if let speaker = session.activeSpeakers.first(where: { $0.id == resolved }),
+               let displayName = speakerNames[resolved] {
+                return self.speakerLabel(for: .estimated(.init(displayName: displayName, isLocalUser: speaker.isLocalUser)),
+                    language: language, bundle: bundle)
+            }
+        }
+        return self.speakerLabel(for: paragraph.firstSegment, in: session, speakerNames: speakerNames,
+                                language: language, bundle: bundle)
     }
 
     /// Detailed evidence identities still drive correction rows and JSON. A readable turn is
@@ -219,9 +230,9 @@ nonisolated enum MeetingTranscriptExporter {
     }
 
     /// Pre-canonical archives have no native word precision or activity to replay. A completed,
-    /// untouched legacy gap between the same known speaker can flow inside that reading turn,
-    /// retaining its legacy bridge marker. Cross-speaker gaps and all unsafe/manual evidence stay
-    /// boundaries. No word, speaker ID, time, revision, provenance or stored policy is rewritten.
+    /// untouched legacy gap between known speakers uses the shared bounded neighbor admission:
+    /// equal neighbors keep that voice, different neighbors select the incoming voice. Unsafe
+    /// or manual evidence remains a boundary. No stored word, ID, timing or policy is rewritten.
     private static func legacyReadingBridges(
         for segments: [MeetingTranscriptSegment], in session: MeetingSession
     ) -> [MeetingTranscriptSegmentID: SessionSpeakerID] {
@@ -268,7 +279,8 @@ nonisolated enum MeetingTranscriptExporter {
             let first = position
             while position < segments.count, unknown(segments[position]) { position += 1 }
             guard first > 0, position < segments.count,
-                  let speaker = anchor(segments[first - 1]), anchor(segments[position]) == speaker else { continue }
+                  anchor(segments[first - 1]) != nil,
+                  let incoming = anchor(segments[position]) else { continue }
             let range = (first - 1)...position
             guard let sourceStart = sourcePositions[segments[first - 1].id],
                   range.allSatisfy({ sourcePositions[segments[$0].id] == sourceStart + $0 - (first - 1)
@@ -277,7 +289,7 @@ nonisolated enum MeetingTranscriptExporter {
                   MeetingSpeakerAttribution.admitsNeighborRun(range.map {
                       .init(start: segments[$0].start.seconds, end: segments[$0].end.seconds)
                   }, policy: .standard) else { continue }
-            for index in first..<position { bridges[segments[index].id] = speaker }
+            for index in first..<position { bridges[segments[index].id] = incoming }
         }
         return bridges
     }
@@ -296,6 +308,7 @@ nonisolated enum MeetingTranscriptExporter {
         var paragraphs: [DisplayParagraph] = []
         var members: [MeetingTranscriptSegment] = []
         var containsLegacyBridge = false
+        var projectedSpeakerID: SessionSpeakerID?
         for segment in segments {
             let startsParagraph = members.last.map { previous in
                 let bothUnknown = previous.speakerID == nil && segment.speakerID == nil
@@ -310,14 +323,19 @@ nonisolated enum MeetingTranscriptExporter {
                     || previous.isEcho != segment.isEcho
             } ?? false
             if startsParagraph {
-                paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge))
+                paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge,
+                                                   projectedSpeakerID: projectedSpeakerID))
                 members = []
                 containsLegacyBridge = false
             }
+            if members.isEmpty { projectedSpeakerID = legacyBridges[segment.id] }
             members.append(segment)
             containsLegacyBridge = containsLegacyBridge || legacyBridges[segment.id] != nil
         }
-        if !members.isEmpty { paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge)) }
+        if !members.isEmpty {
+            paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge,
+                                               projectedSpeakerID: projectedSpeakerID))
+        }
         return paragraphs
     }
 

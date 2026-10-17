@@ -913,6 +913,38 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
               status: .final, overlap: .none, completeness: .complete, attributionState: attribution)
     }
 
+    func testLegacyIncomingTurnKeepsItsShortUnknownPrefixAndPlainParticipantLabel() throws {
+        let track = UUID(), outgoing = UUID(), incoming = UUID()
+        var source = session()
+        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(700)
+        source.processingAttempts = [.init(id: UUID(), startedAt: source.startedAt, completedAt: source.endedAt,
+            stage: .completed, pipelineVersion: 13)]
+        source.speakers = [(outgoing, "Анна"), (incoming, "Борис")].map {
+            .init(id: $0.0, displayName: $0.1, diarizationClusterID: nil, trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        var rows = [segment("Вопрос?", track: track, start: 608.4, speaker: outgoing, attribution: .assigned),
+                    segment("Нет, это", track: track, start: 609.28),
+                    segment("ответ.", track: track, start: 609.84, speaker: incoming, attribution: .assigned)]
+        for index in rows.indices { rows[index].revision = 0; rows[index].originalText = nil }
+        source.transcriptSegments = rows
+        let before = try MeetingTranscriptExporter.json(for: source)
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: source)
+        XCTAssertEqual(paragraphs.count, 2)
+        let paragraph = try XCTUnwrap(paragraphs.last)
+        XCTAssertEqual(paragraph.text, "Нет, это ответ.")
+        XCTAssertEqual(paragraph.firstSegment.id, rows[1].id)
+        XCTAssertNil(paragraph.firstSegment.speakerID)
+        XCTAssertEqual(paragraph.projectedSpeakerID, incoming)
+        XCTAssertEqual(paragraph.firstSegment.start, rows[1].start)
+        for language in [PichiInterfaceLanguage.english, .russian] {
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
+                speakerNames: [outgoing: "Анна", incoming: "Борис"], language: language), "Борис")
+        }
+        XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
+        XCTAssertEqual(try MeetingTranscriptExporter.json(for: source), before)
+    }
+
     func testLegacyOrphanWordsReadWithinTheirSameSpeakerTurnInBothLanguages() throws {
         let track = UUID(), speaker = UUID()
         var source = session()

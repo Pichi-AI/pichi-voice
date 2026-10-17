@@ -333,7 +333,7 @@ struct FluidServeGroundedSummaryTests {
               "Reading projection never changes JSON evidence semantics")
         func staysSplit(_ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil) {
             check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed ?? session).count == rows.count,
-                  "Unsafe, manual, nonlegacy or different-speaker evidence must remain a boundary")
+                  "Unsafe, manual or nonlegacy evidence must remain a boundary")
         }
         for index in 0..<3 {
             var rows = originals; rows[index].revision = 1; staysSplit(rows)
@@ -354,7 +354,20 @@ struct FluidServeGroundedSummaryTests {
         changed = session
         var hiddenEcho = segment("Echo", 3.1, 3.2); hiddenEcho.isLikelyEcho = true
         changed.transcriptSegments.insert(hiddenEcho, at: 1); staysSplit(originals, in: changed)
-        var rows = originals; rows[2].speakerID = other; staysSplit(rows)
+        var rows = originals; rows[2].speakerID = other
+        let incoming = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session)
+        check(incoming.count == 2 && incoming[0].segments == [rows[0]] && incoming[1].segments == Array(rows.dropFirst()),
+              "A bounded legacy gap at a voice change belongs to the incoming reading turn")
+        check(incoming[1].projectedSpeakerID == other && incoming[1].firstSegment.speakerID == nil,
+              "The projected speaker remains separate from the unresolved first member")
+        for language in [PichiInterfaceLanguage.english, .russian] {
+            check(MeetingTranscriptExporter.speakerLabel(for: incoming[1], in: session,
+                speakerNames: [speaker: "Анна", other: "Борис"], language: language) == "Борис",
+                  "An incoming paragraph beginning with an unknown word has a plain known label")
+        }
+        check(incoming.flatMap(\.segments) == rows && rows[1].speakerID == nil,
+              "Incoming projection preserves exact member IDs, text, timing and original unknown evidence")
+        var mixed = rows; mixed[1].attributionState = .overlappingSpeakers; staysSplit(mixed)
         rows = originals; rows[1].start = .init(value: 2000, timescale: 1000); staysSplit(rows)
         rows = originals; rows[2].start = .init(value: 5000, timescale: 1000); rows[2].end = .init(value: 5100, timescale: 1000); staysSplit(rows)
         rows = originals; rows[1].end = .init(value: 7000, timescale: 1000); rows[2].start = .init(value: 7100, timescale: 1000); rows[2].end = .init(value: 7200, timescale: 1000); staysSplit(rows)
