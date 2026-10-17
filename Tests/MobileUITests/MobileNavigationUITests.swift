@@ -126,6 +126,32 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
+    func testStreamingSpeakerSettingsInBothLanguagesAndThemes() throws {
+        for (language, settingsTitle, appearance, title) in [
+            ("en", "Settings", "light", "Identify speakers during recording"),
+            ("ru", "Настройки", "dark", "Определять говорящих во время записи")
+        ] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                "-SelectedSpeechModel", "gigaam-v3-eou", "-MeetingSpeakerLabelsEnabled", "YES",
+                "-MeetingSpeakerProcessingMode", "afterRecording"]
+            app.launch()
+            waitForOrientation(portrait: true)
+            capture("streaming-settings-\(language)-ready")
+            openNavigation("settings", title: settingsTitle)
+            app.buttons["settings.recording"].tap()
+            let toggle = app.switches["recording.streamingDiarization"]
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            XCTAssertEqual(toggle.value as? String, "0")
+            XCTAssertTrue(toggle.label.contains(title))
+            capture("streaming-settings-\(language)-\(appearance)-portrait")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            waitForOrientation(portrait: false)
+            XCTAssertTrue(toggle.exists)
+            capture("streaming-settings-\(language)-\(appearance)-landscape")
+        }
+    }
+
     func testSectionNavigationSwitchesImmediatelyFromSettingsDetails() throws {
         let destinations = ["general", "recording", "models", "privacy"]
         for detail in destinations {
