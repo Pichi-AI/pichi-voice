@@ -425,7 +425,7 @@ private struct MeetingLiveParagraphRow: View, Equatable {
             if self.paragraph.showsLabel {
                 Text(self.paragraph.captionLabel)
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.paragraph.speaker == .you ? self.theme.palette.accent : self.theme.palette.secondaryText)
+                    .foregroundStyle(self.paragraph.speaker == .you ? self.theme.palette.accentText : self.theme.palette.secondaryText)
             }
             Group {
                 if self.isTail {
