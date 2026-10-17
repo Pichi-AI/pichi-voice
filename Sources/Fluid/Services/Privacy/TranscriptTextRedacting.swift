@@ -4,7 +4,7 @@ import Foundation
 /// freezes one implementation per meeting attempt and applies it before live
 /// display, checkpoints, canonical persistence, search or export. An error must
 /// never cause fallback publication of the original text.
-protocol TranscriptTextRedacting: Sendable {
+nonisolated protocol TranscriptTextRedacting: Sendable {
     /// Stable model/rules identity for retained working-state restoration. An adapter without
     /// this identity remains usable, but cannot advertise resumable sensitive-text processing.
     nonisolated var checkpointIdentity: String? { get }
