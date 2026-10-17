@@ -19,6 +19,10 @@ nonisolated enum MeetingNemotronModelProfile: String, CaseIterable, Sendable {
     static let silenceEmbeddingFileName = "learnable_sil_emb.bin"
 
     var isExperimental: Bool { self != .fast32SplitW8A8 }
+    /// The selected composite profile includes the optional owner verifier only when its
+    /// fingerprint and resource preparation include voice matching. Continuous anonymous
+    /// profiles keep their stable diarizer slots without loading a separate encoder.
+    var supportsOwnerVoiceVerification: Bool { self == .fast32SplitW8A8 }
     var computePreference: ComputePreference { self.isExperimental ? .cpuOnly : .devicePreferred }
     var presetName: String {
         switch self {
@@ -168,9 +172,15 @@ nonisolated enum MeetingNemotronModelReadinessError: LocalizedError, Equatable {
 }
 
 nonisolated protocol MeetingNemotronModelLocating: Sendable {
+    var supportsOwnerVoiceVerification: Bool { get }
     func locate() throws -> MeetingNemotronModelArtifact
     /// Re-validates a previously located artifact before opening it. Any drift is a refusal.
     func recheck(_ artifact: MeetingNemotronModelArtifact) throws -> MeetingNemotronModelArtifact
+}
+
+extension MeetingNemotronModelLocating {
+    /// Existing injected/legacy locators retain the original optional owner stage.
+    nonisolated var supportsOwnerVoiceVerification: Bool { true }
 }
 
 nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
@@ -187,6 +197,7 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
     let injectedURL: URL?
     let environment: [String: String]
     let profile: MeetingNemotronModelProfile
+    var supportsOwnerVoiceVerification: Bool { self.profile.supportsOwnerVoiceVerification }
 
     init(
         injectedURL: URL? = nil,

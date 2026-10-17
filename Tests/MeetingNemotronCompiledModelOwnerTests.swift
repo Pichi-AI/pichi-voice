@@ -81,10 +81,18 @@ struct MeetingNemotronCompiledModelOwnerTests {
                     "Each preset and compute profile needs a distinct frozen identity")
         try require(Set(MeetingNemotronModelProfile.allCases.map(\.packageFileName)).count == 3,
                     "Candidate publication cannot overwrite the production package")
+        try require(production.supportsOwnerVoiceVerification
+                    && MeetingNemotronModelLocator().supportsOwnerVoiceVerification,
+                    "The established offline composite keeps its optional owner verification")
         print("PASS profile-default-compatibility-and-identities")
 
         for profile in MeetingNemotronModelProfile.allCases {
             let candidate = profile.isExperimental
+            try require(profile.supportsOwnerVoiceVerification == !candidate,
+                        "Anonymous experimental profiles cannot advertise an unprepared voice encoder")
+            try require(MeetingNemotronModelLocator(profile: profile).supportsOwnerVoiceVerification
+                        == profile.supportsOwnerVoiceVerification,
+                        "The request-bound locator must expose its exact immutable profile capability")
             try require(MeetingNemotronModelProfile.matching(implementationFingerprint: profile.implementationFingerprint) == profile,
                         "Only exact registered identities select a profile")
             try require(MeetingNemotronModelProfile.matching(implementationFingerprint: profile.implementationFingerprint + ";voice=fixture") == profile,

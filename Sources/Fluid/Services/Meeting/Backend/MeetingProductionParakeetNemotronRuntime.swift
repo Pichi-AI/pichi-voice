@@ -273,6 +273,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     private let modelLocator: any MeetingNemotronModelLocating
     private let voiceModelDirectory: URL
     private let usesDefaultVoiceModelDirectory: Bool
+    private let ownerVoiceVerificationEnabled: Bool
     private let pcmIdentityState = MeetingPCMIdentityState()
     let ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot?
     private let compiledNemotron = MeetingNemotronCompiledModelOwner { source, target in
@@ -297,7 +298,9 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         voiceModelDirectory: URL? = nil,
         ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? = try? MeetingOwnerVoiceProfileStore().load()
     ) {
-        self.ownerVoiceProfileSnapshot = ownerVoiceProfileSnapshot
+        let ownerVoiceVerificationEnabled = modelLocator.supportsOwnerVoiceVerification
+        self.ownerVoiceVerificationEnabled = ownerVoiceVerificationEnabled
+        self.ownerVoiceProfileSnapshot = ownerVoiceVerificationEnabled ? ownerVoiceProfileSnapshot : nil
         self.asrServiceProvider = asrServiceProvider
         self.modelLocator = modelLocator
         self.voiceModelDirectory = voiceModelDirectory ?? MeetingSpeakerVoiceModelArtifacts.packageURL()
@@ -315,7 +318,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             artifact = located
             if configuration.effectiveSpeakerProcessingMode == .streaming {
                 try Self.validateStreamingSelection(artifact: located, configuration: configuration)
-            } else {
+            }
+            if self.ownerVoiceVerificationEnabled {
                 if self.usesDefaultVoiceModelDirectory { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
                 try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
             }
@@ -734,6 +738,10 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     /// Runs in its own phase, so the additional encoder never overlaps ASR or Nemotron residency.
     /// Only short, admitted single-speaker excerpts reach this local model; no audio is uploaded.
     func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
+        try Task.checkCancellation()
+        // Retained retries use the same immutable profile as live capture. Anonymous profiles
+        // neither advertise an owner snapshot nor load an encoder absent from their resource plan.
+        guard self.ownerVoiceVerificationEnabled, !samples.isEmpty else { return [] }
         let began = MeetingPCMRuntimeDiagnostics.begin(.voice)
         defer { MeetingPCMRuntimeDiagnostics.completed(.voice, since: began, samples: samples.count) }
         return try MeetingSpeakerVoiceEncoder.encode(
