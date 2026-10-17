@@ -1252,6 +1252,10 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
     }
 
     func testEvidenceRejectsMismatchedBackendOrAttemptAndBadActivity() throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let fixture = try self.makeEvidenceFixture()
         let otherBackend = MeetingBackendID(rawValue: "someone-else")
 
@@ -1530,7 +1534,11 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             "Unsupported input cannot create inference caches or publish a processing result")
     }
 
-    func testSelectedBackendOwnsPCMExecutorRatherThanSubstitutingHostRuntime() async {
+    func testSelectedBackendOwnsPCMExecutorRatherThanSubstitutingHostRuntime() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let descriptor = self.descriptor()
         let probe = Probe()
         let registry = MeetingTranscriptionBackendRegistry()
@@ -1545,7 +1553,11 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(probe.service, 0)
     }
 
-    func testPCMHostCapabilityRejectsSubstitutedFrozenRequest() async {
+    func testPCMHostCapabilityRejectsSubstitutedFrozenRequest() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let descriptor = self.descriptor()
         let probe = Probe()
         let registry = MeetingTranscriptionBackendRegistry()
@@ -1565,7 +1577,11 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(probe.service, 0)
     }
 
-    func testBareFactoryCannotChangeCapabilitiesBetweenAdmissionAndFrozenExecution() async {
+    func testBareFactoryCannotChangeCapabilitiesBetweenAdmissionAndFrozenExecution() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let probe = Probe()
         let admitted = self.descriptor()
         let changed = self.descriptor(version: "2")
@@ -1604,6 +1620,10 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
     }
 
     func testPreinstalledArtifactIdentityStaysPinnedAcrossDependencyPreparation() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let suite = "PinnedPCMArtifact.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -1631,7 +1651,11 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
     }
 
-    func testAllProductionPCMRegistrationsDispatchThroughTheirRuntimeOperation() async {
+    func testAllProductionPCMRegistrationsDispatchThroughTheirRuntimeOperation() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         for backendID in [MeetingBackendID.gigaam, .whisperTiny, .parakeetV3, .parakeetNemotron] {
             let language = backendID == .gigaam ? "ru" : "en"
             let probe = Probe()
@@ -1648,7 +1672,11 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         }
     }
 
-    func testRegisteredProviderValidatesPinnedASRModelBeforeDependencyPreparation() async {
+    func testRegisteredProviderValidatesPinnedASRModelBeforeDependencyPreparation() async throws {
+        let sessionDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sessionDirectory) }
+
         let probe = Probe()
         let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: "whisper-tiny")!
         let registry = MeetingTranscriptionBackendRegistry()
