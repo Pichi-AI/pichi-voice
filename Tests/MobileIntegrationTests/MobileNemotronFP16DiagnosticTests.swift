@@ -243,6 +243,35 @@ private nonisolated final class NemotronFP16DiagnosticExecution {
 }
 
 nonisolated final class MobileNemotronFP16DiagnosticTests: XCTestCase {
+    func testCoreMLDeviceEligibilitySnapshot() throws {
+        guard ProcessInfo.processInfo.environment["PICHI_MEETING_DETAILED_PROFILE"] == "1" else {
+            throw XCTSkip("Explicitly opt in to device eligibility diagnostics")
+        }
+        guard #available(iOS 17.0, macOS 14.0, *) else { throw XCTSkip("Compute device API unavailable") }
+        func kind(_ device: MLComputeDevice) -> String {
+            switch device {
+            case .cpu: return "cpu"
+            case .gpu: return "gpu"
+            case .neuralEngine: return "neuralEngine"
+            @unknown default: return "unknown"
+            }
+        }
+        let eligible = MLModel.availableComputeDevices.map(kind).sorted()
+        let report: [String: Any] = [
+            "schemaVersion": 1,
+            "testedRevision": ProcessInfo.processInfo.environment["PICHI_COMBINED_MEETING_TESTED_REVISION"] ?? "unset",
+            "hardwareComputeDevices": MLComputeDevice.allComputeDevices.map(kind).sorted(),
+            "coreMLPredictionEligibleDevices": eligible,
+            "scope": "Device eligibility only. No model, compute plan, inference or GPU workload is loaded.",
+        ]
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
+                                       uniformTypeIdentifier: "public.json")
+        attachment.name = "CoreMLDeviceEligibility.json"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertFalse(eligible.isEmpty)
+    }
+
     @MainActor
     func testPinnedFP16DiagnosticReplay() async throws {
         let environment = ProcessInfo.processInfo.environment
