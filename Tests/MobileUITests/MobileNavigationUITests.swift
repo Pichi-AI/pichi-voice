@@ -437,6 +437,19 @@ final class MobileNavigationUITests: XCTestCase {
         app.launchArguments = ["-PichiInterfaceLanguage", "ru"]
         app.launch()
         capture("private-saved-ready")
+        // A scheduled iPadOS update can cover the application with a passcode sheet.
+        // Dismiss only its reminder action; never interact with credentials or update settings.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for title in ["Напомнить позже", "Remind Me Later"] {
+            let reminder = springboard.buttons[title].firstMatch
+            if reminder.exists {
+                reminder.tap()
+                capture("private-saved-update-reminder-dismissed")
+                app.activate()
+                capture("private-saved-active")
+                break
+            }
+        }
         openNavigation("history", title: "История")
         capture("private-saved-history")
         let meeting = app.buttons["history.session.\(sessionID)"]
