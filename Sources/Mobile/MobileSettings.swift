@@ -72,7 +72,6 @@ struct MobileRecordingSettings: View {
     let microphones: [MeetingMicrophoneIdentity]
     var isPresentedAsSheet = false
     @ObservedObject private var settings = SettingsStore.shared
-    @ObservedObject private var diarization = MeetingDiarizationModelStore.shared
     @Environment(\.dismiss) private var dismiss
     @State private var isPreparing = false
     @State private var error: String?
@@ -103,11 +102,18 @@ struct MobileRecordingSettings: View {
         })
     }
 
-    private var speakerResourcesBusy: Bool {
-        switch diarization.state {
-        case .checking, .downloading: return true
-        default: return false
-        }
+    private var supportsStreamingSpeakers: Bool {
+        PichiMeetingProviderFactory.registeredBackendDescriptor(for: settings.selectedSpeechModel.rawValue)?
+            .supportedSpeakerProcessingModes.contains(.streaming) == true
+    }
+
+    private var streamingSpeakers: Binding<Bool> {
+        Binding(get: { settings.meetingSpeakerProcessingMode == .streaming },
+                set: { enabled in
+                    if !enabled || supportsStreamingSpeakers {
+                        settings.meetingSpeakerProcessingMode = enabled ? .streaming : .afterRecording
+                    }
+                })
     }
 
     var body: some View {
@@ -133,16 +139,20 @@ struct MobileRecordingSettings: View {
                 Toggle(PichiLocalization.text("Identify each speaker"), isOn: $settings.meetingSpeakerLabelsEnabled)
                     .accessibilityIdentifier("recording.diarization")
                 if settings.meetingSpeakerLabelsEnabled {
-                    diarizationState
-                    if isPreparing { ProgressView() }
-                    Button(PichiLocalization.text("Download")) {
-                        isPreparing = true
-                        Task { @MainActor in
-                            defer { isPreparing = false }
-                            do { _ = try await diarization.ensureInstalled(includingVoiceEncoder: true) } catch { self.error = error.localizedDescription }
-                        }
-                    }.disabled(isPreparing || speakerResourcesBusy).accessibilityIdentifier("recording.downloadSpeakerModel")
-                    Text(PichiLocalization.text("Speaker labels are added after recording."))
+                    if supportsStreamingSpeakers || settings.meetingSpeakerProcessingMode == .streaming {
+                        Toggle(PichiLocalization.text("Identify speakers during recording"), isOn: streamingSpeakers)
+                            .disabled(isPreparing).accessibilityIdentifier("recording.streamingDiarization")
+                    }
+                    if let store = PichiMeetingProviderFactory.speakerModelStore(for: settings.selectedSpeechModel.rawValue,
+                        speakerProcessingMode: settings.meetingSpeakerProcessingMode) {
+                        MobileSpeakerResourcesSettings(store: store,
+                            processingMode: settings.meetingSpeakerProcessingMode, isPreparing: $isPreparing, error: $error)
+                    } else {
+                        Text(PichiLocalization.text("The selected voice model cannot identify speakers in this recording mode."))
+                    }
+                    Text(PichiLocalization.text(settings.meetingSpeakerProcessingMode == .streaming
+                        ? "Speaker labels update during recording. A short delay is expected."
+                        : "Speaker labels are added after recording."))
                 }
             }
             Section(PichiLocalization.text("My voice")) {
@@ -162,13 +172,47 @@ struct MobileRecordingSettings: View {
             .accessibilityIdentifier("settings.recording.detail")
     }
 
+}
+
+/// One observed owner for the currently selected profile. This reuses the same store operations
+/// as capture preparation while letting SwiftUI observe a changed profile's progress correctly.
+private struct MobileSpeakerResourcesSettings: View {
+    @ObservedObject var store: MeetingDiarizationModelStore
+    let processingMode: MeetingSpeakerProcessingMode
+    @Binding var isPreparing: Bool
+    @Binding var error: String?
+
+    private var isBusy: Bool {
+        switch store.state {
+        case .checking, .downloading: return true
+        default: return false
+        }
+    }
+
+    var body: some View {
+        diarizationState
+        if isPreparing { ProgressView() }
+        Button(PichiLocalization.text("Download")) {
+            isPreparing = true
+            Task { @MainActor in
+                defer { isPreparing = false }
+                do { _ = try await store.ensureInstalled(includingVoiceEncoder: processingMode == .afterRecording) }
+                catch { self.error = error.localizedDescription }
+            }
+        }.disabled(isPreparing || isBusy).accessibilityIdentifier("recording.downloadSpeakerModel")
+    }
+
     @ViewBuilder private var diarizationState: some View {
-        switch diarization.state {
-        case .idle: Text(PichiLocalization.text("Available after recording"))
+        switch store.state {
+        case .idle:
+            Text(PichiLocalization.text(processingMode == .streaming
+                ? "Download the speaker model to identify speakers during recording." : "Available after recording"))
         case .checking: ProgressView(PichiLocalization.text("Checking…"))
         case .downloading(let progress): ProgressView(value: progress)
         case .ready:
-            if diarization.allSpeakerResourcesReady {
+            if processingMode == .streaming {
+                Label(PichiLocalization.text("Ready for speaker identification during recording"), systemImage: "checkmark.circle.fill")
+            } else if store.allSpeakerResourcesReady {
                 Label(PichiLocalization.text("Ready · runs after recording"), systemImage: "checkmark.circle.fill")
             } else { Text(PichiLocalization.text("Available after recording")) }
         case .failed(let message): Text(message).foregroundStyle(.red)

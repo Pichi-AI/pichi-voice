@@ -85,6 +85,14 @@ struct MeetingNemotronCompiledModelOwnerTests {
 
         for profile in MeetingNemotronModelProfile.allCases {
             let candidate = profile.isExperimental
+            try require(MeetingNemotronModelProfile.matching(implementationFingerprint: profile.implementationFingerprint) == profile,
+                        "Only exact registered identities select a profile")
+            try require(MeetingNemotronModelProfile.matching(implementationFingerprint: profile.implementationFingerprint + ";voice=fixture") == profile,
+                        "Composite voice lineage preserves the exact diarizer profile")
+            try require(MeetingNemotronModelProfile.matching(implementationFingerprint: profile.implementationFingerprint + "-changed") == nil,
+                        "A partial identity cannot match a changed implementation")
+            try require(MeetingNemotronModelProfile.matching(implementationFingerprint: profile.implementationFingerprint + ";compute=cpuAndGPU") == nil,
+                        "Appended compute overrides cannot relabel a frozen profile")
             try require(profile.hostFileNames.count == (candidate ? 1 : 2), "Only the split graph requires host projection")
             try require(profile.expectedFiles.count == (candidate ? 5 : 6), "Checksums bind all model and host files")
             try require(!candidate || profile.computePreference == .cpuOnly, "Experimental compute policy is frozen")

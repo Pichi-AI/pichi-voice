@@ -14,15 +14,16 @@ final class MeetingProviderBackedBackend: MeetingTranscriptionBackend {
     var echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? { MeetingTextOverlapEchoVerdictProvider() }
     private let providerModelID: String
     private let runtimeFactory: MeetingParakeetNemotronRuntimeFactory
-    private let modelLocator: any MeetingNemotronModelLocating
+    private let modelLocator: (any MeetingNemotronModelLocating)?
     private let materializer: any MeetingEpochAudioMaterializing
     private var composite: MeetingParakeetNemotronBackend?
+    private var frozenPlan: MeetingBackendPlan?
 
     init(
         descriptor: MeetingBackendDescriptor,
         providerModelID: String,
         runtimeFactory: @escaping MeetingParakeetNemotronRuntimeFactory,
-        modelLocator: any MeetingNemotronModelLocating = MeetingNemotronModelLocator(),
+        modelLocator: (any MeetingNemotronModelLocating)? = nil,
         materializer: any MeetingEpochAudioMaterializing = MeetingEpochAudioMaterializer()
     ) {
         self.descriptor = descriptor
@@ -47,24 +48,37 @@ final class MeetingProviderBackedBackend: MeetingTranscriptionBackend {
     }
 
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan {
+        if let frozenPlan {
+            guard frozenPlan.request == request else {
+                throw MeetingBackendError.hostCapabilityRequestMismatch(backend: self.descriptor.id)
+            }
+            return frozenPlan
+        }
+        try self.descriptor.validateSpeakerProcessingMode(configuration: request.configuration, mode: request.session.mode)
+        guard request.configuration.effectiveSpeakerProcessingMode == request.session.effectiveSpeakerProcessingMode else {
+            throw MeetingBackendError.unsupportedSpeakerProcessingMode(backend: self.descriptor.id,
+                mode: request.session.effectiveSpeakerProcessingMode)
+        }
         guard request.configuration.asrModel == self.providerModelID else {
             throw MeetingProviderOptionsError.unsupportedASRModel(request.configuration.asrModel)
         }
         let policy: MeetingBackendDiarizationPolicy
         #if arch(arm64)
-        policy = request.configuration.diarizationFingerprint.hasPrefix("unavailable:") ? .disabled : .ifInstalled
+        policy = request.configuration.effectiveSpeakerProcessingMode == .streaming ? .required
+            : request.configuration.diarizationFingerprint.hasPrefix("unavailable:") ? .disabled : .ifInstalled
         #else
         policy = .disabled
         #endif
         let composite = MeetingParakeetNemotronBackend(
             runtimeFactory: self.runtimeFactory,
-            modelLocator: self.modelLocator,
+            modelLocator: try self.modelLocator ?? PichiMeetingProviderFactory.modelLocator(for: request.configuration),
             materializer: self.materializer,
             descriptor: self.descriptor,
             diarizationPolicy: policy
         )
         let plan = try composite.plan(request)
         self.composite = composite
+        self.frozenPlan = plan
         return plan
     }
 
@@ -76,7 +90,7 @@ final class MeetingProviderBackedBackend: MeetingTranscriptionBackend {
         guard let composite else {
             throw MeetingBackendError.planDisagreesWithRequest(backend: self.descriptor.id, defect: .attemptIdentity)
         }
-        defer { self.composite = nil }
+        defer { self.composite = nil; self.frozenPlan = nil }
         return try await composite.execute(plan: plan, manifest: manifest, progress: progress)
     }
 }

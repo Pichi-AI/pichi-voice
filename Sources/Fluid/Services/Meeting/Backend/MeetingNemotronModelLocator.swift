@@ -92,6 +92,14 @@ nonisolated enum MeetingNemotronModelProfile: String, CaseIterable, Sendable {
         // Persisted attempts/checkpoints keep the original default identity.
         return self == .fast32SplitW8A8 ? base : base + ";split=false;compute=\(self.computePreference.rawValue)"
     }
+
+    /// The optional voice-encoder lineage belongs to the composite adapter. Its boundary is
+    /// explicit so partial model identities and appended compute overrides cannot match.
+    static func matching(implementationFingerprint value: String) -> Self? {
+        self.allCases.first {
+            value == $0.implementationFingerprint || value.hasPrefix($0.implementationFingerprint + ";voice=")
+        }
+    }
 }
 
 // Stage E of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md` (§5): FluidVoice-side Nemotron model

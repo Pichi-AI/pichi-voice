@@ -21,6 +21,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
     let diarizationFingerprint: String
     let pipelineVersion: Int
     let speakerLabelsEnabled: Bool
+    /// Nil preserves older encoded snapshots and their exact identity framing.
+    let speakerProcessingMode: MeetingSpeakerProcessingMode?
     /// Nil identifies an older configuration and retains its legacy presentation policy.
     let speakerAttributionPolicy: MeetingSpeakerAttributionPolicy?
 
@@ -36,6 +38,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
         diarizationFingerprint: String = MeetingProcessingCheckpoint.currentDiarizationFingerprint,
         pipelineVersion: Int = Self.defaultPipelineVersion,
         speakerLabelsEnabled: Bool = true,
+        speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording,
         speakerAttributionPolicy: MeetingSpeakerAttributionPolicy? = .standard
     ) {
         self.asrModel = asrModel ?? (languageCode == Self.defaultLanguageCode ? Self.defaultASRModel : "parakeet-tdt")
@@ -49,7 +52,12 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
         self.diarizationFingerprint = diarizationFingerprint
         self.pipelineVersion = pipelineVersion
         self.speakerLabelsEnabled = speakerLabelsEnabled
+        self.speakerProcessingMode = speakerLabelsEnabled && speakerProcessingMode == .streaming ? .streaming : nil
         self.speakerAttributionPolicy = speakerAttributionPolicy
+    }
+
+    var effectiveSpeakerProcessingMode: MeetingSpeakerProcessingMode {
+        self.speakerLabelsEnabled ? self.speakerProcessingMode ?? .afterRecording : .afterRecording
     }
 
     /// Identity of this inert configuration snapshot only. It does not by itself prove the runtime
@@ -68,6 +76,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
             ("speakerAttribution", self.speakerAttributionPolicy?.fingerprint ?? "legacy-raw"),
         ]
         if let asrArtifactFingerprint { pairs.append(("asrArtifact", asrArtifactFingerprint)) }
+        if self.effectiveSpeakerProcessingMode == .streaming { pairs.append(("speakerProcessing", "streaming")) }
         return MeetingConfigFingerprintEncoding.encode(pairs)
     }
 }

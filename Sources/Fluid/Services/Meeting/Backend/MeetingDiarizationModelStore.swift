@@ -24,6 +24,16 @@ final class MeetingDiarizationModelStore: ObservableObject {
     }
 
     static let shared = MeetingDiarizationModelStore()
+    private static var profileStores: [MeetingNemotronModelProfile: MeetingDiarizationModelStore] = [:]
+
+    /// Settings and capture preparation observe the same existing operation owner per profile.
+    static func shared(for profile: MeetingNemotronModelProfile) -> MeetingDiarizationModelStore {
+        if profile == .fast32SplitW8A8 { return self.shared }
+        if let store = self.profileStores[profile] { return store }
+        let store = MeetingDiarizationModelStore(profile: profile)
+        self.profileStores[profile] = store
+        return store
+    }
 
     static let repositoryOwner = "FluidInference"
     static let repositoryName = "nemotron-3-diarization-coreml"

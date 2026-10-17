@@ -1,6 +1,91 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Identify speakers during recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identify speakers during recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Определять говорящих во время записи"
+          }
+        }
+      }
+    },
+    "Speaker labels update during recording. A short delay is expected.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker labels update during recording. A short delay is expected."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Говорящие определяются во время записи с небольшой задержкой."
+          }
+        }
+      }
+    },
+    "The selected voice model cannot identify speakers in this recording mode.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected voice model cannot identify speakers in this recording mode."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранная модель не поддерживает определение говорящих в этом режиме записи."
+          }
+        }
+      }
+    },
+    "Download the speaker model to identify speakers during recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download the speaker model to identify speakers during recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скачайте модель, чтобы определять говорящих во время записи."
+          }
+        }
+      }
+    },
+    "Ready for speaker identification during recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ready for speaker identification during recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готово к определению говорящих во время записи"
+          }
+        }
+      }
+    },
     "You": {
       "extractionState": "manual",
       "localizations": {

@@ -136,6 +136,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     /// typed failure, never a silent reinterpretation.
     let resultContract: MeetingBackendResultContract
     let supportedInputs: Set<MeetingBackendInputKind>
+    let supportedSpeakerProcessingModes: Set<MeetingSpeakerProcessingMode>
     let pcmAdmissionRestrictions: [MeetingPCMAdmissionRestriction]
     let pcmObservationPolicy: MeetingPCMObservationPolicy?
     /// Human-readable, non-exhaustive statements of what this backend cannot guarantee.
@@ -160,7 +161,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         allowsTranscriptOnlyOnUnsupportedHardware: Bool = false,
         supportedInputs: Set<MeetingBackendInputKind> = [.recordedChunks],
         pcmAdmissionRestrictions: [MeetingPCMAdmissionRestriction] = [],
-        pcmObservationPolicy: MeetingPCMObservationPolicy? = nil
+        pcmObservationPolicy: MeetingPCMObservationPolicy? = nil,
+        supportedSpeakerProcessingModes: Set<MeetingSpeakerProcessingMode> = [.afterRecording]
     ) {
         self.id = id
         self.version = version
@@ -170,6 +172,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         self.supportedFinalPrecisions = supportedFinalPrecisions
         self.resultContract = resultContract
         self.supportedInputs = supportedInputs
+        self.supportedSpeakerProcessingModes = supportedSpeakerProcessingModes
         self.pcmAdmissionRestrictions = pcmAdmissionRestrictions
         self.pcmObservationPolicy = pcmObservationPolicy
         self.knownLimits = knownLimits
@@ -178,10 +181,27 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         self.allowsTranscriptOnlyOnUnsupportedHardware = allowsTranscriptOnlyOnUnsupportedHardware
     }
 
+    /// Scheduling is a declared capability. Streaming currently consumes the existing single
+    /// in-room PCM input contract; it never drops a second online-call track silently.
+    func validateSpeakerProcessingMode(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
+        guard configuration.speakerLabelsEnabled else { return }
+        let processingMode = configuration.effectiveSpeakerProcessingMode
+        guard self.supportedSpeakerProcessingModes.contains(processingMode) else {
+            throw MeetingBackendError.unsupportedSpeakerProcessingMode(backend: self.id, mode: processingMode)
+        }
+        if processingMode == .streaming {
+            guard mode == .inRoom, self.supportedInputs.contains(.boundedMicrophonePCM),
+                  self.supportedTrackKinds.contains(.microphone), self.resultContract == .canonicalEvidence else {
+                throw MeetingBackendError.unsupportedTrackTopology(backend: self.id)
+            }
+        }
+    }
+
     /// Pure admission: no runtime, artifact preparation, file reads or microphone access. The
     /// strict capture path has one source, so admitting an online two-source topology would lose
     /// a track rather than provide the file backend's semantics.
     func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
+        try self.validateSpeakerProcessingMode(configuration: configuration, mode: mode)
         guard self.supportedInputs.contains(.boundedMicrophonePCM) else {
             throw MeetingBackendError.unsupportedInput(backend: self.id, input: .boundedMicrophonePCM)
         }
@@ -216,6 +236,10 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
 
     func validatePCMInput(_ request: MeetingBackendRequest, admissionContext: MeetingPCMAdmissionContext? = nil) throws {
         try self.validatePCMInput(configuration: request.configuration, mode: request.session.mode)
+        guard request.configuration.effectiveSpeakerProcessingMode == request.session.effectiveSpeakerProcessingMode else {
+            throw MeetingBackendError.unsupportedSpeakerProcessingMode(backend: self.id,
+                mode: request.session.effectiveSpeakerProcessingMode)
+        }
         guard request.configuration.languageCode == request.session.languageCode else {
             throw MeetingBackendError.unsupportedLanguage(backend: self.id, languageCode: request.session.languageCode)
         }
@@ -447,6 +471,7 @@ nonisolated enum MeetingBackendError: LocalizedError, Equatable, Sendable {
     case unknownBackend(MeetingBackendID)
     case backendDescriptorMismatch(backend: MeetingBackendID)
     case unsupportedInput(backend: MeetingBackendID, input: MeetingBackendInputKind)
+    case unsupportedSpeakerProcessingMode(backend: MeetingBackendID, mode: MeetingSpeakerProcessingMode)
     case unsupportedPCMConfiguration(backend: MeetingBackendID, restriction: MeetingPCMAdmissionRestriction)
     /// A registered factory produced a backend whose descriptor claims a different identity than the
     /// one that was requested. Selection would otherwise be a lie: the caller asked for one backend
@@ -478,6 +503,8 @@ nonisolated enum MeetingBackendError: LocalizedError, Equatable, Sendable {
             return PichiLocalization.format("Meeting backend \"%@\" produced capabilities different from its registration.", backend.rawValue)
         case let .unsupportedInput(backend, input):
             return PichiLocalization.format("Meeting backend \"%@\" does not support %@ input.", backend.rawValue, input.rawValue)
+        case .unsupportedSpeakerProcessingMode:
+            return PichiLocalization.text("The selected voice model cannot identify speakers in this recording mode.")
         case let .unsupportedPCMConfiguration(_, restriction):
             return restriction.localizedDescription
         case let .backendIdentityMismatch(requested, produced):
