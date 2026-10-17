@@ -13,6 +13,12 @@ nonisolated enum MeetingFast32ComputePolicy {
     static func units(hasNeuralEngine: Bool) -> MLComputeUnits {
         hasNeuralEngine ? .cpuAndNeuralEngine : .cpuAndGPU
     }
+
+    /// A diagnostic comparison never changes the normal device policy or persisted settings.
+    static func diagnosticUnits(preferred: MLComputeUnits, environment: [String: String]) -> MLComputeUnits {
+        environment["PICHI_MEETING_DETAILED_PROFILE"] == "1"
+            && environment["PICHI_MEETING_PROFILE_COMPUTE_UNITS"] == "cpuOnly" ? .cpuOnly : preferred
+    }
 }
 
 /// Adapter for the split graph's actual host projection and high-resolution output contract.

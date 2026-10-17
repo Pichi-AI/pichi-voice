@@ -579,16 +579,31 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: 0)
         let pipelineID = DebugLogger.pipelineID
         let work = Task.detached(priority: .userInitiated) {
-            try await DebugLogger.$pipelineID.withValue(pipelineID) {
+            try await DebugLogger.$pipelineID.withValue(pipelineID ?? attemptID.uuidString) {
+                let recordingBegan = MeetingPCMRuntimeDiagnostics.begin(.recordingDiarize)
+                var recordingSucceeded = false
+                defer {
+                    MeetingPCMRuntimeDiagnostics.completed(.recordingDiarize, since: recordingBegan,
+                        samples: source.totalSampleCount, succeeded: recordingSucceeded)
+                }
+                let replaySource: any MeetingPCMReplaySource = MeetingPCMRuntimeDiagnostics.detailedProfilingEnabled
+                    ? MeetingProfiledPCMReplaySource(wrapping: source) : source
                 let phase = try await self.withNemotronDiarization(artifact: artifact) { factory in
                     let diarizer = try await factory.makeDiarizer(epoch: epoch)
-                    let segments = try await diarizer.diarize(source: source)
+                    let began = MeetingPCMRuntimeDiagnostics.begin(.diarize)
+                    var succeeded = false
+                    defer {
+                        MeetingPCMRuntimeDiagnostics.completed(.diarize, since: began,
+                            samples: source.totalSampleCount, succeeded: succeeded)
+                    }
+                    let segments = try await diarizer.diarize(source: replaySource)
                     let duration = Double(source.totalSampleCount) / 16_000
                     guard segments.allSatisfy({ (0..<8).contains($0.slotIndex)
                         && $0.start.isFinite && $0.end.isFinite && $0.start >= 0
                         && $0.end > $0.start && $0.end <= duration + 1e-6 }) else {
                         throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
                     }
+                    succeeded = true
                     return MeetingNemotronPhaseResult(activity: segments.map {
                         .init(token: .init(analysisEpochID: epoch, label: "slot-\($0.slotIndex)"), start: $0.start, end: $0.end)
                     })
@@ -609,12 +624,20 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     } catch { try Task.checkCancellation() }
                 }
                 try Task.checkCancellation()
+                let attributionBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.wordAttribution)
+                var attributionSucceeded = false
+                defer {
+                    MeetingPCMRuntimeDiagnostics.completedDetailed(.wordAttribution, since: attributionBegan,
+                        samples: transcript.segments.count, succeeded: attributionSucceeded)
+                }
                 let batch = try MeetingPCMRecordingAttribution.assemble(transcript: transcript,
                     activity: phase.activity, epoch: epoch, attemptID: attemptID,
                     duration: Double(source.totalSampleCount) / 16_000,
                     speakerNameFormat: self.pcmSpeakerNameFormat, confirmedLocalUserTokens: confirmedOwner,
                     speakerAttributionPolicy: configuration.speakerAttributionPolicy)
                 try Task.checkCancellation()
+                attributionSucceeded = true
+                recordingSucceeded = true
                 return batch
             }
         }
@@ -647,8 +670,10 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             // fallback uses CPU/GPU with the SAME graph and reports that choice in support logs.
             // CoreML errors remain errors; this route never substitutes legacy weights.
             let configuration = MLModelConfiguration()
-            configuration.computeUnits = MeetingFast32ComputePolicy.preferredUnits
-            let computeName = configuration.computeUnits == .cpuAndNeuralEngine ? "cpuAndNeuralEngine" : "cpuAndGPU"
+            configuration.computeUnits = MeetingFast32ComputePolicy.diagnosticUnits(
+                preferred: MeetingFast32ComputePolicy.preferredUnits, environment: ProcessInfo.processInfo.environment)
+            let computeName = configuration.computeUnits == .cpuOnly ? "cpuOnly"
+                : configuration.computeUnits == .cpuAndNeuralEngine ? "cpuAndNeuralEngine" : "cpuAndGPU"
             DebugLogger.shared.log("[meeting/pcm] model=fast32-w8a8 computeUnits=\(computeName)", source: "MeetingPCMRuntime")
             let loadBegan = MeetingPCMRuntimeDiagnostics.begin(.load)
             let model = try MLModel(contentsOf: compiledURL, configuration: configuration)
@@ -666,7 +691,18 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             let factory = Fast32NemotronDiarizerFactory(config: config, models: models)
             defer { factory.cleanup() }
             try Task.checkCancellation()
-            return try await body(factory)
+            let result = try await body(factory)
+            if MeetingPCMRuntimeDiagnostics.detailedProfilingEnabled {
+                // Inspect after inference so plan specialization cannot warm the measured
+                // model load or predictions. Its memory and wall time are diagnostic overhead.
+                factory.cleanup()
+                try Task.checkCancellation()
+                let began = MeetingPCMRuntimeDiagnostics.begin(.computePlan)
+                await MeetingCoreMLComputeDiagnostics.logPlan(for: compiledURL, configuration: configuration, role: .diarizer)
+                MeetingPCMRuntimeDiagnostics.completed(.computePlan, since: began)
+                try Task.checkCancellation()
+            }
+            return result
         }
         // The checkpoint's trained cache settings: one silence frame per speaker, filled with its
         // learned silence embedding. Anything else splits one voice across several slots.
@@ -737,7 +773,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
 /// Ordinary support logs use the existing rotated FileLogger in Release too. Begin/end lines
 /// contain only phase names, elapsed/process CPU time and bounded counts, never text,
 /// error payloads, paths, speaker metadata or audio samples.
-private nonisolated enum MeetingPCMRuntimeDiagnostics {
+nonisolated enum MeetingPCMRuntimeDiagnostics {
+    static let detailedProfilingEnabled = ProcessInfo.processInfo.environment["PICHI_MEETING_DETAILED_PROFILE"] == "1"
     nonisolated enum Phase: String, Sendable {
         case compile = "nemotron.compile"
         case load = "nemotron.load"
@@ -745,22 +782,40 @@ private nonisolated enum MeetingPCMRuntimeDiagnostics {
         case voice = "voice.encode"
         case asrPrepare = "asr.prepare"
         case asrInfer = "asr.infer"
+        case recordingDiarize = "recording.diarization"
+        case computePlan = "coreml.compute_plan"
+        case replayRead = "audio.replay_read"
+        case speechTail = "speech.tail"
+        case wordAttribution = "transcript.attribution"
+        case archiveRelease = "audio.release"
+        case stopTotal = "stop.total"
+        case stopInitialStore = "stop.initial_store"
+        case captureStop = "stop.capture"
+        case liveTeardown = "stop.live_teardown"
+        case diarizationRequest = "recording.diarization_request"
+        case resultPersist = "result.persist"
+        case resultPublish = "result.publish"
+        case privacyRedact = "privacy.redact"
+        case diagnosticExport = "diagnostic.transcript_export"
     }
     nonisolated struct Started: Sendable {
+        let id: UUID
         let wall: ContinuousClock.Instant
         let cpu: DiagnosticProcessCPUTime?
     }
     static func begin(_ phase: Phase) -> Started {
-        let started = Started(wall: .now, cpu: DiagnosticProcessCPUTime.capture())
+        let started = Started(id: UUID(), wall: .now, cpu: DiagnosticProcessCPUTime.capture())
         let cpuTotal = started.cpu?.totalMilliseconds.map(String.init) ?? "unavailable"
         let footprint = Self.physicalFootprintBytes().map(String.init) ?? "unavailable"
         let uptime = Int64(ProcessInfo.processInfo.systemUptime * 1_000)
+        let thermal = ProcessInfo.processInfo.thermalState.rawValue
         DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
-            "[meeting/pcm] phase=\(phase.rawValue) event=begin uptimeMs=\(uptime) processCpuTotalMs=\(cpuTotal) cpuScope=process physicalFootprintBytes=\(footprint)"
+            "[meeting/pcm] phase=\(phase.rawValue) event=begin spanID=\(started.id) uptimeMs=\(uptime) processCpuTotalMs=\(cpuTotal) cpuScope=process physicalFootprintBytes=\(footprint) thermalState=\(thermal)"
         }
         return started
     }
-    static func completed(_ phase: Phase, since began: Started, samples: Int = 0, sourceBytes: Int64 = 0) {
+    static func completed(_ phase: Phase, since began: Started, samples: Int = 0, sourceBytes: Int64 = 0,
+                          succeeded: Bool? = nil, sourceOffset: Int? = nil) {
         let nowCPU = DiagnosticProcessCPUTime.capture()
         let elapsed = began.wall.duration(to: .now).components
         let milliseconds = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
@@ -768,11 +823,19 @@ private nonisolated enum MeetingPCMRuntimeDiagnostics {
         let cpuTotal = nowCPU?.totalMilliseconds.map(String.init) ?? "unavailable"
         let footprint = Self.physicalFootprintBytes().map(String.init) ?? "unavailable"
         let uptime = Int64(ProcessInfo.processInfo.systemUptime * 1_000)
-        let count = max(0, min(320_000, samples))
+        let count = max(0, min(1_000_000_000, samples))
         let bytes = max(0, min(1_000_000_000, sourceBytes))
+        let outcome = succeeded.map { $0 ? "completed" : Task.isCancelled ? "cancelled" : "failed" } ?? "finished"
+        let offset = sourceOffset.map { String(max(0, min(1_000_000_000, $0))) } ?? "unavailable"
+        let thermal = ProcessInfo.processInfo.thermalState.rawValue
         DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
-            "[meeting/pcm] phase=\(phase.rawValue) elapsedMs=\(milliseconds) count=\(count) sourceBytes=\(bytes) event=end uptimeMs=\(uptime) processCpuMs=\(cpu) processCpuTotalMs=\(cpuTotal) cpuScope=process physicalFootprintBytes=\(footprint)"
+            "[meeting/pcm] phase=\(phase.rawValue) elapsedMs=\(milliseconds) count=\(count) sourceBytes=\(bytes) event=end spanID=\(began.id) outcome=\(outcome) sourceOffset=\(offset) uptimeMs=\(uptime) processCpuMs=\(cpu) processCpuTotalMs=\(cpuTotal) cpuScope=process physicalFootprintBytes=\(footprint) thermalState=\(thermal)"
         }
+    }
+
+    static func beginDetailed(_ phase: Phase) -> Started? { detailedProfilingEnabled ? begin(phase) : nil }
+    static func completedDetailed(_ phase: Phase, since began: Started?, samples: Int = 0, succeeded: Bool = true) {
+        if let began { completed(phase, since: began, samples: samples, succeeded: succeeded) }
     }
 
     private static func physicalFootprintBytes() -> UInt64? {
@@ -788,5 +851,23 @@ private nonisolated enum MeetingPCMRuntimeDiagnostics {
         #else
         return nil
         #endif
+    }
+}
+
+/// Metadata-only diagnostic adapter. The existing replay protocol still owns bounded reads,
+/// validation and cancellation; the wrapped source retains all audio/cache ownership.
+private nonisolated struct MeetingProfiledPCMReplaySource: MeetingPCMReplaySource {
+    let wrapping: any MeetingPCMReplaySource
+    var totalSampleCount: Int { wrapping.totalSampleCount }
+    func readSamples(in range: Range<Int>) async throws -> [Float] {
+        let began = MeetingPCMRuntimeDiagnostics.begin(.replayRead)
+        var succeeded = false
+        defer {
+            MeetingPCMRuntimeDiagnostics.completed(.replayRead, since: began, samples: range.count,
+                succeeded: succeeded, sourceOffset: range.lowerBound)
+        }
+        let samples = try await wrapping.readSamples(in: range)
+        succeeded = true
+        return samples
     }
 }

@@ -271,12 +271,20 @@ extension MeetingProcessingPipeline {
                                      progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
         guard let consumer = attempt.consumer else { throw MeetingProcessingError.noRecoverableAudio }
         defer {
+            let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.archiveRelease)
             attempt.archive.clear()
             attempt.analysisTask = nil
             if self.memoryAttempts[session.id] === attempt { self.memoryAttempts.removeValue(forKey: session.id) }
+            MeetingPCMRuntimeDiagnostics.completedDetailed(.archiveRelease, since: began)
         }
         progress(.transcribing)
-        try await consumer.finish()
+        do {
+            let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.speechTail)
+            var succeeded = false
+            defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.speechTail, since: began, succeeded: succeeded) }
+            try await consumer.finish()
+            succeeded = true
+        }
         try Task.checkCancellation()
         let track = session.audioTracks.first(where: { $0.kind == .microphone })
         var batch: MeetingPCMTranscriptBatch
@@ -292,11 +300,17 @@ extension MeetingProcessingPipeline {
             progress(.identifyingSpeakers)
             let service = self.asrServiceProvider()
             let transcript = batch
-            batch = try await service.withMeetingModelResidency(attemptID: attempt.request.attemptID,
-                acceptsCompletedCancellation: { _ in false }) {
-                try await attempt.runtime.diarizePCMRecording(source: attempt.archive, transcript: transcript,
-                    trackID: track.id, attemptID: attempt.request.attemptID,
-                    configuration: attempt.request.configuration)
+            do {
+                let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.diarizationRequest)
+                var succeeded = false
+                defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.diarizationRequest, since: began, succeeded: succeeded) }
+                batch = try await service.withMeetingModelResidency(attemptID: attempt.request.attemptID,
+                    acceptsCompletedCancellation: { _ in false }) {
+                    try await attempt.runtime.diarizePCMRecording(source: attempt.archive, transcript: transcript,
+                        trackID: track.id, attemptID: attempt.request.attemptID,
+                        configuration: attempt.request.configuration)
+                }
+                succeeded = true
             }
         }
         try Task.checkCancellation()

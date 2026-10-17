@@ -166,7 +166,12 @@ private final class CombinedPrivacyObservations: TranscriptTextRedacting {
         self.wrapped = wrapped; self.aliases = aliases
     }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.privacyRedact)
+        var succeeded = false
+        defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.privacyRedact, since: began,
+            samples: text.utf16.count, succeeded: succeeded) }
         let result = try await wrapped.redactWithSpans(text)
+        succeeded = true
         let source = text as NSString
         for (index, alternatives) in aliases.enumerated() {
             for alias in alternatives {
@@ -505,7 +510,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let thermalStateStarted = ProcessInfo.processInfo.thermalState.rawValue
         let resourceSamples = try CombinedResourceSamples(limit: options.maximumSamples,
                                                          intervalSeconds: options.sampleIntervalSeconds)
-        let progress = options.longEvaluation ? CombinedLongProgress(started: started) : nil
+        let detailedProfiling = MeetingPCMRuntimeDiagnostics.detailedProfilingEnabled
+        let progress = (options.longEvaluation || detailedProfiling) ? CombinedLongProgress(started: started) : nil
         progress?.emit(force: true)
         resourceSamples.capture(since: started)
         let sampler = Task.detached(priority: .utility) {
@@ -610,7 +616,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(observations.remainingCases(in: protectedText), 0, "Protected output must contain none of the expected source aliases")
             let saved = try await store.load(id: completed.id)
             XCTAssertTrue(saved?.transcriptSegments == completed.transcriptSegments, "Reloaded protected segments must match without logging their contents")
+            let exportBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.diagnosticExport)
             let export = try MeetingTranscriptExporter.json(for: completed)
+            MeetingPCMRuntimeDiagnostics.completedDetailed(.diagnosticExport, since: exportBegan,
+                samples: completed.transcriptSegments.count)
             XCTAssertEqual(observations.remainingCases(in: String(decoding: export, as: UTF8.self)), 0)
             let payload = try MeetingSharePayload.transcript(data: export, title: completed.title, fileExtension: "json")
             defer { payload.cleanup() }
@@ -646,6 +655,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "modelResidencyVerified": false,
                 "privateEvaluationEnabled": options.privateEvaluation,
                 "longEvaluationEnabled": options.longEvaluation,
+                "detailedProfilingEnabled": detailedProfiling,
+                "computeUnitsDiagnosticOverride": detailedProfiling && environment["PICHI_MEETING_PROFILE_COMPUTE_UNITS"] == "cpuOnly" ? "cpuOnly" : "automatic",
                 "legacySimulatorReviewEnabled": Self.isSimulator && environment["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW"] == "1"
             ]
             if let limit = environment["PICHI_COMBINED_MEETING_MAX_FOOTPRINT_MIB"] {
@@ -663,6 +674,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "privacyModel": PichiTranscriptPrivacyModelStore.descriptor.id,
                 "diarizationModels": diarizationModels,
                 "audioSeconds": duration, "postStopSeconds": stopSeconds,
+                "inputFrameCount": input.length,
+                "detailedProfilingEnabled": detailedProfiling,
+                "computePlanDiagnosticIncludedAfterInference": detailedProfiling,
                 "audioByteLimit": options.maximumAudioBytes,
                 "protectedEvidenceByteLimit": options.maximumProtectedEvidenceBytes,
                 "totalWallSeconds": totalWallSeconds, "completedWallSeconds": completedWallSeconds,
@@ -767,6 +781,16 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         #else
         false
         #endif
+    }
+
+    func testDetailedComputeOverrideRequiresTheExplicitProfilingGate() {
+        XCTAssertEqual(MeetingFast32ComputePolicy.diagnosticUnits(preferred: .cpuAndGPU, environment: [:]), .cpuAndGPU)
+        XCTAssertEqual(MeetingFast32ComputePolicy.diagnosticUnits(preferred: .cpuAndGPU,
+            environment: ["PICHI_MEETING_PROFILE_COMPUTE_UNITS": "cpuOnly"]), .cpuAndGPU)
+        XCTAssertEqual(MeetingFast32ComputePolicy.diagnosticUnits(preferred: .cpuAndGPU,
+            environment: ["PICHI_MEETING_DETAILED_PROFILE": "1", "PICHI_MEETING_PROFILE_COMPUTE_UNITS": "cpuOnly"]), .cpuOnly)
+        XCTAssertEqual(MeetingFast32ComputePolicy.diagnosticUnits(preferred: .cpuAndNeuralEngine,
+            environment: ["PICHI_MEETING_DETAILED_PROFILE": "1", "PICHI_MEETING_PROFILE_COMPUTE_UNITS": "unexpected"]), .cpuAndNeuralEngine)
     }
 
     func testCombinedPrivateEvaluationOptionsAreBoundedAndSeparatelyGated() throws {

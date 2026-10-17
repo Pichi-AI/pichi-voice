@@ -1779,6 +1779,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func performStopAndTranscribe(generation: UUID) async throws -> MeetingSession {
+        let profileBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.stopTotal)
+        var profileSucceeded = false
+        defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.stopTotal, since: profileBegan, succeeded: profileSucceeded) }
         #if DEBUG && os(macOS)
         AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .coordinatorStop)
         var diagnosticsStopSucceeded = false
@@ -1797,17 +1800,23 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.state = .stopping
         session.updatedAt = Date()
         self.activeSession = session
+        let storeBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.stopInitialStore)
         await self.flushQueuedPersistence()
         // Capture finalization takes priority over persistence availability.
         self.mergeLatestMemoryCheckpoint(into: &session)
-        try? await self.store.save(session)
+        let persisted = (try? await self.store.save(session)) != nil
+        MeetingPCMRuntimeDiagnostics.completedDetailed(.stopInitialStore, since: storeBegan, succeeded: persisted)
 
         let stopResult: MeetingCaptureStopResult
         do {
+            let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.captureStop)
+            var succeeded = false
+            defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.captureStop, since: began, succeeded: succeeded) }
             #if DEBUG && os(macOS)
             AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop)
             #endif
             stopResult = try await self.capture.stop(sessionID: session.id)
+            succeeded = true
             #if DEBUG && os(macOS)
             AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop)
             #endif
@@ -1818,7 +1827,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             await self.handleStopFailure(error, session: session, generation: generation)
             throw error
         }
+        let teardownBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.liveTeardown)
         await self.tearDownLiveTranscription()
+        MeetingPCMRuntimeDiagnostics.completedDetailed(.liveTeardown, since: teardownBegan)
         guard self.operationGeneration == generation else { throw CancellationError() }
         if Task.isCancelled {
             let stopped = MeetingCaptureError.captureStopFailed("Meeting processing was cancelled after capture stopped.", partialResult: stopResult)
@@ -1837,6 +1848,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         try? await self.store.save(session)
         let processed = try await self.process(session, generation: generation)
+        profileSucceeded = true
         #if DEBUG && os(macOS)
         diagnosticsStopSucceeded = true
         #endif
@@ -2092,14 +2104,23 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             session.state = .completed
             session.updatedAt = Date()
-            await self.flushQueuedPersistence()
-            try await self.store.save(session)
+            do {
+                let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.resultPersist)
+                var succeeded = false
+                defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.resultPersist, since: began,
+                    samples: session.transcriptSegments.count, succeeded: succeeded) }
+                await self.flushQueuedPersistence()
+                try await self.store.save(session)
+                succeeded = true
+            }
+            let publishBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.resultPublish)
             self.removeCheckpoint(sessionDirectory: sessionDirectory, removeRetainedState: result.isComplete)
             self.activeSession = nil
             self.latestCompletedSession = session
             self.state = .completed(session.id)
             self.operationGeneration = nil
             await self.releaseActivityLease()
+            MeetingPCMRuntimeDiagnostics.completedDetailed(.resultPublish, since: publishBegan)
             diagnosticOutcome = "completed"
             diagnosticStage = .completed
             // afterTranscription policy deletes here; sweep failures are logged, never affect this result.
