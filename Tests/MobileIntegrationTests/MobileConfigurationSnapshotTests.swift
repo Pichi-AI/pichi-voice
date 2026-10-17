@@ -270,6 +270,30 @@ final class MobilePCMAdmissionTests: XCTestCase {
               audioStorageMode: .memoryOnly, speakerLabelsEnabled: true, piiRedactionEnabled: true)
     }
 
+    func testPCMRequestAdmitsSavedAudioOnlyWithTheRegisteredStreamingMode() throws {
+        let descriptor = try self.descriptor()
+        for storage: MeetingAudioStorageMode in [.memoryOnly, .retainedFiles] {
+            for mode: MeetingSpeakerProcessingMode in [.afterRecording, .streaming] {
+                var capture = self.captureConfiguration()
+                capture.audioStorageMode = storage
+                capture.speakerProcessingMode = mode
+                let session = MeetingSession(configuration: capture,
+                    timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1,
+                        machTimebaseDenominator: 1, firstPresentationTime: nil))
+                let configuration = PichiMeetingProviderFactory.validationConfiguration(backendID: descriptor.id,
+                    languageCode: "ru", diarizationEnabled: true, speakerProcessingMode: mode)
+                let request = MeetingBackendRequest(attemptID: UUID(), session: session,
+                    sessionDirectory: FileManager.default.temporaryDirectory,
+                    configuration: configuration)
+                if storage == .retainedFiles && mode == .afterRecording {
+                    XCTAssertThrowsError(try descriptor.validatePCMInput(request, admissionContext: self.context()))
+                } else {
+                    XCTAssertNoThrow(try descriptor.validatePCMInput(request, admissionContext: self.context()))
+                }
+            }
+        }
+    }
+
     func testDeferredSpeakerAnalysisDoesNotInheritTheLiveCombinedWorkloadBan() throws {
         for model: SettingsStore.SpeechModel in [.gigaam, .whisperTiny, .parakeetTDT] {
             let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue))

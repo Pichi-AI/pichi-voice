@@ -243,7 +243,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         guard request.configuration.languageCode == request.session.languageCode else {
             throw MeetingBackendError.unsupportedLanguage(backend: self.id, languageCode: request.session.languageCode)
         }
-        guard request.session.audioStorageMode == .memoryOnly,
+        guard request.session.audioStorageMode == .memoryOnly || request.session.effectiveSpeakerProcessingMode == .streaming,
               request.session.audioTracks.count <= 1,
               request.session.audioTracks.allSatisfy({ $0.kind == .microphone && $0.chunks.isEmpty }) else {
             throw MeetingBackendError.unsupportedTrackTopology(backend: self.id)
