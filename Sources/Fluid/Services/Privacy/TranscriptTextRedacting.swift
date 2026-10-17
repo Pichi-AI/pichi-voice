@@ -14,13 +14,13 @@ nonisolated protocol TranscriptTextRedacting: Sendable {
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction
 }
 
-struct TranscriptRedactedSpan: Sendable, Equatable {
+nonisolated struct TranscriptRedactedSpan: Sendable, Equatable {
     /// UTF-16 offsets in the original input, not the shortened redacted result.
     let range: NSRange
     let replacement: String
 }
 
-struct TranscriptTextRedaction: Sendable, Equatable {
+nonisolated struct TranscriptTextRedaction: Sendable, Equatable {
     let text: String
     let spans: [TranscriptRedactedSpan]
     /// Optional adapter-approved prefix in the original UTF-16 input. This is
