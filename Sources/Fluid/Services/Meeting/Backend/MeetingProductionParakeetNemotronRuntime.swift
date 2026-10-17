@@ -17,8 +17,11 @@ import FluidAudio
 // - Prepared-provider ASR: one `ASRService.withPreparedMeetingASR` scope per attempt, with the heavy body
 //   bounced off the main actor so materialization and inference never block the UI.
 // - Optional local WeSpeaker encoding in its own phase, using bounded voice excerpts.
-// - Strict PCM runs ASR only during capture. After Stop, the replayable recording gets
-//   one global Nemotron pass followed by optional owner encoding, each in its own phase.
+// - The default strict PCM route runs ASR during capture and one global Nemotron pass
+//   after Stop, followed by optional owner encoding in its own phase.
+// - The explicit streaming capability holds one prepared ASR and one incremental Nemotron
+//   state under the same outer attempt grant. Their native calls remain serial, and Stop
+//   flushes only the unscored tail. It uses anonymous continuous slots, without voice encoding.
 //
 // Parakeet does ASR only; Nemotron does diarization only. Neither capability sees anything beyond
 // the request the host froze.
@@ -310,13 +313,78 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             }
             let located = try self.modelLocator.locate()
             artifact = located
-            if self.usesDefaultVoiceModelDirectory { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
-            try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
-            // Freeze validated selection only. Compile/open the prediction plan inside the
-            // stopped-recording diarization phase, after the live ASR owner has drained.
+            if configuration.effectiveSpeakerProcessingMode == .streaming {
+                try Self.validateStreamingSelection(artifact: located, configuration: configuration)
+            } else {
+                if self.usesDefaultVoiceModelDirectory { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
+                try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
+            }
+            // Freeze validated selection only. Compile/open weights inside the owned model
+            // scope: the offline speaker phase or the explicitly prepared streaming pair.
         } else { artifact = nil }
         try Task.checkCancellation()
         try self.pcmIdentityState.pin(attemptID: attemptID, configuration: configuration.identityFingerprint, artifact: artifact)
+    }
+
+    var supportsStreamingPCMProcessing: Bool {
+        #if arch(arm64)
+        true
+        #else
+        false
+        #endif
+    }
+
+    static func validateStreamingSelection(artifact: MeetingNemotronModelArtifact,
+                                          configuration: MeetingFinalProcessingConfiguration) throws {
+        guard configuration.speakerLabelsEnabled, configuration.effectiveSpeakerProcessingMode == .streaming,
+              artifact.compiledModelURL != nil, artifact.profile.isExperimental,
+              artifact.profile.computePreference == .cpuOnly,
+              configuration.diarizationFingerprint == artifact.implementationFingerprint else {
+            throw MeetingModelResidencyError.staleGrant
+        }
+    }
+
+    /// Retain one prepared ASR and one continuous speaker state on the controller's owned
+    /// stack. The parent owns the outer residency grant. Both native engines run serially;
+    /// returning from the body joins cleanup before either model scope can be released.
+    func withPreparedStreamingPCM(
+        trackID: MeetingAudioTrackID, attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration,
+        onProgress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void,
+        body: @escaping @Sendable (any MeetingPreparedStreamingPCMProcessing) async throws -> Void
+    ) async throws {
+        try Task.checkCancellation()
+        _ = try MeetingProviderOptions.resolve(configuration)
+        guard let artifact = try self.pcmIdentityState.pinnedArtifact(
+            attemptID: attemptID, configuration: configuration.identityFingerprint) else {
+            throw MeetingModelResidencyError.staleGrant
+        }
+        try Self.validateStreamingSelection(artifact: artifact, configuration: configuration)
+        _ = try self.pcmIdentityState.begin(attemptID: attemptID)
+        defer { self.pcmIdentityState.end() }
+        _ = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration) { asr in
+            _ = try await self.withNemotronDiarization(artifact: artifact) { factory in
+                let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: 0)
+                guard let diarizer = try await factory.makeDiarizer(epoch: epoch)
+                    as? any MeetingIncrementalNemotronDiarizerSession else {
+                    throw MeetingPCMInputError.unsupportedRuntime
+                }
+                let session = MeetingPreparedStreamingRuntime(runtime: self, asr: asr, diarizer: diarizer,
+                    trackID: trackID, attemptID: attemptID, configuration: configuration,
+                    speakerNameFormat: self.pcmSpeakerNameFormat, onProgress: onProgress)
+                do {
+                    try await body(session)
+                    try Task.checkCancellation()
+                    try session.requireFinished()
+                    await session.cleanup()
+                } catch {
+                    await session.cleanup()
+                    throw error
+                }
+                return MeetingNemotronPhaseResult()
+            }
+            return MeetingParakeetPhaseResult()
+        }
     }
 
     /// The strict privacy capture sink supplies bounded mono16k PCM directly. Each
@@ -447,6 +515,10 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             // The prior native inference has joined before this append.
             // Incoming deltas live in the consumer's charged queue meanwhile.
             let hasNewPCM = !update.samples.isEmpty
+            if hasNewPCM, let consumePCM {
+                try await consumePCM(update.samples, Int((offset * 16_000).rounded()) + samples.count)
+                try Task.checkCancellation()
+            }
             if samples.isEmpty { samples = update.samples }
             else { samples.append(contentsOf: update.samples) }
             update.samples = []
@@ -681,24 +753,28 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let compiledURL = try await self.compiledNemotron.compiledModel(for: artifact) { try locator.recheck($0) }
         if artifact.compiledModelURL != nil {
             // Keep the existing attempt/phase owner, ASR sequencing and per-track factory contract.
-            // Prefer the evaluated ANE route when CoreML reports that device. The A10X
-            // fallback uses CPU/GPU with the SAME graph and reports that choice in support logs.
+            // The validated artifact profile fixes its compute policy. The existing default
+            // prefers ANE when available; explicitly selected evaluated FP16 profiles use CPU.
             // CoreML errors remain errors; this route never substitutes legacy weights.
             let configuration = MLModelConfiguration()
-            configuration.computeUnits = MeetingFast32ComputePolicy.diagnosticUnits(
-                preferred: MeetingFast32ComputePolicy.preferredUnits, environment: ProcessInfo.processInfo.environment)
+            configuration.computeUnits = artifact.profile.computePreference == .cpuOnly ? .cpuOnly
+                : MeetingFast32ComputePolicy.diagnosticUnits(
+                    preferred: MeetingFast32ComputePolicy.preferredUnits, environment: ProcessInfo.processInfo.environment)
             let computeName = configuration.computeUnits == .cpuOnly ? "cpuOnly"
                 : configuration.computeUnits == .cpuAndNeuralEngine ? "cpuAndNeuralEngine" : "cpuAndGPU"
-            DebugLogger.shared.log("[meeting/pcm] model=fast32-w8a8 computeUnits=\(computeName)", source: "MeetingPCMRuntime")
+            DebugLogger.shared.log("[meeting/pcm] model=\(artifact.profile.rawValue) computeUnits=\(computeName)", source: "MeetingPCMRuntime")
             let loadBegan = MeetingPCMRuntimeDiagnostics.begin(.load)
             let model = try MLModel(contentsOf: compiledURL, configuration: configuration)
             try Task.checkCancellation()
             let silence = try MeetingModelInstaller.validatedSilenceEmbedding(
                 at: MeetingModelInstaller.silenceEmbeddingURL(besides: artifact.packageURL))
-            let projectionData = try Data(contentsOf: artifact.packageURL.appendingPathComponent(MeetingNemotronModelLocator.projectionFileName))
-            guard projectionData.count == 1024 * 512 * MemoryLayout<Float>.size else { throw MeetingModelInstaller.InstallError.wrongPackage }
-            let projection = projectionData.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
-            guard let config = Nemotron3Config.preset(named: "fast32-split-w8a8") else {
+            let projection: [Float]?
+            if let fileName = artifact.profile.projectionFileName {
+                let projectionData = try Data(contentsOf: artifact.packageURL.appendingPathComponent(fileName))
+                guard projectionData.count == 1024 * 512 * MemoryLayout<Float>.size else { throw MeetingModelInstaller.InstallError.wrongPackage }
+                projection = projectionData.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+            } else { projection = nil }
+            guard let config = Nemotron3Config.preset(named: artifact.profile.presetName) else {
                 throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "runtimePresetMissing")
             }
             let models = try Nemotron3Models(config: config, model: model, silenceEmbedding: silence, preEncodeProjection: projection)

@@ -87,6 +87,7 @@ nonisolated struct MeetingStreamingPCMControllerTests {
         try await self.testConcurrentCommandClosesAndJoins()
         try await self.testLatePreviewAndCallbackReentry()
         try await self.testCleanupFailureDoesNotPublishFinal()
+        try await self.testDetachedScopePreservesReentry()
         print("PASS streaming controller preparation, single-command admission, actual PCM wait cancellation, guarded previews and joined resource teardown")
     }
 
@@ -224,6 +225,36 @@ nonisolated struct MeetingStreamingPCMControllerTests {
         let cancellationEvents = await evidence.events
         try require(cancellationEvents.suffix(2) == ["callback-cancel-requested", "cleaned"],
                     "Recursive cancellation unwinds its callback and outer public call joins cleanup without self-deadlock")
+    }
+
+    static func testDetachedScopePreservesReentry() async throws {
+        let evidence = Evidence()
+        let scope = self.scoped(.init(evidence: evidence))
+        let controller = try await MeetingStreamingPCMController.prepare { body in
+            // Production withPreparedASR moves the resource body off MainActor this way.
+            let work = Task.detached { try await scope(body) }
+            try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+        }
+        _ = try await controller.recognize(window: .controllerTestWindow(samples: [0], sealed: true), offset: 0) { _ in
+            do { try await controller.discardActivity(beforeSample: 0); throw NSError(domain: "ExpectedDetachedReentryRejection", code: 1) }
+            catch MeetingStreamingPCMControllerError.reentrantOperation { await evidence.record("detached-reentry-rejected") }
+        }
+        _ = try await controller.finishStreaming()
+        try require(await evidence.contains("detached-reentry-rejected"), "Executor bridges must preserve command callback reentry guards")
+
+        let cancellation = try await MeetingStreamingPCMController.prepare { body in
+            let work = Task.detached { try await scope(body) }
+            try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+        }
+        do {
+            _ = try await cancellation.recognize(window: .controllerTestWindow(samples: [0], sealed: true), offset: 0) { _ in
+                await cancellation.cancelAndWait()
+                await evidence.record("detached-callback-cancelled")
+            }
+            throw NSError(domain: "ExpectedDetachedCallbackCancellation", code: 1)
+        } catch is CancellationError { }
+        try require(await evidence.events.suffix(2) == ["detached-callback-cancelled", "cleaned"],
+                    "Callback cancellation after an executor bridge unwinds before the outer join")
     }
 
     static func testCleanupFailureDoesNotPublishFinal() async throws {

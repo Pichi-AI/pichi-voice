@@ -140,11 +140,22 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 /// of Nemotron residency: weights load before the factory is handed out and are released before
 /// it returns. `withPreparedASR` wraps the attempt's single `ASRService.withPreparedMeetingASR`
 /// scope. Optional voice encoding runs between them. These phases never overlap, so at most
-/// one local meeting model is resident at a time
+/// one local meeting model is resident at a time in the legacy offline route. The optional
+/// prepared streaming scope deliberately retains one ASR and one speaker model while serializing
+/// their native calls under the same outer attempt grant
 /// (plan §6 D/E isolation). Concrete phase result types are deliberate: a generic scoped-closure
 /// witness across the app/test module boundary is not ABI-stable under MainActor-by-default.
 protocol MeetingParakeetNemotronRunning: Sendable {
     nonisolated var supportsProgressivePCMInput: Bool { get }
+    /// Optional continuous speaker processing. The caller owns one outer residency grant;
+    /// the body must finish or cancel its joined worker before this resource scope returns.
+    nonisolated var supportsStreamingPCMProcessing: Bool { get }
+    nonisolated func withPreparedStreamingPCM(
+        trackID: MeetingAudioTrackID, attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration,
+        onProgress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void,
+        body: @escaping @Sendable (any MeetingPreparedStreamingPCMProcessing) async throws -> Void
+    ) async throws
     nonisolated var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { get }
     nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
                                  trackID: MeetingAudioTrackID, attemptID: UUID,
@@ -183,6 +194,15 @@ protocol MeetingParakeetNemotronRunning: Sendable {
 
 extension MeetingParakeetNemotronRunning {
     nonisolated var supportsProgressivePCMInput: Bool { false }
+    nonisolated var supportsStreamingPCMProcessing: Bool { false }
+    nonisolated func withPreparedStreamingPCM(
+        trackID: MeetingAudioTrackID, attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration,
+        onProgress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void,
+        body: @escaping @Sendable (any MeetingPreparedStreamingPCMProcessing) async throws -> Void
+    ) async throws {
+        throw MeetingPCMInputError.unsupportedRuntime
+    }
     nonisolated var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { nil }
 
     nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,

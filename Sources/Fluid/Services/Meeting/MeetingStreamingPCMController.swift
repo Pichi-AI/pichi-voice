@@ -16,6 +16,21 @@ nonisolated struct MeetingStreamingPCMObservation: Sendable {
     let processedThroughSample: Int
     let retainedFromSample: Int
     let isFinal: Bool
+    /// Physical source end of a sealed ASR window, including silence. Metadata-only
+    /// speaker updates leave this nil so they cannot advance the stable speech prefix.
+    let asrStableThroughSample: Int?
+
+    init(batch: MeetingPCMTranscriptBatch, activity: [MeetingBackendSpeakerActivity],
+         acceptedThroughSample: Int, processedThroughSample: Int, retainedFromSample: Int,
+         isFinal: Bool, asrStableThroughSample: Int? = nil) {
+        self.batch = batch
+        self.activity = activity
+        self.acceptedThroughSample = acceptedThroughSample
+        self.processedThroughSample = processedThroughSample
+        self.retainedFromSample = retainedFromSample
+        self.isFinal = isFinal
+        self.asrStableThroughSample = asrStableThroughSample
+    }
 }
 
 nonisolated enum MeetingStreamingPCMControllerError: Error, Equatable {
@@ -111,7 +126,14 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
             await MeetingStreamingPCMCallContext.$controllerID.withValue(self.id) {
                 do {
                     try Task.checkCancellation()
-                    try await scope { session in try await self.run(session) }
+                    // A prepared provider may bridge the body through its own detached
+                    // executor. Bind at the actual command owner too, so callback reentry
+                    // still rejects before trying to join this controller's outer worker.
+                    try await scope { session in
+                        try await MeetingStreamingPCMCallContext.$controllerID.withValue(self.id) {
+                            try await self.run(session)
+                        }
+                    }
                     try Task.checkCancellation()
                     self.complete(error: nil)
                 } catch { self.complete(error: error) }
