@@ -15,6 +15,7 @@ struct MobileMeetingRoot: View {
     @Environment(\.theme) private var theme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     @State private var destination = Destination.meetings
     @State private var settingsPath: [MobileSettingsDestination] = []
     @State private var columnVisibility = NavigationSplitViewVisibility.all
@@ -37,6 +38,7 @@ struct MobileMeetingRoot: View {
     @State private var showPresentationPicker = false
     @State private var presentation: MobilePresentationDocument?
     @StateObject private var presentationLoader = MobilePresentationLoader()
+    @State private var recordingScreenAwakeToken: UUID?
     @StateObject private var playback = MeetingSegmentPlayback()
     // Projection is independent of microphone meters, pending audio, playback progress
     // and other frequent view invalidations. Keep one result for the visible transcript.
@@ -165,13 +167,31 @@ struct MobileMeetingRoot: View {
         }
         .onChange(of: coordinator.state) { _, state in
             if coordinator.isRecording { playback.stop() }
+            updateRecordingScreenAwake()
             Task { await refreshHistory() }
         }
+        .onAppear { updateRecordingScreenAwake() }
+        .onChange(of: scenePhase) { _, _ in updateRecordingScreenAwake() }
         .onChange(of: destination) { _, _ in playback.stop(); presentationLoader.cancel() }
         .onChange(of: selectedHistory?.id) { _, _ in playback.stop(); presentationLoader.cancel() }
-        .onDisappear { presentationLoader.cancel() }
+        .onDisappear {
+            presentationLoader.cancel()
+            updateRecordingScreenAwake(isVisible: false)
+        }
         .onChange(of: settings.meetingAudioRetentionPolicy) { _, _ in
             Task { await coordinator.sweepExpiredAudio(); await refreshHistory() }
+        }
+    }
+
+    /// The active recording screen and an active PDF window share one process
+    /// timer. Scene/background transitions release only this view's own token.
+    private func updateRecordingScreenAwake(isVisible: Bool = true) {
+        let shouldStayAwake = isVisible && scenePhase == .active && coordinator.isRecording
+        if shouldStayAwake && recordingScreenAwakeToken == nil {
+            recordingScreenAwakeToken = MobilePresentationAwakeRegistry.shared.acquire()
+        } else if !shouldStayAwake, let token = recordingScreenAwakeToken {
+            recordingScreenAwakeToken = nil
+            MobilePresentationAwakeRegistry.shared.release(token)
         }
     }
 
