@@ -3706,9 +3706,11 @@ final class MeetingRecoveryTests: XCTestCase {
         var expected = session
         expected.transcriptSegments[0].text = "Corrected words"
         expected.transcriptSegments[0].originalText = original.text
+        expected.transcriptSegments[0].isUserTextEdited = true
         expected.transcriptSegments[0].revision += 1
         expected.updatedAt = edited.updatedAt
         XCTAssertEqual(edited, expected, "Only this paragraph's text, correction metadata and update time change")
+        XCTAssertEqual(edited.transcriptSegments[0].isUserTextEdited, true)
         let loaded = try await store.load(id: session.id)
         let reloaded = try XCTUnwrap(loaded)
         XCTAssertEqual(reloaded.updatedAt.timeIntervalSince1970, floor(edited.updatedAt.timeIntervalSince1970), accuracy: 0.001)
