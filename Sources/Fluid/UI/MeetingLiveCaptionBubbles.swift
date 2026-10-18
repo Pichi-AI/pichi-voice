@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// Shared bubble look for final transcript and live captions; callers own alignment, labels, and insets.
 struct MeetingBubbleStyle {
@@ -296,6 +299,14 @@ struct MeetingCaptionScrollTracking: ViewModifier {
     @State private var isDraggingUp = false
     @State private var previousGeometry: Geometry?
 
+    private var accessibilityOffsetIntent: Bool {
+        #if os(iOS)
+        UIAccessibility.isVoiceOverRunning
+        #else
+        false
+        #endif
+    }
+
     nonisolated struct Geometry: Equatable, Sendable {
         var contentBottom: CGFloat? = nil
         var viewportHeight: CGFloat? = nil
@@ -430,7 +441,7 @@ struct MeetingCaptionScrollTracking: ViewModifier {
                         self.isPinnedToBottom = geometry.fallbackFollowPreference(after: previous,
                             currentlyFollowing: self.isPinnedToBottom,
                             upwardDrag: self.isDraggingUp,
-                            accessibilityOffsetIntent: UIAccessibility.isVoiceOverRunning)
+                            accessibilityOffsetIntent: self.accessibilityOffsetIntent)
                         if wasFollowing != self.isPinnedToBottom {
                             DebugLogger.shared.debug("following=\(self.isPinnedToBottom) upwardDrag=\(self.isDraggingUp) layoutChanged=\(geometry.layoutChanged(from: previous)) offset=\(geometry.contentOffset ?? 0) previousOffset=\(previous.contentOffset ?? 0) height=\(geometry.contentHeight ?? 0)", source: "MeetingCaptionScroll")
                         }
