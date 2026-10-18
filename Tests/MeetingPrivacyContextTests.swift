@@ -91,9 +91,10 @@ private actor CancellablePrivacyRedactor: TranscriptTextRedacting {
 private actor DeferredLiveRedactor: TranscriptTextRedacting {
     let started: AsyncStream<String>.Continuation
     let cancelled: AsyncStream<Void>.Continuation
+    let useCueMask: Bool
     private var waiters: [CheckedContinuation<Void, Never>] = []
-    init(started: AsyncStream<String>.Continuation, cancelled: AsyncStream<Void>.Continuation) {
-        self.started = started; self.cancelled = cancelled
+    init(started: AsyncStream<String>.Continuation, cancelled: AsyncStream<Void>.Continuation, useCueMask: Bool = false) {
+        self.started = started; self.cancelled = cancelled; self.useCueMask = useCueMask
     }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         started.yield(text)
@@ -101,9 +102,33 @@ private actor DeferredLiveRedactor: TranscriptTextRedacting {
             await withCheckedContinuation { waiters.append($0) }
         } onCancel: { self.cancelled.yield(()) }
         try Task.checkCancellation()
+        if useCueMask { return try await CueMaskPrivacyRedactor().redactWithSpans(text) }
         return try await StructuredPrivacyRedactor().redactWithSpans(text)
     }
     func release() { if !waiters.isEmpty { waiters.removeFirst().resume() } }
+}
+
+private struct SelectiveMaskPrivacyRedactor: TranscriptTextRedacting {
+    let words: [String]
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let input = text as NSString
+        var spans: [TranscriptRedactedSpan] = []
+        for word in words {
+            let range = input.range(of: word)
+            if range.location != NSNotFound { spans.append(.init(range: range, replacement: "[REDACTED]")) }
+        }
+        let output = NSMutableString(string: text)
+        for span in spans.sorted(by: { $0.range.location > $1.range.location }) {
+            output.replaceCharacters(in: span.range, with: span.replacement)
+        }
+        return .init(text: output as String, spans: spans, provisionalSafeUTF16: input.length)
+    }
+}
+
+private struct CueMaskPrivacyRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        try await SelectiveMaskPrivacyRedactor(words: text.contains("пароль") ? ["qwerty"] : []).redactWithSpans(text)
+    }
 }
 
 private actor ColdPagedPrivacyRedactor: TranscriptTextRedacting {
@@ -187,6 +212,11 @@ struct MeetingPrivacyContextTests {
         try await liveDeliverySuite()
         try await pagedLiveDeliverySuite()
         try await deferredPagedRevisionSuite()
+        try await monotonePrivacyProjectionSuite()
+        try await privacyPageEdgeMatrixSuite()
+        try await partialMaskPrefixProofSuite()
+        try await inFlightMaskPrefixProofSuite()
+        try await emptyAvailabilityDoesNotPrepareSuite()
         try await joinedColdPreparationSuite()
         try await stableLiveHypothesisSuite()
         try await stablePCMHypothesisSuite()
@@ -904,6 +934,242 @@ struct MeetingPrivacyContextTests {
         began.continuation.finish(); releaser.cancel(); await releaser.value
         try check(complete && failures == 0, "source revisions during native inference did not recover complete history")
         print("PASS 60-to-1259 coalescing and stale-page rejection/retry while inference is deferred")
+    }
+
+    static func monotonePrivacyProjectionSuite() async throws {
+        var source = MeetingLiveTranscriptSnapshot.empty
+        let id = UUID()
+        let raw = " leftSECRET rightSECRET"
+        source.utterances = [.init(id: id, speaker: .you, text: raw, start: 0, end: 1)]
+        let first = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
+            using: SelectiveMaskPrivacyRedactor(words: ["leftSECRET"]))
+        let second = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
+            using: SelectiveMaskPrivacyRedactor(words: ["rightSECRET"]), preserving: first.redactions)
+        let third = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
+            using: SelectiveMaskPrivacyRedactor(words: []), preserving: second.redactions)
+        for projection in [second, third] {
+            let text = projection.snapshot.utterances.map(\.text).joined()
+            try check(!text.contains("leftSECRET") && !text.contains("rightSECRET"),
+                      "a later context removed an earlier raw-offset mask or discarded a new mask")
+        }
+        source.utterances = []
+        let partial = MeetingLivePartial(id: id, text: raw, start: 0, stableUTF16Count: raw.utf16.count)
+        source.partials[.you] = partial
+        let protected = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
+            using: SelectiveMaskPrivacyRedactor(words: []), preserving: second.redactions)
+        try check(protected.snapshot.partials[.you]?.text == "[REDACTED] [REDACTED]",
+                  "an unchanged partial lost its masks when preceding context left the page")
+        source.partials = [:]
+        source.utterances = [.init(id: id, speaker: .you, text: raw, start: 0, end: 1)]
+        let final = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
+            using: SelectiveMaskPrivacyRedactor(words: []), preserving: protected.redactions)
+        try check(final.snapshot.utterances.first?.text == " [REDACTED] [REDACTED]",
+                  "partial-to-final masks lost their original UTF16 coordinates after trimming")
+
+        source.utterances = [.init(id: id, speaker: .you, text: "alpha beta gamma", start: 0, end: 1)]
+        let overlapping = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
+            using: SelectiveMaskPrivacyRedactor(words: ["alpha beta"]))
+        let strengthened = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
+            using: SelectiveMaskPrivacyRedactor(words: ["beta gamma"]), preserving: overlapping.redactions)
+        try check(strengthened.snapshot.utterances.first?.text == "[REDACTED]",
+                  "overlapping detector disagreements exposed part of either previously masked range")
+
+        let shrinkingRaw = " alpha beta gamma."
+        source.utterances = []
+        source.partials[.you] = .init(id: id, text: shrinkingRaw, start: 0, stableUTF16Count: shrinkingRaw.utf16.count)
+        let complete = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
+            using: SelectiveMaskPrivacyRedactor(words: ["beta gamma"]))
+        source.partials[.you]?.stableUTF16Count = " alpha beta ".utf16.count
+        let shortened = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
+            using: SelectiveMaskPrivacyRedactor(words: []), preserving: complete.redactions)
+        try check(shortened.snapshot.partials[.you]?.text == "alpha", "a shorter stable prefix bisected a retained mask")
+        source.partials[.you]?.stableUTF16Count = shrinkingRaw.utf16.count
+        let regrown = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
+            using: SelectiveMaskPrivacyRedactor(words: []), preserving: shortened.redactions)
+        try check(regrown.snapshot.partials[.you]?.text == "alpha [REDACTED].",
+                  "stable-prefix shrink and growth discarded a previously known mask")
+    }
+
+    @MainActor
+    static func privacyPageEdgeMatrixSuite() async throws {
+        let edges = [36, 68, 72, 100, 104, 108, 136, 140, 144, 172, 176, 180, 208, 212, 216, 244, 248, 252, 280, 284, 288]
+        let scenarios: [(String, String, [String])] = [
+            ("пароль", "qwerty", ["qwerty"]),
+            ("дата рождения", "12.03.1985", ["1985"]),
+            ("телефон", "+7 903 112-34-56", ["903", "112-34-56"]),
+            ("доктор", "Иван Петрович Сидоров", ["Иван", "Петрович", "Сидоров"])
+        ]
+        for (cue, secret, forbidden) in scenarios {
+            for offset in [-1, 0, 1] {
+                let delivery = AsyncStream<MeetingLiveTranscriptSnapshot>.makeStream()
+                let timeout = Task { try? await Task.sleep(for: .seconds(60)); delivery.continuation.finish() }
+                let publisher = MeetingLivePrivacyPublication()
+                var source = MeetingLiveTranscriptSnapshot.empty
+                source.revision = 1
+                source.utterances = (0..<320).map { index -> MeetingLiveUtterance in
+                    .init(id: UUID(), speaker: .you, text: "документ инструкция терапия.", start: Double(index), end: Double(index + 1))
+                }
+                for edge in edges {
+                    let position = edge + offset
+                    source.utterances[position - 1].text = cue
+                    source.utterances[position].text = secret
+                }
+                let redactor = RecordingPrivacyRedactor()
+                source.utterances[319].text = "конечный документ."
+                publisher.submit(source, generation: UUID(), using: redactor, latestSnapshot: { source },
+                    publish: { value, _ in delivery.continuation.yield(value) },
+                    failed: { _ in delivery.continuation.finish() })
+                await publisher.waitForCurrentWork()
+                delivery.continuation.finish()
+                var updates = delivery.stream.makeAsyncIterator()
+                var publications = 0
+                while let value = await updates.next() {
+                    publications += 1
+                    let text = value.utterances.map(\.text).joined(separator: " ")
+                    for token in forbidden {
+                        try check(!text.contains(token), "a secret was unmasked by left/right page context or mask disagreement")
+                    }
+                }
+                let inputs = await redactor.inputs
+                await publisher.stop(); timeout.cancel()
+                try check(publications > 1 && inputs.contains { $0.contains("конечный документ.") },
+                          "edge-matrix inference did not visit the final source page")
+            }
+        }
+        print("PASS password/DOB/phone/name at 21 page edges with -1/0/+1 offsets and monotone raw-offset mask union")
+    }
+
+    @MainActor
+    static func partialMaskPrefixProofSuite() async throws {
+        let delivery = AsyncStream<MeetingLiveTranscriptSnapshot>.makeStream()
+        let publisher = MeetingLivePrivacyPublication()
+        let generation = UUID(), id = UUID()
+        var source = MeetingLiveTranscriptSnapshot.empty
+        source.revision = 1
+        source.utterances = [.init(id: UUID(), speaker: .you, text: "пароль", start: 0, end: 1)]
+        var raw = " qwerty initial words."
+        source.partials[.you] = .init(id: id, text: raw, start: 1, stableUTF16Count: raw.utf16.count)
+        func submit() {
+            publisher.submit(source, generation: generation, using: CueMaskPrivacyRedactor(), latestSnapshot: { source },
+                publish: { value, _ in delivery.continuation.yield(value) }, failed: { _ in delivery.continuation.finish() })
+        }
+        var updates = delivery.stream.makeAsyncIterator()
+        submit()
+        let first = await updates.next()
+        try check(first?.partials[.you]?.text.contains("[REDACTED]") == true,
+                  "the first partial did not mask its context-dependent secret")
+        source.utterances = []
+        for suffix in [" initial words. Appended words.", " corrected tail."] {
+            raw = " qwerty" + suffix
+            source.revision += 1
+            source.partials[.you] = .init(id: id, text: raw, start: 1, stableUTF16Count: raw.utf16.count)
+            submit()
+            let update = await updates.next()
+            try check(update?.partials[.you]?.text.contains("qwerty") == false
+                && update?.partials[.you]?.text.contains("[REDACTED]") == true,
+                      "an unchanged masked prefix was exposed after partial growth or an unrelated tail correction")
+        }
+        source.revision += 1; source.partials = [:]
+        source.utterances = [.init(id: id, speaker: .you, text: raw, start: 1, end: 2)]
+        submit()
+        let final = await updates.next()
+        try check(final?.utterances.first?.text.contains("qwerty") == false
+            && final?.utterances.first?.text.contains("[REDACTED]") == true,
+                  "the partial-to-final handoff lost a verified original-prefix mask")
+        await publisher.stop()
+    }
+
+    @MainActor
+    static func inFlightMaskPrefixProofSuite() async throws {
+        let began = AsyncStream<String>.makeStream(), cancelled = AsyncStream<Void>.makeStream()
+        let delivery = AsyncStream<MeetingLiveTranscriptSnapshot>.makeStream()
+        let detector = DeferredLiveRedactor(started: began.continuation, cancelled: cancelled.continuation, useCueMask: true)
+        let publisher = MeetingLivePrivacyPublication()
+        let generation = UUID(), id = UUID()
+        var source = MeetingLiveTranscriptSnapshot.empty
+        source.revision = 1
+        source.utterances = [.init(id: UUID(), speaker: .you, text: "пароль", start: 0, end: 1)]
+        var raw = " qwerty initial words."
+        source.partials[.you] = .init(id: id, text: raw, start: 1, stableUTF16Count: raw.utf16.count)
+        func submit() {
+            publisher.submit(source, generation: generation, using: detector, latestSnapshot: { source },
+                publish: { value, _ in delivery.continuation.yield(value) }, failed: { _ in delivery.continuation.finish() })
+        }
+        submit()
+        var starts = began.stream.makeAsyncIterator()
+        _ = await starts.next()
+        // The first secret has been detected only by the still-running old input.
+        // Its cue vanishes and the partial grows before that native call returns.
+        source.revision = 2; source.utterances = []
+        raw += " More words."
+        source.partials[.you] = .init(id: id, text: raw, start: 1, stableUTF16Count: raw.utf16.count)
+        submit()
+        let releaser = Task { while await starts.next() != nil { await detector.release() } }
+        await detector.release()
+        var updates = delivery.stream.makeAsyncIterator()
+        let revised = await updates.next()
+        try check(revised?.partials[.you]?.text.contains("qwerty") == false
+            && revised?.partials[.you]?.text.contains("[REDACTED]") == true,
+                  "rejecting stale publication discarded newly learned masks for an unchanged raw secret prefix")
+        source.revision = 3; source.partials = [:]
+        source.utterances = [.init(id: id, speaker: .you, text: raw, start: 1, end: 2)]
+        submit()
+        let final = await updates.next()
+        try check(final?.utterances.first?.text.contains("qwerty") == false,
+                  "an in-flight learned mask was lost on later finalization")
+        await publisher.stop()
+        began.continuation.finish(); releaser.cancel(); await releaser.value
+        print("PASS newly learned mask survives deferred inference, withdrawn cue, partial growth and finalization")
+    }
+
+    @MainActor
+    static func emptyAvailabilityDoesNotPrepareSuite() async throws {
+        let delivery = AsyncStream<MeetingLiveTranscriptSnapshot>.makeStream()
+        let detector = ColdPagedPrivacyRedactor()
+        let publisher = MeetingLivePrivacyPublication()
+        let generation = UUID()
+        var source = MeetingLiveTranscriptSnapshot.empty
+        source.revision = 1
+        source.availability = .unavailable(reason: "Synthetic models loading")
+        var failures = 0
+        func submit() {
+            publisher.submit(source, generation: generation, using: detector, latestSnapshot: { source },
+                publish: { value, _ in delivery.continuation.yield(value) },
+                failed: { _ in failures += 1; delivery.continuation.finish() })
+        }
+        var updates = delivery.stream.makeAsyncIterator()
+        submit()
+        let empty = await updates.next()
+        try check(empty?.availability == source.availability && empty?.utterances.isEmpty == true,
+                  "the initial availability update did not publish without text")
+        try check(await detector.preparations == 0, "an empty startup snapshot warmed privacy before capture")
+        source.revision = 2
+        source.partials[.you] = .init(id: UUID(), text: " UNAPPROVED_SYNTHETIC_PERSON", start: 0,
+                                      stableUTF16Count: 1)
+        submit()
+        let unstable = await updates.next()
+        let unstablePreparations = await detector.preparations
+        try check(unstable?.partials.isEmpty == true && unstablePreparations == 0,
+                  "an unstable partial prepared privacy or entered publication")
+        source.revision = 3; source.partials = [:]
+        source.utterances = [.init(id: UUID(), speaker: .you, text: "документ инструкция терапия.", start: 0, end: 1)]
+        submit()
+        let speech = await updates.next()
+        let speechPreparations = await detector.preparations
+        try check(speech?.utterances.count == 1 && speechPreparations == 1,
+                  "the first recognized text did not lazily prepare privacy exactly once")
+        await publisher.stop()
+
+        var publishedText = false
+        source = .empty; source.revision = 1
+        publisher.submit(source, generation: UUID(), using: detector, latestSnapshot: { source },
+            publish: { value, _ in publishedText = !value.utterances.isEmpty || !value.partials.isEmpty },
+            failed: { _ in failures += 1 })
+        await publisher.stop()
+        let cancelledPreparations = await detector.preparations
+        try check(!publishedText && failures == 0 && cancelledPreparations == 1,
+                  "cancelling initial empty availability warmed privacy or leaked text")
+        print("PASS initial empty/unstable availability does not prepare privacy, first speech prepares once, empty cancellation stays clean")
     }
 
     @MainActor
