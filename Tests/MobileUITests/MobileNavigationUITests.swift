@@ -445,11 +445,16 @@ final class MobileNavigationUITests: XCTestCase {
                 saveFiles.tap()
                 let save = app.buttons["DOCPicker.actionButton"]
                 XCTAssertTrue(save.waitForExistence(timeout: 10))
+                let filename = app.textFields["DOCPicker.filenameTextField"]
+                XCTAssertTrue(filename.waitForExistence(timeout: 5))
+                let suffix = "-" + UUID().uuidString.prefix(8)
+                filename.tap()
+                filename.typeText(String(suffix))
+                XCTAssertTrue((filename.value as? String)?.contains(suffix) == true,
+                              "Each synthetic export uses a fresh destination, never an existing user file")
                 XCTAssertTrue(save.isEnabled)
                 capture("protected-export-files-save-ready")
                 save.tap()
-                let replace = app.buttons.matching(NSPredicate(format: "label IN %@", ["Replace", "Заменить"])).firstMatch
-                if replace.waitForExistence(timeout: 1) { replace.tap() }
                 XCTAssertTrue(activityList.waitForNonExistence(timeout: 10), "Saving must dismiss native sharing")
                 XCTAssertTrue(more.isHittable, "A completed share must return control to the transcript")
                 capture("protected-export-files-saved")
