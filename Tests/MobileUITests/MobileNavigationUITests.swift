@@ -402,6 +402,31 @@ final class MobileNavigationUITests: XCTestCase {
             add(description)
             XCTAssertTrue(presented || app.buttons["Save to Files"].exists || app.buttons["Сохранить в Файлы"].exists,
                           "The protected JSON must reach the native share sheet")
+            XCTAssertTrue(app.otherElements["LP.CaptionBar.TopCaption"].label.contains("Синтетическая проверка атрибуции"),
+                          "The exported filename must preserve the original Cyrillic meeting title")
+            let closeShare = app.buttons["header.closeButton"]
+            XCTAssertTrue(closeShare.waitForExistence(timeout: 5))
+            closeShare.tap()
+            XCTAssertTrue(more.waitForExistence(timeout: 5), "Cancel must return to the original transcript")
+            capture("protected-export-\(language)-cancelled")
+            more.tap()
+            XCTAssertTrue(export.waitForExistence(timeout: 5))
+            export.tap()
+            XCTAssertTrue(activityList.waitForExistence(timeout: 10), "A cancelled share must be immediately reusable")
+            if language == "en" {
+                let saveFiles = app.cells.matching(NSPredicate(format: "label == %@", "Save to Files")).firstMatch
+                XCTAssertTrue(saveFiles.waitForExistence(timeout: 5))
+                saveFiles.tap()
+                capture("protected-export-files-picker")
+                let pickerDescription = XCTAttachment(string: app.debugDescription)
+                pickerDescription.name = "protected-export-files-picker-accessibility"
+                pickerDescription.lifetime = .keepAlways
+                add(pickerDescription)
+                let cancel = app.buttons["Cancel"].firstMatch
+                XCTAssertTrue(cancel.waitForExistence(timeout: 10), "The system file destination picker must open")
+                cancel.tap()
+                capture("protected-export-files-picker-cancelled")
+            }
         }
         app.terminate()
     }
