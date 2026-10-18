@@ -200,7 +200,7 @@ nonisolated enum MeetingTranscriptExporter {
 
     /// A reading projection of timed fragments, not a replacement for canonical evidence.
     /// Every member retains its ID, text, revision and attribution for corrections and playback.
-    struct DisplayParagraph: Identifiable, Equatable {
+    struct DisplayParagraph: Identifiable, Equatable, Sendable {
         let segments: [MeetingTranscriptSegment]
         /// A legacy reading bridge is deliberately not persisted as a native assignment.
         var containsLegacySpeakerBridge = false
@@ -209,8 +209,14 @@ nonisolated enum MeetingTranscriptExporter {
         var projectedSpeakerID: SessionSpeakerID? = nil
         var id: MeetingTranscriptSegmentID { segments[0].id }
         var firstSegment: MeetingTranscriptSegment { segments[0] }
-        var text: String {
-            segments.enumerated().map { index, segment in
+        let text: String
+
+        init(segments: [MeetingTranscriptSegment], containsLegacySpeakerBridge: Bool = false,
+             projectedSpeakerID: SessionSpeakerID? = nil) {
+            self.segments = segments
+            self.containsLegacySpeakerBridge = containsLegacySpeakerBridge
+            self.projectedSpeakerID = projectedSpeakerID
+            self.text = segments.enumerated().map { index, segment in
                 Self.separator(after: index > 0 ? segments[index - 1].text : nil, before: segment.text) + segment.text
             }.joined()
         }
@@ -433,6 +439,47 @@ nonisolated enum MeetingTranscriptExporter {
                                                projectedSpeakerID: projectedSpeakerID))
         }
         return paragraphs
+    }
+
+    /// Only values that affect reading ownership invalidate a cached projection. Capture
+    /// meters, pending audio, timestamps, title and playback state do not participate.
+    /// Arrays share the session's immutable value storage until a genuine edit arrives.
+    struct ReadingInput: Equatable, Sendable {
+        let sessionID: MeetingSessionID
+        let state: MeetingSessionState
+        let endedAt: Date?
+        let isComplete: Bool?
+        let sidecar: MeetingResultSidecarReference?
+        let latestAttempt: MeetingProcessingAttempt?
+        let speakers: [MeetingSessionSpeaker]
+        let segments: [MeetingTranscriptSegment]
+        let gaps: [MeetingTranscriptCoverageGap]?
+
+        init(_ session: MeetingSession) {
+            sessionID = session.id; state = session.state; endedAt = session.endedAt
+            isComplete = session.transcriptIsComplete; sidecar = session.resultSidecarReference
+            latestAttempt = session.processingAttempts.last; speakers = session.speakers
+            segments = session.transcriptSegments; gaps = session.transcriptCoverageGaps
+        }
+    }
+
+    /// Saved screens must not run the contextual attribution pass inside SwiftUI body.
+    /// Keep the pure projection cancellable and join its worker before returning.
+    static func readingParagraphs(for session: MeetingSession) async throws -> [DisplayParagraph] {
+        let projection = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let segments = session.transcriptSegments.enumerated().filter { !$0.element.isEcho }.sorted {
+                ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+            }.map(\.element)
+            let paragraphs = self.displayParagraphs(for: segments, in: session)
+            try Task.checkCancellation()
+            return paragraphs
+        }
+        return try await withTaskCancellationHandler {
+            let result = try await projection.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: { projection.cancel() }
     }
 
     static func json(for session: MeetingSession) throws -> Data {

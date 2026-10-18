@@ -45,6 +45,7 @@ struct MeetingSessionStoreCheckpointTests {
 
         try Self.checkPlainParticipantLabels(template: session, check: check)
         try Self.checkManualCorrectionOfProjectedOwner(template: session, check: check)
+        try await Self.checkReadingProjectionCache(template: session, check: check)
 
         let nativePresentation = MeetingTranscriptExporter.speakerPresentation(
             for: session.transcriptSegments[0], in: session)
@@ -461,6 +462,53 @@ struct MeetingSessionStoreCheckpointTests {
             check(MeetingTranscriptExporter.text(for: source) == "[00:00] \(secondAlias): \(corrected.text)",
                   "Text export reflects the corrected participant name")
         }
+    }
+
+    private static func checkReadingProjectionCache(
+        template: MeetingSession, check: (Bool, String) -> Void
+    ) async throws {
+        let baseline = MeetingTranscriptExporter.ReadingInput(template)
+        var unrelated = template
+        unrelated.title = "A renamed meeting"
+        unrelated.updatedAt = template.updatedAt.addingTimeInterval(1)
+        unrelated.audioTracks[0].health.level = 0.7
+        check(MeetingTranscriptExporter.ReadingInput(unrelated) == baseline,
+              "Meters, title and checkpoint timestamps must not invalidate reading ownership")
+        var renamed = template
+        renamed.speakers[0].displayName = "Another manually named speaker"
+        check(MeetingTranscriptExporter.ReadingInput(renamed) != baseline,
+              "A user alias change must invalidate reading labels")
+        var edited = template
+        edited.transcriptSegments[0].text = "A corrected word"
+        check(MeetingTranscriptExporter.ReadingInput(edited) != baseline,
+              "A text edit must invalidate the reading document")
+        var evidence = template
+        evidence.transcriptSegments[0].attributionState = .timingUncertain
+        check(MeetingTranscriptExporter.ReadingInput(evidence) != baseline,
+              "A revised attribution state must invalidate reading ownership")
+        evidence = template; evidence.transcriptCoverageGaps = []
+        check(MeetingTranscriptExporter.ReadingInput(evidence) != baseline,
+              "Coverage barriers participate in the reading cache identity")
+        for count in [1_000, 10_000] {
+            var source = template
+            source.transcriptSegments = Array(template.transcriptSegments.prefix(count))
+            let before = source
+            let start = ProcessInfo.processInfo.systemUptime
+            let result = try await MeetingTranscriptExporter.readingParagraphs(for: source)
+            let elapsed = ProcessInfo.processInfo.systemUptime - start
+            check(result.flatMap(\.segments) == source.transcriptSegments,
+                  "Background reading projection must retain complete long-meeting history")
+            check(result.first?.id == source.transcriptSegments.first?.id,
+                  "Background projection keeps the first word's stable UI identity")
+            check(source == before, "Background reading projection must not change source evidence")
+            let repeated = try await MeetingTranscriptExporter.readingParagraphs(for: source)
+            check(result == repeated, "A cached reading result must match repeat projection")
+            print("Reading projection synthetic benchmark: words=\(count) seconds=\(elapsed) paragraphs=\(result.count)")
+        }
+        let cancelled = Task { try await MeetingTranscriptExporter.readingParagraphs(for: template) }
+        cancelled.cancel()
+        do { _ = try await cancelled.value; preconditionFailure("Cancelled reading projection published") }
+        catch is CancellationError { check(true, "Cancelled reading projection is joined") }
     }
 
     private static func checkManualCorrectionOfProjectedOwner(

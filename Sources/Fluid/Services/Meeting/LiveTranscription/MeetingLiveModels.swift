@@ -152,7 +152,7 @@ nonisolated struct MeetingLiveTranscriptSnapshot: Sendable, Equatable {
 /// Pure row composition for the live captions card: finalized turns in transcript order, then
 /// active partials bottom-pinned by turn start, so a solidifying bubble keeps its row identity.
 nonisolated enum MeetingLiveBubbleComposer {
-    nonisolated struct Row: Identifiable, Equatable {
+    nonisolated struct Row: Identifiable, Equatable, Sendable {
         var id: UUID
         var speaker: MeetingLiveSpeaker
         var text: String
@@ -163,6 +163,20 @@ nonisolated enum MeetingLiveBubbleComposer {
         func hasSameSpeaker(as other: Self) -> Bool {
             speaker == other.speaker && participant?.identity == other.participant?.identity
         }
+    }
+
+    static func rowsForDisplay(_ snapshot: MeetingLiveTranscriptSnapshot) async throws -> [Row] {
+        let work = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let rows = Self.rows(for: snapshot)
+            try Task.checkCancellation()
+            return rows
+        }
+        return try await withTaskCancellationHandler {
+            let result = try await work.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: { work.cancel() }
     }
 
     static func rows(for snapshot: MeetingLiveTranscriptSnapshot) -> [Row] {
@@ -515,10 +529,19 @@ nonisolated struct MeetingPendingSpeechProjection {
             return
         }
         self.visibleRevision = visible.revision
-        for utterance in visible.utterances where !utterance.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guard !utterance.hasIncompleteTextCoverage,
+        // Full reading history must not turn each preview into a text scan and token
+        // retirement pass over the whole meeting. Pending capture itself stays bounded.
+        let pendingBounds = Dictionary(grouping: self.snapshot.tokens, by: \.source).mapValues { tokens in
+            (start: tokens.map(\.start).min()!, end: tokens.map(\.end).max()!)
+        }
+        for utterance in visible.utterances {
+            if self.snapshot.tokens.isEmpty { break }
+            guard let bounds = pendingBounds[utterance.speaker],
+                  utterance.end > bounds.start, utterance.start < bounds.end,
+                  !utterance.hasIncompleteTextCoverage,
                   utterance.start.isFinite, utterance.start >= 0,
-                  utterance.end.isFinite, utterance.end > utterance.start else { continue }
+                  utterance.end.isFinite, utterance.end > utterance.start,
+                  !utterance.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             self.applyCoverage(source: utterance.speaker, start: utterance.start, end: utterance.end,
                 captionID: utterance.id, visibleUTF16: utterance.text.utf16.count)
         }
@@ -531,9 +554,11 @@ nonisolated struct MeetingPendingSpeechProjection {
             self.applyCoverage(source: source, start: partial.start, end: end,
                 captionID: partial.id, visibleUTF16: partial.text.utf16.count)
         }
-        let visibleUTF16 = visible.utterances.reduce(0) { $0 + $1.text.utf16.count }
-            + visible.partials.values.reduce(0) { $0 + $1.text.utf16.count }
-        self.emit(.reconciled, transcriptRevision: visible.revision, visibleUTF16: visibleUTF16)
+        if self.onDiagnostic != nil {
+            let visibleUTF16 = visible.utterances.reduce(0) { $0 + $1.text.utf16.count }
+                + visible.partials.values.reduce(0) { $0 + $1.text.utf16.count }
+            self.emit(.reconciled, transcriptRevision: visible.revision, visibleUTF16: visibleUTF16)
+        }
     }
 
     private mutating func applyCoverage(source: MeetingLiveSpeaker, start: TimeInterval, end: TimeInterval,

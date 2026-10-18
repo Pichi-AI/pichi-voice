@@ -34,6 +34,11 @@ struct MobileMeetingRoot: View {
     @State private var deleteCandidate: MeetingSession?
     @State private var share: MeetingSharePayload?
     @StateObject private var playback = MeetingSegmentPlayback()
+    // Projection is independent of microphone meters, pending audio, playback progress
+    // and other frequent view invalidations. Keep one result for the visible transcript.
+    @State private var transcriptReadingSource: MeetingTranscriptExporter.ReadingInput?
+    @State private var transcriptReading: [MeetingTranscriptExporter.DisplayParagraph] = []
+
 
 
     init(coordinator: MeetingSessionCoordinator, asr: ASRService, store: any MeetingSessionStoring,
@@ -299,8 +304,9 @@ struct MobileMeetingRoot: View {
                     .accessibilityIdentifier("meeting.liveAvailability")
             case .available: EmptyView()
             }
-            MeetingLiveBubbleScrollList(rows: MeetingLiveBubbleComposer.rows(for: coordinator.liveTranscript),
-                                       pending: coordinator.pendingSpeech, documentStyle: true)
+            MeetingLiveTranscriptScrollList(snapshot: coordinator.liveTranscript,
+                                           pending: coordinator.pendingSpeech, documentStyle: true)
+                .id(session.id)
                 .frame(height: max(200, geometry.size.height - 250))
                 .accessibilityIdentifier("meeting.liveTranscript")
             if session.speakerLabelsEnabled != false {
@@ -436,10 +442,8 @@ struct MobileMeetingRoot: View {
         let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map {
             ($0.id, MeetingTranscriptExporter.speakerDisplayName($0, language: PichiLocalization.language))
         })
-        let segments = session.transcriptSegments.filter { !$0.isEcho }.enumerated().sorted {
-            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
-        }.map(\.element)
-        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: segments, in: session)
+        let readingInput = MeetingTranscriptExporter.ReadingInput(session)
+        let paragraphs = transcriptReadingSource == readingInput ? transcriptReading : []
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text(session.title).font(theme.typography.title)
@@ -518,6 +522,15 @@ struct MobileMeetingRoot: View {
                 }
             }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
         }.accessibilityIdentifier("meeting.transcript")
+            .task(id: readingInput) {
+                do {
+                    let projection = try await MeetingTranscriptExporter.readingParagraphs(for: session)
+                    try Task.checkCancellation()
+                    transcriptReading = projection
+                    transcriptReadingSource = readingInput
+                } catch is CancellationError { }
+                catch { report(error) }
+            }
     }
 
     private func participantButton(_ speaker: MeetingSessionSpeaker, session: MeetingSession, expands: Bool) -> some View {

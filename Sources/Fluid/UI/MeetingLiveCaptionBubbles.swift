@@ -39,7 +39,7 @@ extension View {
 /// text, IDs or the canonical transcript. Boundaries depend on committed preceding text,
 /// so a growing partial stays in the same paragraph as it becomes final.
 nonisolated enum MeetingLiveCaptionParagraphs {
-    struct Paragraph: Identifiable, Equatable {
+    struct Paragraph: Identifiable, Equatable, Sendable {
         let rows: [MeetingLiveBubbleComposer.Row]
         var id: UUID { rows[0].id }
         var speaker: MeetingLiveSpeaker { rows[0].speaker }
@@ -59,6 +59,22 @@ nonisolated enum MeetingLiveCaptionParagraphs {
         static func separator(after previous: String?, before next: String) -> String {
             MeetingTranscriptExporter.DisplayParagraph.separator(after: previous, before: next)
         }
+    }
+
+    /// A growing protected transcript is composed only when its rows change, not
+    /// every time the microphone meter or pending waveform invalidates the view.
+    static func composeForDisplay(_ rows: [MeetingLiveBubbleComposer.Row]) async throws -> [Paragraph] {
+        let work = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let paragraphs = Self.compose(rows)
+            try Task.checkCancellation()
+            return paragraphs
+        }
+        return try await withTaskCancellationHandler {
+            let result = try await work.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: { work.cancel() }
     }
 
     static func compose(_ rows: [MeetingLiveBubbleComposer.Row]) -> [Paragraph] {
@@ -104,6 +120,29 @@ private extension MeetingLiveSpeaker {
     }
 }
 
+/// Snapshot-to-row work changes with protected recognition, not the much more frequent
+/// capture meter and pending-waveform updates in the surrounding recording screen.
+struct MeetingLiveTranscriptScrollList: View {
+    let snapshot: MeetingLiveTranscriptSnapshot
+    var pending: MeetingPendingSpeechSnapshot = .empty
+    var hidesPartialFromAccessibility = true
+    var documentStyle = false
+    @State private var rows: [MeetingLiveBubbleComposer.Row] = []
+
+    var body: some View {
+        MeetingLiveBubbleScrollList(rows: self.rows, pending: self.pending,
+            hidesPartialFromAccessibility: self.hidesPartialFromAccessibility, documentStyle: self.documentStyle)
+            .task(id: self.snapshot) {
+                do {
+                    let prepared = try await MeetingLiveBubbleComposer.rowsForDisplay(self.snapshot)
+                    try Task.checkCancellation()
+                    self.rows = prepared
+                } catch is CancellationError { }
+                catch { assertionFailure("Caption row presentation failed: \(error)") }
+            }
+    }
+}
+
 /// Auto-follows the newest row only while the user is pinned to the bottom; scrolling up suspends
 /// following and shows a jump-to-bottom button.
 struct MeetingLiveBubbleScrollList: View {
@@ -116,6 +155,7 @@ struct MeetingLiveBubbleScrollList: View {
     @Environment(\.locale) private var locale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPinnedToBottom = true
+    @State private var paragraphs: [MeetingLiveCaptionParagraphs.Paragraph] = []
     @Namespace private var scrollViewport
     private let bottomAnchor = "meeting.liveTranscript.bottom"
 
@@ -133,18 +173,17 @@ struct MeetingLiveBubbleScrollList: View {
 
     var body: some View {
         let rowIDs = self.rows.map(\.id)
-        let paragraphs = MeetingLiveCaptionParagraphs.compose(self.rows)
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                    LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                         if self.documentStyle {
-                            ForEach(paragraphs) { paragraph in
+                            ForEach(self.paragraphs) { paragraph in
                                 MeetingLiveParagraphRow(paragraph: paragraph,
                                     hidesPartialFromAccessibility: self.hidesPartialFromAccessibility,
                                     interfaceLanguageID: self.locale.identifier,
-                                    isTail: paragraph.id == paragraphs.last?.id,
-                                    pending: paragraph.id == paragraphs.last?.id ? self.inlinePending : .empty)
+                                    isTail: paragraph.id == self.paragraphs.last?.id,
+                                    pending: paragraph.id == self.paragraphs.last?.id ? self.inlinePending : .empty)
                                     .equatable()
                                     .id(paragraph.id)
                                     .transition(.opacity)
@@ -182,6 +221,15 @@ struct MeetingLiveBubbleScrollList: View {
                             .accessibilityHidden(true)
                         }
                     }
+                }
+                .task(id: self.rows) {
+                    guard self.documentStyle else { return }
+                    do {
+                        let composed = try await MeetingLiveCaptionParagraphs.composeForDisplay(self.rows)
+                        try Task.checkCancellation()
+                        self.paragraphs = composed
+                    } catch is CancellationError { }
+                    catch { assertionFailure("Caption presentation failed: \(error)") }
                 }
                 .accessibilityIdentifier("meeting.liveTranscript.viewport")
                 .animation(self.documentStyle || self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: rowIDs)
@@ -385,6 +433,14 @@ struct MeetingCaptionScrollTracking: ViewModifier {
                 .simultaneousGesture(DragGesture(minimumDistance: 2)
                     .onChanged { value in
                         self.isDraggingUp = value.translation.height > 2
+                        // Latch manual reading before the next layout preference or queued
+                        // auto-follow callback can move the same viewport back to the tail.
+                        if self.isDraggingUp,
+                           let geometry = self.previousGeometry,
+                           let height = geometry.contentHeight, let viewport = geometry.viewportHeight,
+                           height > viewport + 1 {
+                            self.isPinnedToBottom = false
+                        }
                     }
                     .onEnded { _ in self.isDraggingUp = false })
         }

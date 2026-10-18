@@ -668,6 +668,38 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
         }
     }
 
+    func testFullMeetingHistoryCanReachItsBeginningAfterMultipleParticipantTurns() async throws {
+        let voices = ["Анна", "Борис", "Виктор"]
+        let rows = (0..<1_200).map { index in
+            let owner = voices[(index / 200) % voices.count]
+            return MeetingLiveBubbleComposer.Row(id: UUID(), speaker: .you,
+                text: index == 0 ? "Самое начало всей встречи." : "Слово \(index)",
+                isPartial: false, showsLabel: index % 200 == 0,
+                participant: .init(identity: owner, label: .identified(.init(displayName: owner, isLocalUser: false))))
+        }
+        let host = try CaptionNativeHost(rows: rows, scheme: .light)
+        defer { host.close() }
+        let scroll = try await captionScroll(in: host)
+        try await settle(host, "Full history starts following the latest participant") { self.nearBottom(scroll) }
+        capture(host, step: "full-history-01-tail", scheme: .light)
+        let beginning = -scroll.adjustedContentInset.top
+        scroll.setContentOffset(CGPoint(x: 0, y: beginning), animated: false)
+        try await settle(host, "The first participant's words remain reachable beyond the last 100 words") {
+            abs(scroll.contentOffset.y - beginning) < 3 && !self.nearBottom(scroll)
+        }
+        capture(host, step: "full-history-02-beginning", scheme: .light)
+        if #unavailable(iOS 18) {
+            // Programmatic offsets exercise the iOS 17 geometry fallback. iOS 18+
+            // requires a real finger phase, covered by the existing UI automation.
+            host.model.rows.append(row("Новая реплика текущего участника."))
+            try await settle(host, "A new participant update must not pull the reader away from the beginning") {
+                abs(scroll.contentOffset.y - beginning) < 3 && !self.nearBottom(scroll)
+            }
+            capture(host, step: "full-history-03-reading-while-updating", scheme: .light)
+        }
+        XCTAssertEqual(host.model.rows.first?.id, rows.first?.id)
+    }
+
     func testIOS17NonTouchScrollToOlderTextStaysPausedWhenNewRowsArrive() async throws {
         guard #unavailable(iOS 18) else {
             throw XCTSkip("This exercises the iOS 17 offset-based fallback. Programmatic UIKit scrolling does not simulate a user scroll phase on iOS 18+.")
@@ -931,6 +963,69 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
             isPartial: false, showsLabel: true, participant: presentations[$0.id]) }
         XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(liveRows).count, 1)
         XCTAssertEqual(try MeetingTranscriptExporter.json(for: source), original)
+    }
+
+    @MainActor
+    func testProtectedLiveHistoryRetainsEveryParticipantBeyondOneHundredWords() async throws {
+        let voices = [UUID(), UUID(), UUID()]
+        let track = UUID()
+        var source = session()
+        source.speakers = voices.enumerated().map { index, id in
+            .init(id: id, displayName: "Участник \(index + 1)", diarizationClusterID: nil,
+                  trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        }
+        source.transcriptSegments = (0..<1_200).map { index in
+            var word = segment(index == 0 ? "Самое начало встречи." : "Защищённое слово \(index)",
+                track: track, start: Double(index) * 0.6,
+                speaker: voices[(index / 200) % voices.count], attribution: .assigned)
+            word.originalText = nil; word.revision = 0
+            return word
+        }
+        let original = try MeetingTranscriptExporter.json(for: source)
+        let preview = MeetingLivePartial(id: UUID(), text: "Только защищённый предпросмотр", start: 721)
+        let result = try await MeetingSessionCoordinator.protectedLiveHistory(session: source, revision: 8, preview: preview)
+        XCTAssertEqual(result.revision, 8)
+        XCTAssertEqual(result.utterances.map(\.id), source.transcriptSegments.map(\.id))
+        XCTAssertEqual(result.utterances.first?.text, "Самое начало встречи.")
+        XCTAssertEqual(Set(result.utterances.compactMap { $0.participant?.participantID }), Set(voices))
+        let rows = MeetingLiveBubbleComposer.rows(for: result)
+        let paragraphs = try await MeetingLiveCaptionParagraphs.composeForDisplay(rows)
+        XCTAssertEqual(paragraphs.flatMap(\.rows).map(\.id), rows.map(\.id))
+        XCTAssertEqual(paragraphs.first?.id, source.transcriptSegments.first?.id)
+        XCTAssertEqual(result.partials[.you]?.id, preview.id)
+        XCTAssertEqual(try MeetingTranscriptExporter.json(for: source), original)
+
+        let revised = try await MeetingSessionCoordinator.protectedLiveHistory(session: source, revision: 9, preview: nil)
+        XCTAssertEqual(revised.utterances.map(\.id), result.utterances.map(\.id))
+        XCTAssertTrue(revised.partials.isEmpty, "Finishing the preview cannot erase approved history")
+        let cancelled = Task {
+            try await MeetingSessionCoordinator.protectedLiveHistory(session: source, revision: 10, preview: nil)
+        }
+        cancelled.cancel()
+        do { _ = try await cancelled.value; XCTFail("A cancelled projection published a new history") }
+        catch is CancellationError { }
+    }
+
+    func testReadingCacheIgnoresMetersButInvalidatesAliasesWordsAndEvidence() {
+        var source = session()
+        source.speakers = [.init(id: UUID(), displayName: "Анна", diarizationClusterID: nil,
+                                trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
+        source.transcriptSegments = [segment("Защищённый текст.", track: UUID(), start: 0,
+                                            speaker: source.speakers[0].id, attribution: .assigned)]
+        let original = MeetingTranscriptExporter.ReadingInput(source)
+        var changed = source
+        changed.title = "Другое название"; changed.updatedAt = source.updatedAt.addingTimeInterval(1)
+        changed.events = [.init(id: UUID(), occurredAt: Date(), kind: .microphoneChanged,
+                               trackID: nil, detail: "Synthetic capture health event")]
+        XCTAssertEqual(MeetingTranscriptExporter.ReadingInput(changed), original)
+        changed.speakers[0].displayName = "Борис"
+        XCTAssertNotEqual(MeetingTranscriptExporter.ReadingInput(changed), original)
+        changed = source; changed.transcriptSegments[0].text = "Исправленный текст."
+        XCTAssertNotEqual(MeetingTranscriptExporter.ReadingInput(changed), original)
+        changed = source; changed.transcriptSegments[0].attributionState = .timingUncertain
+        XCTAssertNotEqual(MeetingTranscriptExporter.ReadingInput(changed), original)
+        changed = source; changed.transcriptCoverageGaps = []
+        XCTAssertNotEqual(MeetingTranscriptExporter.ReadingInput(changed), original)
     }
 
     func testNoMultipleVoiceLabelWhenThereIsNoSingleReadingOwner() {

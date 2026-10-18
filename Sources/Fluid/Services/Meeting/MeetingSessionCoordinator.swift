@@ -1959,6 +1959,35 @@ final class MeetingSessionCoordinator: ObservableObject {
             })
     }
 
+    /// The durable protected transcript is the reading history, not an inference window.
+    /// Construct the contextual projection away from the UI executor; only this already
+    /// privacy-filtered value may be handed to the caption renderer.
+    nonisolated static func protectedLiveHistory(session: MeetingSession, revision: UInt64,
+                                 preview: MeetingLivePartial?) async throws -> MeetingLiveTranscriptSnapshot {
+        let projection = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let reading = MeetingTranscriptExporter.speakerPresentations(in: session)
+            var result = MeetingLiveTranscriptSnapshot.empty
+            result.revision = revision
+            result.utterances = session.transcriptSegments.enumerated().filter { !$0.element.isEcho }.sorted {
+                ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+            }.map { _, segment in
+                MeetingLiveUtterance(id: segment.id, speaker: .you, text: segment.text,
+                    start: segment.start.seconds, end: segment.end.seconds,
+                    participant: reading[segment.id])
+            }
+            result = result.settingPartial(preview, for: .you)
+            result.availability = .available
+            try Task.checkCancellation()
+            return result
+        }
+        return try await withTaskCancellationHandler {
+            let result = try await projection.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: { projection.cancel() }
+    }
+
     private func checkpointMemoryTranscript(_ batch: MeetingPCMTranscriptBatch, sessionID: UUID, generation: UUID) async throws {
         guard self.memoryCheckpointGeneration == generation, var session = self.activeSession, session.id == sessionID else { throw CancellationError() }
         if let track = batch.sourceTrack, !session.audioTracks.contains(where: { $0.id == track.id }) { session.audioTracks.append(track) }
@@ -1990,19 +2019,21 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard self.memoryCheckpointGeneration == generation, self.activeSession?.id == sessionID else {
             throw CancellationError()
         }
-        // Only durable, privacy-filtered text is published by the bounded PCM path.
-        var snapshot = MeetingLiveTranscriptSnapshot.empty
-        snapshot.revision = self.liveTranscript.revision + 1
-        let reading = MeetingTranscriptExporter.speakerPresentations(in: session,
-            segments: Array(session.transcriptSegments.suffix(128)))
-        snapshot.utterances = session.transcriptSegments.suffix(100).map {
-            MeetingLiveUtterance(id: $0.id, speaker: .you, text: $0.text, start: $0.start.seconds, end: $0.end.seconds,
-                participant: reading[$0.id] ?? MeetingTranscriptExporter.speakerPresentation(for: $0, in: session))
+        // Inference owns a bounded audio/context window. The UI owns the complete
+        // protected reading history, so earlier participants do not disappear while
+        // recording. Projection is pure and joined off the main actor.
+        let revisionBeforeProjection = self.liveTranscript.revision
+        var snapshot = try await Self.protectedLiveHistory(
+            session: session, revision: revisionBeforeProjection + 1, preview: batch.livePreview)
+        guard self.memoryCheckpointGeneration == generation, self.activeSession?.id == sessionID else {
+            throw CancellationError()
         }
-        // Approved held text is display-only. Only batch.segments above enter persistence,
-        // Copy and Export; finish/cancellation clear the partial with the same generation.
-        snapshot = snapshot.settingPartial(batch.livePreview, for: .you)
-        snapshot.availability = .available
+        // A newer safe preview may arrive while the pure reading projection runs.
+        // Publishing durable history must not roll that preview or revision backward.
+        if self.liveTranscript.revision > revisionBeforeProjection {
+            snapshot.partials = self.liveTranscript.partials
+        }
+        snapshot.revision = self.liveTranscript.revision + 1
         self.liveTranscript = snapshot
         self.reconcilePendingSpeech()
     }
