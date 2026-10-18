@@ -3830,10 +3830,12 @@ final class MeetingRecoveryTests: XCTestCase {
             XCTAssertEqual(corrected.transcriptSegments[index], expected)
         }
         let persisted = try await store.load(id: session.id)
-        XCTAssertEqual(persisted, corrected)
+        // The archive codec normalizes Date precision; compare the correction evidence exactly.
+        XCTAssertEqual(persisted?.transcriptSegments, corrected.transcriptSegments)
+        XCTAssertEqual(persisted?.speakers, corrected.speakers)
 
         let repeated = try await coordinator.reassignSegment(sessionID: session.id, segmentID: targetID, to: speakerB)
-        XCTAssertEqual(repeated, corrected)
+        XCTAssertEqual(repeated, persisted)
         let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
         XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
         XCTAssertEqual(MeetingTranscriptExporter.speakerPresentations(in: undone)[targetID]?.participantID, speakerA)
