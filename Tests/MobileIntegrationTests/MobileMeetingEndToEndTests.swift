@@ -321,6 +321,34 @@ private nonisolated struct CombinedEvaluationOptions {
     }
 }
 
+/// Scalar-only scheduler diagnostics. This measures executor availability, not rendered frames.
+private nonisolated final class CombinedMainActorSamples: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waits: [Double] = []
+    private var omitted = 0
+    private var maximumInterval = 0.0
+    private let limit = 12_000
+    func record(wait: Double, interval: Double) {
+        lock.withLock {
+            maximumInterval = max(maximumInterval, interval)
+            if waits.count < limit { waits.append(wait) } else { omitted += 1 }
+        }
+    }
+    func json(interval: Double) -> [String: Any] {
+        lock.withLock {
+            let sorted = waits.sorted()
+            func percentile(_ p: Double) -> Double {
+                sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * p))]
+            }
+            return ["samples": sorted.count, "omittedSamples": omitted, "requestedIntervalSeconds": interval,
+                    "p50WaitSeconds": percentile(0.5), "p95WaitSeconds": percentile(0.95),
+                    "p99WaitSeconds": percentile(0.99), "maximumWaitSeconds": sorted.last ?? 0,
+                    "maximumObservedIntervalSeconds": maximumInterval,
+                    "scope": "Utility task hops to MainActor during service/model inference. Does not measure touch latency or rendered frames."]
+        }
+    }
+}
+
 /// Reads the process counter off MainActor. The caller owns and joins its sampling Task.
 nonisolated final class CombinedResourceSamples: @unchecked Sendable {
     struct Sample: Sendable {
@@ -773,6 +801,25 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             }
         }
         defer { sampler.cancel() }
+        let mainActorSamples = CombinedMainActorSamples()
+        let mainActorInterval = options.longEvaluation ? 0.5 : 0.1
+        let mainActorSampler: Task<Void, Never>?
+        if detailedProfiling {
+            mainActorSampler = Task.detached(priority: .utility) {
+                var previous = ProcessInfo.processInfo.systemUptime
+                while !Task.isCancelled {
+                    let queued = ProcessInfo.processInfo.systemUptime
+                    let isMainThread = await MainActor.run { Thread.isMainThread }
+                    guard isMainThread else { return }
+                    let returned = ProcessInfo.processInfo.systemUptime
+                    mainActorSamples.record(wait: returned - queued, interval: returned - previous)
+                    previous = returned
+                    do { try await Task.sleep(nanoseconds: UInt64(mainActorInterval * 1_000_000_000)) }
+                    catch { break }
+                }
+            }
+        } else { mainActorSampler = nil }
+        defer { mainActorSampler?.cancel() }
         let containerRoot = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         let existingAudioPaths = streaming ? try CombinedStreamingAudioInventory.paths(in: containerRoot) : []
         var observedNewAudioPaths: Set<String> = []
@@ -793,12 +840,13 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             }
             let privacyReady = await privacy.isReady
             let preparationSeconds = ProcessInfo.processInfo.systemUptime - started
-            XCTAssertTrue(privacyReady)
-            XCTAssertEqual(PichiTranscriptPrivacyModelStore.descriptor.id, "ru-pii-ner-a1-int8", "Combined evidence requires the A1 descriptor verified and loaded by privacy.prepare")
-            phase = "privacyReady"
+            XCTAssertEqual(PichiTranscriptPrivacyModelStore.descriptor.id, "ru-pii-ner-a1-int8", "Combined evidence requires the pinned A1 descriptor; preparation can be deferred until PCM arrives")
+            phase = "configurationReady"
             resourceSamples.setPhase(phase)
             try await Task.sleep(nanoseconds: 300_000_000)
+            let startRequested = ProcessInfo.processInfo.systemUptime
             let recording = try await coordinator.startRecording(configuration: configuration)
+            let startCommandSeconds = ProcessInfo.processInfo.systemUptime - startRequested
             XCTAssertEqual(recording.audioStorageMode, saveAudio ? .retainedFiles : .memoryOnly)
             XCTAssertEqual(recording.piiRedactionEnabled, true)
             if streaming { XCTAssertEqual(recording.effectiveSpeakerProcessingMode, .streaming) }
@@ -999,6 +1047,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             try await Task.sleep(nanoseconds: 500_000_000)
             sampler.cancel()
             await sampler.value
+            mainActorSampler?.cancel()
+            await mainActorSampler?.value
             resourceSamples.capture(since: started)
             let resources = resourceSamples.snapshot()
             let peak = resources.samples.map(\.bytes).max() ?? baseline
@@ -1048,6 +1098,11 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "candidatePreflightArtifactValidationSecondsExcluded": candidatePreflightValidationSeconds,
                 "totalWallIncludesDiagnosticHolds": true,
                 "preparationSeconds": preparationSeconds, "captureWallSeconds": stopStart - captureStart,
+                "preparationClock": "Service composition to configuration admission; native model preparation can continue during capture.",
+                "privacyReadyAfterConfiguration": privacyReady,
+                "startCommandSeconds": startCommandSeconds,
+                "startCommandScope": "Coordinator admission to synthetic capture start return; not physical microphone activation or touch latency.",
+                "mainActorResponsiveness": mainActorSamples.json(interval: mainActorInterval),
                 "postStopToAudioRatio": stopSeconds / duration,
                 "processCPUMilliseconds": cpuMilliseconds as Any? ?? NSNull(),
                 "firstProtectedTextSeconds": firstProtectedTextSeconds as Any? ?? NSNull(),
@@ -1145,6 +1200,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             try? await privacy.unload()
             sampler.cancel()
             await sampler.value
+            mainActorSampler?.cancel()
+            await mainActorSampler?.value
             let failed = try JSONSerialization.data(withJSONObject: ["phase": phase, "runIndex": repetition,
                 "footprintSamples": resourceSamples.snapshot().samples.map(\.json)], options: [.sortedKeys])
             let attachment = XCTAttachment(data: failed, uniformTypeIdentifier: "public.json")
