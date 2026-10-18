@@ -44,6 +44,7 @@ struct MeetingSessionStoreCheckpointTests {
         }
 
         try Self.checkPlainParticipantLabels(template: session, check: check)
+        try Self.checkManualCorrectionOfProjectedOwner(template: session, check: check)
 
         let nativePresentation = MeetingTranscriptExporter.speakerPresentation(
             for: session.transcriptSegments[0], in: session)
@@ -460,6 +461,71 @@ struct MeetingSessionStoreCheckpointTests {
             check(MeetingTranscriptExporter.text(for: source) == "[00:00] \(secondAlias): \(corrected.text)",
                   "Text export reflects the corrected participant name")
         }
+    }
+
+    private static func checkManualCorrectionOfProjectedOwner(
+        template: MeetingSession, check: (Bool, String) -> Void
+    ) throws {
+        var source = template
+        source.state = .completed
+        source.endedAt = source.startedAt.addingTimeInterval(3)
+        source.transcriptCoverageGaps = nil
+        source.transcriptIsComplete = true
+        let speakerA = source.speakers[0]
+        var speakerB = speakerA
+        speakerB.id = UUID()
+        speakerB.displayName = "Intervening participant"
+        source.speakers = [speakerA, speakerB]
+        source.transcriptSegments = (0..<5).map { index in
+            var word = template.transcriptSegments[0]
+            word.id = UUID()
+            word.start = .init(value: Int64(index * 4), timescale: 10)
+            word.end = .init(value: Int64(index * 4 + 3), timescale: 10)
+            word.text = "Synthetic \(index)"
+            word.originalText = nil
+            word.revision = 0
+            word.speakerID = index == 2 ? speakerB.id : speakerA.id
+            if index == 1 || index == 3 {
+                word.speakerID = nil
+                word.overlap = .ambiguous
+                word.attributionState = .overlappingSpeakers
+            }
+            return word
+        }
+        let original = source
+        let targetID = source.transcriptSegments[2].id
+        let readingID = MeetingTranscriptExporter.speakerPresentations(in: source)[targetID]?.participantID
+        check(readingID == speakerA.id && source.transcriptSegments[2].speakerID == speakerB.id,
+              "The raw intervening participant is displayed inside the continuing main turn")
+
+        try source.reassignSegment(id: targetID, to: speakerB.id, replacingReadingSpeakerID: readingID)
+        let corrected = source.transcriptSegments[2]
+        check(corrected.speakerID == speakerB.id && corrected.revision == 1,
+              "Selecting the raw participant from another reading owner records a manual correction")
+        check(corrected.speakerAttribution == nil && corrected.speakerAttributionInference == nil,
+              "A legacy correction remains authoritative without fabricating modern provenance")
+        check(MeetingTranscriptExporter.speakerPresentations(in: source)[targetID]?.participantID == speakerB.id,
+              "The manual boundary prevents the reading projection from absorbing the corrected participant")
+        for index in source.transcriptSegments.indices {
+            let before = original.transcriptSegments[index], after = source.transcriptSegments[index]
+            check(before.id == after.id && before.text == after.text && before.start == after.start
+                  && before.end == after.end && before.nativeSpeakerAssignment == after.nativeSpeakerAssignment,
+                  "Manual speaker correction preserves source text, member identity, native evidence and timing")
+            if index != 2 {
+                check(before == after, "A manual correction changes only its selected member")
+            }
+        }
+        let once = source
+        try source.reassignSegment(id: targetID, to: speakerB.id, replacingReadingSpeakerID: speakerB.id)
+        check(source == once, "Repeating the same displayed participant selection is a no-op")
+        var clean = original
+        let cleanID = clean.transcriptSegments[0].id
+        try clean.reassignSegment(id: cleanID, to: speakerA.id, replacingReadingSpeakerID: speakerA.id)
+        check(clean == original, "A clean same-participant selection creates no pointless manual revision")
+        let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(source))
+        check(restored == source
+              && MeetingTranscriptExporter.speakerPresentations(in: restored)[targetID]?.participantID == speakerB.id,
+              "The explicit correction and its reading boundary survive the production archive codec")
     }
 
     private static func indexIDs(at url: URL) throws -> [String] {

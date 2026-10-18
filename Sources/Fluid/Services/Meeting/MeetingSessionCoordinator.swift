@@ -1215,7 +1215,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             let previousOverlap = segment.overlap
             let previousAttributionState = segment.attributionState
             let previousRevision = segment.revision
-            try session.reassignSegment(id: segmentID, to: speakerID)
+            let readingSpeakerID = MeetingTranscriptExporter.speakerPresentations(in: session)[segmentID]?.participantID
+            try session.reassignSegment(id: segmentID, to: speakerID,
+                                        replacingReadingSpeakerID: readingSpeakerID)
             return .reassign(
                 segmentID: segmentID,
                 previousSpeakerID: previousSpeakerID,

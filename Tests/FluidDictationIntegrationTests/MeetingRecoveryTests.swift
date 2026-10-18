@@ -3782,6 +3782,66 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertNil(coordinator.latestCompletedSession)
     }
 
+    func testCorrectingProjectedOwnerToRawSpeakerPersistsAndUndoRestoresReading() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var (session, speakerA, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        session.transcriptCoverageGaps = nil
+        session.transcriptTimeDomain = .meetingRelative
+        session.transcriptIsComplete = true
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = (0..<5).map { index in
+            var word = template
+            word.id = UUID()
+            word.start = .init(value: Int64(index * 4), timescale: 10)
+            word.end = .init(value: Int64(index * 4 + 3), timescale: 10)
+            word.text = "Synthetic \(index)"
+            word.originalText = nil
+            word.revision = 0
+            word.status = .final
+            word.completeness = .complete
+            word.speakerID = index == 2 ? speakerB : speakerA
+            word.overlap = .none
+            word.attributionState = .assigned
+            if index == 1 || index == 3 {
+                word.speakerID = nil
+                word.overlap = .ambiguous
+                word.attributionState = .overlappingSpeakers
+            }
+            return word
+        }
+        let targetID = session.transcriptSegments[2].id
+        XCTAssertEqual(MeetingTranscriptExporter.speakerPresentations(in: session)[targetID]?.participantID, speakerA)
+        XCTAssertEqual(session.transcriptSegments[2].speakerID, speakerB)
+        XCTAssertNil(session.transcriptSegments[2].speakerAttribution)
+        try await store.create(session)
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        let corrected = try await coordinator.reassignSegment(sessionID: session.id, segmentID: targetID, to: speakerB)
+        XCTAssertEqual(corrected.transcriptSegments[2].speakerID, speakerB)
+        XCTAssertEqual(corrected.transcriptSegments[2].revision, 1)
+        XCTAssertEqual(MeetingTranscriptExporter.speakerPresentations(in: corrected)[targetID]?.participantID, speakerB)
+        for index in session.transcriptSegments.indices {
+            var expected = session.transcriptSegments[index]
+            if index == 2 { expected.revision = 1 }
+            XCTAssertEqual(corrected.transcriptSegments[index], expected)
+        }
+        let persisted = try await store.load(id: session.id)
+        XCTAssertEqual(persisted, corrected)
+
+        let repeated = try await coordinator.reassignSegment(sessionID: session.id, segmentID: targetID, to: speakerB)
+        XCTAssertEqual(repeated, corrected)
+        let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
+        XCTAssertEqual(MeetingTranscriptExporter.speakerPresentations(in: undone)[targetID]?.participantID, speakerA)
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id), "A no-op selection must not add another undo entry")
+        let persistedUndo = try await store.load(id: session.id)
+        XCTAssertEqual(persistedUndo?.transcriptSegments, session.transcriptSegments)
+    }
+
     func testUndoRestoresExactPriorStateForEachCorrectionType() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

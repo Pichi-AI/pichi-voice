@@ -1097,7 +1097,13 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = Date()
     }
 
-    mutating func reassignSegment(id: MeetingTranscriptSegmentID, to speakerID: SessionSpeakerID) throws {
+    /// The reading projection can group a raw speaker into another participant's continuing
+    /// turn. Selecting the raw speaker again is then an explicit correction, not a no-op.
+    mutating func reassignSegment(
+        id: MeetingTranscriptSegmentID,
+        to speakerID: SessionSpeakerID,
+        replacingReadingSpeakerID: SessionSpeakerID? = nil
+    ) throws {
         guard let segmentIndex = self.transcriptSegments.firstIndex(where: { $0.id == id }) else {
             throw MeetingDomainError.segmentNotFound
         }
@@ -1108,7 +1114,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         }
         guard self.transcriptSegments[segmentIndex].speakerID != speakerID
             || self.transcriptSegments[segmentIndex].speakerAttribution != nil
-            || self.transcriptSegments[segmentIndex].speakerAttributionInference != nil else { return }
+            || self.transcriptSegments[segmentIndex].speakerAttributionInference != nil
+            || replacingReadingSpeakerID.map({ $0 != speakerID }) == true else { return }
         self.transcriptSegments[segmentIndex].speakerID = speakerID
         self.transcriptSegments[segmentIndex].speakerAttribution = nil
         self.transcriptSegments[segmentIndex].speakerAttributionInference = nil

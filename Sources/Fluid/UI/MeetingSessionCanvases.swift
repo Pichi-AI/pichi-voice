@@ -503,7 +503,7 @@ struct MeetingResultCanvas: View {
                                         }
                                     },
                                     isLocalUser: row.speaker?.isLocalUser == true,
-                                    reassignTargets: activeSpeakers.filter { $0.id != row.segment.speakerID },
+                                    reassignTargets: activeSpeakers.filter { $0.id != row.presentation.participantID },
                                     isQuiescent: self.isQuiescent,
                                     onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) },
                                     canPlayAudio: self.session.retention.audioDeletedAt == nil && self.session.hasFinalizedAudio && self.isQuiescent,
