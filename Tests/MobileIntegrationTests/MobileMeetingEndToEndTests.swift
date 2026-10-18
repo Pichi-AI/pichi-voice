@@ -1094,7 +1094,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(completed.state, .completed)
             let diarizationModels = completed.processingAttempts.compactMap(\.diarizationModel)
             let expectedProfile: MeetingNemotronModelProfile = streaming ? .experimentalFast128FP16CPU : .fast32SplitW8A8
-            let expectedDiarization = expectedProfile.implementationFingerprint
+            let expectedDiarization = streaming ? expectedProfile.streamingImplementationFingerprint
+                : expectedProfile.implementationFingerprint
             XCTAssertFalse(diarizationModels.isEmpty, "The completed attempt must record its actual frozen diarizer lineage")
             if streaming {
                 XCTAssertTrue(diarizationModels.allSatisfy { $0 == expectedDiarization },
