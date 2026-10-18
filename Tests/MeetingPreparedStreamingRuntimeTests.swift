@@ -124,7 +124,38 @@ private actor SyntheticDiarizer: MeetingIncrementalNemotronDiarizerSession {
                 if refuseProgress { throw FixtureFailure.observer }
             })
     }
+    /// Runs the production prepared adapter and progressive ASR loop, with inert inference.
+    /// Native recognition quality and the diarizer's 200 ms activity floor are separate tests.
+    private static func shortAndEmptyFinalizationMatrix() async throws {
+        let emptyRecorder = Recorder(), empty = make(emptyRecorder)
+        let emptyFinal = try await empty.finishStreaming()
+        try require(emptyFinal.isFinal && emptyFinal.acceptedThroughSample == 0
+            && emptyFinal.processedThroughSample == 0 && emptyFinal.activity.isEmpty
+            && emptyFinal.batch.segments.isEmpty, "No-input Stop finishes without inventing activity or words")
+        try empty.requireFinished()
+        await empty.cleanup()
+        for frames in [1, 47, 48, 159, 160, 255, 400, 16_000, 48_000, 80_000, 320_000] {
+            for silence in [false, true] {
+                let recorder = Recorder(), runtime = make(recorder, silence: silence)
+                let input = Array(repeating: Float(0), count: frames)
+                let result = try await runtime.recognize(window: .fixture(samples: input, final: true), offset: 0, preview: nil)
+                try require(result.acceptedThroughSample == frames && result.processedThroughSample == frames
+                    && result.asrStableThroughSample == frames, "Short Stop dropped physical source samples: \(frames)")
+                try require(result.batch.segments.isEmpty == silence, "Silence cannot manufacture timed words")
+                let final = try await runtime.finishStreaming()
+                try require(final.isFinal && final.acceptedThroughSample == frames
+                    && final.asrStableThroughSample == frames, "Finish must preserve exact source length: \(frames)")
+                try require(recorder.snapshot.filter { $0 == "finish:\(frames)" }.count == 1,
+                            "Each short capture flushes its speaker tail exactly once")
+                try runtime.requireFinished()
+                await runtime.cleanup()
+            }
+        }
+        print("PASS empty Stop and 22 short/full-window silence/speech adapter cases")
+    }
+
     static func main() async throws {
+        try await shortAndEmptyFinalizationMatrix()
         let r = Recorder(); let s = make(r)
         let w = MeetingPCMProgressiveWindow.fixture()
         let task = Task { try await s.recognize(window: w, offset: 0, preview: nil) }
@@ -219,6 +250,6 @@ private actor SyntheticDiarizer: MeetingIncrementalNemotronDiarizerSession {
             } catch MeetingModelResidencyError.staleGrant {}
         }
         print("PASS pinned streaming profile admission refuses mismatched artifacts, policies and modes")
-        print("8 prepared streaming runtime contract groups passed")
+        print("9 prepared streaming runtime contract groups passed")
     }
 }

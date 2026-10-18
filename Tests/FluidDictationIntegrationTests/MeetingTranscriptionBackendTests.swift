@@ -1447,13 +1447,20 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertTrue(store === MeetingDiarizationModelStore.shared(for: .experimentalFast128FP16CPU))
     }
 
-    func testSpeakerProcessingPreferenceDefaultsOffAndDoesNotChangePrivacy() throws {
+    func testSpeakerProcessingPreferenceUsesRegisteredTopologyAndDoesNotChangePrivacy() throws {
         let suite = "SpeakerModeSettings.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = SettingsStore(defaults: defaults)
         let originalSaveAudio = settings.meetingSaveAudio
         let originalPrivacy = settings.meetingPIIRedactionEnabled
+        settings.selectedSpeechModel = .whisperTiny
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
+        settings.selectedSpeechModel = .gigaam
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording)
+        XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode))
+        settings.meetingSpeakerProcessingMode = .afterRecording
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
         settings.meetingSpeakerProcessingMode = .streaming
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)

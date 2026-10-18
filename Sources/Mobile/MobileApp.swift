@@ -58,7 +58,7 @@ final class AppServices: ObservableObject {
                 let savedBackendID = settings.meetingTranscriptionBackendID
                 let storageMode: MeetingAudioStorageMode = settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
                 let speakerLabelsEnabled = settings.meetingSpeakerLabelsEnabled
-                let speakerProcessingMode = settings.meetingSpeakerProcessingMode
+                let speakerProcessingMode = settings.meetingSpeakerProcessingMode(for: mode)
                 let piiRedactionEnabled = settings.meetingPIIRedactionEnabled
                 let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
                 let language = preferences.languageCode.flatMap { supported.contains($0) ? $0 : nil }

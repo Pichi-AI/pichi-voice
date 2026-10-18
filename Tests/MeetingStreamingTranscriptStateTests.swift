@@ -15,6 +15,20 @@ private struct SyntheticMaskingRedactor: TranscriptTextRedacting {
     }
 }
 
+private struct SyntheticCueMaskingRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let source = text as NSString
+        let expression = try NSRegularExpression(pattern: "пароль\\s+(\\S+)")
+        let spans = expression.matches(in: text, range: NSRange(location: 0, length: source.length))
+            .map { TranscriptRedactedSpan(range: $0.range(at: 1), replacement: "<PASSWORD>") }
+        var safe = text
+        for span in spans.reversed() {
+            safe = (safe as NSString).replacingCharacters(in: span.range, with: span.replacement)
+        }
+        return .init(text: safe, spans: spans, provisionalSafeUTF16: source.length)
+    }
+}
+
 private actor BlockedRedactor: TranscriptTextRedacting {
     let started: AsyncStream<Void>.Continuation
     var waiter: CheckedContinuation<Void, Never>?
@@ -87,17 +101,140 @@ struct MeetingStreamingTranscriptStateTests {
         catch { check(false, "Expected \(error), got \(error)") }
     }
     static func main() async throws {
+        try await shortRecordingAndSilenceMatrix()
+        try await longSilenceSpeakerMatrix()
+        try await sparseEightHourStream()
         try await noInventedASRProgress()
         try await diarizationLagAndWordClusters()
         try await privacyDrainAndLongSilence()
         try await fractionalPrivacyBoundary()
         try await privacyAcrossWindows()
         try await privacyAcrossLongPause()
+        try await privacyCueAcrossWindowAndLongPause()
         try await identityRefinementWithoutTextRollback()
         try await longBoundedStream()
         try await guardsAndLimits()
         try await cancellationAndReentry()
         print("Streaming transcript state: \(checks) checks passed")
+    }
+
+    /// Short captures can end before any acoustic activity is admitted. They still
+    /// preserve real words/coverage and never manufacture an identity to fill the gap.
+    static func shortRecordingAndSilenceMatrix() async throws {
+        for seconds in [0.0, 0.001, 0.199, 0.2, 0.999, 1, 2.999, 3, 5] {
+            for privacyEnabled in [false, true] {
+                let value = try state(privacy: privacyEnabled ? .init(redactor: SyntheticMaskingRedactor()) : nil)
+                let words = seconds == 0 ? [] : [word(0, start: 0, end: seconds, text: "private@example.test")]
+                let initial = try await value.observe(observation(words, accepted: seconds, asr: seconds, activity: []))
+                let final = try await value.finish(observation(accepted: seconds, asr: seconds, final: true, activity: [],
+                    retained: initial.retainActivityFromSample))
+                let combined = initial.safeBatch.segments + final.safeBatch.segments
+                check(combined.map(\.id) == words.map(\.id))
+                check(combined.map(\.nativeTiming) == words.map(\.nativeTiming))
+                check(combined.allSatisfy { $0.speakerID == nil }, "Short input invented an acoustic identity")
+                check(combined.allSatisfy { $0.text == (privacyEnabled ? "<EMAIL>" : "private@example.test") })
+                check(final.diagnostics.isFinal && final.diagnostics.pendingProtectedWords == 0)
+                check(final.diagnostics.retainedAttributionWords == 0)
+                check(final.retainActivityFromSample == Int((seconds * 16_000).rounded()))
+            }
+        }
+    }
+
+    static func longSilenceSpeakerMatrix() async throws {
+        // Leading, inter-speaker and trailing silence all advance physical time, but
+        // cannot become speech or bridge a real change through an expired neighbor rule.
+        for pause in [0.0, 0.8, 5, 60, 600, 3_600] {
+            for privacyEnabled in [false, true] {
+                let value = try state(privacy: privacyEnabled ? .init(redactor: SyntheticMaskingRedactor()) : nil)
+                let leading = pause
+                var retained = 0
+                var published: [MeetingTranscriptSegment] = []
+                var revisions: [MeetingPCMTranscriptBatch.SpeakerRevision] = []
+                var support: [MeetingBackendSpeakerActivity] = []
+                func save(_ result: State.Emission) {
+                    published += result.safeBatch.segments
+                    revisions += result.safeBatch.speakerRevisions
+                    retained = result.retainActivityFromSample
+                }
+                save(try await value.observe(observation(accepted: leading, asr: leading, activity: [])))
+                let a = (0..<20).map { index in
+                    word(index, start: leading + Double(index) * 0.5,
+                        end: leading + Double(index) * 0.5 + 0.4,
+                        text: index == 2 ? "private@example.test" : nil)
+                }
+                support.append(.init(token: .init(analysisEpochID: epoch, label: "a"), start: leading, end: leading + 10))
+                save(try await value.observe(observation(a, accepted: leading + 10, asr: leading + 10,
+                    activity: support, retained: retained)))
+                let bStart = leading + 10 + pause
+                save(try await value.observe(observation(accepted: bStart, asr: bStart, activity: support, retained: retained)))
+                let b = (20..<40).map { index in
+                    word(index, start: bStart + Double(index - 20) * 0.5,
+                        end: bStart + Double(index - 20) * 0.5 + 0.4)
+                }
+                support.append(.init(token: .init(analysisEpochID: epoch, label: "b"), start: bStart, end: bStart + 10))
+                save(try await value.observe(observation(b, accepted: bStart + 10, asr: bStart + 10,
+                    activity: support, retained: retained)))
+                let end = bStart + 10 + pause
+                save(try await value.observe(observation(accepted: end, asr: end, activity: support, retained: retained)))
+                let final = try await value.finish(observation(accepted: end, asr: end, final: true,
+                    activity: support, retained: retained))
+                save(final)
+                var byID = Dictionary(uniqueKeysWithValues: published.map { ($0.id, $0) })
+                for revision in revisions {
+                    var row = byID[revision.segmentID]!
+                    _ = try revision.apply(to: &row)
+                    byID[row.id] = row
+                }
+                let all = (a + b).map { byID[$0.id]! }
+                check(published.count == 40 && byID.count == 40)
+                check(all.map(\.nativeTiming) == (a + b).map(\.nativeTiming))
+                check(all[2].text == (privacyEnabled ? "<EMAIL>" : "private@example.test"))
+                check(all.prefix(20).allSatisfy { $0.speakerID == all[0].speakerID && $0.speakerID != nil })
+                check(all.suffix(20).allSatisfy { $0.speakerID == all[20].speakerID && $0.speakerID != nil })
+                check(all[0].speakerID != all[20].speakerID, "Silence merged two supported distinct speakers")
+                check(final.diagnostics.retainedAttributionWords == 0 && final.diagnostics.pendingProtectedWords == 0)
+                check(final.retainActivityFromSample == Int((end * 16_000).rounded()))
+            }
+        }
+    }
+
+    static func sparseEightHourStream() async throws {
+        // Advances actual production state using metadata, not eight hours of allocated PCM.
+        // Sixty sparse 10 s turns span eight hours; acoustic acknowledgements evict old intervals.
+        let value = try state()
+        var retained = 0, count = 0, maximumTail = 0
+        var owners: [String: UUID] = [:]
+        for turn in 0..<60 {
+            let start = Double(turn) * 480
+            let label = turn % 2 == 0 ? "a" : "b"
+            let leading = try await value.observe(observation(accepted: start, asr: start, activity: [], retained: retained))
+            retained = leading.retainActivityFromSample
+            let words = (0..<20).map { index in
+                word(turn * 20 + index, start: start + Double(index) * 0.5, end: start + Double(index) * 0.5 + 0.4)
+            }
+            let result = try await value.observe(observation(words, accepted: start + 10, asr: start + 10,
+                activity: [.init(token: .init(analysisEpochID: epoch, label: label), start: start, end: start + 10)],
+                retained: retained))
+            count += result.safeBatch.segments.count
+            maximumTail = max(maximumTail, result.diagnostics.retainedAttributionWords)
+            retained = result.retainActivityFromSample
+            check(result.safeBatch.segments.count == 20)
+            let owner = result.safeBatch.segments[0].speakerID
+            check(owner != nil)
+            if let established = owners[label] { check(owner == established, "Speaker slot identity changed across long silence") }
+            else { owners[label] = owner }
+            check(result.diagnostics.pendingProtectedWords == 0 && maximumTail <= 20)
+            // Advance beyond the policy lookahead before releasing this activity snapshot.
+            let drained = try await value.observe(observation(accepted: start + 30, asr: start + 30,
+                activity: [.init(token: .init(analysisEpochID: epoch, label: label), start: start, end: start + 10)],
+                retained: retained))
+            retained = drained.retainActivityFromSample
+            check(drained.diagnostics.retainedAttributionWords == 0)
+        }
+        let final = try await value.finish(observation(accepted: 28_800, asr: 28_800, final: true, activity: [], retained: retained))
+        check(count == 1_200 && owners.count == 2 && Set(owners.values).count == 2)
+        check(final.retainActivityFromSample == 460_800_000)
+        check(final.diagnostics.retainedAttributionWords == 0)
     }
 
     static func noInventedASRProgress() async throws {
@@ -220,6 +357,31 @@ struct MeetingStreamingTranscriptStateTests {
         check(b.safeBatch.segments.count == 40 && b.diagnostics.pendingProtectedWords == 0)
         check(final.retainActivityFromSample == 640 * 16_000)
         check(a.diagnostics.privacyMilliseconds > 0 && a.diagnostics.attributionMilliseconds > 0)
+    }
+
+    static func privacyCueAcrossWindowAndLongPause() async throws {
+        for pause in [0.0, 600, 3_600] {
+            let value = try state(privacy: .init(redactor: SyntheticCueMaskingRedactor()))
+            let first = (0..<40).map { word($0, text: $0 == 39 ? "пароль" : nil) }
+            let secondStart = 20 + pause
+            let second = (40..<80).map { index in
+                word(index, start: secondStart + Double(index - 40) * 0.5,
+                    end: secondStart + Double(index - 40) * 0.5 + 0.4,
+                    text: index == 40 ? "qwerty-synthetic" : nil)
+            }
+            let a = try await value.observe(observation(first, accepted: 20, asr: 20))
+            let silence = try await value.observe(observation(accepted: secondStart, asr: secondStart))
+            check(silence.safeBatch.segments.isEmpty)
+            let b = try await value.observe(observation(second, accepted: secondStart + 20, asr: secondStart + 20))
+            let final = try await value.finish(observation(accepted: secondStart + 20, asr: secondStart + 20, final: true))
+            let all = a.safeBatch.segments + b.safeBatch.segments + final.safeBatch.segments
+            check(all.map(\.id) == (first + second).map(\.id))
+            check(all.map(\.nativeTiming) == (first + second).map(\.nativeTiming))
+            check(all[39].text == "пароль" && all[40].text == "<PASSWORD>",
+                  "A silence or ASR window boundary removed the sensitive-field cue")
+            check(all.allSatisfy { !$0.text.contains("qwerty-synthetic") })
+            check(final.diagnostics.pendingProtectedWords == 0 && final.diagnostics.retainedAttributionWords == 0)
+        }
     }
 
     static func fractionalPrivacyBoundary() async throws {

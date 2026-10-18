@@ -7,6 +7,35 @@ import XCTest
 /// microphone lookup is controlled; the settings, coordinator, pipeline and store are real.
 @MainActor
 final class MobileConfigurationSnapshotTests: XCTestCase {
+    func testNewInRoomRequestsPreferRegisteredStreamingWithoutChangingLegacyChoices() throws {
+        let suite = "StreamingCapabilityDefaults.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .gigaam
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording)
+        XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode),
+                     "Reading a capability default must not write or migrate a preference")
+        settings.selectedSpeechModel = .whisperTiny
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        settings.selectedSpeechModel = .gigaam
+        settings.meetingSpeakerProcessingMode = .afterRecording
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        settings.meetingSpeakerProcessingMode = .streaming
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .streaming,
+                       "An explicit unsupported request is rejected by admission, not silently rewritten")
+        settings.selectedSpeechModel = .whisperTiny
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
+        defaults.set("future-mode", forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
+        settings.selectedSpeechModel = .gigaam
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        defaults.set(7, forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        XCTAssertEqual(MeetingFinalProcessingConfiguration().effectiveSpeakerProcessingMode, .afterRecording)
+    }
+
     func testPreferencesAreFrozenBeforeAwaitedMicrophoneLookup() async throws {
         let suiteName = "MobileConfigurationSnapshotTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

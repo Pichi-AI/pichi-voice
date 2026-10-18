@@ -364,7 +364,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             ?? PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru"
         let storageMode: MeetingAudioStorageMode = self.settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
         let speakerLabelsEnabled = self.settings.meetingSpeakerLabelsEnabled
-        let speakerProcessingMode = self.settings.meetingSpeakerProcessingMode
+        let speakerProcessingMode = self.settings.meetingSpeakerProcessingMode(for: mode)
         let piiRedactionEnabled = self.settings.meetingPIIRedactionEnabled
         let microphone = try await MeetingCaptureSourceCatalog.defaultMicrophone(
             preferredCoreAudioUID: self.preferredMicrophoneUID()
