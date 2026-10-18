@@ -355,30 +355,103 @@ private nonisolated struct StreamingEvaluationOptions {
     }
 }
 
-/// Scalar-only scheduler diagnostics. This measures executor availability, not rendered frames.
+/// Scalar-only executor diagnostics. Queue entry is timestamped inside MainActor;
+/// utility resumption and sampler cadence are separate measurements, never FPS.
 private nonisolated final class CombinedMainActorSamples: @unchecked Sendable {
+    enum Phase: String, CaseIterable, Sendable {
+        case preparation, modelPreparation, configurationPreparation, configurationReady
+        case captureAdmission, capture, postStop, completedPrivacyReady, completedValidation, historyReload, diagnosticExport, privacyRelease
+        case aliasMaintenance, aliasSave, aliasRestore, betweenAttemptsRelease, retainedRecovery, cleanup, other
+    }
+    private struct Sample {
+        let phase: Phase
+        let crossedPhase: Bool
+        let entry: Double
+        let marker: Double
+        let resume: Double
+        let roundTrip: Double
+        let submissionInterval: Double?
+        let completionInterval: Double?
+        let utilityWakeGap: Double?
+    }
     private let lock = NSLock()
-    private var waits: [Double] = []
+    private let limit: Int
+    private var phase = Phase.preparation
+    private var samples: [Sample] = []
     private var omitted = 0
-    private var maximumInterval = 0.0
-    private let limit = 12_000
-    func record(wait: Double, interval: Double) {
+    private var invalid = 0
+
+    init(limit: Int = 12_000) {
+        precondition((0...12_000).contains(limit))
+        self.limit = limit
+    }
+    func setPhase(_ value: String) { lock.withLock { phase = Phase(rawValue: value) ?? .other } }
+    func currentPhase() -> Phase { lock.withLock { phase } }
+
+    /// Absolute uptime values are consumed here and never retained or serialized.
+    func record(phase submittedPhase: Phase, entryPhase: Phase, queued: Double, entered: Double, departed: Double, resumed: Double,
+                previousQueued: Double?, previousResumed: Double?) {
         lock.withLock {
-            maximumInterval = max(maximumInterval, interval)
-            if waits.count < limit { waits.append(wait) } else { omitted += 1 }
+            guard queued.isFinite, entered.isFinite, departed.isFinite, resumed.isFinite,
+                  queued >= 0, entered >= queued, departed >= entered, resumed >= departed,
+                  previousQueued.map({ $0.isFinite && $0 >= 0 && $0 <= queued }) ?? true,
+                  previousResumed.map({ $0.isFinite && $0 >= 0 && $0 <= queued }) ?? true else {
+                invalid += 1; return
+            }
+            guard samples.count < limit else { omitted += 1; return }
+            samples.append(.init(phase: submittedPhase, crossedPhase: submittedPhase != entryPhase,
+                entry: entered - queued, marker: departed - entered, resume: resumed - departed, roundTrip: resumed - queued,
+                submissionInterval: previousQueued.map { queued - $0 },
+                completionInterval: previousResumed.map { resumed - $0 },
+                utilityWakeGap: previousResumed.map { queued - $0 }))
         }
     }
+
     func json(interval: Double) -> [String: Any] {
         lock.withLock {
-            let sorted = waits.sorted()
-            func percentile(_ p: Double) -> Double {
-                sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * p))]
+            func metric(_ values: [Double]) -> [String: Any] {
+                let sorted = values.sorted()
+                func percentile(_ p: Double) -> Double {
+                    sorted.isEmpty ? 0 : sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * p))]
+                }
+                return ["samples": sorted.count, "p50Seconds": percentile(0.5), "p95Seconds": percentile(0.95),
+                        "p99Seconds": percentile(0.99), "maximumSeconds": sorted.last ?? 0]
             }
-            return ["samples": sorted.count, "omittedSamples": omitted, "requestedIntervalSeconds": interval,
-                    "p50WaitSeconds": percentile(0.5), "p95WaitSeconds": percentile(0.95),
-                    "p99WaitSeconds": percentile(0.99), "maximumWaitSeconds": sorted.last ?? 0,
-                    "maximumObservedIntervalSeconds": maximumInterval,
-                    "scope": "Utility task hops to MainActor during service/model inference. Does not measure touch latency or rendered frames."]
+            func metrics(_ values: [Sample]) -> [String: Any] {
+                ["samples": values.count, "phaseChangesWhileQueued": values.filter(\.crossedPhase).count,
+                 "mainActorQueueEntry": metric(values.map(\.entry)),
+                 "mainActorMarkerExecution": metric(values.map(\.marker)),
+                 "utilityContinuationResume": metric(values.map(\.resume)),
+                 "roundTrip": metric(values.map(\.roundTrip)),
+                 "utilitySubmissionInterval": metric(values.compactMap(\.submissionInterval)),
+                 "utilityCompletionInterval": metric(values.compactMap(\.completionInterval)),
+                 "utilityWakeGap": metric(values.compactMap(\.utilityWakeGap))]
+            }
+            let roundTrip = metric(samples.map(\.roundTrip))
+            var result = metrics(samples)
+            result["schema"] = 2
+            result["omittedSamples"] = omitted
+            result["invalidSamples"] = invalid
+            result["capacity"] = limit
+            result["requestedIntervalSeconds"] = interval
+            result["phases"] = Dictionary(uniqueKeysWithValues: Phase.allCases.compactMap { phase in
+                let rows = samples.filter { $0.phase == phase }
+                return rows.isEmpty ? nil : (phase.rawValue, metrics(rows))
+            })
+            // Preserve old readers without rebranding their confounded round trip as
+            // executor queue delay. New reports must use mainActorQueueEntry above.
+            result["p50WaitSeconds"] = roundTrip["p50Seconds"]
+            result["p95WaitSeconds"] = roundTrip["p95Seconds"]
+            result["p99WaitSeconds"] = roundTrip["p99Seconds"]
+            result["maximumWaitSeconds"] = roundTrip["maximumSeconds"]
+            result["maximumObservedIntervalSeconds"] = samples.compactMap(\.completionInterval).max() ?? 0
+            result["legacyWaitFieldsScope"] = "Queued until utility continuation resumes; round trip, not MainActor queue delay."
+            result["phaseScope"] = "Attributed to submission phase; phaseChangesWhileQueued counts transitions before MainActor entry."
+            result["preparationPhaseScope"] = "modelPreparation is the test's explicit asr.downloadModel, before the product defaultConfiguration call measured as configurationPreparation."
+            result["clockScope"] = "Queue entry: utility submission to first timestamp inside MainActor. Marker execution: that entry to last in-actor timestamp. Utility resume: marker departure to utility continuation. Cadence and wake gaps describe this utility sampler only."
+            result["coverageScope"] = "A delayed utility task cannot probe MainActor before it submits. Utility wake gaps expose those unsampled periods; small entry latency does not establish responsiveness during a gap."
+            result["scope"] = "Sampled utility-to-MainActor queue entry, utility continuation resumption and utility sampling gaps. Does not measure touch latency, rendered frames or FPS."
+            return result
         }
     }
 }
@@ -946,14 +1019,23 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let mainActorSampler: Task<Void, Never>?
         if detailedProfiling {
             mainActorSampler = Task.detached(priority: .utility) {
-                var previous = ProcessInfo.processInfo.systemUptime
+                var previousQueued: Double?, previousResumed: Double?
                 while !Task.isCancelled {
+                    let submittedPhase = mainActorSamples.currentPhase()
                     let queued = ProcessInfo.processInfo.systemUptime
-                    let isMainThread = await MainActor.run { Thread.isMainThread }
-                    guard isMainThread else { return }
-                    let returned = ProcessInfo.processInfo.systemUptime
-                    mainActorSamples.record(wait: returned - queued, interval: returned - previous)
-                    previous = returned
+                    let arrival = await MainActor.run {
+                        let entered = ProcessInfo.processInfo.systemUptime
+                        let phase = mainActorSamples.currentPhase()
+                        let isMainThread = Thread.isMainThread
+                        let departed = ProcessInfo.processInfo.systemUptime
+                        return (entered, departed, phase, isMainThread)
+                    }
+                    let resumed = ProcessInfo.processInfo.systemUptime
+                    guard arrival.3, !Task.isCancelled else { return }
+                    mainActorSamples.record(phase: submittedPhase, entryPhase: arrival.2,
+                        queued: queued, entered: arrival.0, departed: arrival.1, resumed: resumed,
+                        previousQueued: previousQueued, previousResumed: previousResumed)
+                    previousQueued = queued; previousResumed = resumed
                     do { try await Task.sleep(nanoseconds: UInt64(mainActorInterval * 1_000_000_000)) }
                     catch { break }
                 }
@@ -961,7 +1043,16 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         } else { mainActorSampler = nil }
         defer { mainActorSampler?.cancel() }
         let containerRoot = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        let existingAudioPaths = streaming ? try CombinedStreamingAudioInventory.paths(in: containerRoot) : []
+        let existingAudioPaths: Set<String>
+        do {
+            existingAudioPaths = streaming ? try CombinedStreamingAudioInventory.paths(in: containerRoot) : []
+        } catch {
+            // This fallible inventory precedes the main test body. Even this early
+            // failure must join both diagnostic owners before leaving the attempt.
+            sampler.cancel(); mainActorSampler?.cancel()
+            await sampler.value; await mainActorSampler?.value
+            throw error
+        }
         var observedNewAudioPaths: Set<String> = []
         var checkpointBeforeStop: [MeetingTranscriptSegment] = []
         var firstKnownSpeakerSeconds: Double?
@@ -980,7 +1071,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         defer { evidenceSampler?.cancel() }
         do {
             // The same service operation used by Settings, with pinned artifacts.
+            mainActorSamples.setPhase("modelPreparation")
             try await services.asr.downloadModel(asrModel)
+            mainActorSamples.setPhase("configurationPreparation")
             let configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Combined Russian probe")
             if streaming {
                 XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming,
@@ -993,7 +1086,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(PichiTranscriptPrivacyModelStore.descriptor.id, "ru-pii-ner-a1-int8", "Combined evidence requires the pinned A1 descriptor; preparation can be deferred until PCM arrives")
             phase = "configurationReady"
             resourceSamples.setPhase(phase)
+            mainActorSamples.setPhase(phase)
             try await Task.sleep(nanoseconds: 300_000_000)
+            mainActorSamples.setPhase("captureAdmission")
             let startRequested = ProcessInfo.processInfo.systemUptime
             let recording = try await coordinator.startRecording(configuration: configuration)
             let startCommandSeconds = ProcessInfo.processInfo.systemUptime - startRequested
@@ -1002,6 +1097,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             if streaming { XCTAssertEqual(recording.effectiveSpeakerProcessingMode, .streaming) }
             phase = "capture"
             resourceSamples.setPhase(phase)
+            mainActorSamples.setPhase(phase)
             let captureStart = ProcessInfo.processInfo.systemUptime
             let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 1_600))
             var offset = 0
@@ -1076,6 +1172,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             }
             phase = "postStop"
             resourceSamples.setPhase(phase)
+            mainActorSamples.setPhase(phase)
             progress?.update(phase: "postStopBegin", deliveredFrames: offset,
                 protectedUtterances: coordinator.liveTranscript.utterances.count,
                 protectedPartials: coordinator.liveTranscript.partials.count)
@@ -1090,7 +1187,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             progress?.emit(force: true)
             phase = "completedPrivacyReady"
             resourceSamples.setPhase(phase)
+            mainActorSamples.setPhase(phase)
             try await Task.sleep(nanoseconds: 300_000_000)
+            mainActorSamples.setPhase("completedValidation")
             XCTAssertEqual(completed.state, .completed)
             let diarizationModels = completed.processingAttempts.compactMap(\.diarizationModel)
             let expectedProfile: MeetingNemotronModelProfile = streaming ? .experimentalFast128FP16CPU : .fast32SplitW8A8
@@ -1177,8 +1276,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             }
             XCTAssertEqual(observations.unmaskedPublishableObservations, 0, "Recognized expected PII must never pass the privacy publication boundary unmasked")
             XCTAssertEqual(observations.remainingCases(in: protectedText), 0, "Protected output must contain none of the expected source aliases")
+            mainActorSamples.setPhase("historyReload")
             let saved = try await store.load(id: completed.id)
             XCTAssertTrue(saved?.transcriptSegments == completed.transcriptSegments, "Reloaded protected segments must match without logging their contents")
+            mainActorSamples.setPhase("diagnosticExport")
             let exportBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.diagnosticExport)
             let export = try MeetingTranscriptExporter.json(for: completed)
             MeetingPCMRuntimeDiagnostics.completedDetailed(.diagnosticExport, since: exportBegan,
@@ -1195,6 +1296,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertNil(services.asr.activeExclusiveActivity)
             XCTAssertFalse(services.asr.hasActiveModelPreparation)
             XCTAssertFalse(services.asr.hasActiveModelDownload)
+            mainActorSamples.setPhase("privacyRelease")
             try await privacy.unload()
             let privacyStillReady = await privacy.isReady
             XCTAssertFalse(privacyStillReady)
@@ -1205,6 +1307,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 // deliberately closes that owner permanently, so benchmark before shutdown.
                 // Exclude independent retention from this save-only measurement, and report
                 // its wait separately rather than attributing background work to alias I/O.
+                mainActorSamples.setPhase("aliasMaintenance")
                 let maintenanceBegan = ProcessInfo.processInfo.systemUptime
                 for _ in 0..<200 {
                     if coordinator.isQuiescent { break }
@@ -1212,6 +1315,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 }
                 explicitAliasMaintenanceWaitSeconds = ProcessInfo.processInfo.systemUptime - maintenanceBegan
                 XCTAssertTrue(coordinator.isQuiescent, "Background retention must release its mutation gate before the alias benchmark")
+                mainActorSamples.setPhase("aliasSave")
                 let beforeAlias = ProcessInfo.processInfo.systemUptime
                 let renamed = try await coordinator.renameSpeaker(sessionID: completed.id,
                     speakerID: participant.id, to: "Explicit participant alias")
@@ -1219,17 +1323,20 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 XCTAssertEqual(renamed.activeSpeakers.first(where: { $0.id == participant.id })?.displayName,
                                "Explicit participant alias")
                 XCTAssertEqual(renamed.transcriptSegments, completed.transcriptSegments)
+                mainActorSamples.setPhase("aliasRestore")
                 let restored = try await coordinator.undoTranscriptCorrection(sessionID: completed.id)
                 XCTAssertEqual(restored.activeSpeakers, completed.activeSpeakers)
                 XCTAssertEqual(restored.transcriptSegments, completed.transcriptSegments)
                 let privacyReadyAfterAlias = await privacy.isReady
                 XCTAssertFalse(privacyReadyAfterAlias, "Renaming must not prepare the speech privacy model again")
             }
+            mainActorSamples.setPhase("cleanup")
             await coordinator.shutdownForTermination()
             if recoverAfterStop {
                 resourceSamples.capture(since: started)
                 phase = "betweenAttemptsRelease"
                 resourceSamples.setPhase(phase)
+                mainActorSamples.setPhase(phase)
                 let firstASRReadyBeforeRelease = services.asr.isAsrReady
                 try await services.asr.meetingResidencyParticipant().suspend()
                 let firstASRReadyAfterRelease = services.asr.isAsrReady
@@ -1242,6 +1349,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 XCTAssertFalse(previousPrivacyStillReady, "The first inference owner must unload before cold privacy recovery begins")
                 phase = "retainedRecovery"
                 resourceSamples.setPhase(phase)
+                mainActorSamples.setPhase(phase)
                 progress?.update(phase: phase, deliveredFrames: Int(input.length), protectedUtterances: 0,
                     protectedPartials: 0, protectedFinalSegments: completed.transcriptSegments.count)
                 progress?.emit(force: true)
@@ -1259,6 +1367,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             }
             phase = "cleanup"
             resourceSamples.setPhase(phase)
+            mainActorSamples.setPhase(phase)
             try await Task.sleep(nanoseconds: 500_000_000)
             evidenceSampler?.cancel()
             await evidenceSampler?.value
@@ -2145,6 +2254,72 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         XCTAssertEqual(segment.originalText, "Private pre-edit wording", "Export must not mutate product values")
         let people = try XCTUnwrap(values["speakers"] as? [[String: Any]])
         XCTAssertEqual(people.first?["displayName"] as? String, "Speaker 1")
+    }
+
+    func testMainActorSamplingSeparatesEntryFromDelayedUtilityContinuation() throws {
+        let sampler = CombinedMainActorSamples()
+        sampler.record(phase: .modelPreparation, entryPhase: .modelPreparation,
+            queued: 10, entered: 10.001, departed: 10.0012, resumed: 12.0012,
+            previousQueued: nil, previousResumed: nil)
+        sampler.record(phase: .capture, entryPhase: .postStop,
+            queued: 20, entered: 22, departed: 22.0002, resumed: 22.0012,
+            previousQueued: 10, previousResumed: 12.0012)
+        let json = sampler.json(interval: 0.1)
+        let phases = try XCTUnwrap(json["phases"] as? [String: [String: Any]])
+        let model = try XCTUnwrap(phases["modelPreparation"])
+        let capture = try XCTUnwrap(phases["capture"])
+        func maximum(_ row: [String: Any], _ key: String) throws -> Double {
+            try XCTUnwrap((row[key] as? [String: Any])?["maximumSeconds"] as? Double)
+        }
+        XCTAssertEqual(try maximum(model, "mainActorQueueEntry"), 0.001, accuracy: 0.000_001)
+        XCTAssertEqual(try maximum(model, "mainActorMarkerExecution"), 0.0002, accuracy: 0.000_001)
+        XCTAssertEqual(try maximum(model, "utilityContinuationResume"), 2, accuracy: 0.000_001)
+        XCTAssertEqual(try maximum(capture, "mainActorQueueEntry"), 2, accuracy: 0.000_001)
+        XCTAssertEqual(try maximum(capture, "utilityContinuationResume"), 0.001, accuracy: 0.000_001)
+        XCTAssertEqual(try maximum(capture, "utilitySubmissionInterval"), 10, accuracy: 0.000_001)
+        XCTAssertEqual(try maximum(capture, "utilityWakeGap"), 7.9988, accuracy: 0.000_001)
+        XCTAssertEqual(capture["phaseChangesWhileQueued"] as? Int, 1)
+        XCTAssertEqual(try XCTUnwrap(json["maximumWaitSeconds"] as? Double), 2.0012, accuracy: 0.000_001)
+    }
+
+    func testMainActorSamplingIsBoundedPhaseScopedAndTimestampFree() throws {
+        let sampler = CombinedMainActorSamples(limit: 2)
+        sampler.setPhase("arbitrary private phase text")
+        XCTAssertEqual(sampler.currentPhase(), .other)
+        for start in [10.0, 20, 30] {
+            sampler.record(phase: sampler.currentPhase(), entryPhase: .other,
+                queued: start, entered: start + 0.01, departed: start + 0.02, resumed: start + 0.03,
+                previousQueued: nil, previousResumed: nil)
+        }
+        let json = sampler.json(interval: 0.1)
+        XCTAssertEqual(json["samples"] as? Int, 2)
+        XCTAssertEqual(json["omittedSamples"] as? Int, 1)
+        XCTAssertEqual(json["capacity"] as? Int, 2)
+        let phases = try XCTUnwrap(json["phases"] as? [String: [String: Any]])
+        XCTAssertEqual(Set(phases.keys), ["other"])
+        XCTAssertEqual(phases["other"]?["samples"] as? Int, 2)
+        let encoded = try JSONSerialization.data(withJSONObject: json)
+        let text = String(decoding: encoded, as: UTF8.self)
+        XCTAssertFalse(text.contains("arbitrary private phase text"))
+        for rawClockKey in ["queued", "entered", "departed", "resumed"] {
+            XCTAssertFalse(text.contains("\"" + rawClockKey + "\":"))
+        }
+    }
+
+    func testMainActorSamplingZeroDefaultsAndInvalidClockOrder() throws {
+        let sampler = CombinedMainActorSamples()
+        let empty = sampler.json(interval: 0.1)
+        XCTAssertEqual(empty["samples"] as? Int, 0)
+        XCTAssertEqual(empty["maximumWaitSeconds"] as? Double, 0)
+        XCTAssertTrue((empty["phases"] as? [String: Any])?.isEmpty == true)
+        for (queued, entered, departed, resumed) in [(Double.nan, 1.0, 1.0, 1.0), (2, 1, 2, 3), (1, 2, 1, 3), (1, 2, 3, 2)] {
+            sampler.record(phase: .capture, entryPhase: .capture,
+                queued: queued, entered: entered, departed: departed, resumed: resumed,
+                previousQueued: nil, previousResumed: nil)
+        }
+        let rejected = sampler.json(interval: 0.1)
+        XCTAssertEqual(rejected["samples"] as? Int, 0)
+        XCTAssertEqual(rejected["invalidSamples"] as? Int, 4)
     }
 
     func testCombinedResourceSamplesBoundStorageAndExposeActualGaps() throws {
