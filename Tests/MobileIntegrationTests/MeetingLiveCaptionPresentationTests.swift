@@ -898,8 +898,43 @@ private final class CaptionNativeHost {
 }
 
 final class MeetingSavedTranscriptPresentationTests: XCTestCase {
-    func testHistoricalMultipleVoicesAreNotPresentedAsOneUnknownParticipant() {
-        for (language, expected) in [(PichiInterfaceLanguage.english, "Several speakers"), (.russian, "Несколько говорящих")] {
+    func testMixedBoutReadsWithTheContinuingParticipantAndPreservesEveryOriginalWord() throws {
+        let a = UUID(), b = UUID(), track = UUID()
+        var source = session()
+        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(10)
+        source.processingAttempts = [.init(id: UUID(), startedAt: source.startedAt, completedAt: source.endedAt,
+                                          stage: .completed, pipelineVersion: 13)]
+        source.speakers = [(a, "Участник 2"), (b, "Участник 1")].map {
+            .init(id: $0.0, displayName: $0.1, diarizationClusterID: nil, trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        var rows = [segment("Продолжаю", track: track, start: 0, speaker: a, attribution: .assigned),
+                    segment("короткая", track: track, start: 0.6),
+                    segment("вставка", track: track, start: 1.2, speaker: b, attribution: .assigned),
+                    segment("и", track: track, start: 1.8),
+                    segment("продолжение.", track: track, start: 2.4, speaker: a, attribution: .assigned)]
+        for index in rows.indices { rows[index].revision = 0; rows[index].originalText = nil }
+        for index in [1, 3] { rows[index].attributionState = .overlappingSpeakers; rows[index].overlap = .ambiguous }
+        source.transcriptSegments = rows
+        let original = try MeetingTranscriptExporter.json(for: source)
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: source)
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
+        let paragraph = try XCTUnwrap(paragraphs.first)
+        for language in [PichiInterfaceLanguage.english, .russian] {
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
+                speakerNames: [a: "Участник 2", b: "Участник 1"], language: language), "Участник 2")
+        }
+        let presentations = MeetingTranscriptExporter.speakerPresentations(in: source)
+        XCTAssertTrue(rows.allSatisfy { presentations[$0.id]?.participantID == a })
+        let liveRows = rows.map { MeetingLiveBubbleComposer.Row(id: $0.id, speaker: .you, text: $0.text,
+            isPartial: false, showsLabel: true, participant: presentations[$0.id]) }
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(liveRows).count, 1)
+        XCTAssertEqual(try MeetingTranscriptExporter.json(for: source), original)
+    }
+
+    func testNoMultipleVoiceLabelWhenThereIsNoSingleReadingOwner() {
+        for (language, expected) in [(PichiInterfaceLanguage.english, "Unknown speaker"), (.russian, "Неизвестный участник")] {
             let value = MeetingSpeakerPresentation(identity: "historical-multiple", label: .candidates([], relation: .several))
             XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: value, language: language), expected)
         }

@@ -333,8 +333,8 @@ final class MobileNavigationUITests: XCTestCase {
     func testGeneralizedSpeakerAttributionLabelsInBothLanguagesAndThemes() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9016"
         for (language, appearance, historyTitle, interruptionLabel, participantLabel) in [
-            ("en", "light", "History", "Борис (interrupting; background: Анна)", "Борис"),
-            ("ru", "dark", "История", "Борис (перебивает; фон: Анна)", "Борис")
+            ("en", "light", "History", "Борис", "Борис"),
+            ("ru", "dark", "История", "Борис", "Борис")
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -405,11 +405,13 @@ final class MobileNavigationUITests: XCTestCase {
             capture("legacy-attribution-\(language)-original-members")
             app.buttons[cancelTitle].firstMatch.tap()
             capture("legacy-attribution-\(language)-editor-cancelled")
-            let incomingParagraph = app.staticTexts["Нет, это ответ."].firstMatch
+            let incomingParagraph = app.staticTexts["Нет, это ответ. Короткая вставка и продолжение."].firstMatch
             XCTAssertTrue(incomingParagraph.waitForExistence(timeout: 5))
             try revealParagraphAboveNavigation(incomingParagraph, step: "legacy-attribution-\(language)-incoming-portrait")
             XCTAssertTrue(app.staticTexts["Борис"].firstMatch.exists)
             XCTAssertFalse(app.staticTexts[language == "ru" ? "Неизвестный участник" : "Unknown speaker"].exists)
+            XCTAssertFalse(app.staticTexts["Несколько говорящих"].exists)
+            XCTAssertFalse(app.staticTexts["Several speakers"].exists)
             capture("legacy-attribution-\(language)-incoming-prefix")
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)

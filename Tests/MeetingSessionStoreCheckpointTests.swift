@@ -98,10 +98,10 @@ struct MeetingSessionStoreCheckpointTests {
                                                                           background: [backgroundToken]),
             speakerIDs: [presentationToken: speaker.id, backgroundToken: sameNamedSpeaker.id])
         let interruption = MeetingTranscriptExporter.speakerPresentation(for: canonicalWord, in: twoSpeakers)
-        check(interruption.identity != canonicalDirect.identity,
-              "Actual overlap/background changes remain readable boundaries")
+        check(interruption.identity == canonicalDirect.identity,
+              "Raw overlap/background changes do not split the same reading participant")
         check(MeetingTranscriptExporter.speakerLabel(for: interruption)
-              == "Fixture speaker (interrupting; background: Fixture speaker)",
+              == "Fixture speaker",
               "Live interruptions reuse the existing explicit foreground/background label")
 
         var ownerSession = session

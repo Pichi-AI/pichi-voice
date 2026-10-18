@@ -253,7 +253,7 @@ nonisolated enum MeetingTranscriptExporter {
            legacySpeakerID != nil || segment.attributionState == nil || segment.attributionState == .assigned {
             return [self.resolvedAliasID(speaker, in: session).uuidString, "assigned"].joined(separator: "|")
         }
-        return "unknown"
+        return self.speakerLabelIdentity(for: segment, in: session, speakerNames: speakerNames)
     }
 
     /// Reading ownership follows a continuing participant across a bounded mixed bout. This
@@ -349,16 +349,18 @@ nonisolated enum MeetingTranscriptExporter {
         let active = Set(session.activeSpeakers.map(\.id))
         func untouched(_ segment: MeetingTranscriptSegment) -> Bool {
             segment.revision == 0 && segment.originalText == nil && segment.status == .final
-                && segment.completeness == .complete && !segment.isEcho && segment.overlap == .none
+                && segment.completeness == .complete && !segment.isEcho
                 && segment.nativePrecision == nil && segment.nativeTiming == nil && segment.nativeUnitID == nil
                 && segment.nativeSpeakerAssignment == nil && segment.speakerAttribution == nil
                 && segment.speakerAttributionInference == nil
         }
         func unknown(_ segment: MeetingTranscriptSegment) -> Bool {
-            untouched(segment) && segment.speakerID == nil && segment.attributionState == .unassigned
+            untouched(segment) && segment.speakerID == nil
+                && (segment.attributionState == .unassigned && segment.overlap == .none
+                    || segment.attributionState == .overlappingSpeakers)
         }
         func anchor(_ segment: MeetingTranscriptSegment) -> SessionSpeakerID? {
-            guard untouched(segment), segment.attributionState == .assigned,
+            guard untouched(segment), segment.overlap == .none, segment.attributionState == .assigned,
                   let speaker = segment.speakerID,
                   self.resolvedSpeakerID(speaker, in: session, activeSpeakerIDs: active) != nil else { return nil }
             return speaker
