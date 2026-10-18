@@ -114,12 +114,8 @@ struct MobileMeetingRoot: View {
             }
         }
         .sheet(item: $share) { payload in
-            MobileActivitySheet(items: payload.items, completion: { share = nil }) {
-                Text(payload.includesAudio
-                    ? PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls.")
-                    : AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText).padding()
-            }.onDisappear { payload.cleanup() }
+            MobileActivitySheet(items: payload.items) { share = nil }
+                .onDisappear { payload.cleanup() }
         }
         .confirmationDialog(PichiLocalization.text("Delete Meeting"), isPresented: Binding(
             get: { deleteCandidate != nil }, set: { if !$0 { deleteCandidate = nil } }
@@ -492,6 +488,12 @@ struct MobileMeetingRoot: View {
                         .accessibilityIdentifier("transcript.more")
                     Spacer()
                 }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
+                    if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
+                        Text(PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls."))
+                    }
+                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 Text(PichiLocalization.text("Transcript")).font(theme.typography.sectionTitle)
                 Divider()
                 if !session.activeSpeakers.isEmpty {
