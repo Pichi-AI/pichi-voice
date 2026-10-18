@@ -209,28 +209,24 @@ struct MeetingFloatingCaptionsContent: View {
 
     private static var fluidVoiceIcon: NSImage { PichiBrandMark.appIcon }
 
-    private var rows: [MeetingLiveBubbleComposer.Row] {
-        MeetingLiveBubbleComposer.rows(for: self.coordinator.liveTranscript)
-    }
-
     private var isRecordingActive: Bool {
         MeetingOverlayVisibility.isVisible(for: self.coordinator.state)
     }
 
     var body: some View {
-        let rows = self.rows
-
         VStack(alignment: .leading, spacing: 10) {
             self.header
 
-            if rows.isEmpty && self.coordinator.pendingSpeech.tokens.isEmpty {
+            if self.coordinator.liveTranscript.utterances.isEmpty
+                && self.coordinator.liveTranscript.partials.values.allSatisfy({ $0.text.isEmpty })
+                && self.coordinator.pendingSpeech.tokens.isEmpty {
                 Text("Listening…")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
-                MeetingLiveBubbleScrollList(rows: rows, pending: self.coordinator.pendingSpeech,
-                                           hidesPartialFromAccessibility: false)
+                MeetingLiveTranscriptScrollList(snapshot: self.coordinator.liveTranscript,
+                    pending: self.coordinator.pendingSpeech, hidesPartialFromAccessibility: false)
             }
         }
         .padding(14)
