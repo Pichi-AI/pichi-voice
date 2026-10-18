@@ -396,7 +396,6 @@ final class MeetingRecoveryTests: XCTestCase {
         let capture = StubCaptureController()
         let track = self.makeMicrophoneTrack(chunks: [])
         capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
-        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
         let processing = MemoryCheckpointProcessingController()
         let arbiter = StubArbiter()
         var preparations = 0
@@ -567,6 +566,9 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.audioStorageMode = .memoryOnly
         configuration.languageCode = "en"
         let session = try await coordinator.startRecording(configuration: configuration)
+        // The synthetic Stop must follow this session's admission, not the setup Date
+        // captured before startRecording, and cover its one-second checkpoint.
+        capture.stopResult = .init(tracks: [track], stoppedAt: session.startedAt.addingTimeInterval(2))
         let speaker = MeetingSessionSpeaker(id: UUID(), displayName: "Participant",
             diarizationClusterID: "synthetic-voice", trackKind: .microphone,
             isLocalUser: false, identityCandidates: [])
