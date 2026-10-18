@@ -91,28 +91,32 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
             var fragments = indices.map { TextFragment(key: $0, text: copy.utterances[$0].text) }
             let partialKey = copy.utterances.count
             let partial = copy.partials[source]
+            let partialMasks = try partial.map { try self.atomicMasks(in: $0.text, spans: redactions[$0.id] ?? []) } ?? []
             if let partial, var text = try self.stablePrefix(of: partial),
                !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 // A shorter stability claim cannot expose the beginning of an old mask.
                 var limit = text.utf16.count
-                for span in redactions[partial.id] ?? [] where span.range.location < limit && NSMaxRange(span.range) > limit {
+                for span in partialMasks where span.range.location < limit && NSMaxRange(span.range) > limit {
                     limit = span.range.location
                 }
                 if limit < text.utf16.count { text = (text as NSString).substring(to: limit) }
                 if !text.isEmpty { fragments.append(.init(key: partialKey, text: text)) }
             }
             var prior: [Int: [TranscriptRedactedSpan]] = [:]
-            for index in indices { prior[index] = redactions[copy.utterances[index].id] }
-            if let partial, let fragment = fragments.first(where: { $0.key == partialKey }) {
-                prior[partialKey] = redactions[partial.id]?.filter { NSMaxRange($0.range) <= fragment.text.utf16.count }
+            for index in indices {
+                prior[index] = try self.atomicMasks(in: copy.utterances[index].text, spans: redactions[copy.utterances[index].id] ?? [])
             }
-            let projection = try await self.projectedTexts(fragments, prefix: "", preserving: prior, using: redactor)
+            if let fragment = fragments.first(where: { $0.key == partialKey }) {
+                prior[partialKey] = partialMasks.filter { NSMaxRange($0.range) <= fragment.text.utf16.count }
+            }
+            let projection = try await self.projectedTexts(fragments, prefix: "", preserving: prior,
+                                                           atomicProtection: true, using: redactor)
             for index in indices {
                 retained[copy.utterances[index].id] = projection.redactions[index]
                 admitted[copy.utterances[index].id] = projection.provisionalUTF16[index]
             }
             if let partial {
-                retained[partial.id] = self.mergedSpans((redactions[partial.id] ?? []) + (projection.redactions[partialKey] ?? []))
+                retained[partial.id] = self.mergedSpans(partialMasks + (projection.redactions[partialKey] ?? []))
                 admitted[partial.id] = projection.provisionalUTF16[partialKey]
             }
             // A decoder's EOU can be an arbitrary audio-window boundary, not the
@@ -225,6 +229,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
 
     private static func projectedTexts(_ fragments: [TextFragment], prefix: String, separator: String = " ",
                                        preserving prior: [Int: [TranscriptRedactedSpan]] = [:],
+                                       atomicProtection: Bool = false,
                                        using redactor: any TranscriptTextRedacting) async throws -> TextProjection {
         guard prefix.utf16.count <= MeetingTranscriptPrivacyContext.maximumContextUTF16 else {
             throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
@@ -252,6 +257,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
             let output = try await redactor.redactWithSpans(text)
             try Task.checkCancellation()
             try self.validate(output, for: text)
+            let evaluatedSpans = atomicProtection ? try self.atomicMasks(in: text, spans: output.spans) : output.spans
             // Strict held text fits one admission window. A multi-window transformation has
             // no single adapter-approved prefix, so canonical projection remains available
             // but provisional display fails closed rather than splicing separate approvals.
@@ -259,7 +265,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 var approved: [Int: String] = [:]
                 let source = text as NSString
                 for (key, range) in ranges where range.location < limit {
-                    let evaluated = output.spans.compactMap { span -> TranscriptRedactedSpan? in
+                    let evaluated = evaluatedSpans.compactMap { span -> TranscriptRedactedSpan? in
                         let intersection = NSIntersectionRange(span.range, range)
                         guard intersection.length > 0 else { return nil }
                         return .init(range: NSRange(location: intersection.location - range.location, length: intersection.length),
@@ -280,7 +286,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 provisional = approved
             }
             for (key, range) in ranges {
-                for span in output.spans {
+                for span in evaluatedSpans {
                     let intersection = NSIntersectionRange(span.range, range)
                     guard intersection.length > 0 else { continue }
                     rangesByFragment[key, default: []].append(.init(
@@ -327,6 +333,31 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         guard try self.replacing(input, spans: output.spans) == output.text else {
             throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
         }
+    }
+
+    /// Retained protection follows an atomic whitespace-delimited token, including
+    /// punctuation and Unicode suffixes. A revised hypothesis cannot reveal a new
+    /// suffix merely because an earlier evaluation ended the same field sooner.
+    fileprivate static func atomicMasks(in text: String, spans: [TranscriptRedactedSpan]) throws -> [TranscriptRedactedSpan] {
+        let source = text as NSString
+        let expanded = try spans.map { span -> TranscriptRedactedSpan in
+            guard span.range.location >= 0, span.range.length > 0, NSMaxRange(span.range) <= source.length else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+            var end = NSMaxRange(span.range)
+            guard end == source.length || !(0xDC00...0xDFFF).contains(source.character(at: end)) else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+            // UTF16 whitespace lies in the BMP. Surrogate pairs stay inside the
+            // protected token; no suffix String or full remaining-text copy is needed.
+            while end < source.length {
+                if let scalar = UnicodeScalar(source.character(at: end)), scalar.properties.isWhitespace { break }
+                end += 1
+            }
+            return .init(range: NSRange(location: span.range.location,
+                length: end - span.range.location), replacement: span.replacement)
+        }
+        return self.mergedSpans(expanded)
     }
 
     fileprivate static func mergedSpans(_ spans: [TranscriptRedactedSpan]) -> [TranscriptRedactedSpan] {
@@ -448,6 +479,10 @@ final class MeetingLivePrivacyPublication {
     private var retainedMasks: [UUID: [TranscriptRedactedSpan]] = [:]
     private var admittedUTF16: [UUID: Int] = [:]
     private var maskProofs: [UUID: MaskProof] = [:]
+    // When a known sensitive unit is rewritten before its protected prefix can be
+    // verified, its field position is ambiguous. Preserve other units and withhold
+    // or redact this one rather than treating the disappeared cue as permission.
+    private var conservativeRewrites: [UUID: String] = [:]
 
     func submit(_ snapshot: MeetingLiveTranscriptSnapshot, generation: UUID,
                 using redactor: any TranscriptTextRedacting,
@@ -508,8 +543,19 @@ final class MeetingLivePrivacyPublication {
                             throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
                         }
                         // `page` owns at most 100 raw rows. No full source crosses NER.
+                        var prior: [UUID: [TranscriptRedactedSpan]] = [:]
+                        for row in page.snapshot.utterances {
+                            if let replacement = self.conservativeRewrites[row.id], !row.text.isEmpty {
+                                prior[row.id] = [.init(range: NSRange(location: 0, length: row.text.utf16.count), replacement: replacement)]
+                            } else { prior[row.id] = self.retainedMasks[row.id] }
+                        }
+                        for partial in page.snapshot.partials.values {
+                            if let replacement = self.conservativeRewrites[partial.id], !partial.text.isEmpty {
+                                prior[partial.id] = [.init(range: NSRange(location: 0, length: partial.text.utf16.count), replacement: replacement)]
+                            } else { prior[partial.id] = self.retainedMasks[partial.id] }
+                        }
                         let projection = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(page.snapshot,
-                            using: item.redactor, preserving: self.retainedMasks)
+                            using: item.redactor, preserving: prior)
                         safe = projection.snapshot; masks = projection.redactions; admitted = projection.admittedUTF16
                     } else {
                         var availability = page.snapshot
@@ -526,9 +572,11 @@ final class MeetingLivePrivacyPublication {
                     var proposedMasks: [UUID: [TranscriptRedactedSpan]] = [:]
                     var proposedProofs: [UUID: MaskProof] = [:]
                     for (unitID, spans) in masks {
-                        let union = MeetingTranscriptPrivacyPolicy.mergedSpans((self.retainedMasks[unitID] ?? []) + spans)
+                        guard let text = rawTexts[unitID] else { continue }
+                        let union = try MeetingTranscriptPrivacyPolicy.atomicMasks(in: text,
+                            spans: MeetingTranscriptPrivacyPolicy.mergedSpans((self.retainedMasks[unitID] ?? []) + spans))
                         if !union.isEmpty {
-                            guard let text = rawTexts[unitID], let proof = MaskProof(text: text, spans: union) else {
+                            guard let proof = MaskProof(text: text, spans: union) else {
                                 throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
                             }
                             proposedMasks[unitID] = union; proposedProofs[unitID] = proof
@@ -549,8 +597,12 @@ final class MeetingLivePrivacyPublication {
                     // Learned redaction evidence is useful even if the visible page is
                     // stale. Retain it only when its original masked prefix still matches
                     // the current source; do this before rejecting stale publication.
-                    for id in latest.verifiedProposedMasks {
-                        self.retainedMasks[id] = proposedMasks[id]; self.maskProofs[id] = proposedProofs[id]
+                    for (id, spans) in proposedMasks where latest.versions[id] != nil {
+                        if latest.verifiedProposedMasks.contains(id) {
+                            self.retainedMasks[id] = spans; self.maskProofs[id] = proposedProofs[id]
+                        } else if let replacement = spans.first?.replacement {
+                            self.conservativeRewrites[id] = replacement
+                        }
                     }
                     // A changed or withdrawn raw page cannot publish an older version.
                     guard page.snapshot.utterances.allSatisfy({ latest.versions[$0.id] == page.source.versions[$0.id] }) else { continue }
@@ -669,6 +721,11 @@ final class MeetingLivePrivacyPublication {
         self.contextPending.subtract(invalidated)
         for id in invalidated { self.approved[id] = nil; self.admittedUTF16[id] = nil }
         for id in changed where self.versions[id]?.digest != source.versions[id]?.digest && !source.verifiedMasks.contains(id) {
+            if source.versions[id] == nil {
+                self.conservativeRewrites[id] = nil
+            } else if let replacement = self.retainedMasks[id]?.first?.replacement {
+                self.conservativeRewrites[id] = replacement
+            }
             self.retainedMasks[id] = nil; self.maskProofs[id] = nil
         }
         self.versions = source.versions
@@ -708,7 +765,7 @@ final class MeetingLivePrivacyPublication {
         if workerID == id { worker = nil; workerID = nil }
         publishedRevision = 0; lastTailRevision = 0; prepared = false; privacyIdentity = nil
         versions.removeAll(); sourceOrder.removeAll(); visited.removeAll(); contextPending.removeAll(); approved.removeAll()
-        retainedMasks.removeAll(); admittedUTF16.removeAll(); maskProofs.removeAll()
+        retainedMasks.removeAll(); admittedUTF16.removeAll(); maskProofs.removeAll(); conservativeRewrites.removeAll()
     }
 }
 

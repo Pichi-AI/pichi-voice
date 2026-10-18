@@ -131,6 +131,13 @@ private struct CueMaskPrivacyRedactor: TranscriptTextRedacting {
     }
 }
 
+private struct AtomicFieldPrivacyRedactor: TranscriptTextRedacting {
+    let initialSecret: String
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        try await SelectiveMaskPrivacyRedactor(words: text.hasPrefix("пароль ") ? [initialSecret] : []).redactWithSpans(text)
+    }
+}
+
 private actor ColdPagedPrivacyRedactor: TranscriptTextRedacting {
     enum Failure: Error { case notPrepared }
     nonisolated let checkpointIdentity: String? = "synthetic-cold-paging-v1"
@@ -215,6 +222,7 @@ struct MeetingPrivacyContextTests {
         try await monotonePrivacyProjectionSuite()
         try await privacyPageEdgeMatrixSuite()
         try await partialMaskPrefixProofSuite()
+        try await atomicRetainedFieldSuite()
         try await inFlightMaskPrefixProofSuite()
         try await emptyAvailabilityDoesNotPrepareSuite()
         try await joinedColdPreparationSuite()
@@ -986,7 +994,7 @@ struct MeetingPrivacyContextTests {
         source.partials[.you]?.stableUTF16Count = shrinkingRaw.utf16.count
         let regrown = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(source,
             using: SelectiveMaskPrivacyRedactor(words: []), preserving: shortened.redactions)
-        try check(regrown.snapshot.partials[.you]?.text == "alpha [REDACTED].",
+        try check(regrown.snapshot.partials[.you]?.text == "alpha [REDACTED]",
                   "stable-prefix shrink and growth discarded a previously known mask")
     }
 
@@ -1080,46 +1088,125 @@ struct MeetingPrivacyContextTests {
     }
 
     @MainActor
-    static func inFlightMaskPrefixProofSuite() async throws {
-        let began = AsyncStream<String>.makeStream(), cancelled = AsyncStream<Void>.makeStream()
-        let delivery = AsyncStream<MeetingLiveTranscriptSnapshot>.makeStream()
-        let detector = DeferredLiveRedactor(started: began.continuation, cancelled: cancelled.continuation, useCueMask: true)
-        let publisher = MeetingLivePrivacyPublication()
-        let generation = UUID(), id = UUID()
-        var source = MeetingLiveTranscriptSnapshot.empty
-        source.revision = 1
-        source.utterances = [.init(id: UUID(), speaker: .you, text: "пароль", start: 0, end: 1)]
-        var raw = " qwerty initial words."
-        source.partials[.you] = .init(id: id, text: raw, start: 1, stableUTF16Count: raw.utf16.count)
-        func submit() {
-            publisher.submit(source, generation: generation, using: detector, latestSnapshot: { source },
-                publish: { value, _ in delivery.continuation.yield(value) }, failed: { _ in delivery.continuation.finish() })
+    static func atomicRetainedFieldSuite() async throws {
+        var fresh = MeetingLiveTranscriptSnapshot.empty
+        let firstToken = " qwertyZ! initial words."
+        fresh.partials[.you] = .init(id: UUID(), text: firstToken, start: 0, stableUTF16Count: firstToken.utf16.count)
+        let firstProjection = try await MeetingTranscriptPrivacyPolicy.redactedLiveProjection(fresh,
+            using: SelectiveMaskPrivacyRedactor(words: ["qwerty"]))
+        try check(firstProjection.snapshot.partials[.you]?.text == "[REDACTED] initial words.",
+                  "the first publication exposed a suffix before fresh mask normalization")
+        let cases: [(secret: String, initial: String, revisions: [String], expected: [String])] = [
+            ("qwerty", " qwerty initial words.",
+             [" qwertyz initial words.", " qwertyz!B2 initial words.", " qwertyz!B2жЁ👩🏽‍⚕️?/% initial words."],
+             Array(repeating: "[REDACTED] initial words.", count: 3)),
+            ("A!b", " A!b", [" A!bc", " A!bcЖЁ👩🏽‍⚕️!/?"], Array(repeating: "[REDACTED]", count: 2)),
+            ("qwerty", " qwerty initial words.", [" qwertyinitial words."], ["[REDACTED] words."]),
+            ("qwerty", " qwerty initial words.", [" xqwerty initial words."], ["[REDACTED]"]),
+            ("qwerty", " qwerty initial words.", [" qwErty initial words."], ["[REDACTED]"]),
+            ("qwerty", " qwerty initial words.", [" prefix qwerty initial words."], ["[REDACTED]"]),
+            ("qwerty", " qwerty initial words.", ["\tqwerty initial words."], ["[REDACTED]"]),
+            ("qwerty", " qwerty\tinitial words.", [" qwertyZ!?\tinitial words."], ["[REDACTED]\tinitial words."]),
+            ("qwerty", " qwerty initial words.", [" qwertyZ!? initial words."], ["[REDACTED] initial words."]),
+            ("one two", " «one two» initial words.", [" «one two more» initial words."], ["[REDACTED]"]),
+            ("one two", " \"one two\" initial words.", [" \"one two more\" initial words."], ["[REDACTED]"])
+        ]
+        for scenario in cases {
+            let delivery = AsyncStream<MeetingLiveTranscriptSnapshot>.makeStream()
+            let publisher = MeetingLivePrivacyPublication()
+            let generation = UUID(), id = UUID()
+            var source = MeetingLiveTranscriptSnapshot.empty
+            source.revision = 1
+            source.utterances = [.init(id: UUID(), speaker: .you, text: "пароль", start: 0, end: 1)]
+            var raw = scenario.initial
+            source.partials[.you] = .init(id: id, text: raw, start: 1, stableUTF16Count: raw.utf16.count)
+            func submit() {
+                publisher.submit(source, generation: generation, using: AtomicFieldPrivacyRedactor(initialSecret: scenario.secret),
+                    latestSnapshot: { source }, publish: { value, _ in delivery.continuation.yield(value) },
+                    failed: { _ in delivery.continuation.finish() })
+            }
+            var updates = delivery.stream.makeAsyncIterator()
+            submit()
+            let initial = await updates.next()
+            try check(initial?.partials[.you]?.text.contains(scenario.secret) == false,
+                      "an atomic-field fixture did not initially protect its secret")
+            source.utterances = []
+            for (index, revised) in scenario.revisions.enumerated() {
+                raw = revised
+                source.partials[.you] = .init(id: id, text: raw, start: 1, stableUTF16Count: raw.utf16.count)
+                source.revision += 1; submit()
+                let update = await updates.next()
+                try check(update?.partials[.you]?.text == scenario.expected[index],
+                          "a retained sensitive field revealed a changed token, suffix, punctuation or ambiguous rewrite")
+                source.revision += 1; submit()
+                let repeated = await updates.next()
+                try check(repeated?.partials[.you]?.text == scenario.expected[index],
+                          "repeated stability removed retained atomic-field protection")
+            }
+            source.revision += 1; source.partials = [:]
+            source.utterances = [.init(id: id, speaker: .you, text: raw, start: 1, end: 2)]
+            submit()
+            let final = await updates.next()
+            try check(final?.utterances.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) == scenario.expected.last,
+                      "finalization revealed a retained sensitive-field token after recognition revisions")
+            await publisher.stop()
         }
-        submit()
-        var starts = began.stream.makeAsyncIterator()
-        _ = await starts.next()
-        // The first secret has been detected only by the still-running old input.
-        // Its cue vanishes and the partial grows before that native call returns.
-        source.revision = 2; source.utterances = []
-        raw += " More words."
-        source.partials[.you] = .init(id: id, text: raw, start: 1, stableUTF16Count: raw.utf16.count)
-        submit()
-        let releaser = Task { while await starts.next() != nil { await detector.release() } }
-        await detector.release()
-        var updates = delivery.stream.makeAsyncIterator()
-        let revised = await updates.next()
-        try check(revised?.partials[.you]?.text.contains("qwerty") == false
-            && revised?.partials[.you]?.text.contains("[REDACTED]") == true,
-                  "rejecting stale publication discarded newly learned masks for an unchanged raw secret prefix")
-        source.revision = 3; source.partials = [:]
-        source.utterances = [.init(id: id, speaker: .you, text: raw, start: 1, end: 2)]
-        submit()
-        let final = await updates.next()
-        try check(final?.utterances.first?.text.contains("qwerty") == false,
-                  "an in-flight learned mask was lost on later finalization")
-        await publisher.stop()
-        began.continuation.finish(); releaser.cancel(); await releaser.value
-        print("PASS newly learned mask survives deferred inference, withdrawn cue, partial growth and finalization")
+        print("PASS retained atomic fields: suffixes, prepend/case/insertion, Unicode, punctuation, quotes, EOF and repeated/finalized hypotheses")
+    }
+
+    @MainActor
+    static func inFlightMaskPrefixProofSuite() async throws {
+        let scenarios: [(raw: String, expected: String)] = [
+            (" qwerty initial words. More words.", "[REDACTED] initial words. More words."),
+            (" qwertyz! initial words.", "[REDACTED] initial words."),
+            (" xqwerty initial words.", "[REDACTED]"),
+            (" qwErty initial words.", "[REDACTED]"),
+            (" prefix qwerty initial words.", "[REDACTED]")
+        ]
+        for scenario in scenarios {
+            let began = AsyncStream<String>.makeStream(), cancelled = AsyncStream<Void>.makeStream()
+            let delivery = AsyncStream<MeetingLiveTranscriptSnapshot>.makeStream()
+            let detector = DeferredLiveRedactor(started: began.continuation, cancelled: cancelled.continuation, useCueMask: true)
+            let publisher = MeetingLivePrivacyPublication()
+            let generation = UUID(), id = UUID()
+            var source = MeetingLiveTranscriptSnapshot.empty
+            source.revision = 1
+            source.utterances = [.init(id: UUID(), speaker: .you, text: "пароль", start: 0, end: 1)]
+            var raw = " qwerty initial words."
+            source.partials[.you] = .init(id: id, text: raw, start: 1, stableUTF16Count: raw.utf16.count)
+            func submit() {
+                publisher.submit(source, generation: generation, using: detector, latestSnapshot: { source },
+                    publish: { value, _ in delivery.continuation.yield(value) }, failed: { _ in delivery.continuation.finish() })
+            }
+            submit()
+            var starts = began.stream.makeAsyncIterator()
+            _ = await starts.next()
+            // The first secret has been detected only by the still-running old input.
+            // Its cue vanishes and the partial grows before that native call returns.
+            source.revision = 2; source.utterances = []
+            raw = scenario.raw
+            source.partials[.you] = .init(id: id, text: raw, start: 1, stableUTF16Count: raw.utf16.count)
+            submit()
+            let releaser = Task { while await starts.next() != nil { await detector.release() } }
+            await detector.release()
+            var updates = delivery.stream.makeAsyncIterator()
+            let revised = await updates.next()
+            try check(revised?.partials[.you]?.text == scenario.expected,
+                      "rejecting stale publication discarded learned atomic-field protection")
+            source.revision = 3; submit()
+            let repeated = await updates.next()
+            try check(repeated?.partials[.you]?.text == scenario.expected,
+                      "repeated stability removed in-flight sensitive-field protection")
+            source.revision = 4; source.partials = [:]
+            source.utterances = [.init(id: id, speaker: .you, text: raw, start: 1, end: 2)]
+            submit()
+            let final = await updates.next()
+            try check(final?.utterances.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) == scenario.expected,
+                      "an in-flight learned atomic mask was lost on finalization")
+            await publisher.stop()
+            began.continuation.finish(); releaser.cancel(); await releaser.value
+        }
+        print("PASS learned atomic masks survive deferred inference, withdrawn cue, suffix/prepend/case/insertion and finalization")
     }
 
     @MainActor
