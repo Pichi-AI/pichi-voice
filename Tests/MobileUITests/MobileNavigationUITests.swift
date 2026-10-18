@@ -422,10 +422,27 @@ final class MobileNavigationUITests: XCTestCase {
                 pickerDescription.name = "protected-export-files-picker-accessibility"
                 pickerDescription.lifetime = .keepAlways
                 add(pickerDescription)
-                let cancel = app.buttons["Cancel"].firstMatch
+                let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Отмена", "Отменить"])).firstMatch
                 XCTAssertTrue(cancel.waitForExistence(timeout: 10), "The system file destination picker must open")
                 cancel.tap()
                 capture("protected-export-files-picker-cancelled")
+                if activityList.exists { closeShare.tap() }
+                XCTAssertTrue(more.waitForExistence(timeout: 5))
+                more.tap()
+                XCTAssertTrue(export.waitForExistence(timeout: 5))
+                export.tap()
+                XCTAssertTrue(activityList.waitForExistence(timeout: 10))
+                saveFiles.tap()
+                let save = app.buttons["DOCPicker.actionButton"]
+                XCTAssertTrue(save.waitForExistence(timeout: 10))
+                XCTAssertTrue(save.isEnabled)
+                capture("protected-export-files-save-ready")
+                save.tap()
+                let replace = app.buttons.matching(NSPredicate(format: "label IN %@", ["Replace", "Заменить"])).firstMatch
+                if replace.waitForExistence(timeout: 1) { replace.tap() }
+                XCTAssertTrue(activityList.waitForNonExistence(timeout: 10), "Saving must dismiss native sharing")
+                XCTAssertTrue(more.isHittable, "A completed share must return control to the transcript")
+                capture("protected-export-files-saved")
             }
         }
         app.terminate()
