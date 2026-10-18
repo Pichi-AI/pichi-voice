@@ -904,6 +904,14 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 let remaining = captureStart + Double(offset) / 16_000 - ProcessInfo.processInfo.systemUptime
                 if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
             }
+            // A physical microphone almost never stops on an exact 10 ms boundary.
+            // Keep the reviewed 180 s source intact, then exercise the same residual
+            // sample count as the reported Stop failure with 5.5 ms of silence.
+            let terminalSilenceSamples = streaming ? 88 : 0
+            if terminalSilenceSamples > 0 {
+                try await microphone.deliver([Float](repeating: 0, count: terminalSilenceSamples), startingAt: offset)
+                offset += terminalSilenceSamples
+            }
             if streaming {
                 checkpointBeforeStop = coordinator.activeSession?.transcriptSegments ?? []
                 XCTAssertGreaterThan(canonicalCheckpointsObserved, 0, "Streaming must publish canonical protected checkpoints before Stop")
@@ -956,7 +964,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
             if streaming {
                 streamingEvidence = try await streamingEvaluation(completed: completed,
-                    checkpoint: checkpointBeforeStop, sourceFrames: Int(input.length), started: started,
+                    checkpoint: checkpointBeforeStop, sourceFrames: offset, started: started,
                     captureStarted: captureStart, stopStarted: stopStart, completedAt: started + completedWallSeconds,
                     firstKnownSpeakerSeconds: firstKnownSpeakerSeconds,
                     canonicalCheckpointsObserved: canonicalCheckpointsObserved,
@@ -964,6 +972,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 observedNewAudioPaths.formUnion(try CombinedStreamingAudioInventory.paths(in: containerRoot).subtracting(existingAudioPaths))
                 XCTAssertTrue(CombinedStreamingAudioInventory.onlyAllowed(observedNewAudioPaths, retainedRoot: saveAudio ? root : nil))
                 streamingEvidence["newPersistentAudioOrMediaPathsObserved"] = observedNewAudioPaths.count
+                streamingEvidence["sourceAudioFrames"] = Int(input.length)
+                streamingEvidence["terminalSilenceRegressionSamples"] = terminalSilenceSamples
                 streamingEvidence["retainedTestRootAudioPermitted"] = saveAudio
                 streamingEvidence["audioInventoryCadenceSeconds"] = 15
                 streamingEvidence["audioInventoryScope"] = "App container including temporary directory; before preparation, paced input and completion; transient create/delete between observations not proven absent"
