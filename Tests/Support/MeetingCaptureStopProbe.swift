@@ -110,8 +110,49 @@ final class MeetingCaptureStopTimerProbe {
     // PRODUCTION_STOP_TIMER
 }
 
+struct MeetingSessionFailure: Sendable, Equatable { let id: UUID; let code: String }
+final class MeetingCaptureStopHandoffProbe {
+    struct Session { var id: UUID }
+    var activeSession: Session?
+    var captureStopHandoff: (sessionID: MeetingSessionID, generation: UUID,
+        result: MeetingCaptureStopResult?, failure: MeetingSessionFailure?)?
+    init(sessionID: UUID, generation: UUID) {
+        activeSession = .init(id: sessionID)
+        captureStopHandoff = (sessionID, generation, nil, nil)
+    }
+    func record(_ result: MeetingCaptureStopResult, sessionID: UUID, generation: UUID,
+                failure: MeetingSessionFailure? = nil) {
+        preserveCaptureStopHandoff(result, sessionID: sessionID, generation: generation, failure: failure)
+    }
+    func consume(sessionID: UUID, generation: UUID?) -> (result: MeetingCaptureStopResult, failure: MeetingSessionFailure?)? {
+        takeCaptureStopHandoff(sessionID: sessionID, generation: generation)
+    }
+    // PRODUCTION_PRESERVE_HANDOFF
+    // PRODUCTION_TAKE_HANDOFF
+}
+
 extension MeetingCapturePCMTransportTests {
     static func testCaptureStopBoundary() async throws {
+        let sessionID = UUID(), generation = UUID()
+        let handoff = MeetingCaptureStopHandoffProbe(sessionID: sessionID, generation: generation)
+        let physical = MeetingCaptureStopResult(tracks: [.init()], stoppedAt: Date(timeIntervalSince1970: 17))
+        let failure = MeetingSessionFailure(id: UUID(), code: "synthetic-partial-stop")
+        handoff.record(physical, sessionID: sessionID, generation: UUID())
+        try require(handoff.captureStopHandoff?.result == nil, "An older processing generation cannot overwrite the owned capture handoff")
+        handoff.record(physical, sessionID: UUID(), generation: generation)
+        try require(handoff.captureStopHandoff?.result == nil, "Another session cannot publish physical Stop facts")
+        handoff.record(physical, sessionID: sessionID, generation: generation, failure: failure)
+        try require(handoff.consume(sessionID: sessionID, generation: UUID()) == nil && handoff.captureStopHandoff != nil,
+            "A mismatched termination generation cannot consume the current owner")
+        handoff.activeSession = .init(id: UUID())
+        try require(handoff.consume(sessionID: sessionID, generation: generation) == nil,
+            "An older capture cannot write physical facts into a new active session")
+        handoff.activeSession = .init(id: sessionID)
+        let joined = handoff.consume(sessionID: sessionID, generation: generation)
+        try require(joined?.result.stoppedAt == physical.stoppedAt && joined?.result.tracks.count == 1 && joined?.failure == failure,
+            "The exact joined boundary, final tracks and partial failure pass to their termination owner")
+        try require(handoff.captureStopHandoff == nil && handoff.consume(sessionID: sessionID, generation: generation) == nil,
+            "A physical Stop handoff is consumed exactly once")
         let id = UUID(), request = Date(), start = Date().addingTimeInterval(-3)
         let timer = MeetingCaptureStopTimerProbe(.init(id: id, startedAt: start, endedAt: nil))
         timer.stopRequestedAt = (id, request); timer.state = .stopping(id)

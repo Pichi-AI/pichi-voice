@@ -41,6 +41,14 @@ stop_probe = stop_probe.replace('// PRODUCTION_IOS_STOP', declaration(ios, 'func
 stop_probe = stop_probe.replace('// PRODUCTION_DESKTOP_STOP', declaration(engine, 'func stop(sessionID:'))
 coordinator = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift').read_text()
 stop_probe = stop_probe.replace('// PRODUCTION_STOP_TIMER', declaration(coordinator, 'var elapsedTime:'))
+stop_probe = stop_probe.replace('// PRODUCTION_PRESERVE_HANDOFF', declaration(coordinator, 'private func preserveCaptureStopHandoff('))
+stop_probe = stop_probe.replace('// PRODUCTION_TAKE_HANDOFF', declaration(coordinator, 'private func takeCaptureStopHandoff('))
+stop_body = declaration(coordinator, 'private func performStopAndTranscribe(')
+assert stop_body.index('guard self.operationGeneration == generation') < stop_body.index('self.state = .stopping')
+assert 'if self.captureStopHandoff?.sessionID != session.id || self.captureStopHandoff?.generation != generation' in stop_body
+start_body = declaration(coordinator, 'private func performStartRecording(')
+retry_body = declaration(coordinator, 'private func beginProcessingRetry(')
+assert 'self.captureStopHandoff = nil' in start_body and 'self.captureStopHandoff = nil' in retry_body
 assert 'self.stopRequestedAt = (session.id, Date())' in coordinator
 mobile_ui = pathlib.Path('Sources/Mobile/MobileMeetingRoot.swift').read_text()
 assert 'Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))' in mobile_ui

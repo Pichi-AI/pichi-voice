@@ -165,6 +165,10 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var memoryCheckpointGeneration: UUID?
     private var operationGeneration: UUID?
     private var stopRequestedAt: (sessionID: MeetingSessionID, date: Date)?
+    /// A joined capture can outlive the processing generation during termination. Retain
+    /// only its immutable physical facts, never an older transcript/session snapshot.
+    private var captureStopHandoff: (sessionID: MeetingSessionID, generation: UUID,
+        result: MeetingCaptureStopResult?, failure: MeetingSessionFailure?)?
 
     private var stopTask: Task<MeetingSession, Error>? {
         willSet { if (newValue == nil) != (self.stopTask == nil) { self.objectWillChange.send() } }
@@ -612,6 +616,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.activityLease = lease
         let generation = UUID()
+        self.captureStopHandoff = nil
         self.captureGeneration = generation
         self.degradeReason = nil
         self.silenceWatchdogActive = false
@@ -1041,6 +1046,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.activityLease = try await self.audioArbiter.acquireMeetingCapture()
         }
         let generation = UUID()
+        self.captureStopHandoff = nil
         self.operationGeneration = generation
         session.state = .processing
         self.state = .processing(session.id, .pending)
@@ -1801,6 +1807,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         await self.restoreTask?.value
+        let captureStopGeneration = self.operationGeneration ?? self.captureStopHandoff?.generation
         self.captureGeneration = nil
         self.degradeReason = nil
         self.operationGeneration = nil
@@ -1821,7 +1828,14 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
 
         let wasCapturing = [.preparing, .recording, .recordingDegraded, .stopping].contains(session.state)
-        if wasCapturing {
+        if (wasCapturing || session.endedAt == nil),
+           let joined = self.takeCaptureStopHandoff(sessionID: session.id, generation: captureStopGeneration) {
+            Self.apply(joined.result, to: &session)
+            if let failure = joined.failure { session.failures.append(failure) }
+            // The capture owner has already joined and released this exact Stop. A second
+            // stop would discard its facts by returning noActiveCapture.
+            await self.capture.shutdownForTermination()
+        } else if wasCapturing {
             self.state = .stopping(session.id)
             do {
                 let stopResult = try await self.capture.stop(sessionID: session.id)
@@ -1893,7 +1907,11 @@ final class MeetingSessionCoordinator: ObservableObject {
             )
         }
         #endif
+        guard self.operationGeneration == generation else { throw CancellationError() }
         guard var session = self.activeSession else { throw MeetingCoordinatorError.noActiveMeeting }
+        if self.captureStopHandoff?.sessionID != session.id || self.captureStopHandoff?.generation != generation {
+            self.captureStopHandoff = (session.id, generation, nil, nil)
+        }
         self.stopRequestedAt = (session.id, Date())
         self.state = .stopping(session.id)
         session.state = .stopping
@@ -1915,6 +1933,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop)
             #endif
             stopResult = try await self.capture.stop(sessionID: session.id)
+            self.preserveCaptureStopHandoff(stopResult, sessionID: session.id, generation: generation)
             succeeded = true
             #if DEBUG && os(macOS)
             AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop)
@@ -1923,6 +1942,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             #if DEBUG && os(macOS)
             AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop, status: -1)
             #endif
+            if let partial = Self.partialStopResult(from: error) {
+                self.preserveCaptureStopHandoff(partial, sessionID: session.id, generation: generation,
+                    failure: Self.failure(from: error, domain: .capture, recoverable: true))
+            }
             await self.handleStopFailure(error, session: session, generation: generation)
             throw error
         }
@@ -2468,7 +2491,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 self.degradeReason = nil
                 self.operationGeneration = nil
                 self.enqueuePersistence(session)
-                self.beginUnexpectedStop(sessionID: session.id)
+                self.beginUnexpectedStop(sessionID: session.id, generation: generation)
                 return
             } else if kind == .sourceRecovered, session.state == .recordingDegraded,
                       self.degradeReason == .sourceLoss
@@ -2505,23 +2528,29 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
-    private func beginUnexpectedStop(sessionID: MeetingSessionID) {
+    private func beginUnexpectedStop(sessionID: MeetingSessionID, generation: UUID) {
         guard self.interruptionTask == nil, self.terminationTask == nil else { return }
+        if self.captureStopHandoff?.sessionID != sessionID || self.captureStopHandoff?.generation != generation {
+            self.captureStopHandoff = (sessionID, generation, nil, nil)
+        }
         self.interruptionTask = Task { @MainActor [weak self] in
-            await self?.finishUnexpectedStop(sessionID: sessionID)
+            await self?.finishUnexpectedStop(sessionID: sessionID, generation: generation)
         }
     }
 
-    private func finishUnexpectedStop(sessionID: MeetingSessionID) async {
+    private func finishUnexpectedStop(sessionID: MeetingSessionID, generation: UUID) async {
         guard var session = self.activeSession, session.id == sessionID else {
             self.interruptionTask = nil
             return
         }
         do {
             let stopResult = try await self.capture.stop(sessionID: sessionID)
+            self.preserveCaptureStopHandoff(stopResult, sessionID: sessionID, generation: generation)
             Self.apply(stopResult, to: &session)
         } catch {
             if let partialResult = Self.partialStopResult(from: error) {
+                self.preserveCaptureStopHandoff(partialResult, sessionID: sessionID, generation: generation,
+                    failure: Self.failure(from: error, domain: .capture, recoverable: true))
                 Self.apply(partialResult, to: &session)
             } else {
                 await self.capture.shutdownForTermination()
@@ -2678,6 +2707,24 @@ final class MeetingSessionCoordinator: ObservableObject {
             lastCompletedTrackID: nil,
             errorCode: nil
         )
+    }
+
+    private func preserveCaptureStopHandoff(
+        _ result: MeetingCaptureStopResult, sessionID: MeetingSessionID, generation: UUID,
+        failure: MeetingSessionFailure? = nil
+    ) {
+        guard self.activeSession?.id == sessionID, let owner = self.captureStopHandoff,
+              owner.sessionID == sessionID, owner.generation == generation else { return }
+        self.captureStopHandoff = (sessionID, generation, result, owner.failure ?? failure)
+    }
+
+    private func takeCaptureStopHandoff(sessionID: MeetingSessionID, generation: UUID?)
+        -> (result: MeetingCaptureStopResult, failure: MeetingSessionFailure?)? {
+        guard self.activeSession?.id == sessionID, let owner = self.captureStopHandoff,
+              owner.sessionID == sessionID, owner.generation == generation,
+              let result = owner.result else { return nil }
+        self.captureStopHandoff = nil
+        return (result, owner.failure)
     }
 
     private static func apply(_ stopResult: MeetingCaptureStopResult, to session: inout MeetingSession) {
