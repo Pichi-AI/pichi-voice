@@ -10,8 +10,12 @@ private final nonisolated class PhysicalMicrophoneProbe: MeetingMemoryAudioConsu
     private let lock = NSLock()
     private var samples = 0
     private var events: [String] = []
+    private var firstBufferUptime: Double?
     func enqueue(_ buffer: CMSampleBuffer) -> Bool {
-        lock.withLock { samples += CMSampleBufferGetNumSamples(buffer) }
+        lock.withLock {
+            if firstBufferUptime == nil { firstBufferUptime = ProcessInfo.processInfo.systemUptime }
+            samples += CMSampleBufferGetNumSamples(buffer)
+        }
         return true
     }
     func finish() async throws { }
@@ -22,6 +26,7 @@ private final nonisolated class PhysicalMicrophoneProbe: MeetingMemoryAudioConsu
     }
     func count() -> Int { lock.withLock { samples } }
     func recordedEvents() -> [String] { lock.withLock { events } }
+    func firstBufferTime() -> Double? { lock.withLock { firstBufferUptime } }
 }
 
 @MainActor
@@ -163,6 +168,8 @@ final class PhysicalDevicePrerequisiteTests: XCTestCase {
         guard duration >= 3, duration <= 90 else { throw NSError(domain: "PhysicalMicrophoneProbe", code: 1) }
         let requiresBackground = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_MIC_BACKGROUND"] == "1"
         var backgroundSamples = 0
+        var captureRequested: Double?
+        var captureReturned: Double?
         var stateObservations: [[String: Any]] = []
         let evidence = try FileManager.default.url(for: .applicationSupportDirectory,
             in: .userDomainMask, appropriateFor: nil, create: true)
@@ -183,15 +190,21 @@ final class PhysicalDevicePrerequisiteTests: XCTestCase {
                 "events": probe.recordedEvents(), "error": error?.localizedDescription ?? "",
                 "backgroundSamples": backgroundSamples, "durationSeconds": duration,
                 "applicationStates": stateObservations,
+                "captureCommandSeconds": captureRequested.flatMap { start in captureReturned.map { $0 - start } } as Any? ?? NSNull(),
+                "firstPCMSecondsFromCaptureRequest": captureRequested.flatMap { start in probe.firstBufferTime().map { $0 - start } } as Any? ?? NSNull(),
+                "latencyScope": "Physical capture engine after permission preflight; excludes UI, model preparation and coordinator admission.",
             ]
-            try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-                .write(to: evidence.appendingPathComponent("microphone.json"), options: .atomic)
+            let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            let revision = RuntimeBuildProvenance.sanitizedSourceRevision(Bundle.main.object(forInfoDictionaryKey: "AppSourceRevision"))
+            try data.write(to: evidence.appendingPathComponent("microphone-latency-\(revision.prefix(8)).json"), options: .atomic)
         }
         try saveEvidence()
         do {
             try await capture.preflightPermissions()
+            captureRequested = ProcessInfo.processInfo.systemUptime
             _ = try await capture.start(session: session, configuration: configuration,
                 sessionDirectory: root, eventHandler: { probe.event($0) })
+            captureReturned = ProcessInfo.processInfo.systemUptime
             var previousCount = probe.count()
             for second in 0..<Int(duration.rounded(.up)) {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
