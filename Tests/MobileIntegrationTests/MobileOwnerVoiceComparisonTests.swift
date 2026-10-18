@@ -42,6 +42,13 @@ private nonisolated struct OwnerVoiceComparisonOptions: Sendable {
             environment["PICHI_OWNER_VOICE_DIAGNOSTIC_PROFILE_PATH"], simulator: Self.isSimulator)
     }
 
+    static func boundaryRanges(frameCount: Int, clipFrames: Int) -> [Range<Int>]? {
+        let edge = 2_560
+        guard (102_400...320_000).contains(frameCount), [48_000, 80_000].contains(clipFrames),
+              frameCount >= 2 * clipFrames + 2 * edge else { return nil }
+        return [edge..<(edge + clipFrames), (frameCount - edge - clipFrames)..<(frameCount - edge)]
+    }
+
     func read(root: URL) throws -> [Float] {
         let file = root.appendingPathComponent("audio/combined-ru.wav")
         let properties = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
@@ -219,6 +226,12 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
             return clip.map { $0 - mean }
         })
         append(6, short.clips) // Same-input repeatability control, never a new real identity.
+        if let ranges = OwnerVoiceComparisonOptions.boundaryRanges(frameCount: samples.count, clipFrames: 80_000) {
+            append(7, ranges.map { Array(samples[$0]) })
+        }
+        if let ranges = OwnerVoiceComparisonOptions.boundaryRanges(frameCount: samples.count, clipFrames: 48_000) {
+            append(8, ranges.map { Array(samples[$0]) })
+        }
         let began = ProcessInfo.processInfo.systemUptime
         let profiles = try MeetingSpeakerVoiceEncoder.encode(samples: requests)
         let elapsed = ProcessInfo.processInfo.systemUptime - began
@@ -286,6 +299,21 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
         for value in ["", "relative/profile.json", "https://example.invalid/profile.json", "\0invalid", String(repeating: "x", count: 4097)] {
             XCTAssertThrowsError(try OwnerVoiceComparisonOptions.validateReadOnlyProfilePath(value, simulator: true))
         }
+    }
+
+    func testDiagnosticFirstAndLastClipsAreDisjointAtEveryBoundary() {
+        for frames in [102_400, 128_000, 165_119, 165_120, 192_000, 320_000] {
+            for clipFrames in [48_000, 80_000] {
+                let ranges = OwnerVoiceComparisonOptions.boundaryRanges(frameCount: frames, clipFrames: clipFrames)
+                if frames < 2 * clipFrames + 5_120 { XCTAssertNil(ranges); continue }
+                XCTAssertEqual(ranges?.map(\.count), [clipFrames, clipFrames])
+                XCTAssertEqual(ranges?.first?.lowerBound, 2_560)
+                XCTAssertEqual(ranges?.last?.upperBound, frames - 2_560)
+                XCTAssertLessThanOrEqual(ranges![0].upperBound, ranges![1].lowerBound)
+            }
+        }
+        XCTAssertNil(OwnerVoiceComparisonOptions.boundaryRanges(frameCount: 320_001, clipFrames: 80_000))
+        XCTAssertNil(OwnerVoiceComparisonOptions.boundaryRanges(frameCount: Int.max, clipFrames: Int.max))
     }
 
     func testPrivateVoiceDiagnosticQualityAndMatrixAreScalarOnly() throws {

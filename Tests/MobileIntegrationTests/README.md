@@ -113,6 +113,8 @@ The private attachment `PrivateOwnerVoiceScalarComparison.json` contains only ty
 | 4 | Variant0 with bounded RMS normalization, diagnostic only |
 | 5 | Variant0 with its DC mean removed, diagnostic only |
 | 6 | Exact variant0 repeated in the same encoder load, numerical-repeatability control |
+| 7 | First and last disjoint5s clips, each inset160ms, when at least10.32s of input exists |
+| 8 | First and last disjoint3s clips, each inset160ms |
 
 The production diarizer's actual clean ranges are not replayed in this isolated comparison. Differences between variants can reveal duration/content/channel sensitivity but do not establish speaker accuracy. `sameSourceEarlyReferenceConfirmedCount` uses variant0 embeddings as an in-memory control and never replaces the real enrolled reference. For one query candidate the ambiguity margin has no observed competitor; the report marks that margin unavailable. Keep the fixed production threshold and require multiple independent negative controls before adopting a generic change. Compare a same-channel current microphone observation against the stored reference to distinguish a poor enrollment from meeting-codec or microphone channel shift; that observation requires the actual owner's voice and must not be simulated as a positive result.
 
