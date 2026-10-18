@@ -39,9 +39,10 @@ public actor GigaAMRuntime {
             let environment = try ORTEnv(loggingLevel: .warning)
             let options = try ORTSessionOptions()
             #if os(iOS)
-            // Preserve measured transcription latency while avoiding active waits
-            // between operators. Freeze these options before opening the session.
-            try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
+            // A physical background CPU-fatal report sampled parallel ORT GEMM work.
+            // Limit this provider's intra-op work before opening its immutable session;
+            // sustained background throughput still requires device validation.
+            try options.setIntraOpNumThreads(1)
             try options.addConfigEntry(withKey: "session.intra_op.allow_spinning", value: "0")
             try options.addConfigEntry(withKey: "session.inter_op.allow_spinning", value: "0")
             #else
