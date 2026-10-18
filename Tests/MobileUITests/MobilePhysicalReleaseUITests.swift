@@ -54,8 +54,25 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     "Only the unique protected transcript export may be selected")
         try tap(app.buttons["transcript.exportProtected"], "Open only protected transcript export")
         let activity = app.otherElements["ActivityListView"]
-        let saves = app.buttons.matching(identifier: "DOCPicker.actionButton")
-        let names = app.textFields.matching(identifier: "DOCPicker.filenameTextField")
+        let identifiedSaves = app.buttons.matching(identifier: "DOCPicker.actionButton")
+        let identifiedNames = app.textFields.matching(identifier: "DOCPicker.filenameTextField")
+        let nativePickers = app.otherElements.matching(identifier: "Browse View (Picker)")
+        // iPadOS 17 omits both DOCPicker control identifiers. Admit only its
+        // observed owned picker, one browsing root, one native navbar Save and
+        // one filename TextField in that picker. Never mix partial schemas.
+        let browsingRoots = nativePickers.otherElements.matching(NSPredicate(format:
+            "identifier BEGINSWITH %@", "DOC.browsingRoot Source: "))
+        let nativeBars = browsingRoots.navigationBars.matching(identifier: "FullDocumentManagerViewControllerNavigationBar")
+        let nativeSaves = nativeBars.buttons.matching(NSPredicate(format: "label IN %@", ["Save", "Сохранить"]))
+        let nativeNames = nativePickers.textFields
+        var usesControlIdentifiers: Bool { identifiedSaves.count > 0 || identifiedNames.count > 0 }
+        var saves: XCUIElementQuery { usesControlIdentifiers ? identifiedSaves : nativeSaves }
+        var names: XCUIElementQuery { usesControlIdentifiers ? identifiedNames : nativeNames }
+        func saveControlsAreUnique() -> Bool {
+            if usesControlIdentifiers { return identifiedSaves.count == 1 && identifiedNames.count == 1 }
+            return nativePickers.count == 1 && browsingRoots.count == 1 && nativeBars.count == 1
+                && nativeSaves.count == 1 && nativeNames.count == 1
+        }
         var ownsActivity = true
         var ownsPicker = false
         defer {
@@ -89,9 +106,10 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     "The owned native activity list must offer one unambiguous Save to Files")
         try tap(saveFiles.firstMatch, "Open the native Save to Files destination picker")
         ownsPicker = true
-        try require(saves.firstMatch.waitForExistence(timeout: 10) && saves.count == 1
-                    && names.count == 1 && app.alerts.count == 0,
-                    "The owned native save picker must expose its exact Save and filename controls")
+        let pickerAppeared = identifiedSaves.firstMatch.waitForExistence(timeout: 1)
+            || nativePickers.firstMatch.waitForExistence(timeout: 10)
+        try require(pickerAppeared && saveControlsAreUnique() && app.alerts.count == 0,
+                    "The owned native save picker must expose one complete unambiguous native control schema")
         captureProtectedExportStep("root-export-06-native-picker", app: app, revision: revision)
 
         let rootBars = app.navigationBars.matching(identifier: root)
@@ -109,7 +127,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             "DOC.sidebar.item.iCloud Drive", root))
         var explicitlySelectedRoot = false
         for step in 0..<5 {
-            try require(app.alerts.count == 0 && saves.count == 1 && names.count == 1,
+            try require(app.alerts.count == 0 && saveControlsAreUnique(),
                         "Remain inside the owned native save picker without accepting alerts")
             if locations.count == 1 && locations.firstMatch.isHittable {
                 try tap(locations.firstMatch, "Choose only the explicit iCloud Drive provider root")
@@ -131,7 +149,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let rootAppeared = cloudRoots.firstMatch.waitForExistence(timeout: 5)
             || rootBars.firstMatch.waitForExistence(timeout: 1)
         try require(explicitlySelectedRoot && rootAppeared && rootIsVerified()
-                    && saves.count == 1 && names.count == 1 && app.alerts.count == 0,
+                    && saveControlsAreUnique() && app.alerts.count == 0,
                     "After explicit provider selection, native navigation must confirm iCloud Drive root")
         captureProtectedExportStep("root-export-09-root-confirmed", app: app, revision: revision)
         let stem = (filename as NSString).deletingPathExtension
@@ -151,7 +169,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count) + enteredName)
         captureProtectedExportStep("root-export-11-unique-name-entered", app: app, revision: revision)
         try require(name.value as? String == enteredName && rootIsVerified() && app.alerts.count == 0
-                    && saves.count == 1 && saves.firstMatch.isEnabled && saves.firstMatch.isHittable
+                    && saveControlsAreUnique() && saves.firstMatch.isEnabled && saves.firstMatch.isHittable
                     && existing.count == 0 && !app.staticTexts[filename].exists && !app.staticTexts[stem].exists,
                     "Save requires the exact unique filename in verified iCloud Drive root with no conflict")
         captureProtectedExportStep("root-export-12-save-ready", app: app, revision: revision)
