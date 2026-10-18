@@ -83,9 +83,15 @@ nonisolated enum MeetingTranscriptAssembler {
 }
 nonisolated enum MeetingOwnerVoiceVerifier {
     enum Policy: Sendable { case legacy, streamingV2 }
-    static func confirmedTokens(owner: MeetingOwnerVoiceProfileSnapshot?, profiles: [MeetingSpeakerVoiceProfile], policy: Policy = .legacy) -> Set<MeetingBackendSpeakerToken> {
+    struct Diagnostics: Sendable {}
+    static func confirmedTokens(owner: MeetingOwnerVoiceProfileSnapshot?, profiles: [MeetingSpeakerVoiceProfile], policy: Policy = .legacy,
+        diagnostics: ((Diagnostics) -> Void)? = nil) -> Set<MeetingBackendSpeakerToken> {
         profiles.isEmpty ? [] : [.init(analysisEpochID: .init(trackID: UUID(), ordinal: 0), label: "slot-0")]
     }
+}
+nonisolated enum MeetingPCMRuntimeDiagnostics {
+    static func ownerVerificationObserver(samples: [MeetingSpeakerVoiceSamples], profiles: [MeetingSpeakerVoiceProfile],
+        streaming: Bool) -> ((MeetingOwnerVoiceVerifier.Diagnostics) -> Void)? { nil }
 }
 nonisolated enum StreamingScopeFailure: Error { case encoder }
 nonisolated final class StreamingScopeFixture: @unchecked Sendable {

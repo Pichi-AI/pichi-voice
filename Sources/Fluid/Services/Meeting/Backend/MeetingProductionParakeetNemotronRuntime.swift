@@ -440,7 +440,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             }
             try Task.checkCancellation()
             let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot,
-                profiles: profiles, policy: ownerPolicy)
+                profiles: profiles, policy: ownerPolicy,
+                diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: evidence.samples, profiles: profiles, streaming: true))
             DebugLogger.shared.info("mode=streaming owner_verification=completed profileCount=\(profiles.count) confirmedCount=\(confirmed.count)", source: "MeetingPCMRuntime")
             let identities = MeetingTranscriptAssembler.applyingLocalUserTokens(to: evidence.speakers,
                 attemptID: attemptID, tokens: confirmed)
@@ -774,7 +775,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     let excerpts = try await MeetingSpeakerVoiceSamples.collect(epoch: epoch, source: source, segments: segments)
                     do {
                         let profiles = try await self.speakerVoiceProfiles(samples: excerpts)
-                        confirmedOwner = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles)
+                        confirmedOwner = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles,
+                            diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: excerpts, profiles: profiles, streaming: false))
                     } catch { try Task.checkCancellation() }
                 }
                 try Task.checkCancellation()
@@ -938,9 +940,28 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
 
 /// Ordinary support logs use the existing rotated FileLogger in Release too. Begin/end lines
 /// contain only phase names, elapsed/process CPU time and bounded counts, never text,
-/// error payloads, paths, speaker metadata or audio samples.
+/// error payloads, paths, identity metadata or audio samples. Opt-in owner rows add only
+/// bounded anonymous scalar matching evidence.
 nonisolated enum MeetingPCMRuntimeDiagnostics {
     static let detailedProfilingEnabled = ProcessInfo.processInfo.environment["PICHI_MEETING_DETAILED_PROFILE"] == "1"
+    /// Reuses the existing explicit local profiling opt-in in ordinary signed Release builds.
+    /// Capture scalar lengths before enqueueing; neither this closure nor the log retains PCM.
+    static func ownerVerificationObserver(
+        samples: [MeetingSpeakerVoiceSamples], profiles: [MeetingSpeakerVoiceProfile], streaming: Bool
+    ) -> ((MeetingOwnerVoiceVerifier.Diagnostics) -> Void)? {
+        guard self.detailedProfilingEnabled else { return nil }
+        // The encoder may omit unusable inputs. Align lengths to admitted profile ordinals
+        // internally; ambiguous duplicate inputs have unavailable lengths, never guessed ones.
+        let inputs = Dictionary(grouping: samples.prefix(MeetingSpeakerVoiceSamples.maximumProfiles), by: \.token)
+        let frames = profiles.prefix(MeetingSpeakerVoiceSamples.maximumProfiles).enumerated().map { ordinal, profile in
+            guard let matches = inputs[profile.token], matches.count == 1, let sample = matches.first else { return "\(ordinal):unavailable" }
+            return "\(ordinal):" + sample.clips.prefix(2).map { String($0.count) }.joined(separator: "+")
+        }.joined(separator: ",")
+        return { details in
+            DebugLogger.shared.info("mode=\(streaming ? "streaming" : "recording") owner_verification_detail=completed "
+                + details.diagnosticFields + " excerptFramesByProfile=[\(frames)]", source: "MeetingPCMRuntime")
+        }
+    }
     nonisolated enum Phase: String, Sendable {
         case compile = "nemotron.compile"
         case load = "nemotron.load"

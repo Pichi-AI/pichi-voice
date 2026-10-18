@@ -257,6 +257,7 @@ builds/
 !/docs/development/local-russian-text-models.md
 !/docs/development/meeting-summary-strategy.md
 !/docs/development/meeting-speaker-attribution.md
+!/docs/development/owner-verification-diagnostics.md
 !/docs/development/mobile-meetings.md
 !/docs/development/ipad-demo-install-via-mac.md
 !/scripts/

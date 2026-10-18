@@ -39,6 +39,9 @@ pure += 'nonisolated enum MeetingSpeakerVoiceMatcher {\n'
 pure += re.search(r'    static let maximumDistance:[^\n]+', matcher).group(0) + '\n'
 pure += re.search(r'    static let ambiguityMargin:[^\n]+', matcher).group(0) + '\n'
 pure += declaration(matcher, '    static func distance(') + declaration(matcher, '    static func validLinks(') + '}\n'
+pure += 'extension MeetingPCMRuntimeDiagnostics {\n'
+pure += re.search(r'    static let detailedProfilingEnabled[^\n]+', source).group(0) + '\n'
+pure += declaration(source, '    static func ownerVerificationObserver(') + '}\n'
 Path(sys.argv[1]).write_text(context + source[start:end] + '\n}\n' + voice[extension_start:] + pure)
 PY
 swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
@@ -48,4 +51,6 @@ swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/Backend/MeetingNemotronCompiledModelOwner.swift \
     "$pichi_build/ActualVoiceAdmission.swift" Tests/MeetingRuntimeVoiceVerificationContractTests.swift \
     -o "$pichi_build/tests"
-"$pichi_build/tests"
+env -u PICHI_MEETING_DETAILED_PROFILE "$pichi_build/tests"
+PICHI_MEETING_DETAILED_PROFILE=1 "$pichi_build/tests"
+PICHI_MEETING_DETAILED_PROFILE=true "$pichi_build/tests"

@@ -10,7 +10,11 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts { static let revision = "synt
 nonisolated struct MeetingAnalysisEpochID: Hashable, Sendable { var trackID = UUID(); var ordinal = 0 }
 nonisolated struct MeetingBackendSpeakerToken: Hashable, Sendable { var analysisEpochID = MeetingAnalysisEpochID(); var label = "probe" }
 nonisolated struct MeetingSpeakerIdentityLink: Sendable { let token: MeetingBackendSpeakerToken; let canonicalToken: MeetingBackendSpeakerToken }
-nonisolated struct MeetingSpeakerVoiceSamples: Sendable { static let maximumProfiles = 128 }
+nonisolated struct MeetingSpeakerVoiceSamples: Sendable {
+    static let maximumProfiles = 128
+    var token = MeetingBackendSpeakerToken()
+    var clips: [[Float]] = []
+}
 nonisolated struct MeetingSpeakerVoiceProfile: Sendable {
     var token = MeetingBackendSpeakerToken()
     var embeddings: [[Float]] = [[1] + [Float](repeating: 0, count: 255), [1] + [Float](repeating: 0, count: 255)]
@@ -40,6 +44,13 @@ nonisolated enum MeetingSpeakerVoiceEncoder {
         self.calls.record()
         return [.init()]
     }
+}
+nonisolated final class DebugLogger: @unchecked Sendable {
+    static let shared = DebugLogger()
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func info(_ message: String, source: String) { self.lock.withLock { self.lines.append(message) } }
+    var messages: [String] { self.lock.withLock { self.lines } }
 }
 private nonisolated struct LegacyInjectedLocator: MeetingNemotronModelLocating {
     func locate() throws -> MeetingNemotronModelArtifact { throw Refusal.notUsed }
@@ -101,6 +112,7 @@ private nonisolated enum Refusal: Error { case notUsed }
         cancelled.cancel()
         do { _ = try await cancelled.value; throw Refusal.notUsed } catch is CancellationError {}
         try ownerPolicyContracts()
+        try ownerDiagnosticContracts()
         print("PASS actual runtime voice admission, three immutable profiles, legacy existential compatibility and cancellation")
     }
     private static func ownerPolicyContracts() throws {
@@ -150,6 +162,102 @@ private nonisolated enum Refusal: Error { case notUsed }
         try require(MeetingOwnerVoiceVerifier.confirmedTokens(owner: invalidReference, profiles: [cross], policy: .streamingV2).isEmpty,
                     "Stored reference quality remains strict under V2")
         print("PASS actual ownerV2policy, strict legacy default, global thresholds, independent evidence and ambiguity contracts")
+    }
+
+    private static func ownerDiagnosticContracts() throws {
+        let track = UUID()
+        func vector(_ angle: Float) -> [Float] { [cos(angle), sin(angle)] + [Float](repeating: 0, count: 254) }
+        func profile(_ slot: Int, _ angle: Float = 0, second: Float? = nil, epoch: Int = 0) -> MeetingSpeakerVoiceProfile {
+            .init(token: .init(analysisEpochID: .init(trackID: track, ordinal: epoch), label: "PRIVATE-NAME-\(slot)"),
+                  embeddings: [vector(angle), vector(second ?? angle)])
+        }
+        let owner = MeetingOwnerVoiceProfileSnapshot(embeddings: [vector(0), vector(0)])
+        let originalAPI: (MeetingOwnerVoiceProfileSnapshot?, [MeetingSpeakerVoiceProfile], [MeetingSpeakerIdentityLink],
+                          MeetingOwnerVoiceVerifier.Policy) -> Set<MeetingBackendSpeakerToken> = MeetingOwnerVoiceVerifier.confirmedTokens
+        try require(originalAPI(owner, [profile(0)], [], .legacy) == [profile(0).token],
+                    "The original four-argument function API remains source-compatible")
+        func check(_ profiles: [MeetingSpeakerVoiceProfile], _ expected: MeetingOwnerVoiceVerifier.Diagnostics.Outcome,
+                   policy: MeetingOwnerVoiceVerifier.Policy = .streamingV2,
+                   links: [MeetingSpeakerIdentityLink] = [], reference: MeetingOwnerVoiceProfileSnapshot? = owner
+        ) throws -> MeetingOwnerVoiceVerifier.Diagnostics {
+            var reports: [MeetingOwnerVoiceVerifier.Diagnostics] = []
+            let plain = MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: profiles, identityLinks: links, policy: policy)
+            let observed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: profiles,
+                identityLinks: links, policy: policy, diagnostics: { reports.append($0) })
+            try require(plain == observed && reports.count == 1 && reports[0].outcome == expected,
+                        "Observing verifier: expected=\(expected.rawValue) actual=\(reports.first?.outcome.rawValue ?? "none") parity=\(plain == observed) count=\(reports.count)")
+            let fields = reports[0].diagnosticFields
+            try require(!fields.contains("PRIVATE-NAME") && !fields.contains(track.uuidString)
+                        && !fields.contains("embeddings") && !fields.contains("nan") && !fields.contains("inf"),
+                        "Scalar diagnostics cannot expose synthetic private identifiers, vectors or nonfinite values")
+            return reports[0]
+        }
+        _ = try check([profile(0)], .missingOwner, reference: nil)
+        _ = try check([profile(0)], .invalidOwner,
+                      reference: .init(embeddings: [vector(0), vector(.pi / 2)]))
+        _ = try check([], .noValidCandidates)
+        let first = profile(0, 1)
+        let confirmed = try check([first, profile(1, 1.5)], .confirmed)
+        try require(confirmed.validProfileCount == 2 && confirmed.rejectedProfileCount == 0
+                    && confirmed.bestReferenceDistance != nil && confirmed.runnerReferenceDistance != nil
+                    && (confirmed.winnerMargin ?? 0) >= 0.1, "Confirmed evidence must report actual competing distances")
+        let far = try check([profile(0, 1.5)], .referenceDistance)
+        try require((far.bestReferenceDistance ?? 0) > 0.65 && far.winnerMargin == nil,
+                    "A lone out-of-reference voice fails the reference gate without inventing a runner")
+        let ambiguous = try check([first, profile(1, 1.05)], .winnerMargin)
+        try require((ambiguous.winnerMargin ?? 1) < 0.1, "Close independent participants fail the actual ambiguity gate")
+        let inconsistent = try check([profile(0, 0, second: .pi / 2)], .noValidCandidates)
+        try require(inconsistent.queries.first?.gate == .querySelfDistance
+                    && (inconsistent.queries.first?.selfDistance ?? 0) > 0.45
+                    && inconsistent.queries.first?.referenceDistance == nil && inconsistent.rejectedProfileCount == 1,
+                    "Self rejection reports the measured distance and never computes or invents a reference distance")
+        var malformed = profile(5); malformed.embeddings = [[0], [0]]
+        let invalid = try check([malformed, first], .confirmed)
+        try require(invalid.rejectedProfileCount == 1 && invalid.validProfileCount == 1
+                    && invalid.queries.contains { $0.gate == .invalidQuery && $0.selfDistance == nil },
+                    "Malformed competitors remain excluded with unavailable scalar measurements")
+        let strict = profile(0, 0.2)
+        _ = try check([strict, strict], .duplicateTokens)
+        _ = try check([strict, strict], .confirmed, policy: .legacy)
+        let other = profile(1, 0.2)
+        let badLink = MeetingSpeakerIdentityLink(token: other.token, canonicalToken: strict.token)
+        _ = try check([strict, other], .invalidLinks, links: [badLink])
+        _ = try check([strict, other], .confirmed, policy: .legacy, links: [badLink])
+        let later = profile(2, 1.5, epoch: 1)
+        let linked = try check([first, later], .referenceDistance,
+                              links: [.init(token: later.token, canonicalToken: first.token)])
+        try require(linked.validGroupCount == 1 && linked.bestReferenceDistance == far.bestReferenceDistance,
+                    "Linked epochs retain their worst all-pairs reference distance")
+        let unmeasured = profile(3, 0, epoch: 1)
+        let earlyFailure = try check([malformed, unmeasured], .noValidCandidates,
+            links: [.init(token: unmeasured.token, canonicalToken: malformed.token)])
+        try require(earlyFailure.validProfileCount == 0 && earlyFailure.rejectedProfileCount == 1
+                    && earlyFailure.diagnosticFields.contains("skippedProfiles=1"),
+                    "A rejected linked group preserves short circuit and labels later observations unmeasured")
+        let many = (0..<300).map { profile($0, 0.2) }
+        let bounded = try check(many, .winnerMargin, policy: .legacy)
+        try require(bounded.queries.count == 128 && bounded.validProfileCount == 300
+                    && bounded.diagnosticFields.count < 20_000 && bounded.diagnosticFields.contains("omittedQueries=172"),
+                    "Diagnostic storage and output are bounded even beyond the production profile limit")
+        let before = DebugLogger.shared.messages.count
+        let observer = MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(
+            samples: [.init(token: profile(9).token, clips: [[0]]),
+                      .init(token: first.token, clips: [[Float](repeating: 0, count: 48_000), [Float](repeating: 0, count: 64_000)])],
+            profiles: [first], streaming: true)
+        let enabled = ProcessInfo.processInfo.environment["PICHI_MEETING_DETAILED_PROFILE"] == "1"
+        try require((observer != nil) == enabled, "Only the exact existing local profiling opt-in enables scalar support logs")
+        observer?(confirmed)
+        try require(DebugLogger.shared.messages.count == before + (enabled ? 1 : 0),
+                    "Disabled diagnostics produce no log; the opt-in uses the ordinary Release info path")
+        if enabled {
+            try require(DebugLogger.shared.messages.last?.contains("excerptFramesByProfile=[0:48000+64000]") == true,
+                        "Clip lengths follow the admitted profile after a skipped encoder input; no source timestamps are invented")
+            MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: [.init(token: first.token, clips: [[0]]),
+                .init(token: first.token, clips: [[0, 0]])], profiles: [first], streaming: true)?(confirmed)
+            try require(DebugLogger.shared.messages.last?.contains("excerptFramesByProfile=[0:unavailable]") == true,
+                        "Ambiguous duplicate encoder inputs cannot manufacture clip metadata")
+        }
+        print("PASS actual owner diagnostic gates, result parity, legacy links, bounded privacy and Release opt-in")
     }
 
 }
