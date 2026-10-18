@@ -2375,6 +2375,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private func handleCaptureEvent(_ event: MeetingCaptureEvent, generation: UUID) {
         guard self.captureGeneration == generation, var session = self.activeSession else { return }
+        var requiresPersistence = true
         switch event {
         case let .trackHealth(trackID, health):
             if health.status == .healthy {
@@ -2386,6 +2387,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                 }
                 return
             }
+            let previousHealth = session.audioTracks[index].health
+            let previousState = session.state
             var health = health
             let kind = session.audioTracks[index].kind
             let watchdogTripped = kind == .applicationAudio && health.status != .degraded
@@ -2427,6 +2430,12 @@ final class MeetingSessionCoordinator: ObservableObject {
                 self.state = .recording(session.id)
                 self.degradeReason = nil
             }
+            // Meter, sample timestamps and silence duration remain current in memory and UI.
+            // Saving the growing transcript for every capture tick can keep flush() waiting
+            // indefinitely. Durable capture transitions still save immediately; canonical,
+            // chunk and terminal saves include the latest complete health snapshot.
+            requiresPersistence = previousHealth.status != health.status
+                || previousHealth.detail != health.detail || previousState != session.state
         case let .chunkFinalized(trackID, chunk, format):
             guard let index = session.audioTracks.firstIndex(where: { $0.id == trackID }) else { return }
             if !session.audioTracks[index].chunks.contains(where: { $0.id == chunk.id }) {
@@ -2533,7 +2542,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         // startRecording persists the settled tracks and any startup events together. Queuing
         // a preparing snapshot here could overwrite that newer state after start returns.
-        if session.state != .preparing {
+        if requiresPersistence, session.state != .preparing {
             self.enqueuePersistence(session)
         }
     }

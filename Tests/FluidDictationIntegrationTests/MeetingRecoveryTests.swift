@@ -983,6 +983,115 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(saved?.failures.isEmpty == true)
     }
 
+    func testTransientHealthTicksDoNotReplenishPersistenceWhileCanonicalCheckpointWaits() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel, originalBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = originalModel; settings.meetingTranscriptionBackendID = originalBackend }
+        settings.selectedSpeechModel = .whisperTiny
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let directory = self.makeTempDirectory(), disk = MeetingSessionStore(rootDirectory: directory)
+        let store = GatedHealthPersistenceStore(inner: disk)
+        let capture = StubCaptureController(), processing = MemoryCheckpointProcessingController()
+        var track = self.makeMicrophoneTrack(chunks: [])
+        track.health.status = .healthy
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
+            processing: processing, audioArbiter: StubArbiter())
+        self.addTeardownBlock { @MainActor in
+            await store.release()
+            await coordinator.shutdownForTermination()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        var configuration = self.makeConfiguration()
+        configuration.audioStorageMode = .memoryOnly
+        let session = try await coordinator.startRecording(configuration: configuration)
+        await store.arm()
+        var health = track.health
+        health.detail = "Synthetic meaningful capture detail"
+        capture.emit(.trackHealth(trackID: track.id, health: health))
+        try await store.waitUntilHeld()
+        let word = self.makeTranscriptSegment(sourceTrackID: track.id, speakerID: nil)
+        let checkpoint = Task { @MainActor in
+            try await processing.checkpoint(.init(segments: [word], isComplete: true))
+        }
+        for _ in 0..<5_000 {
+            if coordinator.currentSession?.transcriptSegments.count == 1 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(coordinator.currentSession?.transcriptSegments.count, 1)
+        // A gated slow save receives 100 successive 10 Hz capture snapshots. A meter
+        // producer must not create pending full-session writes behind that save.
+        for tick in 1...100 {
+            health.lastSampleAt = session.startedAt.addingTimeInterval(Double(tick) / 10)
+            health.lastPresentationTime = .init(value: Int64(tick), timescale: 10)
+            health.level = Float(tick % 10) / 10
+            health.silentForSeconds = Double(tick) / 10
+            capture.emit(.trackHealth(trackID: track.id, health: health))
+        }
+        capture.emit(.trackHealth(trackID: UUID(), health: .waiting))
+        await self.drainCaptureEvents()
+        XCTAssertEqual(coordinator.trackHealth[.microphone], health)
+        XCTAssertEqual(coordinator.currentSession?.audioTracks.first?.health, health)
+        await store.release()
+        try await checkpoint.value
+        let snapshots = await store.snapshots
+        XCTAssertEqual(snapshots.count, 3, "Only settled start, meaningful detail and canonical checkpoint save; transient ticks cannot prolong flush")
+        XCTAssertEqual(snapshots.last?.audioTracks.first?.health, health,
+            "The canonical checkpoint takes the latest live health after the owned persistence flush")
+        XCTAssertEqual(snapshots.last?.transcriptSegments.map(\.id), [word.id])
+        track.health = health
+        capture.stopResult = .init(tracks: [track], stoppedAt: session.startedAt.addingTimeInterval(10))
+        await coordinator.shutdownForTermination()
+        let stopped = try await disk.load(id: session.id)
+        XCTAssertEqual(stopped?.audioTracks.first?.health, try self.sessionManifestRoundTrip(health))
+        let savedAfterStop = await store.snapshots.count
+        capture.emit(.trackHealth(trackID: track.id, health: .waiting))
+        await self.drainCaptureEvents()
+        let savedAfterStaleTick = await store.snapshots.count
+        XCTAssertEqual(savedAfterStaleTick, savedAfterStop, "A retired capture generation cannot enqueue health")
+    }
+
+    func testHealthStatusDetailAndSilenceRecoveryRemainDurableAcrossTracks() async throws {
+        let directory = self.makeTempDirectory(), disk = MeetingSessionStore(rootDirectory: directory)
+        let store = GatedHealthPersistenceStore(inner: disk), capture = StubCaptureController()
+        var microphone = self.makeMicrophoneTrack(chunks: []), application = self.makeMicrophoneTrack(chunks: [])
+        microphone.health.status = .healthy; microphone.health.silentForSeconds = 0
+        application.kind = .applicationAudio; application.health.status = .healthy; application.health.silentForSeconds = 0
+        capture.startResult = .init(tracks: [microphone, application], firstPresentationTime: nil)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        self.addTeardownBlock { @MainActor in
+            await coordinator.shutdownForTermination()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        var configuration = self.makeConfiguration()
+        configuration.mode = .onlineCall
+        configuration.application = .init(bundleIdentifier: "synthetic.call", displayName: "Synthetic call")
+        let session = try await coordinator.startRecording(configuration: configuration)
+        var silent = application.health; silent.silentForSeconds = 100
+        capture.emit(.trackHealth(trackID: application.id, health: silent))
+        await self.drainCaptureEvents()
+        try await store.waitForSnapshotCount(2)
+        let degraded = try await disk.load(id: session.id)
+        XCTAssertEqual(degraded?.state, .recordingDegraded)
+        XCTAssertEqual(degraded?.audioTracks.last?.health.status, .degraded)
+        XCTAssertNotNil(degraded?.audioTracks.last?.health.detail)
+        capture.emit(.trackHealth(trackID: application.id, health: application.health))
+        await self.drainCaptureEvents()
+        try await store.waitForSnapshotCount(3)
+        let recovered = try await disk.load(id: session.id)
+        XCTAssertEqual(recovered?.state, .recording)
+        XCTAssertEqual(recovered?.audioTracks.last?.health.status, .healthy)
+        XCTAssertNil(recovered?.audioTracks.last?.health.detail)
+        var detail = microphone.health; detail.detail = "Synthetic route observation"
+        capture.emit(.trackHealth(trackID: microphone.id, health: detail))
+        await self.drainCaptureEvents()
+        try await store.waitForSnapshotCount(4)
+        let detailed = try await disk.load(id: session.id)
+        XCTAssertEqual(detailed?.audioTracks.first?.health.detail, detail.detail,
+            "A detail-only change is durable even when status and recording state stay healthy")
+    }
+
     func testVoiceProcessingFallbackDoesNotDegradeHealthyRecording() async throws {
         for deliverDuringStart in [false, true] {
             let dir = self.makeTempDirectory()
@@ -7123,6 +7232,39 @@ private actor GatedLoadAllStore: MeetingSessionStoring {
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? { try await self.inner.existingSessionDirectory(for: id) }
     func delete(id: MeetingSessionID) async throws { try await self.inner.delete(id: id) }
     func deleteAudioFiles(for id: MeetingSessionID) async throws { try await self.inner.deleteAudioFiles(for: id) }
+}
+
+/// Holds one meaningful health write while capture continues, using the real disk store.
+private actor GatedHealthPersistenceStore: MeetingSessionStoring {
+    private let inner: MeetingSessionStore
+    private var armed = false
+    private let entered = PermissionPreflightGate(), released = PermissionPreflightGate()
+    private(set) var snapshots: [MeetingSession] = []
+    init(inner: MeetingSessionStore) { self.inner = inner }
+    func arm() { armed = true }
+    func release() async { await released.open() }
+    func waitUntilHeld() async throws { try await waitUntil { await self.entered.hasOpened() } }
+    func waitForSnapshotCount(_ count: Int) async throws { try await waitUntil { await self.snapshots.count >= count } }
+    private func waitUntil(_ condition: () async -> Bool) async throws {
+        for _ in 0..<5_000 {
+            if await condition() { return }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        throw NSError(domain: "HealthPersistenceGateTimeout", code: 1)
+    }
+    func create(_ session: MeetingSession) async throws { try await inner.create(session) }
+    func save(_ session: MeetingSession) async throws {
+        if armed { armed = false; await entered.open(); await released.wait() }
+        try await inner.save(session)
+        snapshots.append(session)
+    }
+    func load(id: MeetingSessionID) async throws -> MeetingSession? { try await inner.load(id: id) }
+    func loadAll() async throws -> [MeetingSession] { try await inner.loadAll() }
+    func loadRecoverable() async throws -> [MeetingSession] { try await inner.loadRecoverable() }
+    func sessionDirectory(for id: MeetingSessionID) async throws -> URL { try await inner.sessionDirectory(for: id) }
+    func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? { try await inner.existingSessionDirectory(for: id) }
+    func delete(id: MeetingSessionID) async throws { try await inner.delete(id: id) }
+    func deleteAudioFiles(for id: MeetingSessionID) async throws { try await inner.deleteAudioFiles(for: id) }
 }
 
 /// Holds one queued pre-loss save, then holds a loss snapshot only AFTER the real
