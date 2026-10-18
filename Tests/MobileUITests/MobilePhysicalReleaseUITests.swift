@@ -5,6 +5,185 @@ import UIKit
 /// Opt-in tests of the installed app through its public UI. Audible fixtures belong
 /// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
+    /// Observation only: the parent verifies the saved session and idle process,
+    /// preserves current data and owns continuous native frame capture. This test
+    /// never starts, stops, relaunches, retries, edits or deletes a meeting.
+    @MainActor
+    func testPhysicalOwnedCompletedProtectedShareObservation() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires an explicitly authorized completed physical-device meeting")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_PROTECTED_SHARE_OBSERVATION"] == "1" else {
+            throw XCTSkip("Enable observation of an explicitly verified owned completed meeting")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let sessionID = try XCTUnwrap(environment["PICHI_PHYSICAL_READ_ONLY_SESSION_ID"])
+        let title = try XCTUnwrap(environment["PICHI_PHYSICAL_READ_ONLY_SESSION_TITLE"])
+        try require(UUID(uuidString: sessionID) != nil && !title.isEmpty && title.count <= 1024
+                    && environment["PICHI_PHYSICAL_READ_ONLY_SESSION_STATE"] == "completed",
+                    "The parent must supply an exact owned session ID, title and completed state")
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        try require(completedReadOnlyTranscriptVisible(in: app, title: title),
+                    "Begin on the exact parent-verified completed transcript, with no active attempt")
+        capture("share-observation-01-owned-completed-current", revision: revision)
+        try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
+        let row = app.buttons["history.session.\(sessionID)"]
+        try require(row.waitForExistence(timeout: 10) && row.isEnabled && row.isHittable,
+                    "Only the exact owned history session may be selected; no search or other row is opened")
+        try require(row.staticTexts.matching(NSPredicate(format: "label == %@", title)).firstMatch.exists,
+                    "The exact owned history ID must also expose its expected title")
+        try tap(row, "Open only the exact owned completed history session")
+        capture("share-observation-02-owned-history-transcript", revision: revision)
+        try require(completedReadOnlyTranscriptVisible(in: app, title: title),
+                    "The selected owned history record must remain completed and exportable")
+        let more = app.buttons["transcript.more"]
+        try tap(more, "Open the completed transcript's ordinary actions")
+        capture("share-observation-03-protected-export-menu", revision: revision)
+        try tap(app.buttons["transcript.exportProtected"], "Open only protected transcript export")
+        let activityList = app.otherElements["ActivityListView"]
+        let close = app.buttons["header.closeButton"]
+        var ownsShare = true
+        defer {
+            // Only dismiss the exact native activity UI opened by this selector.
+            // Never accept an alert, pick a destination or tap a suggested contact.
+            if ownsShare && app.state == .runningForeground && activityList.exists
+                && app.alerts.count == 0 && close.exists && close.isHittable {
+                close.tap()
+                capture("share-observation-cleanup-native-close", revision: revision)
+            }
+        }
+        try require(activityList.waitForExistence(timeout: 15) && app.alerts.count == 0,
+                    "The ordinary protected export must present the observed native activity UI")
+        capture("share-observation-04-native-activity", revision: revision)
+        let accessibility = XCTAttachment(string: app.debugDescription)
+        accessibility.name = "protected-share-observation-accessibility-\(revision)"
+        accessibility.lifetime = .keepAlways
+        add(accessibility)
+        try tap(close, "Close only the observed native activity header")
+        try require(activityList.waitForNonExistence(timeout: 10)
+                    && completedReadOnlyTranscriptVisible(in: app, title: title),
+                    "Cancelling observation must return to the same owned completed transcript")
+        ownsShare = false
+        capture("share-observation-05-cancelled-no-delivery", revision: revision)
+        print("[PHYSICAL_PROTECTED_SHARE_OBSERVATION] native_ui_observed_and_cancelled delivery_attempted=false")
+        #endif
+    }
+
+    /// Fixture staging preflight only. No recording is started and the PDF is not
+    /// selected or rendered. Exact Files location/folder admission avoids Recents
+    /// and global search finding an unrelated file with the same basename.
+    @MainActor
+    func testPhysicalReadySyntheticPDFFixturePreflight() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires an explicitly authorized ready physical-device app")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_PDF_FIXTURE_PREFLIGHT"] == "1" else {
+            throw XCTSkip("Enable read-only inspection of an explicitly staged synthetic PDF")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let filename = try XCTUnwrap(environment["PICHI_PRESENTATION_FIXTURE_NAME"])
+        let location = try XCTUnwrap(environment["PICHI_PRESENTATION_FIXTURE_LOCATION"])
+        let folder = try XCTUnwrap(environment["PICHI_PRESENTATION_FIXTURE_FOLDER"])
+        try require(filename == "SyntheticDemoPresentation.pdf" && !location.isEmpty
+                    && folder == "Codex-Pichi-Demo-20261018",
+                    "Only the approved synthetic PDF in its explicit staged location/folder may be inspected")
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        try require(app.descendants(matching: .any)["meeting.ready"].firstMatch.exists
+                    && app.buttons["meeting.start"].exists && app.alerts.count == 0,
+                    "Begin in ready state; this selector never uses New Meeting or Start")
+        capture("pdf-preflight-01-ready-no-recording", revision: revision)
+        try tap(app.buttons["meeting.presentation"], "Open only the ready toolbar's native PDF picker")
+        capture("pdf-preflight-02-native-picker", revision: revision)
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Отмена", "Отменить"]))
+        var ownsPicker = true
+        defer {
+            if ownsPicker && app.state == .runningForeground && app.alerts.count == 0
+                && cancel.count == 1 && cancel.firstMatch.isHittable {
+                cancel.firstMatch.tap()
+                capture("pdf-preflight-cleanup-native-cancel", revision: revision)
+            }
+        }
+        let locationCell = app.cells.matching(NSPredicate(format: "label == %@", location))
+        for step in 0..<5 where !locationCell.firstMatch.isHittable {
+            let browse = app.buttons.matching(NSPredicate(format: "label IN %@", ["Browse", "Обзор"]))
+            let back = app.buttons["BackButton"]
+            if browse.count == 1 && browse.firstMatch.isHittable { browse.firstMatch.tap() }
+            else if back.exists && back.isHittable { back.tap() }
+            else { break }
+            capture("pdf-preflight-03-location-navigation-\(step)", revision: revision)
+        }
+        try require(locationCell.count == 1, "The explicit native Files location must be unique")
+        try tap(locationCell.firstMatch, "Open only the explicitly staged native Files location")
+        capture("pdf-preflight-04-known-location", revision: revision)
+        let folderText = app.staticTexts.matching(NSPredicate(format: "label == %@", folder))
+        try require(folderText.firstMatch.waitForExistence(timeout: 15) && folderText.count == 1,
+                    "The exact owned fixture folder must exist and be unambiguous")
+        try tap(folderText.firstMatch, "Inspect only the existing owned synthetic fixture folder")
+        capture("pdf-preflight-05-owned-folder", revision: revision)
+        let stem = (filename as NSString).deletingPathExtension
+        let file = app.staticTexts.matching(NSPredicate(format: "label IN %@", [filename, stem]))
+        try require(file.firstMatch.waitForExistence(timeout: 10) && file.count == 1
+                    && file.firstMatch.isEnabled && file.firstMatch.isHittable,
+                    "The exact approved synthetic PDF must be visible and selectable in its owned folder")
+        let accessibility = XCTAttachment(string: app.debugDescription)
+        accessibility.name = "synthetic-pdf-preflight-accessibility-\(revision)"
+        accessibility.lifetime = .keepAlways
+        add(accessibility)
+        capture("pdf-preflight-06-exact-fixture-visible-not-selected", revision: revision)
+        try require(cancel.count == 1, "The native fixture picker must expose one unambiguous Cancel")
+        try tap(cancel.firstMatch, "Cancel fixture inspection without selecting the PDF")
+        try require(cancel.firstMatch.waitForNonExistence(timeout: 10)
+                    && app.buttons["meeting.start"].waitForExistence(timeout: 10)
+                    && app.descendants(matching: .any)["meeting.ready"].firstMatch.exists
+                    && !app.buttons["meeting.stop"].exists && app.alerts.count == 0,
+                    "Fixture inspection must return to ready state without starting capture")
+        ownsPicker = false
+        capture("pdf-preflight-07-ready-after-native-cancel", revision: revision)
+        print("[PHYSICAL_PDF_FIXTURE_PREFLIGHT] exact_fixture_visible selected=false recording_started=false")
+        #endif
+    }
+
+    @MainActor private func attachReadOnlyPhysicalApp(revision: String) throws -> XCUIApplication {
+        continueAfterFailure = false
+        try require(revision.count == 40 && revision.allSatisfy { "0123456789abcdef".contains($0) }
+                    && ProcessInfo.processInfo.environment["PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT"] == "1",
+                    "The parent must freshly preserve all current data and verify an idle frozen Release process")
+        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice.mobile")
+        app.launchArguments = []
+        app.launchEnvironment = [:]
+        switch app.state {
+        case .runningForeground: break
+        case .runningBackground: app.activate()
+        case .notRunning, .runningBackgroundSuspended, .unknown:
+            throw verificationFailure("Read-only observation never launches, relaunches or resumes an unknown/suspended AUT")
+        @unknown default:
+            throw verificationFailure("The existing AUT state is unsupported for read-only observation")
+        }
+        try require(app.state == .runningForeground && app.alerts.count == 0
+                    && !app.buttons["meeting.stop"].exists
+                    && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                    && !app.descendants(matching: .any)["meeting.preparing"].firstMatch.exists
+                    && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                    "Read-only observation requires the parent's idle process, never an active attempt")
+        return app
+    }
+
+    @MainActor private func completedReadOnlyTranscriptVisible(in app: XCUIApplication, title: String) -> Bool {
+        app.state == .runningForeground && app.alerts.count == 0
+            && app.staticTexts.matching(NSPredicate(format: "label == %@", title)).firstMatch.exists
+            && app.buttons["transcript.more"].exists && app.buttons["transcript.more"].isHittable
+            && !app.buttons["meeting.stop"].exists && !app.buttons["meeting.retry"].exists
+            && !app.buttons["meeting.restartProcessing"].exists
+            && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+            && !app.descendants(matching: .any)["meeting.preparing"].firstMatch.exists
+            && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
+            && !app.staticTexts.matching(NSPredicate(format: "label IN %@",
+                ["Meeting transcription was interrupted", "Расшифровка встречи прервана",
+                 "Meeting transcription failed", "Не удалось расшифровать встречу"])).firstMatch.exists
+    }
+
     @MainActor
     func testPhysicalOwnerVoiceSampleCanBeCheckedAndDiscardedWithoutSaving() async throws {
         #if targetEnvironment(simulator)
