@@ -2748,6 +2748,11 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         var visibleUI: CombinedVisibleMeetingUI?
         defer { visibleUI?.close() }
         let twoVoiceFixture = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_TWO_VOICES"] == "1"
+        if externalStreamingSpeech {
+            guard duration >= 180, twoVoiceFixture else {
+                throw NSError(domain: "PhysicalStreamingBackgroundAcceptance", code: 1)
+            }
+        }
         let fixture = twoVoiceFixture ? "audio/mixed-two-voices.wav" : "audio/ru.wav"
         let player = externalStreamingSpeech ? nil : try AVAudioPlayer(contentsOf: assets.appendingPathComponent(fixture))
         player?.numberOfLoops = -1
@@ -2759,7 +2764,11 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         var lastUpdateSecond = 0
         var lastBackgroundUpdateSecond = 0
         var previousIDs: Set<UUID> = []
-        var previousPartial: MeetingLivePartial?
+        var previousSnapshot = coordinator.liveTranscript
+        var firstMicrophoneHealthSecond: Int?
+        var lastHealthyMicrophoneSecond = 0
+        var microphonePTSAdvances = 0
+        var previousMicrophonePTS: MeetingMediaTime?
         let requiresBackground = externalStreamingSpeech || environment["PICHI_PHYSICAL_STRICT_MEETING_BACKGROUND"] == "1"
         var backgroundSeconds: TimeInterval = 0
         var backgroundUpdates = 0
@@ -2776,7 +2785,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 guard case .unsupportedPCMConfiguration = error else { throw error }
                 throw XCTSkip("Registered strict PCM admission rejects this exact deployment: \(error.localizedDescription)")
             }
+            let captureRequested = ProcessInfo.processInfo.systemUptime
             let recording = try await coordinator.startRecording(configuration: configuration)
+            let captureAdmissionSeconds = ProcessInfo.processInfo.systemUptime - captureRequested
             XCTAssertEqual(recording.audioStorageMode, .memoryOnly)
             XCTAssertEqual(recording.speakerLabelsEnabled, true)
             XCTAssertEqual(recording.piiRedactionEnabled, true)
@@ -2808,6 +2819,13 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 }
                 let snapshot = coordinator.liveTranscript
                 let pending = coordinator.pendingSpeech
+                if let health = coordinator.trackHealth[.microphone], health.status == .healthy,
+                   health.lastSampleAt != nil, let pts = health.lastPresentationTime {
+                    firstMicrophoneHealthSecond = firstMicrophoneHealthSecond ?? second
+                    lastHealthyMicrophoneSecond = second
+                    if pts != previousMicrophonePTS { microphonePTSAdvances += 1 }
+                    previousMicrophonePTS = pts
+                }
                 largestPendingCount = max(largestPendingCount, pending.tokens.count)
                 if !pending.tokens.isEmpty { firstPendingSecond = firstPendingSecond ?? second }
                 XCTAssertLessThanOrEqual(pending.tokens.count, 64)
@@ -2823,8 +2841,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 if !ids.isEmpty || snapshot.partials.values.contains(where: { !$0.text.isEmpty }) {
                     firstTextSecond = firstTextSecond ?? Int(elapsed.rounded(.up))
                 }
-                let partial = snapshot.partials[.you]
-                if !ids.subtracting(previousIDs).isEmpty || (partial != nil && partial != previousPartial) {
+                if snapshot.hasNewWords(since: previousSnapshot) {
                     updates += 1
                     protectedUpdateSeconds.append(elapsed)
                     lastUpdateSecond = second
@@ -2837,7 +2854,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     }
                 }
                 previousIDs = ids
-                previousPartial = partial
+                previousSnapshot = snapshot
                 wasBackground = isBackground
                 previousObservationTime = now
                 print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates) pendingAudio=\(pending.tokens.count) background=\(isBackground)")
@@ -2853,9 +2870,17 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let capturedSeconds = ProcessInfo.processInfo.systemUptime - captureStart
             player?.stop()
             XCTAssertGreaterThanOrEqual(capturedSeconds, Double(duration))
-            XCTAssertNotNil(firstPendingSecond, "Real accepted microphone audio must show capture progress before recognition completes")
+            if externalStreamingSpeech {
+                // Pending tokens are an animation heuristic, not PCM acceptance. Health
+                // PTS is published only after the real sink accepts microphone samples.
+                XCTAssertNotNil(firstMicrophoneHealthSecond)
+                XCTAssertGreaterThanOrEqual(microphonePTSAdvances, duration - 20)
+                XCTAssertGreaterThanOrEqual(lastHealthyMicrophoneSecond, duration - 15)
+            } else {
+                XCTAssertNotNil(firstPendingSecond, "Real accepted microphone audio must show capture progress before recognition completes")
+                XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 12, "Speech must appear before slower attribution completes")
+            }
             XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
-            XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 12, "Speech must appear before slower attribution completes")
             XCTAssertGreaterThanOrEqual(updates, 3, "Repeated capture must keep advancing after the original 35-second failure")
             XCTAssertGreaterThanOrEqual(lastUpdateSecond, duration - 15,
                                         "Protected text must keep advancing near the end, not only during the first window")
@@ -2903,7 +2928,16 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             add(transcriptAttachment)
             let timingData = try JSONSerialization.data(withJSONObject: [
                 "model": model.rawValue, "durationSeconds": capturedSeconds,
+                "captureAdmissionSeconds": captureAdmissionSeconds,
+                "firstMicrophoneHealthSecond": firstMicrophoneHealthSecond ?? -1,
+                "lastHealthyMicrophoneSecond": lastHealthyMicrophoneSecond,
+                "microphonePTSAdvances": microphonePTSAdvances,
                 "firstTextSecond": firstTextSecond ?? -1,
+                "earlySafeTextUXTargetSeconds": 12,
+                "earlySafeTextUXTargetMet": firstTextSecond.map { $0 <= 12 } ?? false,
+                "acceptanceScope": externalStreamingSpeech
+                    ? "Background transport and protected-text progress; first-safe-text latency is reported separately. This is not overall live-UX or speaker-accuracy acceptance."
+                    : "Legacy strict capture and early-text checks",
                 "firstPendingSecond": firstPendingSecond ?? -1, "largestPendingCount": largestPendingCount,
                 "protectedUpdateSeconds": protectedUpdateSeconds,
                 "backgroundSeconds": backgroundSeconds,

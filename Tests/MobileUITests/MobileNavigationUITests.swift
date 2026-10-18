@@ -217,7 +217,9 @@ final class MobileNavigationUITests: XCTestCase {
                         "Protected export must reload the saved session and present the native activity UI")
             mark("native_activity_visible")
             capture("production-11-native-protected-export")
-            let close = app.buttons["header.closeButton"]
+            let identifiedClose = app.buttons["header.closeButton"]
+            let close = identifiedClose.exists ? identifiedClose : app.buttons.matching(
+                NSPredicate(format: "label IN %@", ["Close", "Закрыть", "Cancel", "Отмена"])).firstMatch
             try require(close.waitForExistence(timeout: 5) && close.isHittable,
                         "The native share sheet must expose its Cancel/Close action")
             close.tap()
