@@ -4495,7 +4495,11 @@ final class MeetingRecoveryTests: XCTestCase {
             session.transcriptSegments[0].nativeUnitID = "synthetic-native-word"
             session.transcriptSegments[0].nativePrecision = .word
             session.transcriptSegments[0].nativeTiming = .init(start: 0.1234, end: 0.9876)
+            // Native timing and its media-time projection must describe the same word.
+            session.transcriptSegments[0].start = .init(value: 123_400, timescale: 1_000_000)
+            session.transcriptSegments[0].end = .init(value: 987_600, timescale: 1_000_000)
             if operation == "nameUnknown" { session.transcriptSegments[0].speakerID = nil }
+            try session.validateForPersistence()
             try await store.create(session)
             let redactor = ColdCorrectionRedactor()
             redactor.behavior = .preparationFailure
@@ -4516,6 +4520,8 @@ final class MeetingRecoveryTests: XCTestCase {
                 XCTAssertEqual(changed.originalText, original.originalText)
                 XCTAssertEqual(changed.start, original.start)
                 XCTAssertEqual(changed.end, original.end)
+                XCTAssertEqual(changed.nativeUnitID, original.nativeUnitID)
+                XCTAssertEqual(changed.nativePrecision, original.nativePrecision)
                 XCTAssertEqual(changed.nativeTiming, original.nativeTiming)
                 XCTAssertEqual(changed.sourceTrackID, original.sourceTrackID)
             }
