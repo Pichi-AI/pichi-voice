@@ -259,6 +259,29 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
                       "A reflow that also adjusts the offset must retain the follow preference")
     }
 
+    func testIOS17OffsetOnlyLayoutCorrectionCannotPauseWithoutAnActualDrag() {
+        typealias Geometry = MeetingCaptionScrollTracking.Geometry
+        let bottom = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 2000, contentOffset: 1400)
+        let correction = Geometry(contentBottom: 700, viewportHeight: 600, contentHeight: 2000, contentOffset: 1300)
+        XCTAssertFalse(correction.layoutChanged(from: bottom))
+        XCTAssertTrue(correction.offsetChanged(from: bottom))
+        XCTAssertTrue(correction.fallbackFollowPreference(after: bottom,
+            currentlyFollowing: true, upwardDrag: false),
+            "UIKit offset compensation without a finger must retain follow intent")
+        XCTAssertFalse(correction.fallbackFollowPreference(after: bottom,
+            currentlyFollowing: true, upwardDrag: true), "An actual upward drag still pauses")
+
+        let momentum = Geometry(contentBottom: 800, viewportHeight: 600, contentHeight: 2000, contentOffset: 1200)
+        XCTAssertFalse(momentum.fallbackFollowPreference(after: correction,
+            currentlyFollowing: false, upwardDrag: false), "Finger release must not undo reading mode")
+        let growth = Geometry(contentBottom: 1000, viewportHeight: 600, contentHeight: 2200, contentOffset: 1200)
+        XCTAssertFalse(growth.fallbackFollowPreference(after: momentum,
+            currentlyFollowing: false, upwardDrag: false), "New captions must respect the reader")
+        let returned = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 2200, contentOffset: 1600)
+        XCTAssertTrue(returned.fallbackFollowPreference(after: growth,
+            currentlyFollowing: false, upwardDrag: false), "Returning to the actual bottom resumes following")
+    }
+
     func testFastBottomCrossingLatchesFollowThroughRubberBandRecoil() {
         typealias Geometry = MeetingCaptionScrollTracking.Geometry
         let older = Geometry(contentBottom: 450, viewportHeight: 300, contentHeight: 900, contentOffset: 450)
@@ -688,64 +711,53 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
             abs(scroll.contentOffset.y - beginning) < 3 && !self.nearBottom(scroll)
         }
         capture(host, step: "full-history-02-beginning", scheme: .light)
-        if #unavailable(iOS 18) {
-            // Programmatic offsets exercise the iOS 17 geometry fallback. iOS 18+
-            // requires a real finger phase, covered by the existing UI automation.
-            host.model.rows.append(row("Новая реплика текущего участника."))
-            try await settle(host, "A new participant update must not pull the reader away from the beginning") {
-                abs(scroll.contentOffset.y - beginning) < 3 && !self.nearBottom(scroll)
-            }
-            capture(host, step: "full-history-03-reading-while-updating", scheme: .light)
-        }
+        // A programmatic offset proves the full history is reachable, not that a
+        // person dragged. Real manual reading/return is covered by UI gestures.
         XCTAssertEqual(host.model.rows.first?.id, rows.first?.id)
     }
 
-    func testIOS17NonTouchScrollToOlderTextStaysPausedWhenNewRowsArrive() async throws {
+    func testIOS17ProgrammaticOffsetCorrectionKeepsFollowingWhenNewRowsArrive() async throws {
         guard #unavailable(iOS 18) else {
-            throw XCTSkip("This exercises the iOS 17 offset-based fallback. Programmatic UIKit scrolling does not simulate a user scroll phase on iOS 18+.")
+            throw XCTSkip("This exercises the iOS 17 geometry fallback; programmatic movement is not a user gesture.")
         }
         for scheme in [ColorScheme.light, .dark] {
             let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: scheme)
             defer { host.close() }
             let scroll = try await captionScroll(in: host)
             try await settle(host, "Initial captions must be bottom-pinned") { self.nearBottom(scroll) }
-            capture(host, step: "01-before-non-touch-scroll", scheme: scheme)
+            capture(host, step: "01-before-layout-offset-correction", scheme: scheme)
 
             let olderOffset = max(-scroll.adjustedContentInset.top, self.bottomOffset(scroll) - 250)
             scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: olderOffset), animated: false)
-            try await settle(host, "UIKit non-touch movement must reach older text") {
+            try await settle(host, "UIKit can adjust the offset without a finger gesture") {
                 abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
             }
-            capture(host, step: "02-non-touch-older-text", scheme: scheme)
+            capture(host, step: "02-programmatic-offset-correction", scheme: scheme)
 
             let oldContentHeight = scroll.contentSize.height
             host.model.rows += wordRows(count: 120)
-            try await settle(host, "New captions must not pull an older-text reader back to the bottom") {
+            try await settle(host, "New captions must remain visible after a non-user offset correction") {
                 scroll.contentSize.height > oldContentHeight + 40
-                    && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
+                    && self.nearBottom(scroll)
             }
-            capture(host, step: "03-appended-while-paused", scheme: scheme)
+            capture(host, step: "03-append-preserves-following", scheme: scheme)
             let heightBeforePending = scroll.contentSize.height
             host.model.pending = pending(count: 40)
-            try await settle(host, "Pending waveforms must also respect reading older text") {
+            try await settle(host, "Pending waveforms must also retain automatic following") {
                 scroll.contentSize.height > heightBeforePending + 20
-                    && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
+                    && self.nearBottom(scroll)
             }
-            capture(host, step: "04-pending-while-paused", scheme: scheme)
+            capture(host, step: "04-pending-preserves-following", scheme: scheme)
             let heightBeforeStop = scroll.contentSize.height
             host.model.pending = .empty
-            try await settle(host, "Terminal capture cleanup must preserve the reader's position") {
+            try await settle(host, "Terminal pending cleanup must preserve following") {
                 scroll.contentSize.height < heightBeforeStop - 20
-                    && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
+                    && self.nearBottom(scroll)
             }
-            capture(host, step: "05-capture-stop-while-paused", scheme: scheme)
-            scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: self.bottomOffset(scroll) - 20), animated: false)
-            try await settle(host, "Almost reaching the bottom does not resume following") { !self.nearBottom(scroll) }
-            scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: self.bottomOffset(scroll)), animated: false)
-            try await settle(host, "Reaching the actual bottom resumes following") { self.nearBottom(scroll) }
+            capture(host, step: "05-capture-stop-preserves-following", scheme: scheme)
             host.model.pending = pending(count: 64)
-            try await settle(host, "New pending audio follows after reaching the bottom") { self.nearBottom(scroll) }
-            capture(host, step: "06-bottom-resumes-pending", scheme: scheme)
+            try await settle(host, "Later pending audio must still follow") { self.nearBottom(scroll) }
+            capture(host, step: "06-later-pending-follows", scheme: scheme)
         }
     }
 

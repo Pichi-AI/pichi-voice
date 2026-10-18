@@ -324,16 +324,12 @@ struct MeetingCaptionScrollTracking: ViewModifier {
 
         func fallbackFollowPreference(after previous: Self, currentlyFollowing: Bool,
                                       upwardDrag: Bool) -> Bool {
-            // Preferences can publish a new height before UIKit clamps the old offset.
-            // The later offset-only clamp is still layout, not a scroll to older text.
-            let clampedToBottom: Bool
-            if let contentHeight, let viewportHeight, let contentOffset,
-               let previousOffset = previous.contentOffset {
-                let bottomOffset = max(0, contentHeight - viewportHeight)
-                clampedToBottom = previousOffset > bottomOffset + 0.5 && abs(contentOffset - bottomOffset) < 2
-            } else { clampedToBottom = false }
+            // On iOS 17 a LazyVStack/TextKit layout correction can move the offset
+            // after its height preference has settled. Offset-only movement therefore
+            // does not establish user intent. The actual drag latches reading mode;
+            // momentum retains that choice, and reaching the end resumes following.
             return followPreference(after: previous, currentlyFollowing: currentlyFollowing,
-                userIsScrolling: upwardDrag || (!layoutChanged(from: previous) && !clampedToBottom), upwardDrag: upwardDrag)
+                userIsScrolling: upwardDrag, upwardDrag: upwardDrag)
         }
 
         func followPreference(after previous: Self, currentlyFollowing: Bool,
@@ -418,8 +414,8 @@ struct MeetingCaptionScrollTracking: ViewModifier {
                 .onPreferenceChange(GeometryKey.self) { geometry in
                     defer { self.previousGeometry = geometry }
                     if let previous = self.previousGeometry {
-                        // Content growth and rotation change layout, not the user's follow choice.
-                        // Offset-only changes also cover deceleration and non-touch scrolling.
+                        // Geometry observes position, while the drag below owns the
+                        // decision to pause. Layout corrections must not become gestures.
                         let wasFollowing = self.isPinnedToBottom
                         self.isPinnedToBottom = geometry.fallbackFollowPreference(after: previous,
                             currentlyFollowing: self.isPinnedToBottom,
