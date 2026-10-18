@@ -287,3 +287,23 @@ Coalesced ASR windows still publish once per original delta. The small native fe
 Retained streaming retry uses the same V2 clean-range/quality collector and owner policy. It reads native speech ranges in bounded one-second buffers, skipping silent gaps, and never acquires an entire recording as Float PCM. Optional owner reread failures discard identity evidence while preserving valid diarization and anonymous speech; cancellation still propagates. This optional phase can reread voiced portions of retained audio; its I/O is separate from live capture memory. Anonymous and exact owner-v1 fingerprints remain admitted with their original collectors and strict decisions. A changed V2 recipe has a distinct exact composite fingerprint, including its thresholds, quality block and lookback.
 
 The operating point is an experimental candidate derived from a user-confirmed false negative and 16 exploratory CPU comparisons, not an unseen accuracy benchmark. Independent newly frozen weak-label meetings/voices and full production E2E owner/nonowner runs are required before calling it validated. Scalar source/embedding diagnostics do not establish identity truth for automatic Fathom labels.
+
+## Opt-in durable private XCTest evidence
+
+The hosted streaming probe can preserve the existing post-privacy evaluation and scalar resource report when the XCTest attachment connection is lost. This is test-only diagnostics, not a production recording feature or a replacement for an external XCTest PASS. It does not write audio, owner profiles, embeddings, speaker contact names, `originalText`, arbitrary error descriptions, or an additional meeting record.
+
+In addition to the ordinary private single-run streaming flags, the caller must set:
+
+| Environment value | Required value |
+| --- | --- |
+| `PICHI_MEETING_DURABLE_EVIDENCE` | `1` |
+| `PICHI_MEETING_DURABLE_RUN_ID` | A fresh lowercase UUID, never reused |
+| `PICHI_MEETING_DURABLE_AUDIO_SHA256` | The exact lowercase 64-digit fixture WAV SHA-256 |
+| `PICHI_COMBINED_MEETING_TESTED_REVISION` | The exact lowercase 40-digit frozen test-host revision |
+| `PICHI_MEETING_STREAMING_EXPECTED_SOURCE_FRAMES` | An explicit positive source frame count matching the WAV |
+
+The fixture hash, frame count, private evaluation, detailed profiling, single repetition and actual frozen host revision are checked before recording the run. The fixed app-container destination is `Library/Caches/PrivateMeetingEvaluationTests/<runID>/`; no environment variable supplies a destination path. An existing run directory or a replaced Library/Caches/test-directory symbolic link is refused. The caller must preserve normal user data before a device test, download only this exact task-owned run directory afterward, and remove only that directory after verifying its copied files. The test intentionally leaves these files available for that readback. Caches remain purgeable by the operating system.
+
+`manifest.json` pins the run, revision, audio hash and source frame count. `terminal.json` starts as `running`. After inference, joined cleanup and the last measured resource sample, the probe atomically writes `metadata.json`, `protected-evaluation.json`, and a final `completedDiagnostic` terminal containing both file hashes and the current recorded XCTest failure count. Known privacy-invariant failures refuse protected persistence. The terminal is a diagnostic commit marker; a nonzero or unavailable failure count, a later assertion, lost test transport or a missing external result must never be presented as an accepted PASS. Missing or partial output is not a completed diagnostic.
+
+Caught failures and cancellation join the same existing resource owners first, then write bounded `failure-metadata.json` and `failedDiagnostic` or `cancelledDiagnostic`. Their terminal contains a fixed phase label and file hash, not the thrown error's private description. Abrupt host termination can leave `running`; it cannot manufacture successful completion. Evidence serialization, disk writes and attachment allocation remain outside the reported resource measurement window.

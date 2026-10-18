@@ -624,6 +624,117 @@ private nonisolated enum CombinedProtectedEvaluation {
     }
 }
 
+/// Explicit private XCTest diagnostics survive a lost XCTest attachment connection.
+/// A terminal diagnostic is never a substitute for the external XCTest result. This
+/// owner writes only existing post-privacy evidence, outside the sampled window.
+private nonisolated struct CombinedDurableEvidencePin: Encodable {
+    let runID: String
+    let testedRevision: String
+    let audioSHA256: String
+    let expectedSourceFrames: Int64
+
+    init?(environment: [String: String], streaming: Bool, options: CombinedEvaluationOptions,
+          actualRevision: String, audioSHA256: String, sourceFrames: Int64) throws {
+        guard environment["PICHI_MEETING_DURABLE_EVIDENCE"] == "1" else { return nil }
+        func hex(_ value: String, count: Int) -> Bool {
+            value.count == count && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+        }
+        guard streaming, options.privateEvaluation, options.repetitions == 1,
+              environment["PICHI_MEETING_DETAILED_PROFILE"] == "1",
+              let rawID = environment["PICHI_MEETING_DURABLE_RUN_ID"],
+              let id = UUID(uuidString: rawID), id.uuidString.lowercased() == rawID,
+              let revision = environment["PICHI_COMBINED_MEETING_TESTED_REVISION"],
+              hex(revision, count: 40), revision == actualRevision,
+              let digest = environment["PICHI_MEETING_DURABLE_AUDIO_SHA256"],
+              hex(digest, count: 64), digest == audioSHA256,
+              let expected = environment["PICHI_MEETING_STREAMING_EXPECTED_SOURCE_FRAMES"].flatMap(Int64.init),
+              expected > 0, expected == sourceFrames else {
+            throw NSError(domain: "CombinedMeetingDurableEvidencePin", code: 1)
+        }
+        runID = rawID; testedRevision = revision; self.audioSHA256 = digest; expectedSourceFrames = expected
+    }
+}
+
+private nonisolated final class CombinedDurableEvaluationEvidence {
+    static let directoryName = "PrivateMeetingEvaluationTests"
+    private let directory: URL
+    private let pin: CombinedDurableEvidencePin
+    private let maximumEvidenceBytes: Int
+    private let files = FileManager.default
+
+    init(pin: CombinedDurableEvidencePin, cachesDirectory: URL, maximumEvidenceBytes: Int) throws {
+        self.pin = pin
+        self.maximumEvidenceBytes = maximumEvidenceBytes
+        let caches = cachesDirectory.standardizedFileURL
+        // The caller obtains the fixed sandbox Caches location, never an environment
+        // path. Refuse a replaced Library/Caches boundary, while allowing the OS's
+        // own /var alias outside the application container.
+        try Self.requireDirectory(caches.deletingLastPathComponent())
+        try Self.requireDirectory(caches)
+        let parent = caches.appendingPathComponent(Self.directoryName, isDirectory: true)
+        if !files.fileExists(atPath: parent.path) {
+            try files.createDirectory(at: parent, withIntermediateDirectories: false)
+        }
+        try Self.requireDirectory(parent)
+        directory = parent.appendingPathComponent(pin.runID, isDirectory: true)
+        // A fresh run owns a new directory. Never replace another attempt's evidence.
+        guard !files.fileExists(atPath: directory.path) else {
+            throw NSError(domain: "CombinedMeetingDurableEvidenceExists", code: 1)
+        }
+        try files.createDirectory(at: directory, withIntermediateDirectories: false)
+        try Self.requireDirectory(directory)
+        try write(try JSONEncoder().encode(pin), name: "manifest.json", limit: 4_096)
+        try terminal(state: "running", assertionFailures: nil, evidenceDigests: [:])
+    }
+
+    private static func requireDirectory(_ url: URL) throws {
+        guard try FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType == .typeDirectory else {
+            throw NSError(domain: "CombinedMeetingDurableEvidenceDirectory", code: 1)
+        }
+    }
+
+    private func write(_ data: Data, name: String, limit: Int) throws {
+        guard data.count <= limit else { throw NSError(domain: "CombinedMeetingDurableEvidenceSize", code: 1) }
+        try Self.requireDirectory(directory)
+        let target = directory.appendingPathComponent(name)
+        if files.fileExists(atPath: target.path) {
+            guard try files.attributesOfItem(atPath: target.path)[.type] as? FileAttributeType == .typeRegular else {
+                throw NSError(domain: "CombinedMeetingDurableEvidenceFile", code: 1)
+            }
+        }
+        try data.write(to: target, options: .atomic)
+    }
+
+    private func terminal(state: String, assertionFailures: Int?, evidenceDigests: [String: String], phase: String? = nil) throws {
+        var values: [String: Any] = [
+            "schema": 1, "pin": try JSONSerialization.jsonObject(with: JSONEncoder().encode(pin)),
+            "state": state, "recordedXCTestFailureCount": assertionFailures as Any? ?? NSNull(),
+            "xctestAcceptance": "externalXCTestPassRequired", "evidenceSHA256": evidenceDigests,
+            "scope": "Private test diagnostics only. Completion here cannot establish XCTest PASS, quality acceptance, or absence of later test failures. No audio, profiles, embeddings, original text, or arbitrary error descriptions are written."
+        ]
+        if let phase { values["failurePhase"] = phase }
+        try write(try JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]), name: "terminal.json", limit: 8_192)
+    }
+
+    func finish(metadata: Data, protectedEvaluation: Data, assertionFailures: Int?) throws {
+        try write(metadata, name: "metadata.json", limit: maximumEvidenceBytes)
+        try write(protectedEvaluation, name: "protected-evaluation.json", limit: maximumEvidenceBytes)
+        let hashes = ["metadata.json": metadata, "protected-evaluation.json": protectedEvaluation].mapValues {
+            SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined()
+        }
+        try terminal(state: "completedDiagnostic", assertionFailures: assertionFailures, evidenceDigests: hashes)
+    }
+
+    func fail(cancelled: Bool, phase: String, assertionFailures: Int?, metadata: Data) throws {
+        let allowed = ["preparation", "configurationReady", "capture", "postStop", "completedPrivacyReady",
+                       "betweenAttemptsRelease", "retainedRecovery", "cleanup"]
+        try write(metadata, name: "failure-metadata.json", limit: maximumEvidenceBytes)
+        let hash = SHA256.hash(data: metadata).map { String(format: "%02x", $0) }.joined()
+        try terminal(state: cancelled ? "cancelledDiagnostic" : "failedDiagnostic", assertionFailures: assertionFailures,
+                     evidenceDigests: ["failure-metadata.json": hash], phase: allowed.contains(phase) ? phase : "other")
+    }
+}
+
 /// The streaming test reads only whitelisted numeric diagnostics for this exact attempt.
 /// It never attaches support logs, paths, source wording, identities or model inputs.
 private nonisolated enum CombinedStreamingDiagnostics {
@@ -1005,6 +1116,15 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertNotNil(ownerProfileGenerationAtStart, "Both positive and negative owner comparisons require a real existing enrollment")
         }
         let baseline = try XCTUnwrap(physicalFootprintBytes())
+        let durablePin = try CombinedDurableEvidencePin(environment: environment, streaming: streaming, options: options,
+            actualRevision: RuntimeBuildProvenance.sanitizedSourceRevision(Bundle.main.object(forInfoDictionaryKey: "AppSourceRevision")),
+            audioSHA256: audioDigest, sourceFrames: Int64(input.length))
+        let durableEvidence: CombinedDurableEvaluationEvidence?
+        if let durablePin {
+            let caches = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+            durableEvidence = try CombinedDurableEvaluationEvidence(pin: durablePin, cachesDirectory: caches,
+                maximumEvidenceBytes: options.maximumProtectedEvidenceBytes)
+        } else { durableEvidence = nil }
         let name = "CombinedMeetingProbe.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
@@ -1083,6 +1203,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             // failure must join both diagnostic owners before leaving the attempt.
             sampler.cancel(); mainActorSampler?.cancel()
             await sampler.value; await mainActorSampler?.value
+            try? durableEvidence?.fail(cancelled: error is CancellationError, phase: "preparation",
+                assertionFailures: testRun?.totalFailureCount, metadata: Data("{\"inventoryFailed\":true}".utf8))
             throw error
         }
         var observedNewAudioPaths: Set<String> = []
@@ -1529,10 +1651,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 report["processCPUScope"] = "Whole process across first streaming attempt, inter-attempt release, fresh retained retry and cleanup"
             }
             if streaming { report["streaming"] = streamingEvidence }
-            let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
-            attachment.name = (recoverAfterStop ? "Retained-Streaming-Russian-meeting-metadata-only" : streaming ? "Streaming-Russian-meeting-metadata-only" : "Combined-Russian-meeting-metadata-only") + (options.repetitions > 1 ? "-run-\(repetition)" : "")
-            attachment.lifetime = .keepAlways
-            add(attachment)
+            let metadataData = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            var protectedReviewData: Data?
             // Physical private evaluation is separately gated. Legacy visual review
             // retains its simulator-only meaning; neither exports pre-privacy text.
             if options.privateEvaluation || (Self.isSimulator && environment["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW"] == "1") {
@@ -1559,7 +1679,27 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 guard reviewData.count <= options.maximumProtectedEvidenceBytes else {
                     throw NSError(domain: "CombinedMeetingProtectedEvidenceSize", code: 2)
                 }
-                let review = XCTAttachment(data: reviewData, uniformTypeIdentifier: "public.json")
+                protectedReviewData = reviewData
+            }
+            if let durableEvidence {
+                // Refuse persistence if any known privacy invariant failed. Anonymous
+                // voice IDs and post-privacy native timings use the existing exporter.
+                guard completed.state == .completed,
+                      completed.transcriptSegments.allSatisfy({ $0.originalText == nil }),
+                      observations.unmaskedPublishableObservations == 0,
+                      observations.remainingCases(in: protectedText) == 0,
+                      let protectedReviewData else {
+                    throw NSError(domain: "CombinedMeetingDurableEvidencePrivacy", code: 1)
+                }
+                try durableEvidence.finish(metadata: metadataData, protectedEvaluation: protectedReviewData,
+                    assertionFailures: testRun?.totalFailureCount)
+            }
+            let attachment = XCTAttachment(data: metadataData, uniformTypeIdentifier: "public.json")
+            attachment.name = (recoverAfterStop ? "Retained-Streaming-Russian-meeting-metadata-only" : streaming ? "Streaming-Russian-meeting-metadata-only" : "Combined-Russian-meeting-metadata-only") + (options.repetitions > 1 ? "-run-\(repetition)" : "")
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            if let protectedReviewData {
+                let review = XCTAttachment(data: protectedReviewData, uniformTypeIdentifier: "public.json")
                 review.name = recoverAfterStop ? "Retained-Streaming-Russian-meeting-private-protected-evaluation" : streaming ? "Streaming-Russian-meeting-private-protected-evaluation" : (options.privateEvaluation ? "Combined-Russian-meeting-private-protected-evaluation" : "Combined-Russian-meeting-private-visual-review")
                     + (options.repetitions > 1 ? "-run-\(repetition)" : "")
                 review.lifetime = .keepAlways
@@ -1578,6 +1718,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             await mainActorSampler?.value
             let failed = try JSONSerialization.data(withJSONObject: ["phase": phase, "runIndex": repetition,
                 "footprintSamples": resourceSamples.snapshot().samples.map(\.json)], options: [.sortedKeys])
+            do {
+                try durableEvidence?.fail(cancelled: error is CancellationError, phase: phase,
+                    assertionFailures: testRun?.totalFailureCount, metadata: failed)
+            } catch { XCTFail("Private durable failure diagnostics could not be written") }
             let attachment = XCTAttachment(data: failed, uniformTypeIdentifier: "public.json")
             attachment.name = "Combined-Russian-meeting-failure-resource-samples"
             attachment.lifetime = .keepAlways
@@ -1986,6 +2130,108 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             "completedUptimeMs": completedMS,
             "limitations": "Anonymous session voice IDs are not verified real identities. Known-label coverage is not diarization accuracy. Reference WER and speaker quality require offline scoring. No isolated engine utilization or background execution claim."
         ]
+    }
+
+    private func durableEvidenceFixture() throws -> (environment: [String: String], options: CombinedEvaluationOptions,
+        pin: CombinedDurableEvidencePin, caches: URL) {
+        let environment = [
+            "PICHI_MEETING_DURABLE_EVIDENCE": "1", "PICHI_MEETING_DURABLE_RUN_ID": UUID().uuidString.lowercased(),
+            "PICHI_COMBINED_MEETING_PRIVATE_EVALUATION": "1", "PICHI_MEETING_DETAILED_PROFILE": "1",
+            "PICHI_COMBINED_MEETING_TESTED_REVISION": String(repeating: "a", count: 40),
+            "PICHI_MEETING_DURABLE_AUDIO_SHA256": String(repeating: "b", count: 64),
+            "PICHI_MEETING_STREAMING_EXPECTED_SOURCE_FRAMES": "320000"
+        ]
+        let options = try CombinedEvaluationOptions(environment: environment)
+        let pin = try XCTUnwrap(CombinedDurableEvidencePin(environment: environment, streaming: true, options: options,
+            actualRevision: String(repeating: "a", count: 40), audioSHA256: String(repeating: "b", count: 64), sourceFrames: 320_000))
+        let caches = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("DurableMeetingEvidenceTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: false)
+        return (environment, options, pin, caches)
+    }
+
+    func testDurableEvaluationEvidenceRequiresExplicitMatchingPins() throws {
+        let fixture = try durableEvidenceFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.caches) }
+        XCTAssertNil(try CombinedDurableEvidencePin(environment: [:], streaming: false,
+            options: CombinedEvaluationOptions(environment: [:]), actualRevision: "", audioSHA256: "", sourceFrames: 0))
+        let invalidValues = [
+            "PICHI_MEETING_DURABLE_RUN_ID": "../foreign", "PICHI_COMBINED_MEETING_TESTED_REVISION": String(repeating: "c", count: 40),
+            "PICHI_MEETING_DURABLE_AUDIO_SHA256": String(repeating: "c", count: 64),
+            "PICHI_MEETING_STREAMING_EXPECTED_SOURCE_FRAMES": "319999", "PICHI_MEETING_DETAILED_PROFILE": "0"
+        ]
+        for (key, value) in invalidValues {
+            var environment = fixture.environment; environment[key] = value
+            XCTAssertThrowsError(try CombinedDurableEvidencePin(environment: environment, streaming: true, options: fixture.options,
+                actualRevision: fixture.pin.testedRevision, audioSHA256: fixture.pin.audioSHA256, sourceFrames: 320_000))
+        }
+        var missing = fixture.environment; missing.removeValue(forKey: "PICHI_MEETING_STREAMING_EXPECTED_SOURCE_FRAMES")
+        XCTAssertThrowsError(try CombinedDurableEvidencePin(environment: missing, streaming: true, options: fixture.options,
+            actualRevision: fixture.pin.testedRevision, audioSHA256: fixture.pin.audioSHA256, sourceFrames: 320_000))
+        XCTAssertThrowsError(try CombinedDurableEvidencePin(environment: fixture.environment, streaming: false, options: fixture.options,
+            actualRevision: fixture.pin.testedRevision, audioSHA256: fixture.pin.audioSHA256, sourceFrames: 320_000))
+        XCTAssertThrowsError(try CombinedDurableEvidencePin(environment: fixture.environment, streaming: true,
+            options: CombinedEvaluationOptions(environment: [:]), actualRevision: fixture.pin.testedRevision,
+            audioSHA256: fixture.pin.audioSHA256, sourceFrames: 320_000))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.caches.path), [])
+    }
+
+    func testDurableEvaluationEvidenceCommitsHashedDiagnosticsWithoutClaimingXCTestPass() throws {
+        let fixture = try durableEvidenceFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.caches) }
+        let writer = try CombinedDurableEvaluationEvidence(pin: fixture.pin, cachesDirectory: fixture.caches, maximumEvidenceBytes: 4_096)
+        let directory = fixture.caches.appendingPathComponent(CombinedDurableEvaluationEvidence.directoryName)
+            .appendingPathComponent(fixture.pin.runID)
+        let metadata = Data("{\"peakFootprintBytes\":123}".utf8)
+        let protected = Data("{\"segments\":[{\"text\":\"[ИМЯ] работает\"}],\"speakers\":[]}".utf8)
+        try writer.finish(metadata: metadata, protectedEvaluation: protected, assertionFailures: 1)
+        let terminal = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("terminal.json"))) as? [String: Any])
+        XCTAssertEqual(terminal["state"] as? String, "completedDiagnostic")
+        XCTAssertEqual(terminal["recordedXCTestFailureCount"] as? Int, 1)
+        XCTAssertEqual(terminal["xctestAcceptance"] as? String, "externalXCTestPassRequired")
+        let digests = try XCTUnwrap(terminal["evidenceSHA256"] as? [String: String])
+        for name in ["metadata.json", "protected-evaluation.json"] {
+            let data = try Data(contentsOf: directory.appendingPathComponent(name))
+            XCTAssertEqual(digests[name], SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+        }
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: directory.path)),
+            Set(["manifest.json", "metadata.json", "protected-evaluation.json", "terminal.json"]))
+        XCTAssertThrowsError(try CombinedDurableEvaluationEvidence(pin: fixture.pin, cachesDirectory: fixture.caches, maximumEvidenceBytes: 4_096))
+    }
+
+    func testDurableEvaluationFailureAndCancellationContainOnlyBoundedDiagnostics() throws {
+        let fixture = try durableEvidenceFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.caches) }
+        let writer = try CombinedDurableEvaluationEvidence(pin: fixture.pin, cachesDirectory: fixture.caches, maximumEvidenceBytes: 4_096)
+        let directory = fixture.caches.appendingPathComponent(CombinedDurableEvaluationEvidence.directoryName)
+            .appendingPathComponent(fixture.pin.runID)
+        try writer.fail(cancelled: true, phase: "Private arbitrary failure path", assertionFailures: nil,
+            metadata: Data("{\"footprintSamples\":[]}".utf8))
+        let data = try Data(contentsOf: directory.appendingPathComponent("terminal.json"))
+        let terminal = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(terminal["state"] as? String, "cancelledDiagnostic")
+        XCTAssertEqual(terminal["failurePhase"] as? String, "other")
+        XCTAssertTrue(terminal["recordedXCTestFailureCount"] is NSNull)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("Private arbitrary"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("protected-evaluation.json").path))
+    }
+
+    func testDurableEvaluationEvidenceRejectsSymlinksAndOversizedOutput() throws {
+        let fixture = try durableEvidenceFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.caches) }
+        let parent = fixture.caches.appendingPathComponent(CombinedDurableEvaluationEvidence.directoryName)
+        let foreign = fixture.caches.appendingPathComponent("foreign")
+        try FileManager.default.createDirectory(at: foreign, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: parent, withDestinationURL: foreign)
+        XCTAssertThrowsError(try CombinedDurableEvaluationEvidence(pin: fixture.pin, cachesDirectory: fixture.caches, maximumEvidenceBytes: 8))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: foreign.path), [])
+        try FileManager.default.removeItem(at: parent)
+        let writer = try CombinedDurableEvaluationEvidence(pin: fixture.pin, cachesDirectory: fixture.caches, maximumEvidenceBytes: 8)
+        XCTAssertThrowsError(try writer.finish(metadata: Data(repeating: 65, count: 9), protectedEvaluation: Data(), assertionFailures: 0))
+        let directory = parent.appendingPathComponent(fixture.pin.runID)
+        let terminal = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent("terminal.json"))) as? [String: Any])
+        XCTAssertEqual(terminal["state"] as? String, "running")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("metadata.json").path))
     }
 
     func testStreamingDiagnosticCursorParserRejectsForeignAndImpossiblePrefixes() throws {
