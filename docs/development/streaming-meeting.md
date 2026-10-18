@@ -1,8 +1,10 @@
 # Streaming meeting processing
 
-The experimental speaker-processing mode is registered for GigaAM in-room meetings. It is
-off by default. Recognition, text privacy and speaker attribution share the existing meeting
-pipeline, resource owners, session store and native capture engines.
+Continuous speaker processing is the default for a new in-room meeting when the registered
+backend advertises streaming support and no explicit processing preference exists. An existing
+preference is preserved. Online-call and unsupported backend defaults remain after-recording.
+Recognition, text privacy and speaker attribution share the existing meeting pipeline,
+resource owners, session store and native capture engines.
 
 ## Why continuous speaker state
 
@@ -99,9 +101,27 @@ receives the same capture alongside the bounded consumer. A later retained-file 
 the pinned recording mode and profile. When disabled, audio remains in bounded memory and
 cannot be recovered after process termination.
 
-The optional mode decodes old sessions as `afterRecording`. Legacy configuration identities
-remain unchanged; streaming identities include the mode and exact model profile. An
+Missing mode fields in old serialized sessions still decode as `afterRecording`. The new
+meeting default does not reinterpret saved sessions or checkpoints. Legacy configuration
+identities remain unchanged; streaming identities include the mode and exact model profile. An
 unsupported backend or two-source capture is rejected before permissions and preparation.
+
+## Enrolled owner identity
+
+An attempt freezes the existing enrolled reference and collects bounded, disjoint clean
+voice excerpts alongside the continuous speaker state. Verification runs after the acoustic
+worker closes its ASR and diarizer scopes. It is a final identity refinement, not a live claim
+that an anonymous slot belongs to the owner. Only an accepted comparison marks an existing
+participant as the local user. Protected words, native timing, stable IDs and explicit aliases
+remain unchanged. Missing, insufficient, ambiguous or inconsistent voice evidence retains an
+ordinary participant label.
+
+Enrollment, encoder installation and the private profile store use the existing service
+operations. Streaming never enrolls a meeting voice automatically or downloads an optional
+encoder before admitting capture. The composite attempt identity includes the evidence
+policy. Exact older anonymous streaming recipes remain resumable with owner verification
+disabled, even if a profile has since been enrolled. See the owner-identity contract in
+[mobile meetings](mobile-meetings.md#streaming-owner-voice-identity).
 
 ## Continuing participant reading convention
 
@@ -133,9 +153,17 @@ cleanup. The opt-in mobile E2E test separately measures paced joint inference, p
 publication, native word preservation, no-audio-file behavior, resource samples and Stop tail.
 Detailed profiling is explicitly gated and records scalar timing/resource metadata.
 The paced diagnostic also records configuration admission, synthetic capture-command latency
-and bounded MainActor executor wait samples. Executor waits measure scheduler availability,
-not physical touch latency or rendered frame rate. Startup diagnostics distinguish command
+and bounded MainActor queue-entry samples, separated from utility continuation delays and
+sampling gaps. Phase aggregates separate capture, Stop and metadata saves from the test's
+own synchronous artifact checks after completion. Queue-entry samples measure scheduler
+availability, not physical touch latency or rendered frame rate. Startup diagnostics distinguish command
 admission, capture request and capture return without recording speech or participant names.
+
+Short recordings need not emit a complete protected word before Stop. Longer paced tests
+must observe protected canonical output during capture and final cursor convergence. Silence
+tests include long empty intervals and a returning voice, and are scored separately for
+hallucinated text, participant continuity and identity verification. A successful test runner
+exit alone does not establish any of those quality measures.
 
 Automatic Fathom annotations are a weak comparison reference, not manually verified DER
 ground truth. One ASR stream also cannot reliably recover both word sequences in overlapping
