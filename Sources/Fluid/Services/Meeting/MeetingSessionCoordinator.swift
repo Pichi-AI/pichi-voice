@@ -2085,7 +2085,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.updatedAt = Date()
         self.activeSession = session
         await self.persistence.flush()
-        guard self.memoryCheckpointGeneration == generation else { throw CancellationError() }
+        guard self.memoryCheckpointGeneration == generation, let latest = self.activeSession,
+              latest.id == sessionID else { throw CancellationError() }
+        // Capture events can update coverage and state while queued persistence drains.
+        // Save and project that latest owned snapshot, not this batch's pre-flush copy.
+        session = latest
         try await self.store.save(session)
         guard self.memoryCheckpointGeneration == generation, self.activeSession?.id == sessionID else {
             throw CancellationError()

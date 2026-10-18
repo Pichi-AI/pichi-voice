@@ -715,6 +715,80 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(arbiter.releaseCount, 1)
     }
 
+    func testCheckpointCannotOverwriteDurableCaptureLossAfterQueuedPersistenceFlush() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel, originalBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = originalModel; settings.meetingTranscriptionBackendID = originalBackend }
+        settings.selectedSpeechModel = .whisperTiny
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let directory = self.makeTempDirectory(), disk = MeetingSessionStore(rootDirectory: directory)
+        let store = GatedCheckpointFlushStore(inner: disk)
+        let track = self.makeMicrophoneTrack(chunks: [])
+        let capture = StubCaptureController()
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        let processing = MemoryCheckpointProcessingController(), arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: arbiter)
+        self.addTeardownBlock { @MainActor in
+            await store.releaseAll()
+            await coordinator.shutdownForTermination()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        var configuration = self.makeConfiguration()
+        configuration.audioStorageMode = .memoryOnly; configuration.languageCode = "en"
+        let session = try await coordinator.startRecording(configuration: configuration)
+        capture.stopResult = .init(tracks: [track], stoppedAt: session.startedAt.addingTimeInterval(3))
+        let first = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1), end: .init(value: 1, timescale: 1),
+            sourceTrackID: track.id, speakerID: nil, text: "Protected first word", revision: 0,
+            status: .final, overlap: .none, completeness: .complete)
+        try await processing.checkpoint(.init(segments: [first], isComplete: true))
+        await store.arm()
+        capture.emit(.interrupted(kind: .voiceProcessingDeclined, trackID: track.id, detail: "Synthetic queued benign capture event"))
+        try await store.waitForQueuedSave()
+        let speaker = MeetingSessionSpeaker(id: UUID(), displayName: "Retained manual alias", diarizationClusterID: "synthetic-owner",
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        var assignedFirst = first; assignedFirst.speakerID = speaker.id
+        var tail = first; tail.id = UUID(); tail.text = "Protected new word"
+        tail.start = .init(value: 1, timescale: 1); tail.end = .init(value: 2, timescale: 1); tail.speakerID = speaker.id
+        var batch = MeetingPCMTranscriptBatch(segments: [tail], speakers: [speaker], isComplete: true)
+        batch.speakerRevisions = [.init(assignedFirst)]
+        let protectedBatch = batch, expectedTail = tail
+        let checkpoint = Task { @MainActor in try await processing.checkpoint(protectedBatch) }
+        for _ in 0..<5_000 {
+            if coordinator.currentSession?.transcriptSegments.contains(where: { $0.id == expectedTail.id }) == true { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(coordinator.currentSession?.transcriptSegments.count, 2, "The checkpoint has merged its batch before awaiting flush")
+        capture.emit(.interrupted(kind: .writerBackpressure, trackID: track.id, detail: "Synthetic rejected memory PCM"))
+        for _ in 0..<5_000 {
+            if coordinator.currentSession?.transcriptIsComplete == false { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(coordinator.currentSession?.transcriptIsComplete, false)
+        await store.releaseQueuedSave()
+        try await store.waitForDurableLoss()
+        let savedBeforeResume = try await disk.load(id: session.id)
+        XCTAssertEqual(savedBeforeResume?.transcriptIsComplete, false, "Loss is already durable while the older checkpoint is still in flush")
+        XCTAssertTrue(savedBeforeResume?.events.contains(where: { $0.kind == .writerBackpressure }) == true)
+        XCTAssertFalse(savedBeforeResume?.events.contains(where: { $0.kind == .captureStoppedUnexpectedly }) == true,
+            "This regression observes persistence before a terminal join can repair an older save")
+        await store.releaseDurableLoss()
+        try await checkpoint.value
+        let savedAfterResume = try await disk.load(id: session.id)
+        XCTAssertEqual(savedAfterResume?.transcriptIsComplete, false)
+        XCTAssertTrue(savedAfterResume?.events.contains(where: { $0.kind == .writerBackpressure }) == true)
+        XCTAssertEqual(savedAfterResume?.state, .recordingDegraded, "The old local batch cannot restore pre-loss capture state")
+        XCTAssertEqual(savedAfterResume?.transcriptSegments.map(\.text), [first.text, expectedTail.text])
+        XCTAssertEqual(savedAfterResume?.transcriptSegments.map(\.id), [first.id, expectedTail.id])
+        XCTAssertEqual(savedAfterResume?.transcriptSegments.first?.revision, 1, "Reading the latest state must not apply the speaker patch twice")
+        XCTAssertEqual(savedAfterResume?.transcriptSegments.first?.speakerID, speaker.id)
+        XCTAssertEqual(savedAfterResume?.speakers.first?.displayName, speaker.displayName)
+        let history = await store.savedSnapshots
+        let lossIndex = try XCTUnwrap(history.firstIndex { $0.transcriptIsComplete == false })
+        XCTAssertTrue(history[lossIndex...].allSatisfy { $0.transcriptIsComplete == false
+            && $0.events.contains(where: { $0.kind == .writerBackpressure }) },
+            "No subsequent save can erase the already durable loss flag or its event")
+    }
+
     func testRejectedMemoryCaptureRemainsIncompleteAcrossFinalCheckpointAndTerminalPaths() async throws {
         for path in ["unexpected", "termination", "partialFailure"] {
             try await self.assertRejectedMemoryCaptureIncomplete(path)
@@ -7049,6 +7123,50 @@ private actor GatedLoadAllStore: MeetingSessionStoring {
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? { try await self.inner.existingSessionDirectory(for: id) }
     func delete(id: MeetingSessionID) async throws { try await self.inner.delete(id: id) }
     func deleteAudioFiles(for id: MeetingSessionID) async throws { try await self.inner.deleteAudioFiles(for: id) }
+}
+
+/// Holds one queued pre-loss save, then holds a loss snapshot only AFTER the real
+/// filesystem store has written it. This exposes the post-flush stale-save window.
+private actor GatedCheckpointFlushStore: MeetingSessionStoring {
+    private let inner: MeetingSessionStore
+    private var armed = false, queuedHeld = false, lossHeld = false
+    private let queuedEntered = PermissionPreflightGate(), queuedReleased = PermissionPreflightGate()
+    private let lossDurable = PermissionPreflightGate(), lossReleased = PermissionPreflightGate()
+    private(set) var savedSnapshots: [MeetingSession] = []
+    init(inner: MeetingSessionStore) { self.inner = inner }
+    func arm() { armed = true }
+    func releaseQueuedSave() async { await queuedReleased.open() }
+    func releaseDurableLoss() async { await lossReleased.open() }
+    func releaseAll() async { armed = false; await queuedReleased.open(); await lossReleased.open() }
+    func waitForQueuedSave() async throws { try await waitUntilOpen(queuedEntered) }
+    func waitForDurableLoss() async throws { try await waitUntilOpen(lossDurable) }
+    private func waitUntilOpen(_ gate: PermissionPreflightGate) async throws {
+        for _ in 0..<5_000 {
+            if await gate.hasOpened() { return }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        throw NSError(domain: "CheckpointFlushGateTimeout", code: 1)
+    }
+    func create(_ session: MeetingSession) async throws { try await inner.create(session) }
+    func save(_ session: MeetingSession) async throws {
+        if armed, !queuedHeld, session.events.contains(where: { $0.kind == .voiceProcessingDeclined }) {
+            queuedHeld = true
+            await queuedEntered.open(); await queuedReleased.wait()
+        }
+        let holdLoss = armed && !lossHeld && session.transcriptIsComplete == false
+            && session.events.contains(where: { $0.kind == .writerBackpressure })
+        if holdLoss { lossHeld = true }
+        try await inner.save(session)
+        savedSnapshots.append(session)
+        if holdLoss { await lossDurable.open(); await lossReleased.wait() }
+    }
+    func load(id: MeetingSessionID) async throws -> MeetingSession? { try await inner.load(id: id) }
+    func loadAll() async throws -> [MeetingSession] { try await inner.loadAll() }
+    func loadRecoverable() async throws -> [MeetingSession] { try await inner.loadRecoverable() }
+    func sessionDirectory(for id: MeetingSessionID) async throws -> URL { try await inner.sessionDirectory(for: id) }
+    func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? { try await inner.existingSessionDirectory(for: id) }
+    func delete(id: MeetingSessionID) async throws { try await inner.delete(id: id) }
+    func deleteAudioFiles(for id: MeetingSessionID) async throws { try await inner.deleteAudioFiles(for: id) }
 }
 
 /// Wraps a real `MeetingSessionStore`; `save(_:)` records a "store.save.start" event, then either
