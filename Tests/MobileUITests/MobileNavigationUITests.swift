@@ -107,6 +107,42 @@ final class MobileNavigationUITests: XCTestCase {
                 && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
                 && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
         }
+        let terminalTitle = environment["PICHI_PHYSICAL_PRODUCTION_OWNED_TERMINAL_TITLE"]
+        let terminalState = environment["PICHI_PHYSICAL_PRODUCTION_OWNED_TERMINAL_STATE"]
+        let completedTitle = environment["PICHI_PHYSICAL_PRODUCTION_OWNED_COMPLETED_TITLE"]
+        if terminalTitle != nil || terminalState != nil {
+            try require(terminalTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                        && (terminalTitle?.count ?? 0) <= 1024
+                        && ["completed", "interrupted", "failed"].contains(terminalState ?? "")
+                        && completedTitle == nil,
+                        "Owned terminal admission requires a nonempty exact title and explicit terminal state; do not combine legacy admission")
+        }
+        let priorOwnedTitle = terminalTitle ?? completedTitle
+        let priorOwnedState = terminalState ?? (completedTitle == nil ? nil : "completed")
+        func noActiveAttemptVisible() -> Bool {
+            app.state == .runningForeground
+                && !app.buttons["meeting.stop"].exists
+                && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
+        }
+        func priorOwnedTerminalVisible() -> Bool {
+            guard let priorOwnedTitle, !priorOwnedTitle.isEmpty, noActiveAttemptVisible(),
+                  app.staticTexts.matching(NSPredicate(format: "label == %@", priorOwnedTitle)).firstMatch.exists else {
+                return false
+            }
+            let interrupted = app.staticTexts.matching(NSPredicate(format: "label IN %@",
+                ["Meeting transcription was interrupted", "Расшифровка встречи прервана"])).firstMatch.exists
+            let failed = app.staticTexts.matching(NSPredicate(format: "label IN %@",
+                ["Meeting transcription failed", "Не удалось расшифровать встречу"])).firstMatch.exists
+            switch priorOwnedState {
+            case "completed":
+                return completed() && !interrupted && !failed && !app.buttons["meeting.retry"].exists
+                    && !app.buttons["meeting.restartProcessing"].exists
+            case "interrupted": return interrupted && !failed
+            case "failed": return failed && !interrupted
+            default: return false
+            }
+        }
         func waitForCompletion(timeout: TimeInterval) async throws {
             let deadline = ProcessInfo.processInfo.systemUptime + timeout
             while ProcessInfo.processInfo.systemUptime < deadline {
@@ -206,27 +242,47 @@ final class MobileNavigationUITests: XCTestCase {
         mark("test_body_entered")
         do {
             try require(app.state == .runningForeground, "The ordinary signed Release AUT must be foreground")
+            // The parent freshly backs up and verifies the exact owned session ID,
+            // title and terminal state before supplying these test-only flags. No
+            // unknown or active session, retry/restart action or storage deletion
+            // is admitted. Failed/interrupted New Meeting normally resolves owned
+            // recovery metadata and schedules retention; the parent must preflight
+            // sweep effects on all sessions as well as compare preserved data after.
+            if app.alerts.count > 0 {
+                try require(terminalTitle != nil && priorOwnedTerminalVisible() && app.alerts.count == 1,
+                            "Only an explicitly verified owned terminal meeting may dismiss its standard error alert")
+                let alert = app.alerts.firstMatch
+                let ok = alert.buttons.matching(NSPredicate(format: "label IN %@", ["OK", "ОК"])).firstMatch
+                try require(["Error", "Ошибка"].contains(alert.label) && alert.buttons.count == 1
+                            && alert.textFields.count == 0 && alert.secureTextFields.count == 0
+                            && ok.exists && ok.isEnabled && ok.isHittable,
+                            "Only the ordinary single-OK error alert may be dismissed; no other prompt is accepted")
+                ok.tap()
+                try require(alert.waitForNonExistence(timeout: 5) && priorOwnedTerminalVisible(),
+                            "Error dismissal must preserve the same owned terminal meeting")
+                mark("prior_owned_terminal_standard_error_dismissed")
+                capture("production-01-prior-owned-terminal-error-dismissed")
+            }
             openNavigation("meetings", title: "Meetings")
             capture("production-01-existing-idle")
-            try require(!app.buttons["meeting.stop"].exists
-                        && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
-                        && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+            try require(noActiveAttemptVisible(),
                         "An existing recording or processing attempt is not owned by this selector")
             let start = app.buttons["meeting.start"]
-            if !start.exists, let priorTitle = environment["PICHI_PHYSICAL_PRODUCTION_OWNED_COMPLETED_TITLE"] {
-                try require(completed() && !app.buttons["meeting.retry"].exists
-                            && !app.buttons["meeting.restartProcessing"].exists && app.staticTexts[priorTitle].exists,
-                            "Only the parent's verified prior completed test meeting may be left through New Meeting")
+            if !start.exists, priorOwnedTitle != nil {
+                try require(priorOwnedTerminalVisible() && app.alerts.count == 0,
+                            "Only the parent's verified prior owned terminal meeting may be left through New Meeting")
                 let newMeeting = app.buttons["meeting.new"]
                 try require(newMeeting.exists && newMeeting.isEnabled && newMeeting.isHittable,
-                            "The prior completed meeting must expose normal New Meeting")
+                            "The owned terminal meeting must expose normal New Meeting")
                 newMeeting.tap()
-                mark("prior_owned_completed_meeting_left_without_storage_edit")
-                capture("production-01-prior-owned-completed-left")
+                mark(priorOwnedState == "completed"
+                    ? "prior_owned_completed_meeting_left_without_storage_edit"
+                    : "prior_owned_terminal_meeting_left_through_normal_new_meeting")
+                capture("production-01-prior-owned-terminal-left")
             }
             try require(start.waitForExistence(timeout: 15) && start.isEnabled && start.isHittable
                         && app.alerts.count == 0,
-                        "The meeting must be idle; active, interrupted and failed meetings are never reset")
+                        "The meeting must be idle; only the explicitly verified prior owned terminal meeting may be left")
             let startDeadline = ProcessInfo.processInfo.systemUptime + 15
             mark("start_tap_requested")
             // Ownership starts immediately before the only Start tap so a failed
