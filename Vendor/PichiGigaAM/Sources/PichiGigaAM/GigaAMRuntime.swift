@@ -39,8 +39,9 @@ public actor GigaAMRuntime {
             let environment = try ORTEnv(loggingLevel: .warning)
             let options = try ORTSessionOptions()
             #if os(iOS)
-            // A single intra-op thread still exceeded the physical background CPU limit
-            // and slowed measured 20s foreground inference from about 2.9s to 8.5s.
+            // One thread still exceeded the physical background CPU limit. Historical
+            // four-thread and later one-thread runs measured about 2.9s and 8.5s per
+            // 20s window, with differing capture/UI scopes rather than controlled A/B.
             // Restore bounded foreground throughput in the immutable prepared session;
             // this is not evidence of safe sustained background execution.
             try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))

@@ -282,6 +282,28 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
             currentlyFollowing: false, upwardDrag: false), "Returning to the actual bottom resumes following")
     }
 
+    func testIOS17VoiceOverRetainsPriorOffsetIntentWithoutReplacingNativeScroll() {
+        typealias Geometry = MeetingCaptionScrollTracking.Geometry
+        let bottom = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 2000, contentOffset: 1400)
+        let earlier = Geometry(contentBottom: 700, viewportHeight: 600, contentHeight: 2000, contentOffset: 1300)
+        XCTAssertFalse(earlier.fallbackFollowPreference(after: bottom,
+            currentlyFollowing: true, upwardDrag: false, accessibilityOffsetIntent: true))
+        XCTAssertTrue(earlier.fallbackFollowPreference(after: bottom,
+            currentlyFollowing: true, upwardDrag: false, accessibilityOffsetIntent: false))
+        let growth = Geometry(contentBottom: 900, viewportHeight: 600, contentHeight: 2200, contentOffset: 1300)
+        XCTAssertFalse(growth.fallbackFollowPreference(after: earlier,
+            currentlyFollowing: false, upwardDrag: false, accessibilityOffsetIntent: true))
+        XCTAssertTrue(growth.fallbackFollowPreference(after: earlier,
+            currentlyFollowing: true, upwardDrag: false, accessibilityOffsetIntent: true))
+        let returned = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 2200, contentOffset: 1600)
+        XCTAssertTrue(returned.fallbackFollowPreference(after: growth,
+            currentlyFollowing: false, upwardDrag: false, accessibilityOffsetIntent: true))
+        let beforeClamp = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 1800, contentOffset: 1600)
+        let clamped = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 1800, contentOffset: 1200)
+        XCTAssertTrue(clamped.fallbackFollowPreference(after: beforeClamp,
+            currentlyFollowing: true, upwardDrag: false, accessibilityOffsetIntent: true))
+    }
+
     func testFastBottomCrossingLatchesFollowThroughRubberBandRecoil() {
         typealias Geometry = MeetingCaptionScrollTracking.Geometry
         let older = Geometry(contentBottom: 450, viewportHeight: 300, contentHeight: 900, contentOffset: 450)

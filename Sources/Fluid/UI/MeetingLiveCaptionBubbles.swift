@@ -323,13 +323,23 @@ struct MeetingCaptionScrollTracking: ViewModifier {
         }
 
         func fallbackFollowPreference(after previous: Self, currentlyFollowing: Bool,
-                                      upwardDrag: Bool) -> Bool {
+                                      upwardDrag: Bool, accessibilityOffsetIntent: Bool = false) -> Bool {
             // On iOS 17 a LazyVStack/TextKit layout correction can move the offset
             // after its height preference has settled. Offset-only movement therefore
             // does not establish user intent. The actual drag latches reading mode;
             // momentum retains that choice, and reaching the end resumes following.
+            // Preserve the prior semantic-scroll behavior for VoiceOver without
+            // replacing its native scroll action. Its layout ambiguity remains;
+            // ordinary touch must not infer a gesture from that ambiguity.
+            let clampedToBottom: Bool
+            if let contentHeight, let viewportHeight, let contentOffset,
+               let previousOffset = previous.contentOffset {
+                let bottomOffset = max(0, contentHeight - viewportHeight)
+                clampedToBottom = previousOffset > bottomOffset + 0.5 && abs(contentOffset - bottomOffset) < 2
+            } else { clampedToBottom = false }
+            let semanticMotion = accessibilityOffsetIntent && !layoutChanged(from: previous) && !clampedToBottom
             return followPreference(after: previous, currentlyFollowing: currentlyFollowing,
-                userIsScrolling: upwardDrag, upwardDrag: upwardDrag)
+                userIsScrolling: upwardDrag || semanticMotion, upwardDrag: upwardDrag)
         }
 
         func followPreference(after previous: Self, currentlyFollowing: Bool,
@@ -419,7 +429,8 @@ struct MeetingCaptionScrollTracking: ViewModifier {
                         let wasFollowing = self.isPinnedToBottom
                         self.isPinnedToBottom = geometry.fallbackFollowPreference(after: previous,
                             currentlyFollowing: self.isPinnedToBottom,
-                            upwardDrag: self.isDraggingUp)
+                            upwardDrag: self.isDraggingUp,
+                            accessibilityOffsetIntent: UIAccessibility.isVoiceOverRunning)
                         if wasFollowing != self.isPinnedToBottom {
                             DebugLogger.shared.debug("following=\(self.isPinnedToBottom) upwardDrag=\(self.isDraggingUp) layoutChanged=\(geometry.layoutChanged(from: previous)) offset=\(geometry.contentOffset ?? 0) previousOffset=\(previous.contentOffset ?? 0) height=\(geometry.contentHeight ?? 0)", source: "MeetingCaptionScroll")
                         }
