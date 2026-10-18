@@ -345,6 +345,16 @@ final class MobileNavigationUITests: XCTestCase {
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
             app.launch()
             openNavigation("meetings", title: "Meetings")
+            // This isolated simulator can restore an earlier synthetic recovery
+            // fixture. Use normal New Meeting without deleting its stored audio.
+            if !app.buttons["meeting.start"].exists {
+                XCTAssertFalse(app.buttons["meeting.stop"].exists)
+                XCTAssertFalse(app.descendants(matching: .any)["meeting.processing"].firstMatch.exists)
+                let newMeeting = app.buttons["meeting.new"]
+                XCTAssertTrue(newMeeting.waitForExistence(timeout: 10) && newMeeting.isHittable)
+                newMeeting.tap()
+                capture("presentation-\(language)-new-ready")
+            }
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
             capture("presentation-\(language)-ready")
             let done = try openSyntheticPresentation(filename: filename)
