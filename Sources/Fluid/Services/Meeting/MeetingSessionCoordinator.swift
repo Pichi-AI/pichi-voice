@@ -191,7 +191,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var retentionTimerTask: Task<Void, Never>?
 
     private enum TranscriptCorrection {
-        case editText(segmentID: MeetingTranscriptSegmentID, previousText: String, previousOriginalText: String?, previousRevision: Int)
+        case editText(segmentID: MeetingTranscriptSegmentID, previousText: String, previousOriginalText: String?,
+                      previousUserTextEdited: Bool?, previousRevision: Int)
         case rename(speakerID: SessionSpeakerID, previousName: String)
         case reassign(
             segmentID: MeetingTranscriptSegmentID,
@@ -1219,10 +1220,12 @@ final class MeetingSessionCoordinator: ObservableObject {
                 segmentID: segmentID,
                 previousText: previous.text,
                 previousOriginalText: previous.originalText,
+                previousUserTextEdited: previous.isUserTextEdited,
                 previousRevision: previous.revision
             )
             guard trimmed != previous.text else { return inverse }
             session.transcriptSegments[index].originalText = previous.originalText ?? previous.text
+            session.transcriptSegments[index].isUserTextEdited = true
             session.transcriptSegments[index].text = trimmed
             session.transcriptSegments[index].revision += 1
             session.updatedAt = Date()
@@ -1572,10 +1575,11 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// False when the inverse's target no longer exists; caller must not save or re-push.
     private static func applyInverse(_ correction: TranscriptCorrection, to session: inout MeetingSession) -> Bool {
         switch correction {
-        case let .editText(segmentID, previousText, previousOriginalText, previousRevision):
+        case let .editText(segmentID, previousText, previousOriginalText, previousUserTextEdited, previousRevision):
             guard let index = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }) else { return false }
             session.transcriptSegments[index].text = previousText
             session.transcriptSegments[index].originalText = previousOriginalText
+            session.transcriptSegments[index].isUserTextEdited = previousUserTextEdited
             session.transcriptSegments[index].revision = previousRevision
             return true
         case let .rename(speakerID, previousName):

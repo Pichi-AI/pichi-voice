@@ -87,6 +87,7 @@ struct MeetingStreamingProtectedWordTailTests {
         var concurrent = first.inserted[1]
         concurrent.text = "User corrected <EMAIL>"
         concurrent.originalText = "Original safe <PERSON>"
+        concurrent.isUserTextEdited = true
         concurrent.revision += 1
         concurrent.completeness = .incompleteTrack
         let before = concurrent
@@ -98,6 +99,7 @@ struct MeetingStreamingProtectedWordTailTests {
         expected.speakerAttribution = concurrent.speakerAttribution
         expected.revision += 1
         check(concurrent == expected, "A speaker revision changed protected/user-edited source fields")
+        check(concurrent.isUserTextEdited == true, "Late automatic identity patches cannot erase a manual reading boundary")
         check(!(try patch.apply(to: &concurrent)), "Identical metadata must not bump revision")
         for (source, emitted) in zip(original, first.inserted) {
             check(source.text == emitted.text && source.originalText == emitted.originalText)

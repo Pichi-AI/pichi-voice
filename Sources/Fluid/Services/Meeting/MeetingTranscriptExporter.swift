@@ -281,7 +281,7 @@ nonisolated enum MeetingTranscriptExporter {
         }, tolerance: MeetingSpeakerAttributionPolicy.standard.comparisonTolerance, checkpoint: { _ in })
         let active = Set(session.activeSpeakers.map(\.id))
         func safe(_ value: MeetingTranscriptSegment) -> Bool {
-            value.revision == 0 && value.originalText == nil && value.status == .final
+            value.revision == 0 && value.originalText == nil && value.isUserTextEdited != true && value.status == .final
                 && value.completeness == .complete && !value.isEcho && value.attributionState != .timingUncertain
                 && value.speakerAttribution?.relation != .conflict && value.speakerAttribution?.rule != .barrier
                 && value.speakerAttribution?.rule != .conflict
@@ -327,6 +327,72 @@ nonisolated enum MeetingTranscriptExporter {
         return owners
     }
 
+    /// Streaming can commit a contextual token before that voice has enough clean support
+    /// to admit a participant. Later words admit its identity, but the committed word keeps
+    /// its original missing UUID. Complete only that mapping for reading, using independent
+    /// native anchors. This does not select a voice, replay neighbor rules across pauses or
+    /// change stored evidence. A revision can be an automatic identity patch, not a user edit;
+    /// explicit speaker corrections clear the summary, and manual text provenance survives PII.
+    private static func unmappedCanonicalReadingOwners(
+        for segments: [MeetingTranscriptSegment], in session: MeetingSession
+    ) -> [MeetingTranscriptSegmentID: SessionSpeakerID] {
+        let active = Set(session.activeSpeakers.map(\.id))
+        func safeNative(_ segment: MeetingTranscriptSegment) -> Bool {
+            guard segment.status == .final, segment.completeness == .complete, !segment.isEcho,
+                  segment.originalText == nil, segment.isUserTextEdited != true,
+                  segment.attributionState != .timingUncertain,
+                  segment.speakerAttributionInference == nil, segment.revision >= 0,
+                  segment.start.seconds.isFinite, segment.end.seconds.isFinite,
+                  segment.start.seconds >= 0, segment.end.seconds > segment.start.seconds,
+                  let timing = segment.nativeTiming, timing.start.isFinite, timing.end.isFinite,
+                  timing.start >= 0, timing.end > timing.start,
+                  segment.nativePrecision == .word, segment.nativeUnitID?.isEmpty == false,
+                  segment.nativeSpeakerAssignment != nil else { return false }
+            return true
+        }
+        func evidence(_ segment: MeetingTranscriptSegment) -> MeetingTranscriptSpeakerAttribution? {
+            guard safeNative(segment), let nativeID = segment.nativeUnitID,
+                  let native = segment.nativeSpeakerAssignment, let summary = segment.speakerAttribution,
+                  summary.unitID == nativeID, summary.rawAssignment == native,
+                  summary.rule != .barrier, summary.rule != .conflict, summary.relation != .conflict,
+                  let token = summary.selectedToken, token.analysisEpochID.trackID == segment.sourceTrackID
+            else { return nil }
+            return summary
+        }
+        var identities: [MeetingBackendSpeakerToken: Set<SessionSpeakerID>] = [:]
+        for segment in session.transcriptSegments {
+            guard safeNative(segment), segment.attributionState == .assigned, segment.overlap == .none,
+                  let native = segment.nativeSpeakerAssignment, case let .assigned(token) = native,
+                  token.analysisEpochID.trackID == segment.sourceTrackID,
+                  let id = self.resolvedSpeakerID(segment.speakerID, in: session, activeSpeakerIDs: active)
+            else { continue }
+            if let summary = evidence(segment) {
+                guard !summary.rule.isHeuristic, summary.relation == .single,
+                      summary.selectedToken == token, summary.selectedSpeakerID == segment.speakerID else { continue }
+            } else {
+                // Compact native assignments intentionally omit a redundant reading summary.
+                // A revised nil-summary row can instead be a manual reassignment; it cannot
+                // establish a token identity without explicit automatic provenance.
+                guard segment.speakerAttribution == nil, segment.revision == 0 else { continue }
+            }
+            identities[token, default: []].insert(id)
+        }
+        var owners: [MeetingTranscriptSegmentID: SessionSpeakerID] = [:]
+        for segment in segments {
+            guard segment.speakerID == nil, let summary = evidence(segment),
+                  summary.selectedSpeakerID == nil, let token = summary.selectedToken,
+                  let mapped = identities[token], mapped.count == 1,
+                  segment.attributionState == .unassigned || segment.attributionState == .overlappingSpeakers
+            else { continue }
+            switch summary.rule {
+            case .neighborAgreement, .incomingSpeaker, .boundaryContinuation, .mainSpeakerContinuation:
+                owners[segment.id] = mapped.first
+            default: break
+            }
+        }
+        return owners
+    }
+
     /// Pre-canonical archives have no native word precision or activity to replay. A completed,
     /// untouched legacy gap between known speakers uses the shared bounded neighbor admission:
     /// equal neighbors keep that voice, different neighbors select the incoming voice. Unsafe
@@ -355,7 +421,7 @@ nonisolated enum MeetingTranscriptExporter {
         }, tolerance: MeetingSpeakerAttributionPolicy.standard.comparisonTolerance, checkpoint: { _ in })
         let active = Set(session.activeSpeakers.map(\.id))
         func untouched(_ segment: MeetingTranscriptSegment) -> Bool {
-            segment.revision == 0 && segment.originalText == nil && segment.status == .final
+            segment.revision == 0 && segment.originalText == nil && segment.isUserTextEdited != true && segment.status == .final
                 && segment.completeness == .complete && !segment.isEcho
                 && segment.nativePrecision == nil && segment.nativeTiming == nil && segment.nativeUnitID == nil
                 && segment.nativeSpeakerAssignment == nil && segment.speakerAttribution == nil
@@ -408,7 +474,9 @@ nonisolated enum MeetingTranscriptExporter {
         let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
         let legacyBridges = self.legacyReadingBridges(for: segments, in: session)
         let continuations = self.mainSpeakerReadingOwners(for: segments, in: session)
-        let readingOwners = legacyBridges.merging(continuations) { _, continuation in continuation }
+        let canonicalMappings = self.unmappedCanonicalReadingOwners(for: segments, in: session)
+        let readingOwners = legacyBridges.merging(canonicalMappings) { _, canonical in canonical }
+            .merging(continuations) { _, continuation in continuation }
         var paragraphs: [DisplayParagraph] = []
         var members: [MeetingTranscriptSegment] = []
         var containsLegacyBridge = false
@@ -500,6 +568,7 @@ nonisolated enum MeetingTranscriptExporter {
                         activeSpeakerIDs: activeSpeakerIDs
                     ),
                     text: $0.text,
+                    isUserTextEdited: $0.isUserTextEdited,
                     revision: $0.revision,
                     status: $0.status.rawValue,
                     overlap: $0.overlap.rawValue,
@@ -589,6 +658,7 @@ private struct ExportedSegment: Codable {
     var endSeconds: TimeInterval
     var speakerID: SessionSpeakerID?
     var text: String
+    var isUserTextEdited: Bool?
     var revision: Int
     var status: String
     var overlap: String

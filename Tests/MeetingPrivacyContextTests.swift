@@ -272,6 +272,7 @@ struct MeetingPrivacyContextTests {
         source.speakers = [.init(id: UUID(), displayName: "Speaker 1", diarizationClusterID: "synthetic",
             trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
         source.transcriptSegments = [segment("Пациент Иван Тестов просит копию.", track: track, start: 0)]
+        source.transcriptSegments[0].isUserTextEdited = true
         try source.renameSpeaker(id: source.speakers[0].id, to: "  \(alias)  ")
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: source, using: ClinicalNERFixtureRedactor())
         try check(safe.title == alias && safe.selectedMicrophone.displayName == alias,
@@ -279,13 +280,18 @@ struct MeetingPrivacyContextTests {
         try check(safe.speakers[0].displayName == alias, "An explicit participant name is outside transcript redaction")
         try check(!safe.transcriptSegments[0].text.contains("Иван"), "The same name spoken in a transcript must still be redacted")
         try check(safe.transcriptSegments[0].originalText == nil, "Alias exemption cannot restore original voice text")
+        try check(safe.transcriptSegments[0].isUserTextEdited == true,
+                  "Privacy removes original wording without erasing durable manual text provenance")
         let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(safe))
         let repeated = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: restored, using: ClinicalNERFixtureRedactor())
         try check(repeated.speakers[0].displayName == alias, "Repeated publication after reload must preserve the explicit alias")
+        try check(repeated.transcriptSegments[0].isUserTextEdited == true,
+                  "Manual text provenance survives privacy, archive codec and repeated publication")
         let batch = try await MeetingTranscriptPrivacyPolicy.redactedBatch(
             .init(segments: source.transcriptSegments, speakers: source.speakers), using: ClinicalNERFixtureRedactor())
         try check(batch.speakers[0].displayName == alias, "PCM publication must preserve a resumed participant alias")
         try check(!batch.segments[0].text.contains("Иван"), "PCM alias exemption must not exempt speech from redaction")
+        try check(batch.segments[0].isUserTextEdited == true, "PCM privacy publication preserves manual text provenance")
         try check(source.transcriptSegments[0].text.contains("Иван"), "Publication cannot mutate source speech")
     }
 

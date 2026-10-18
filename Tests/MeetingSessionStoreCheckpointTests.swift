@@ -45,6 +45,7 @@ struct MeetingSessionStoreCheckpointTests {
 
         try Self.checkPlainParticipantLabels(template: session, check: check)
         try Self.checkManualCorrectionOfProjectedOwner(template: session, check: check)
+        try Self.checkUnmappedCanonicalReadingOwner(template: session, check: check)
         try await Self.checkReadingProjectionCache(template: session, check: check)
 
         let nativePresentation = MeetingTranscriptExporter.speakerPresentation(
@@ -597,6 +598,146 @@ struct MeetingSessionStoreCheckpointTests {
         check(restored == source
               && MeetingTranscriptExporter.speakerPresentations(in: restored)[targetID]?.participantID == speakerB.id,
               "The explicit correction and its reading boundary survive the production archive codec")
+    }
+
+    private static func checkUnmappedCanonicalReadingOwner(
+        template: MeetingSession, check: (Bool, String) -> Void
+    ) throws {
+        var source = template
+        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(5)
+        source.transcriptIsComplete = true; source.transcriptCoverageGaps = []
+        let speakerA = source.speakers[0]
+        var speakerB = speakerA; speakerB.id = UUID(); speakerB.displayName = "Other participant"
+        source.speakers = [speakerA, speakerB]
+        let epoch = MeetingAnalysisEpochID(trackID: source.audioTracks[0].id, ordinal: 0)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "synthetic-a")
+        func word(_ index: Int, start: Double, end: Double, owner: UUID?,
+                  rule: MeetingSpeakerAttributionRule, revision: Int = 1) -> MeetingTranscriptSegment {
+            let native: MeetingBackendSpeakerAssignment = owner == nil ? .unassigned : .assigned(token)
+            let unitID = "synthetic-unmapped-\(index)"
+            let decision = MeetingSpeakerAttributionDecision(unitID: unitID, rawAssignment: native,
+                candidates: [], activeSupportSeconds: owner == nil ? 0 : end - start,
+                simultaneousIntervals: [], relation: owner == nil ? .none : .single,
+                selectedToken: token, rule: rule, cueUnitIDs: [], backgroundTokens: [],
+                policyVersion: 2, policyFingerprint: "synthetic-unmapped-policy")
+            return .init(id: UUID(), start: .init(value: Int64((start * 1000).rounded()), timescale: 1000),
+                end: .init(value: Int64((end * 1000).rounded()), timescale: 1000),
+                sourceTrackID: epoch.trackID, speakerID: owner, text: ["Before", "island", "after"][index % 3],
+                revision: revision, status: .final, overlap: .none, completeness: .complete,
+                attributionState: owner == nil ? .unassigned : .assigned, nativePrecision: .word,
+                nativeUnitID: unitID, nativeSpeakerAssignment: native, nativeTiming: .init(start: start, end: end),
+                speakerAttribution: .init(decision: decision, speakerIDs: owner.map { [token: $0] } ?? [:]))
+        }
+        for rule in [MeetingSpeakerAttributionRule.neighborAgreement, .incomingSpeaker,
+                     .boundaryContinuation, .mainSpeakerContinuation] {
+            for revision in [0, 1, 7] {
+                source.transcriptSegments = [word(0, start: 2.4, end: 3.4, owner: speakerA.id, rule: .singleAcousticSupport),
+                    word(1, start: 3.6, end: 3.68, owner: nil, rule: rule, revision: revision),
+                    word(2, start: 3.72, end: 3.76, owner: speakerA.id, rule: .singleAcousticSupport)]
+                let before = source, json = try MeetingTranscriptExporter.json(for: source)
+                let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: source.transcriptSegments, in: source)
+                check(paragraphs.count == 1 && paragraphs[0].segments == source.transcriptSegments,
+                      "An already selected canonical voice maps to its independently admitted participant at any automatic revision")
+                check(MeetingTranscriptExporter.speakerPresentations(in: source).values.allSatisfy { $0.participantID == speakerA.id },
+                      "Live and saved reading share the completed canonical identity mapping")
+                check(MeetingTranscriptExporter.text(for: source) == "[00:02] \(speakerA.displayName): Before island after",
+                      "Text export has the same complete reading turn")
+                let repeatedJSON = try MeetingTranscriptExporter.json(for: source)
+                check(source == before && json == repeatedJSON,
+                      "Reading preserves native IDs, wording, timing, revisions and JSON evidence")
+            }
+        }
+        let baseline = source
+        let islandID = source.transcriptSegments[1].id
+        let oldArchive = try JSONEncoder().encode(baseline)
+        let decodedOldArchive = try JSONDecoder().decode(MeetingSession.self, from: oldArchive)
+        check(!String(decoding: oldArchive, as: UTF8.self).contains("isUserTextEdited")
+              && decodedOldArchive.transcriptSegments.allSatisfy { $0.isUserTextEdited == nil },
+              "Historical absent manual provenance decodes without manufacturing user edits")
+        var manuallyEdited = baseline
+        manuallyEdited.transcriptSegments[1].isUserTextEdited = true
+        manuallyEdited.transcriptSegments[1].originalText = nil // PII has removed original wording.
+        let manualArchive = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(manuallyEdited))
+        check(manualArchive.transcriptSegments[1].isUserTextEdited == true
+              && MeetingTranscriptExporter.speakerPresentations(in: manualArchive)[islandID]?.participantID == nil,
+              "A durable text correction remains a reading boundary after PII and archive round-trip")
+        let manualExport = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: manualArchive)) as! [String: Any]
+        let manualExportSegments = manualExport["segments"] as! [[String: Any]]
+        check(manualExportSegments[1]["isUserTextEdited"] as? Bool == true,
+              "Canonical JSON export retains durable manual provenance")
+        var compact = baseline
+        for index in [0, 2] {
+            compact.transcriptSegments[index].revision = 0
+            let previous = compact.transcriptSegments[index]
+            let decision = MeetingSpeakerAttributionDecision(unitID: previous.nativeUnitID!, rawAssignment: .assigned(token),
+                candidates: [], activeSupportSeconds: 0.1, simultaneousIntervals: [], relation: .single,
+                selectedToken: token, rule: .singleAcousticSupport, cueUnitIDs: [], backgroundTokens: [],
+                policyVersion: 2, policyFingerprint: "synthetic-unmapped-policy")
+            compact.transcriptSegments[index].speakerAttribution = .readingSummary(decision: decision,
+                speakerIDs: [token: speakerA.id])
+        }
+        check(compact.transcriptSegments[0].speakerAttribution == nil
+              && MeetingTranscriptExporter.speakerPresentations(in: compact)[islandID]?.participantID == speakerA.id,
+              "Production compact native anchors establish identity without a redundant reading summary")
+        for index in [0, 2] { compact.transcriptSegments[index].revision = 1 }
+        check(MeetingTranscriptExporter.speakerPresentations(in: compact)[islandID]?.participantID == nil,
+              "Revised nil-summary native assignments cannot masquerade as untouched acoustic anchors")
+        func remainsUnmapped(_ value: MeetingSession, _ reason: String) {
+            check(MeetingTranscriptExporter.speakerPresentations(in: value)[islandID]?.participantID == nil, reason)
+        }
+        for barrier in 0..<11 {
+            var blocked = baseline
+            switch barrier {
+            case 0: blocked.transcriptSegments[1].originalText = "User's corrected wording"
+            case 1: blocked.transcriptSegments[1].speakerAttribution = nil
+            case 2: blocked.transcriptSegments[1].status = .provisional
+            case 3: blocked.transcriptSegments[1].completeness = .incompleteTrack
+            case 4: blocked.transcriptSegments[1].attributionState = .timingUncertain
+            case 5: blocked.transcriptSegments[1].nativeUnitID = "different-unit"
+            case 6: blocked.transcriptSegments[1].nativePrecision = .utterance
+            case 7: blocked.transcriptSegments[1].sourceTrackID = UUID()
+            case 8:
+                blocked.transcriptSegments[0].speakerAttribution = nil
+                blocked.transcriptSegments[2].speakerAttribution = nil
+            case 9:
+                blocked.transcriptSegments[0].originalText = "Manually corrected anchor"
+                blocked.transcriptSegments[2].originalText = "Manually corrected anchor"
+            default:
+                // The same token mapped to two active identities is not a unique proof.
+                blocked.transcriptSegments[2] = word(2, start: 3.72, end: 3.76, owner: speakerB.id,
+                    rule: .singleAcousticSupport)
+            }
+            remainsUnmapped(blocked, "Manual, incomplete, ambiguous or incompatible evidence cannot repair a mapping (\(barrier))")
+        }
+        var corrected = baseline
+        try corrected.reassignSegment(id: islandID, to: speakerB.id)
+        check(MeetingTranscriptExporter.speakerPresentations(in: corrected)[islandID]?.participantID == speakerB.id,
+              "Explicit reassignment supersedes the old canonical token and survives reading")
+        var aliases = baseline
+        aliases.speakers[0].mergedIntoSpeakerID = speakerB.id
+        check(MeetingTranscriptExporter.speakerPresentations(in: aliases)[islandID]?.participantID == speakerB.id,
+              "Unique canonical mapping resolves merged participant aliases to the active identity")
+        var notChosen = baseline
+        notChosen.transcriptSegments[1] = word(1, start: 3.6, end: 3.68, owner: nil, rule: .ambiguous)
+        let ambiguousID = notChosen.transcriptSegments[1].id
+        check(MeetingTranscriptExporter.speakerPresentations(in: notChosen)[ambiguousID]?.participantID == nil,
+              "An ambiguous decision never becomes a known voice through identity mapping")
+        var scoped = baseline
+        let nextEpoch = MeetingAnalysisEpochID(trackID: epoch.trackID, ordinal: 1)
+        let otherToken = MeetingBackendSpeakerToken(analysisEpochID: nextEpoch, label: token.label)
+        for index in [0, 2] {
+            let prior = scoped.transcriptSegments[index]
+            let decision = MeetingSpeakerAttributionDecision(unitID: prior.nativeUnitID!, rawAssignment: .assigned(otherToken),
+                candidates: [], activeSupportSeconds: 0.1, simultaneousIntervals: [], relation: .single,
+                selectedToken: otherToken, rule: .singleAcousticSupport, cueUnitIDs: [], backgroundTokens: [],
+                policyVersion: 2, policyFingerprint: "synthetic-unmapped-policy")
+            scoped.transcriptSegments[index].nativeSpeakerAssignment = .assigned(otherToken)
+            scoped.transcriptSegments[index].speakerAttribution = .init(decision: decision, speakerIDs: [otherToken: speakerA.id])
+        }
+        remainsUnmapped(scoped, "Equal slot labels in different analysis epochs are separate voices")
+        let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(baseline))
+        check(MeetingTranscriptExporter.speakerPresentations(in: restored)[islandID]?.participantID == speakerA.id,
+              "The canonical identity completion works after production archive decoding")
     }
 
     private static func indexIDs(at url: URL) throws -> [String] {

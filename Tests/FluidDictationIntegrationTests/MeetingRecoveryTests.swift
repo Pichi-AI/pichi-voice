@@ -4410,12 +4410,15 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(redactor.preparations, 1)
         XCTAssertEqual(edited.transcriptSegments[0].text, "New [PRIVATE] speech")
         XCTAssertNil(edited.transcriptSegments[0].originalText)
+        XCTAssertEqual(edited.transcriptSegments[0].isUserTextEdited, true)
         XCTAssertEqual(edited.transcriptSegments[0].start, session.transcriptSegments[0].start)
         XCTAssertEqual(edited.transcriptSegments[0].end, session.transcriptSegments[0].end)
         redactor.isReady = false
         let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
         XCTAssertEqual(redactor.preparations, 2, "Undo after model eviction is another privacy publication")
         XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
+        XCTAssertEqual(undone.transcriptSegments[0].isUserTextEdited, session.transcriptSegments[0].isUserTextEdited,
+                       "Undo restores provenance together with wording and revision")
         let persisted = try await store.load(id: session.id)
         XCTAssertEqual(persisted?.transcriptSegments, session.transcriptSegments)
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))

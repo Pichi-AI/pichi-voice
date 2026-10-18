@@ -911,6 +911,10 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     var text: String
     /// The initial ASR wording is retained when a user corrects this turn.
     var originalText: String? = nil
+    /// Durable manual provenance: privacy intentionally removes originalText, while automatic
+    /// speaker patches also increment revision. Neither can erase this reading boundary.
+    /// Optional so existing archives decode without inventing a correction history.
+    var isUserTextEdited: Bool? = nil
     var revision: Int
     var status: MeetingTranscriptStatus
     var overlap: MeetingTranscriptOverlap
