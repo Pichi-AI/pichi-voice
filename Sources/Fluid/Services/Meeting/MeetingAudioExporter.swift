@@ -73,8 +73,21 @@ nonisolated enum MeetingAudioExporter {
     }
 
     static func sanitizedExportName(_ title: String) -> String {
-        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _.-")
-        let sanitized = String(title.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }.prefix(80))
+        // Keep readable names in every supported language, while leaving room for
+        // extensions, collision suffixes and the audio export staging suffix.
+        let allowed = CharacterSet.letters.union(.decimalDigits).union(.nonBaseCharacters)
+            .union(CharacterSet(charactersIn: " _.-"))
+        var sanitized = ""
+        var byteCount = 0
+        for character in title.precomposedStringWithCanonicalMapping {
+            let safe = character.unicodeScalars.allSatisfy { allowed.contains($0) } ? String(character) : "-"
+            guard sanitized.count < 80, byteCount + safe.utf8.count <= 160 else { break }
+            sanitized += safe
+            byteCount += safe.utf8.count
+        }
+        // A path component must never become '.', '..' or a hidden file. The
+        // allowlist above replaces slash, backslash, controls and bidi controls.
+        sanitized = sanitized.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
         return sanitized.isEmpty ? PichiLocalization.text("Meeting") : sanitized
     }
 

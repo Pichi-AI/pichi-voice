@@ -78,13 +78,57 @@ struct MeetingSharePayload: Identifiable {
     func cleanup() { try? FileManager.default.removeItem(at: directory) }
 }
 
-struct MobileActivitySheet: UIViewControllerRepresentable {
+/// The native activity controller extends its content to the container edges.
+/// Own its containment here so the retention caption uses the actual window's
+/// safe area instead of being pulled underneath the status bar by that child.
+struct MobileActivitySheet<Caption: View>: UIViewControllerRepresentable {
     let items: [Any]
     let completion: () -> Void
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
-        controller.completionWithItemsHandler = { _, _, _, _ in completion() }
-        return controller
+    @ViewBuilder let caption: () -> Caption
+
+    func makeUIViewController(context: Context) -> MobileActivityContainer<Caption> {
+        MobileActivityContainer(items: items, caption: caption(), completion: completion)
     }
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+
+    func updateUIViewController(_ controller: MobileActivityContainer<Caption>, context: Context) {
+        controller.captionHost.rootView = caption()
+    }
+}
+
+final class MobileActivityContainer<Caption: View>: UIViewController {
+    let captionHost: UIHostingController<Caption>
+    private let activityController: UIActivityViewController
+
+    init(items: [Any], caption: Caption, completion: @escaping () -> Void) {
+        captionHost = UIHostingController(rootView: caption)
+        captionHost.sizingOptions = [.intrinsicContentSize]
+        activityController = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        activityController.completionWithItemsHandler = { _, _, _, _ in completion() }
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        captionHost.view.backgroundColor = .clear
+        for child in [captionHost as UIViewController, activityController] {
+            addChild(child)
+            view.addSubview(child.view)
+            child.view.translatesAutoresizingMaskIntoConstraints = false
+            child.didMove(toParent: self)
+        }
+        captionHost.view.setContentCompressionResistancePriority(.required, for: .vertical)
+        let safeArea = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            captionHost.view.topAnchor.constraint(equalTo: safeArea.topAnchor),
+            captionHost.view.leadingAnchor.constraint(equalTo: safeArea.leadingAnchor),
+            captionHost.view.trailingAnchor.constraint(equalTo: safeArea.trailingAnchor),
+            activityController.view.topAnchor.constraint(equalTo: captionHost.view.bottomAnchor),
+            activityController.view.leadingAnchor.constraint(equalTo: safeArea.leadingAnchor),
+            activityController.view.trailingAnchor.constraint(equalTo: safeArea.trailingAnchor),
+            activityController.view.bottomAnchor.constraint(equalTo: safeArea.bottomAnchor)
+        ])
+    }
 }
