@@ -80,6 +80,10 @@ final class MobileNavigationUITests: XCTestCase {
         }
         let began = ProcessInfo.processInfo.systemUptime
         var events: [[String: Any]] = []
+        var recordingUIHealthChecks: [[String: Any]] = []
+        var passedRecordingUIHealthChecks = 0
+        let recordingUIHealthCheckIntervalSeconds = PhysicalProductionObservationSchedule(
+            startedAt: began, observationSeconds: observationSeconds, longSmoke: longSmoke).uiHealthCheckIntervalSeconds
         var backgroundObservedSeconds: TimeInterval = 0
         var ownsRecording = false
         var outcome = "failed"
@@ -227,6 +231,11 @@ final class MobileNavigationUITests: XCTestCase {
                 "outcome": outcome, "events": events, "plannedRecordingObservationSeconds": observationSeconds,
                 "backgroundSmoke": backgroundSmoke, "backgroundObservedSeconds": backgroundObservedSeconds,
                 "longSmoke": longSmoke, "presentationFile": presentationFile ?? "",
+                "recordingUIHealthCheckIntervalSeconds": recordingUIHealthCheckIntervalSeconds,
+                "recordingUIHealthCheckCount": recordingUIHealthChecks.count,
+                "passedRecordingUIHealthCheckCount": passedRecordingUIHealthChecks,
+                "recordingUIHealthChecks": recordingUIHealthChecks,
+                "recordingUIObservationScope": "Application state and accessibility health use the nominal recorded cadence, not continuously between checks. Actual start/completion timestamps and durations are attached. The parent independently captures native USB frames at 1 Hz and verifies coverage separately; this selector does not replace that capture.",
                 "nativeExportFilename": saveExportName ?? "",
                 "backgroundObservationScope": "Sum of intervals between consecutive runningBackground samples; app state alone does not prove audio capture, text or speaker progress",
                 "speechPlaybackOwner": "parent_external_player",
@@ -311,12 +320,31 @@ final class MobileNavigationUITests: XCTestCase {
                 capture("production-presentation-preview")
             }
             mark("recording_observation_began")
-            let speechDeadline = ProcessInfo.processInfo.systemUptime + Double(observationSeconds)
+            let observationStartedAt = ProcessInfo.processInfo.systemUptime
+            var observationSchedule = PhysicalProductionObservationSchedule(
+                startedAt: observationStartedAt, observationSeconds: observationSeconds, longSmoke: longSmoke)
+            try require(observationSchedule.uiHealthCheckIntervalSeconds == recordingUIHealthCheckIntervalSeconds,
+                        "Recording observation must use the reported fixed UI health cadence")
+            let speechDeadline = observationSchedule.deadline
             var previousState: XCUIApplication.State?
             var previousObservation: TimeInterval?
             while ProcessInfo.processInfo.systemUptime < speechDeadline {
+                try Task.checkCancellation()
+                // Sleeping remains cancellation-responsive without asking XCTest to
+                // snapshot the growing accessibility tree on every one-second wake.
+                let healthCheckStartedAt = ProcessInfo.processInfo.systemUptime
+                guard observationSchedule.beginUIHealthCheck(at: healthCheckStartedAt) else {
+                    try await Task.sleep(nanoseconds: observationSchedule.sleepNanoseconds(
+                        at: ProcessInfo.processInfo.systemUptime))
+                    continue
+                }
                 let state = app.state
                 let observedAt = ProcessInfo.processInfo.systemUptime
+                recordingUIHealthChecks.append([
+                    "startedUptimeSeconds": healthCheckStartedAt, "uptimeSeconds": observedAt,
+                    "elapsedObservationSeconds": healthCheckStartedAt - observationStartedAt,
+                    "appState": state.rawValue
+                ])
                 if state != previousState { mark("observation_app_state_\(state.rawValue)") }
                 if state == .runningBackground, previousState == .runningBackground, let previousObservation {
                     backgroundObservedSeconds += observedAt - previousObservation
@@ -338,9 +366,15 @@ final class MobileNavigationUITests: XCTestCase {
                 @unknown default:
                     try require(false, "The owned AUT entered an unsupported recording state")
                 }
+                let healthCheckFinishedAt = ProcessInfo.processInfo.systemUptime
+                recordingUIHealthChecks[recordingUIHealthChecks.count - 1]["completedUptimeSeconds"] = healthCheckFinishedAt
+                recordingUIHealthChecks[recordingUIHealthChecks.count - 1]["queryDurationSeconds"] =
+                    healthCheckFinishedAt - healthCheckStartedAt
+                passedRecordingUIHealthChecks += 1
                 previousState = state
                 previousObservation = observedAt
-                try await Task.sleep(nanoseconds: 1_000_000_000)
+                try await Task.sleep(nanoseconds: observationSchedule.sleepAfterUIHealthCheckNanoseconds(
+                    at: ProcessInfo.processInfo.systemUptime))
             }
             mark("recording_observation_ended")
             if let presentationDone {
