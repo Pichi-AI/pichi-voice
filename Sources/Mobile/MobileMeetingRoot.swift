@@ -37,6 +37,7 @@ struct MobileMeetingRoot: View {
     @State private var share: MeetingSharePayload?
     @State private var showPresentationPicker = false
     @State private var presentation: MobilePresentationDocument?
+    @State private var presentationURL: URL?
     @StateObject private var playback = MeetingSegmentPlayback()
     // Projection is independent of microphone meters, pending audio, playback progress
     // and other frequent view invalidations. Keep one result for the visible transcript.
@@ -122,9 +123,14 @@ struct MobileMeetingRoot: View {
                 .onDisappear { payload.cleanup() }
         }
         .fileImporter(isPresented: $showPresentationPicker, allowedContentTypes: [.pdf]) { result in
+            showPresentationPicker = false
             switch result {
             case .success(let url):
-                do { presentation = try MobilePresentationDocument(url: url) }
+                do {
+                    let document = try MobilePresentationDocument(url: url)
+                    presentation = document
+                    presentationURL = document.url
+                }
                 catch { report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
                     "The PDF presentation could not be opened. Choose a readable PDF file."])) }
             case .failure(let error):
@@ -136,9 +142,10 @@ struct MobileMeetingRoot: View {
         }
         // QuickLook is presented by this scene, so choosing or dismissing a PDF never
         // changes the meeting coordinator or sends the app to another application.
-        .quickLookPreview(Binding(get: { presentation?.url }, set: { url in
+        .quickLookPreview($presentationURL)
+        .onChange(of: presentationURL) { _, url in
             if url == nil { presentation = nil }
-        }))
+        }
         .confirmationDialog(PichiLocalization.text("Delete Meeting"), isPresented: Binding(
             get: { deleteCandidate != nil }, set: { if !$0 { deleteCandidate = nil } }
         )) {
