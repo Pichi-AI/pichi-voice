@@ -456,8 +456,15 @@ final class MobileNavigationUITests: XCTestCase {
                 capture("explicit-alias-\(language)-editor")
                 let field = app.textViews["transcript.edit.text"]
                 XCTAssertTrue(field.waitForExistence(timeout: 5))
+                XCTAssertEqual(field.value as? String, previous)
                 field.tap()
-                field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count) + name)
+                field.press(forDuration: 1.1)
+                capture("explicit-alias-\(language)-selection-menu")
+                let selectAll = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@",
+                    ["Select All", "Выбрать все", "Выбрать всё"])).firstMatch
+                XCTAssertTrue(selectAll.waitForExistence(timeout: 3))
+                selectAll.tap()
+                field.typeText(name)
                 capture("explicit-alias-\(language)-entered")
                 app.buttons[saveTitle].firstMatch.tap()
                 let saved = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", name), object: participant)
