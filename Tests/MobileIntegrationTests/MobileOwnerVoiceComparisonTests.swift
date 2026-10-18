@@ -106,6 +106,7 @@ private nonisolated struct OwnerVoiceComparisonScalars: Encodable, Sendable {
         let queryPassesSelfConsistency: Bool
         let queryPassesOwnerDistance: Bool
         let verifiedOwnerCount: Int
+        let ownerV2VerifiedOwnerCount: Int
         let sameSourceEarlyReferenceConfirmedCount: Int
         let duplicateEncodingDistance: Float?
         let duplicateEncodingMatchedMaximumDistance: Float?
@@ -121,6 +122,7 @@ private nonisolated struct OwnerVoiceComparisonScalars: Encodable, Sendable {
     let requiredAmbiguityMargin: Float
     let independentCandidatesPerComparison: Int
     let observedAmbiguityMarginAvailable: Bool
+    let adaptiveEvidenceAvailable: Bool
     let inferenceSeconds: Double
     var ownerProfileUnchanged: Bool
     let variants: [Variant]
@@ -232,6 +234,13 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
         if let ranges = OwnerVoiceComparisonOptions.boundaryRanges(frameCount: samples.count, clipFrames: 48_000) {
             append(8, ranges.map { Array(samples[$0]) })
         }
+        // Apply the actual V2 quality-block and first/latest selector to the reviewed
+        // single-voice fixture. This isolates selection/encoding; it does not fabricate
+        // production diarizer intervals or establish the fixture's weak identity label.
+        var adaptive = MeetingStreamingOwnerVoiceSamples(epoch: epoch, useAdaptiveOwnerEvidence: true)
+        adaptive.consumeCleanOwnerSamples(samples[...], slot: 0)
+        let adaptiveExcerpt = adaptive.takeExcerpts().first
+        if let adaptiveExcerpt { append(9, adaptiveExcerpt.clips) }
         let began = ProcessInfo.processInfo.systemUptime
         let profiles = try MeetingSpeakerVoiceEncoder.encode(samples: requests)
         let elapsed = ProcessInfo.processInfo.systemUptime - began
@@ -246,6 +255,7 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
             let selfDistance = MeetingSpeakerVoiceMatcher.distance(profile, profile)
             let crossDistance = MeetingSpeakerVoiceMatcher.distance(profile, reference)
             let verified = MeetingOwnerVoiceVerifier.confirmedTokens(owner: owner, profiles: [profile]).count
+            let verifiedV2 = MeetingOwnerVoiceVerifier.confirmedTokens(owner: owner, profiles: [profile], policy: .streamingV2).count
             let sameSource = MeetingOwnerVoiceVerifier.confirmedTokens(owner: earlyReference, profiles: [profile]).count
             var repeatedDistance: Float?
             var repeatedDifference: Float?
@@ -262,7 +272,8 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
                 crossOwnerMatrix: OwnerVoiceComparisonScalars.matrix(profile.embeddings, owner.embeddings), crossOwnerWorstDistance: crossDistance,
                 queryPassesSelfConsistency: selfDistance.map { $0 <= MeetingSpeakerVoiceMatcher.maximumDistance } ?? false,
                 queryPassesOwnerDistance: crossDistance.map { $0 <= MeetingSpeakerVoiceMatcher.maximumDistance } ?? false,
-                verifiedOwnerCount: verified, sameSourceEarlyReferenceConfirmedCount: sameSource,
+                verifiedOwnerCount: verified, ownerV2VerifiedOwnerCount: verifiedV2,
+                sameSourceEarlyReferenceConfirmedCount: sameSource,
                 duplicateEncodingDistance: IDs[index] == 6 ? MeetingSpeakerVoiceMatcher.distance(profile, first) : nil,
                 duplicateEncodingMatchedMaximumDistance: repeatedDistance,
                 duplicateEncodingMaximumAbsoluteDifference: repeatedDifference))
@@ -273,6 +284,7 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
             ownerReferenceValid: MeetingOwnerVoiceProfileStore.isValid(owner), ownerOriginalPCMAvailable: false,
             maximumDistance: MeetingSpeakerVoiceMatcher.maximumDistance, requiredAmbiguityMargin: MeetingSpeakerVoiceMatcher.ambiguityMargin,
             independentCandidatesPerComparison: 1, observedAmbiguityMarginAvailable: false,
+            adaptiveEvidenceAvailable: adaptiveExcerpt != nil,
             inferenceSeconds: elapsed, ownerProfileUnchanged: false, variants: variants)
     }
 
