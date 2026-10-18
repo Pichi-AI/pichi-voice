@@ -427,6 +427,57 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
+    func testExplicitSpeakerAliasPersistsWithTranscriptPrivacyEnabled() throws {
+        let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9024"
+        let speakerID = "00000000-0000-0000-0000-000000000065"
+        for (language, appearance, historyTitle, saveTitle) in [
+            ("en", "light", "History", "Save"),
+            ("ru", "dark", "История", "Сохранить")
+        ] {
+            func openFixture() throws {
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                       "-MeetingPIIRedactionEnabled", "YES"]
+                app.launch()
+                capture("explicit-alias-\(language)-ready")
+                openNavigation("history", title: historyTitle)
+                capture("explicit-alias-\(language)-history")
+                let meeting = app.buttons["history.session.\(fixtureID)"]
+                guard meeting.waitForExistence(timeout: 5) else {
+                    throw XCTSkip("Stage the synthetic ExplicitSpeakerAliasMeeting.json in the isolated test store")
+                }
+                meeting.tap()
+                XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+                capture("explicit-alias-\(language)-opened")
+            }
+            func rename(_ previous: String, to name: String) {
+                let participant = app.buttons["transcript.speaker.\(speakerID)"]
+                XCTAssertTrue(participant.waitForExistence(timeout: 5))
+                participant.tap()
+                capture("explicit-alias-\(language)-editor")
+                let field = app.textViews["transcript.edit.text"]
+                XCTAssertTrue(field.waitForExistence(timeout: 5))
+                field.tap()
+                field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count) + name)
+                capture("explicit-alias-\(language)-entered")
+                app.buttons[saveTitle].firstMatch.tap()
+                let saved = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", name), object: participant)
+                XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 5), .completed)
+                XCTAssertTrue(app.staticTexts["[ИМЯ] оставил [ТЕЛЕФОН]."].exists,
+                              "A metadata correction must preserve the protected transcript")
+                capture("explicit-alias-\(language)-saved")
+            }
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+            try openFixture()
+            rename("Анна", to: "Иван Петров")
+            app.terminate()
+            try openFixture()
+            XCTAssertEqual(app.buttons["transcript.speaker.\(speakerID)"].label, "Иван Петров")
+            capture("explicit-alias-\(language)-persisted")
+            rename("Иван Петров", to: "Анна")
+        }
+    }
+
     func testPrivateSavedIncomingParagraphsOnPhysicalDevice() throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("A separately authorized physical-device saved-session review")

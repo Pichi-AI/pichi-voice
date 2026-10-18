@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "id": "1AD3258B-41DC-426A-A9CA-0FB6531A9024",
+  "title": "Синтетическая проверка ручных имён",
+  "languageCode": "ru",
+  "mode": "inRoom",
+  "selectedMicrophone": {
+    "captureDeviceID": "synthetic-navigation-microphone",
+    "displayName": "Synthetic microphone",
+    "role": "unknown"
+  },
+  "startedAt": "2026-10-16T12:00:00Z",
+  "endedAt": "2026-10-16T12:00:08Z",
+  "updatedAt": "2026-10-16T12:00:08Z",
+  "timebase": {
+    "startedHostTime": 0,
+    "machTimebaseNumerator": 1,
+    "machTimebaseDenominator": 1
+  },
+  "state": "completed",
+  "events": [],
+  "failures": [],
+  "audioStorageMode": "memoryOnly",
+  "audioTracks": [
+    {
+      "id": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "kind": "microphone",
+      "sourceIdentifier": "synthetic-navigation-microphone",
+      "sourceDisplayName": "Synthetic microphone",
+      "timebase": {
+        "startedHostTime": 0,
+        "machTimebaseNumerator": 1,
+        "machTimebaseDenominator": 1
+      },
+      "health": {
+        "status": "stopped",
+        "level": 0,
+        "droppedSampleCount": 0
+      },
+      "chunks": []
+    }
+  ],
+  "speakers": [
+    {
+      "id": "00000000-0000-0000-0000-000000000065",
+      "displayName": "Анна",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    }
+  ],
+  "transcriptSegments": [
+    {
+      "id": "00000000-0000-0000-0000-202610180101",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 0,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 300,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "[ИМЯ]",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-alias-ui-1",
+      "nativeTiming": {
+        "start": 0,
+        "end": 0.3
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610180102",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 300,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 600,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "оставил",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-alias-ui-2",
+      "nativeTiming": {
+        "start": 0.3,
+        "end": 0.6
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610180103",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 600,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 1000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "[ТЕЛЕФОН].",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-alias-ui-3",
+      "nativeTiming": {
+        "start": 0.6,
+        "end": 1
+      }
+    }
+  ],
+  "retention": {},
+  "processingAttempts": [],
+  "transcriptTimeDomain": "meetingRelative",
+  "transcriptIsComplete": true,
+  "speakerLabelsEnabled": true,
+  "piiRedactionEnabled": true
+}
