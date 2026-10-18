@@ -106,6 +106,45 @@ private actor DeferredLiveRedactor: TranscriptTextRedacting {
     func release() { if !waiters.isEmpty { waiters.removeFirst().resume() } }
 }
 
+private actor ColdPagedPrivacyRedactor: TranscriptTextRedacting {
+    enum Failure: Error { case notPrepared }
+    nonisolated let checkpointIdentity: String? = "synthetic-cold-paging-v1"
+    private(set) var preparations = 0
+    private(set) var largestInputRows = 0
+    private var ready = false
+    func prepareForMeeting() async throws { preparations += 1; ready = true }
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        guard ready else { throw Failure.notPrepared }
+        largestInputRows = max(largestInputRows, text.components(separatedBy: "документ").count - 1)
+        return try await StructuredPrivacyRedactor().redactWithSpans(text)
+    }
+}
+
+private actor FailingPreparePrivacyRedactor: TranscriptTextRedacting {
+    enum Failure: Error { case unavailable }
+    private(set) var inferenceCalls = 0
+    func prepareForMeeting() async throws { throw Failure.unavailable }
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        inferenceCalls += 1
+        return .init(text: text, spans: [], provisionalSafeUTF16: text.utf16.count)
+    }
+}
+
+private actor DeferredPreparePrivacyRedactor: TranscriptTextRedacting {
+    let started: AsyncStream<Void>.Continuation
+    private var waiter: CheckedContinuation<Void, Never>?
+    init(started: AsyncStream<Void>.Continuation) { self.started = started }
+    func prepareForMeeting() async throws {
+        started.yield(())
+        await withCheckedContinuation { self.waiter = $0 }
+    }
+    func release() { waiter?.resume(); waiter = nil }
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        try Task.checkCancellation()
+        return try await StructuredPrivacyRedactor().redactWithSpans(text)
+    }
+}
+
 @main
 struct MeetingPrivacyContextTests {
     enum Failure: Error { case assertion(String) }
@@ -146,6 +185,9 @@ struct MeetingPrivacyContextTests {
         }
         #endif
         try await liveDeliverySuite()
+        try await pagedLiveDeliverySuite()
+        try await deferredPagedRevisionSuite()
+        try await joinedColdPreparationSuite()
         try await stableLiveHypothesisSuite()
         try await stablePCMHypothesisSuite()
         try await coarsePCMPreviewCoverageSuite()
@@ -736,6 +778,167 @@ struct MeetingPrivacyContextTests {
         await redactor.release()
         let boundedOutput = await updates.next()
         try check(boundedOutput?.0.utterances.count == 100 && boundedOutput?.0.utterances.first?.id == large.utterances[100].id, "bounded live rows changed identity")
+        await publisher.stop()
+    }
+
+    @MainActor
+    static func pagedLiveDeliverySuite() async throws {
+        let delivery = AsyncStream<MeetingLiveTranscriptSnapshot>.makeStream()
+        let timeout = Task { try? await Task.sleep(for: .seconds(60)); delivery.continuation.finish() }
+        defer { timeout.cancel() }
+        let publisher = MeetingLivePrivacyPublication()
+        let detector = ColdPagedPrivacyRedactor()
+        let generation = UUID()
+        var failures = 0
+        var source = MeetingLiveTranscriptSnapshot.empty
+        source.revision = 1
+        source.utterances = (0..<1_200).map { index -> MeetingLiveUtterance in
+            let speaker: MeetingLiveSpeaker = index % 2 == 0 ? .you : .them
+            return MeetingLiveUtterance(id: UUID(), speaker: speaker,
+                  text: "документ инструкция терапия схема применение.", start: Double(index), end: Double(index + 1))
+        }
+        // One source's person name crosses the 100-row page edge. Page overlap must
+        // provide raw context while every delivered version remains protected.
+        for (index, text) in [(98, "доктор Иван"), (100, "Петрович Сидоров, обсуждает препарат.")] {
+            source.utterances[index].speaker = .you; source.utterances[index].text = text
+        }
+        func submit() {
+            publisher.submit(source, generation: generation, using: detector, latestSnapshot: { source },
+                publish: { value, _ in delivery.continuation.yield(value) },
+                failed: { _ in failures += 1; delivery.continuation.finish() })
+        }
+        var updates = delivery.stream.makeAsyncIterator()
+        func complete(_ count: Int) async throws -> MeetingLiveTranscriptSnapshot {
+            while let value = await updates.next() {
+                let text = value.utterances.map(\.text).joined(separator: " ")
+                for name in ["Иван", "Петрович", "Сидоров"] {
+                    try check(!text.contains(name), "a person name escaped while crossing a bounded privacy page")
+                }
+                if value.utterances.count == count { return value }
+            }
+            throw Failure.assertion("bounded privacy paging did not produce the complete protected history")
+        }
+        submit()
+        let first = try await complete(1_200)
+        try check(first.utterances.map(\.id) == source.utterances.map(\.id),
+                  "an initial 1200-row snapshot lost unseen rows outside the 100-row detector page")
+        try check(await detector.preparations == 1, "cold live privacy did not prepare its frozen redactor exactly once")
+        try check(await detector.largestInputRows <= 100, "privacy paging exceeded its raw row budget")
+
+        source.utterances += (1_200..<1_400).map { index -> MeetingLiveUtterance in
+            MeetingLiveUtterance(id: UUID(), speaker: .you, text: "документ инструкция терапия схема применение.",
+                  start: Double(index), end: Double(index + 1))
+        }
+        source.revision += 1
+        submit()
+        let extended = try await complete(1_400)
+        try check(extended.utterances.prefix(1_200).map(\.id) == first.utterances.map(\.id),
+                  "coalesced growth beyond the page budget lost earlier participants")
+        let withdrawn = source.utterances.remove(at: 20).id
+        let changed = source.utterances[50].id
+        source.utterances[50].text = "документ инструкция терапия схема применение. документ."
+        source.revision += 1
+        submit()
+        let revised = try await complete(1_399)
+        try check(!revised.utterances.contains { $0.id == withdrawn }, "a withdrawn raw row remained in protected history")
+        try check(revised.utterances.first(where: { $0.id == changed })?.text == "документ инструкция терапия схема применение. документ.",
+                  "a previously visited raw row was not revalidated after correction")
+        try check(await detector.preparations == 1 && failures == 0, "paging restarted preparation or failed a valid history")
+        await publisher.stop()
+        print("PASS cold privacy preparation, 1200-row initial/backfill, 1400-row growth, source retraction/revision and cross-page person masking")
+    }
+
+    @MainActor
+    static func deferredPagedRevisionSuite() async throws {
+        let began = AsyncStream<String>.makeStream()
+        let cancelled = AsyncStream<Void>.makeStream()
+        let delivery = AsyncStream<MeetingLiveTranscriptSnapshot>.makeStream()
+        let timeout = Task { try? await Task.sleep(for: .seconds(60)); delivery.continuation.finish(); began.continuation.finish() }
+        defer { timeout.cancel() }
+        let detector = DeferredLiveRedactor(started: began.continuation, cancelled: cancelled.continuation)
+        let publisher = MeetingLivePrivacyPublication()
+        let generation = UUID()
+        var source = MeetingLiveTranscriptSnapshot.empty
+        source.revision = 1
+        source.utterances = (0..<60).map { index -> MeetingLiveUtterance in
+            .init(id: UUID(), speaker: .you, text: "документ инструкция терапия.", start: Double(index), end: Double(index + 1))
+        }
+        var failures = 0
+        func submit() {
+            publisher.submit(source, generation: generation, using: detector, latestSnapshot: { source },
+                publish: { value, _ in delivery.continuation.yield(value) },
+                failed: { _ in failures += 1; delivery.continuation.finish() })
+        }
+        submit()
+        var starts = began.stream.makeAsyncIterator()
+        _ = await starts.next()
+        // The first page is still inside a noncooperative detector. Withdraw and
+        // revise its source, then coalesce a history jump much larger than one page.
+        let withdrawn = source.utterances.remove(at: 10).id
+        let changed = source.utterances[15].id
+        source.utterances[15].text = "документ инструкция."
+        source.utterances += (60..<1_260).map { index -> MeetingLiveUtterance in
+            .init(id: UUID(), speaker: .you, text: "документ инструкция терапия.", start: Double(index), end: Double(index + 1))
+        }
+        source.revision = 2; submit()
+        source.revision = 3; submit()
+        let releaser = Task {
+            while await starts.next() != nil { await detector.release() }
+        }
+        await detector.release()
+        var updates = delivery.stream.makeAsyncIterator()
+        var complete = false
+        while let value = await updates.next() {
+            try check(!value.utterances.contains { $0.id == withdrawn },
+                      "a page withdrawn during inference was published")
+            if let revised = value.utterances.first(where: { $0.id == changed }) {
+                try check(revised.text == "документ инструкция.", "a stale in-flight raw text version was published")
+            }
+            if value.utterances.count == source.utterances.count {
+                try check(value.utterances.map(\.id) == source.utterances.map(\.id),
+                          "coalesced history backfill omitted an unseen word")
+                complete = true; break
+            }
+        }
+        await publisher.stop()
+        began.continuation.finish(); releaser.cancel(); await releaser.value
+        try check(complete && failures == 0, "source revisions during native inference did not recover complete history")
+        print("PASS 60-to-1259 coalescing and stale-page rejection/retry while inference is deferred")
+    }
+
+    @MainActor
+    static func joinedColdPreparationSuite() async throws {
+        let began = AsyncStream<Void>.makeStream()
+        let detector = DeferredPreparePrivacyRedactor(started: began.continuation)
+        let publisher = MeetingLivePrivacyPublication()
+        var source = MeetingLiveTranscriptSnapshot.empty
+        source.revision = 1
+        source.utterances = [.init(id: UUID(), speaker: .you, text: "документ инструкция.", start: 0, end: 1)]
+        var publications = 0, failures = 0
+        publisher.submit(source, generation: UUID(), using: detector, latestSnapshot: { source },
+            publish: { _, _ in publications += 1 }, failed: { _ in failures += 1 })
+        var starts = began.stream.makeAsyncIterator()
+        _ = await starts.next()
+        var stopped = false
+        let stopBegan = AsyncStream<Void>.makeStream()
+        let stop = Task { stopBegan.continuation.yield(()); await publisher.stop(); stopped = true }
+        var stopping = stopBegan.stream.makeAsyncIterator()
+        _ = await stopping.next()
+        try check(!stopped, "stop abandoned noncooperative cold model preparation")
+        await detector.release()
+        await stop.value
+        try check(stopped && publications == 0 && failures == 0,
+                  "cancelled cold preparation published raw text or reported a spurious failure")
+
+        let failure = AsyncStream<Void>.makeStream()
+        let unavailable = FailingPreparePrivacyRedactor()
+        publisher.submit(source, generation: UUID(), using: unavailable, latestSnapshot: { source },
+            publish: { _, _ in publications += 1 }, failed: { _ in failures += 1; failure.continuation.yield(()) })
+        var errors = failure.stream.makeAsyncIterator()
+        _ = await errors.next()
+        let inferenceCalls = await unavailable.inferenceCalls
+        try check(publications == 0 && failures == 1 && inferenceCalls == 0,
+                  "failed cold preparation must prevent inference and publication")
         await publisher.stop()
     }
 

@@ -57,6 +57,12 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         self.onUpdate = onUpdate
     }
 
+    /// Read one immutable source value for bounded privacy paging. The publisher must
+    /// release this value after selecting its page, before awaiting native inference.
+    func latestSnapshot() -> MeetingLiveTranscriptSnapshot {
+        self.stateLock.withLock { self.snapshot }
+    }
+
     /// Clears any in-progress microphone partial at a capture-side splice, so it can't straddle eras.
     func resetMicrophoneUtterance() {
         let buffered = self.stateLock.withLock { self.bufferedMicrophoneEngine }

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 nonisolated enum MeetingPrivacyPublicationError: LocalizedError {
     case redactorUnavailable
@@ -316,74 +317,217 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
     }
 }
 
-/// Delivery ownership for the existing live privacy transform. Cancelling every
-/// partial can starve slow inference and leave unjoined work behind; one worker
-/// instead finishes its revision and then consumes the latest bounded raw input.
-/// Raw snapshots are never replaced by previously filtered display strings.
+/// One joined privacy owner. Raw input stays in its existing recognition owner;
+/// only one bounded page is retained across native inference. Previously approved
+/// history and content digests let delayed/coalesced updates backfill every row.
 @MainActor
 final class MeetingLivePrivacyPublication {
+    private static let pageRows = 100
+    private static let contextRows = 32
     private struct Pending {
         let snapshot: MeetingLiveTranscriptSnapshot
+        let latestSnapshot: (@MainActor () -> MeetingLiveTranscriptSnapshot?)?
         let generation: UUID
         let redactor: any TranscriptTextRedacting
         let publish: @MainActor (MeetingLiveTranscriptSnapshot, UUID) -> Void
         let failed: @MainActor (UUID) -> Void
+    }
+    private nonisolated struct SourceVersion: Equatable, Sendable {
+        let digest: Data
+        let start: Double
+        let end: Double
+        let speaker: MeetingLiveSpeaker
+        let incomplete: Bool
+        let participant: MeetingSpeakerPresentation?
+        init(_ row: MeetingLiveUtterance) {
+            digest = Data(SHA256.hash(data: Data(row.text.utf8)))
+            start = row.start; end = row.end; speaker = row.speaker
+            incomplete = row.hasIncompleteTextCoverage; participant = row.participant
+        }
+    }
+    private nonisolated struct Source: Sendable {
+        let order: [UUID]
+        let versions: [UUID: SourceVersion]
+        let revision: UInt64
+    }
+    private nonisolated struct Page: Sendable {
+        let snapshot: MeetingLiveTranscriptSnapshot
+        let source: Source
+        let isTail: Bool
     }
     private var pending: Pending?
     private var worker: Task<Void, Never>?
     private var workerID: UUID?
     private var generation: UUID?
     private var submittedRevision: UInt64 = 0
+    private var publishedRevision: UInt64 = 0
+    private var lastTailRevision: UInt64 = 0
+    private var prepared = false
+    private var privacyIdentity: String?
+    private var versions: [UUID: SourceVersion] = [:]
+    private var sourceOrder: [UUID] = []
+    private var visited: Set<UUID> = []
+    private var contextPending: Set<UUID> = []
+    private var approved: [UUID: MeetingLiveUtterance] = [:]
 
     func submit(_ snapshot: MeetingLiveTranscriptSnapshot, generation: UUID,
                 using redactor: any TranscriptTextRedacting,
+                latestSnapshot: (@MainActor () -> MeetingLiveTranscriptSnapshot?)? = nil,
                 publish: @escaping @MainActor (MeetingLiveTranscriptSnapshot, UUID) -> Void,
                 failed: @escaping @MainActor (UUID) -> Void) {
-        // A caller must join stop before changing the recording generation.
-        guard (self.generation == nil && worker == nil) || self.generation == generation else { return }
-        guard snapshot.revision > submittedRevision else { return }
+        guard (self.generation == nil && worker == nil) || self.generation == generation,
+              snapshot.revision > submittedRevision else { return }
         self.generation = generation
         submittedRevision = snapshot.revision
+        // Compatibility callers without a source owner retain the existing bounded
+        // one-snapshot behavior. Production supplies the locked source getter above.
         self.pending = Pending(snapshot: MeetingTranscriptPrivacyPolicy.boundedLiveInput(snapshot),
-                               generation: generation, redactor: redactor, publish: publish, failed: failed)
+            latestSnapshot: latestSnapshot, generation: generation, redactor: redactor, publish: publish, failed: failed)
         guard worker == nil else { return }
         let id = UUID()
         workerID = id
         worker = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer {
-                if self.workerID == id { self.worker = nil; self.workerID = nil }
-            }
-            while self.workerID == id, let item = self.pending {
-                self.pending = nil
+            defer { if self.workerID == id { self.worker = nil; self.workerID = nil } }
+            var current: Pending?
+            while self.workerID == id {
+                if let next = self.pending { current = next; self.pending = nil }
+                guard let item = current else { return }
                 do {
                     try Task.checkCancellation()
-                    let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(item.snapshot, using: item.redactor)
+                    if !self.prepared {
+                        let identity = item.redactor.checkpointIdentity
+                        try await item.redactor.prepareForMeeting()
+                        try Task.checkCancellation()
+                        guard identity == item.redactor.checkpointIdentity else {
+                            throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+                        }
+                        self.privacyIdentity = identity; self.prepared = true
+                    }
+                    guard self.generation == item.generation else { throw CancellationError() }
+                    guard self.privacyIdentity == item.redactor.checkpointIdentity else {
+                        throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+                    }
+                    let selected: Page?
+                    do {
+                        guard let input = item.latestSnapshot?() ?? (item.latestSnapshot == nil ? item.snapshot : nil) else { return }
+                        selected = try await self.page(from: input)
+                    }
+                    guard let page = selected else { current = nil; continue }
+                    // `page` owns at most 100 raw rows. No full source snapshot crosses NER.
+                    let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(page.snapshot, using: item.redactor)
                     try Task.checkCancellation()
                     guard self.workerID == id, self.generation == item.generation else { return }
-                    item.publish(safe, item.generation)
+                    guard self.privacyIdentity == item.redactor.checkpointIdentity else {
+                        throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+                    }
+                    let latest: Source
+                    if let getter = item.latestSnapshot {
+                        guard let snapshot = getter() else { return }
+                        latest = try await Self.source(from: snapshot)
+                    } else { latest = page.source }
+                    try Task.checkCancellation()
+                    guard self.workerID == id, self.generation == item.generation else { return }
+                    self.reconcile(latest)
+                    // A changed or withdrawn raw page cannot publish an older version.
+                    guard page.snapshot.utterances.allSatisfy({ latest.versions[$0.id] == page.source.versions[$0.id] }) else { continue }
+                    let pageIDs = Set(page.snapshot.utterances.map(\.id))
+                    for id in pageIDs { self.approved[id] = nil }
+                    for row in safe.utterances { self.approved[row.id] = row }
+                    self.visited.formUnion(pageIDs)
+                    if page.isTail {
+                        self.contextPending.removeAll()
+                        self.lastTailRevision = page.source.revision
+                    } else {
+                        // The page's lexical edge can be withheld even for a previously
+                        // visited row. Force its raw context into the following page.
+                        self.contextPending = Set(page.snapshot.utterances.suffix(Self.contextRows).map(\.id))
+                        self.visited.subtract(self.contextPending)
+                    }
+                    var publication = safe
+                    publication.utterances = latest.order.compactMap { self.approved[$0] }
+                    // Internal page progress is independent of raw recognition revisions.
+                    self.publishedRevision = max(self.publishedRevision + 1, page.source.revision)
+                    publication.revision = self.publishedRevision
+                    item.publish(publication, item.generation)
+                    if item.latestSnapshot == nil { current = nil }
                 } catch is CancellationError { return }
                 catch {
                     guard self.workerID == id, self.generation == item.generation, !Task.isCancelled else { return }
-                    self.pending = nil
-                    item.failed(item.generation)
-                    return
+                    self.pending = nil; item.failed(item.generation); return
                 }
             }
         }
     }
 
-    /// Keep the task slot until it finishes, so concurrent teardown callers join
-    /// the same native operation and a new generation cannot inherit old work.
+    private static func source(from snapshot: MeetingLiveTranscriptSnapshot) async throws -> Source {
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            guard snapshot.utterances.allSatisfy({ $0.start.isFinite && $0.end.isFinite
+                && $0.start >= 0 && $0.end >= $0.start }) else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+            let values = snapshot.utterances.map { ($0.id, SourceVersion($0)) }
+            guard Set(values.map(\.0)).count == values.count else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+            let result = Source(order: values.map(\.0), versions: Dictionary(uniqueKeysWithValues: values), revision: snapshot.revision)
+            try Task.checkCancellation()
+            return result
+        }
+        return try await withTaskCancellationHandler {
+            let value = try await task.value; try Task.checkCancellation(); return value
+        } onCancel: { task.cancel() }
+    }
+
+    private func reconcile(_ source: Source) {
+        let changed = Set(self.versions.keys).filter { self.versions[$0] != source.versions[$0] }
+        var invalidated = Set(changed)
+        if !changed.isEmpty {
+            // A source edit can change an entity spanning neighboring fragments.
+            // Hide and revisit that bounded context before another page publishes.
+            for order in [self.sourceOrder, source.order] {
+                let positions = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
+                for id in changed {
+                    guard let index = positions[id] else { continue }
+                    let lower = max(0, index - Self.contextRows)
+                    let upper = min(order.count, index + Self.contextRows + 1)
+                    invalidated.formUnion(order[lower..<upper])
+                }
+            }
+        }
+        self.visited.subtract(invalidated)
+        self.contextPending.subtract(invalidated)
+        for id in invalidated { self.approved[id] = nil }
+        self.versions = source.versions
+        self.sourceOrder = source.order
+    }
+
+    private func page(from input: MeetingLiveTranscriptSnapshot) async throws -> Page? {
+        let source = try await Self.source(from: input)
+        self.reconcile(source)
+        let first = source.order.firstIndex { !self.visited.contains($0) }
+        guard first != nil || source.revision > self.lastTailRevision else { return nil }
+        let start = first.map { index in
+            self.contextPending.contains(source.order[index]) ? index : max(0, index - Self.contextRows)
+        } ?? max(0, input.utterances.count - Self.pageRows)
+        let end = min(input.utterances.count, start + Self.pageRows)
+        var snapshot = input
+        snapshot.utterances = Array(input.utterances[start..<end])
+        let isTail = end == input.utterances.count
+        if !isTail { snapshot.partials = [:] }
+        return Page(snapshot: snapshot, source: source, isTail: isTail)
+    }
+
+    /// Keep ownership until even a noncooperative native preparation/inference
+    /// returns. A new generation cannot inherit its history, model or publication.
     func stop() async {
-        pending = nil
-        generation = nil
-        submittedRevision = 0
-        let task = worker
-        let id = workerID
-        task?.cancel()
-        await task?.value
+        pending = nil; generation = nil; submittedRevision = 0
+        let task = worker; let id = workerID
+        task?.cancel(); await task?.value
         if workerID == id { worker = nil; workerID = nil }
+        publishedRevision = 0; lastTailRevision = 0; prepared = false; privacyIdentity = nil
+        versions.removeAll(); sourceOrder.removeAll(); visited.removeAll(); contextPending.removeAll(); approved.removeAll()
     }
 }
 

@@ -143,6 +143,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var liveTranscriptionCoordinator: MeetingLiveTranscriptionCoordinator?
     private var liveTranscriptionTeardownTask: Task<Void, Never>?
     private let livePrivacyPublication = MeetingLivePrivacyPublication()
+    private var lastLiveSourceRevision: UInt64 = 0
     private var startupTrackHealth: [MeetingAudioTrackID: MeetingTrackHealth] = [:]
     private var startupWriterFailures: Set<MeetingAudioTrackID?> = []
     private var pendingSpeechCapture: MeetingPendingSpeechCapture?
@@ -151,6 +152,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         didSet {
             if self.captureGeneration != oldValue {
                 self.logPendingSpeechState("generation_reset")
+                self.lastLiveSourceRevision = 0
                 self.pendingSpeechCapture?.stop()
                 self.pendingSpeechCapture = nil
                 self.pendingSpeech = .empty
@@ -633,8 +635,10 @@ final class MeetingSessionCoordinator: ObservableObject {
                 MainActor.assumeIsolated {
                     guard let self,
                           self.liveTranscriptionCoordinator != nil,
-                          self.liveTranscript.accepts(snapshot, generation: generation, activeGeneration: self.captureGeneration)
+                          generation == self.captureGeneration,
+                          snapshot.revision > self.lastLiveSourceRevision
                     else { return }
+                    self.lastLiveSourceRevision = snapshot.revision
                     self.publishLiveTranscript(snapshot, generation: generation, redactor: recordingRedactor)
                 }
             }
@@ -1947,7 +1951,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             return
         }
         self.livePrivacyPublication.submit(snapshot, generation: generation, using: redactor,
-            publish: { [weak self] safe, generation in
+            latestSnapshot: { [weak self] in
+                guard let self, self.captureGeneration == generation else { return nil }
+                return self.liveTranscriptionCoordinator?.latestSnapshot()
+            }, publish: { [weak self] safe, generation in
                 guard let self, self.liveTranscriptionCoordinator != nil,
                       self.liveTranscript.accepts(safe, generation: generation, activeGeneration: self.captureGeneration) else { return }
                 if safe.hasNewWords(since: self.liveTranscript) { self.lastLiveSpeechAt = Date() }
