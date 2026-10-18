@@ -423,6 +423,16 @@ final class MobileNavigationUITests: XCTestCase {
                 pickerDescription.lifetime = .keepAlways
                 add(pickerDescription)
                 let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Отмена", "Отменить"])).firstMatch
+                XCTAssertTrue(app.buttons["DOCPicker.actionButton"].waitForExistence(timeout: 10),
+                              "The system file destination picker must open")
+                // Compact Files presents the current folder first; its Cancel
+                // action is on the enclosing locations page, unlike iPad.
+                if !cancel.exists {
+                    let locations = app.buttons["BackButton"]
+                    XCTAssertTrue(locations.waitForExistence(timeout: 5))
+                    locations.tap()
+                    capture("protected-export-files-locations")
+                }
                 XCTAssertTrue(cancel.waitForExistence(timeout: 10), "The system file destination picker must open")
                 cancel.tap()
                 capture("protected-export-files-picker-cancelled")
