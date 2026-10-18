@@ -58,6 +58,7 @@ struct MeetingStreamingProtectedWordTailTests {
         try knownIdentity()
         try knownNeighborIdentity()
         try knownNeighborSafety()
+        try knownContinuationIdentityAndPartitions()
         try longStream(mode: 0)
         try longStream(mode: 1)
         try longStream(mode: 2)
@@ -116,12 +117,12 @@ struct MeetingStreamingProtectedWordTailTests {
         var value = try tail()
         let beforeAnchor = try update(&value, words: Array(words.prefix(2)), activity: [
             Self.activity("a", 0, 0.8), Self.activity("b", 0.4, 0.6)], end: 0.8)
-        check(beforeAnchor.inserted[1].speakerAttribution?.rule != .briefInterruption)
+        check(beforeAnchor.inserted[1].speakerAttribution?.rule != .mainSpeakerContinuation)
         let result = try update(&value, words: [words[2]], activity: activity, end: 1.1)
         let mixed = result.revisions.first { $0.segmentID == words[1].id }
-        check(mixed?.speakerAttribution?.rule == .briefInterruption)
-        check(mixed?.speakerAttribution?.background.count == 1)
-        check(mixed?.speakerAttribution?.selectedToken?.label == "b")
+        check(mixed?.speakerAttribution?.rule == .mainSpeakerContinuation)
+        check(mixed?.speakerAttribution?.background.isEmpty == true)
+        check(mixed?.speakerAttribution?.selectedToken?.label == "a")
         check(mixed?.speakerAttribution?.rawAssignment.tokens.count == 2)
         check(mixed?.overlap == .ambiguous)
         for unsafeIndex in [0, 1, 2] {
@@ -129,13 +130,13 @@ struct MeetingStreamingProtectedWordTailTests {
             unsafe[unsafeIndex].completeness = .incompleteTrack
             var protected = try tail()
             let blocked = try update(&protected, words: unsafe, activity: activity, end: 1.1)
-            check(blocked.inserted[1].speakerAttribution?.rule != .briefInterruption)
+            check(blocked.inserted[1].speakerAttribution?.rule != .mainSpeakerContinuation)
             check(blocked.inserted.map(\.completeness) == unsafe.map(\.completeness))
         }
         var hiddenThird = try tail()
         let blocked = try update(&hiddenThird, words: words,
             activity: activity + [Self.activity("c", 0.21, 0.25)], end: 1.1)
-        check(blocked.inserted[1].speakerAttribution?.rule != .briefInterruption)
+        check(blocked.inserted[1].speakerAttribution?.rule != .mainSpeakerContinuation)
     }
 
     static func exactWordBoundary() throws {
@@ -367,6 +368,83 @@ struct MeetingStreamingProtectedWordTailTests {
         let manualOutput = try update(&manual, words: manualWords, activity: support, end: 26.6)
         check(manualOutput.inserted[2].speakerID != established.segments[1].speakerID,
               "A manually assigned target was replaced by a contextual known identity")
+    }
+
+    static func knownContinuationIdentityAndPartitions() throws {
+        let established = try MeetingPCMRecordingAttribution.assemble(
+            transcript: .init(segments: [word(90, 0, 6), word(91, 7, 13)]),
+            activity: [activity("a", 0, 6), activity("b", 7, 13)],
+            epoch: epoch, attemptID: attempt, duration: 13, speakerNameFormat: "Speaker %lld")
+        let knownID = established.segments[1].speakerID
+        check(knownID != nil)
+        let source = [word(92, 20, 26), word(93, 26.1, 26.2), word(94, 26.2, 26.3),
+                      word(95, 26.4, 26.6), word(96, 26.6, 26.7), word(97, 26.8, 27)]
+        let support = [activity("a", 20, 26), activity("b", 26.1, 26.2), activity("b", 26.4, 26.6),
+                       activity("c", 26.45, 26.55), activity("b", 26.8, 27)]
+        var oneShot = try tail(prior: established.speakers)
+        let canonical = try oneShot.finish(safeWords: .init(segments: source), activity: support,
+            watermarks: marks(27), attemptID: attempt, epoch: epoch)
+        for position in 2...4 {
+            check(canonical.inserted[position].speakerID == knownID)
+            check(canonical.inserted[position].speakerAttribution?.rule == .mainSpeakerContinuation)
+            check(canonical.inserted[position].speakerAttribution?.selectedSpeakerID == knownID)
+            check(canonical.inserted[position].speakerAttribution?.background.isEmpty == true)
+        }
+        check(canonical.inserted[2].speakerAttribution?.candidates.isEmpty == true)
+        check(canonical.inserted[4].speakerAttribution?.candidates.isEmpty == true)
+        check(canonical.inserted[3].speakerAttribution?.rawAssignment.tokens.count == 2)
+        for split in 0...source.count {
+            var value = try tail(prior: established.speakers)
+            let prefix = Array(source.prefix(split)), suffix = Array(source.dropFirst(split))
+            let cursor = prefix.last?.nativeTiming?.end ?? 0
+            let prefixSupport = support.filter { $0.start < cursor }.map {
+                MeetingBackendSpeakerActivity(token: $0.token, start: $0.start, end: min($0.end, cursor))
+            }
+            let first = try update(&value, words: prefix, activity: prefixSupport, end: cursor)
+            if split > 2, split < source.count {
+                check(first.inserted[2].speakerAttribution?.rule != .mainSpeakerContinuation,
+                      "Continuation used an absent future original anchor")
+            }
+            let final = try value.finish(safeWords: .init(segments: suffix), activity: support,
+                watermarks: marks(27), attemptID: attempt, epoch: epoch)
+            var observed = Dictionary(uniqueKeysWithValues: (first.inserted + final.inserted).map { ($0.id, $0) })
+            for patch in final.revisions {
+                guard var row = observed[patch.segmentID] else { check(false); continue }
+                _ = try patch.apply(to: &row)
+                observed[patch.segmentID] = row
+            }
+            for expected in canonical.inserted {
+                let row = observed[expected.id]!
+                check(row.speakerID == expected.speakerID && row.speakerAttribution == expected.speakerAttribution,
+                      "Stop partition changed canonical continuation ownership")
+                check(row.id == expected.id && row.text == expected.text && row.originalText == expected.originalText)
+                check(row.start == expected.start && row.end == expected.end && row.nativeTiming == expected.nativeTiming)
+                check(row.nativeUnitID == expected.nativeUnitID && row.nativeSpeakerAssignment == expected.nativeSpeakerAssignment)
+            }
+            check(final.isFinal && final.provisionalSpeakerIDs.isEmpty)
+        }
+        var fresh = try tail()
+        let unadmitted = try update(&fresh, words: source, activity: support, end: 27)
+        for position in 2...4 {
+            check(unadmitted.inserted[position].speakerID == nil,
+                  "Continuation manufactured an identity for a never-admitted short speaker")
+            check(unadmitted.inserted[position].speakerAttribution?.rule == .mainSpeakerContinuation)
+        }
+        for unsafeIndex in 1...5 {
+            for kind in 0..<4 {
+                var words = source
+                switch kind {
+                case 0: words[unsafeIndex].completeness = .incompleteTrack
+                case 1: words[unsafeIndex].status = .provisional
+                case 2: words[unsafeIndex].isLikelyEcho = true
+                default: words[unsafeIndex].attributionState = .timingUncertain
+                }
+                var value = try tail(prior: established.speakers)
+                let blocked = try update(&value, words: words, activity: support, end: 27)
+                check(blocked.inserted[2].speakerAttribution?.rule != .mainSpeakerContinuation)
+                check(blocked.inserted[4].speakerAttribution?.rule != .mainSpeakerContinuation)
+            }
+        }
     }
 
     static func longStream(mode: Int) throws {

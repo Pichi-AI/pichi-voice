@@ -292,7 +292,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 let hasNeighborCues = original.speakerID == nil && summary.rawAssignment == .unassigned
                     && (summary.rule == .neighborAgreement || summary.rule == .incomingSpeaker)
                     && (summary.relation == .none || summary.relation == .single)
-                guard hasWordSupport || hasNeighborCues,
+                let hasContinuationCues = original.speakerID == nil && summary.rule == .mainSpeakerContinuation
+                guard hasWordSupport || hasNeighborCues || hasContinuationCues,
                       let known = self.speakers.first(where: {
                           $0.diarizationClusterID == "\(token.analysisEpochID):\(token.label.precomposedStringWithCanonicalMapping)"
                       }) else { continue }

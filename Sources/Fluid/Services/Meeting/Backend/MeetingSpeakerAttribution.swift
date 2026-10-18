@@ -28,6 +28,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     let enableNeighborResolution: Bool
     let enableSameSpeakerPauseResolution: Bool
     let enableBriefInterruption: Bool
+    let enableMainSpeakerContinuation: Bool
 
     init(
         schemaVersion: Int = Self.currentVersion,
@@ -47,7 +48,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         enableDominance: Bool = true,
         enableNeighborResolution: Bool = true,
         enableSameSpeakerPauseResolution: Bool = true,
-        enableBriefInterruption: Bool = true
+        enableBriefInterruption: Bool = true,
+        enableMainSpeakerContinuation: Bool = true
     ) {
         self.schemaVersion = schemaVersion
         self.comparisonTolerance = comparisonTolerance
@@ -67,6 +69,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         self.enableNeighborResolution = enableNeighborResolution
         self.enableSameSpeakerPauseResolution = enableSameSpeakerPauseResolution
         self.enableBriefInterruption = enableBriefInterruption
+        self.enableMainSpeakerContinuation = enableMainSpeakerContinuation
     }
 
     /// Exact, length-framed values avoid locale, delimiter and rounding collisions. Zero has one
@@ -98,6 +101,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         // New pause semantics get an additive framed entry without invalidating old decoders.
         if self.enableSameSpeakerPauseResolution {
             entries.append(("sameSpeakerPauseEnabled", "true"))
+        }
+        if self.enableMainSpeakerContinuation {
+            entries.append(("mainSpeakerContinuationEnabled", "true"))
         }
         let canonical = MeetingConfigFingerprintEncoding.encode(entries)
         let digest = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -132,6 +138,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         case maximumNeighborGapSeconds, maximumBoundaryResidualSeconds, maximumBriefInterruptionSeconds
         case maximumInterruptionWordSeconds, maximumBriefInterruptionGapSeconds
         case enableDominance, enableNeighborResolution, enableSameSpeakerPauseResolution, enableBriefInterruption
+        case enableMainSpeakerContinuation
     }
 
     init(from decoder: Decoder) throws {
@@ -154,7 +161,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
             enableDominance: c.decode(Bool.self, forKey: .enableDominance),
             enableNeighborResolution: c.decode(Bool.self, forKey: .enableNeighborResolution),
             enableSameSpeakerPauseResolution: c.decodeIfPresent(Bool.self, forKey: .enableSameSpeakerPauseResolution) ?? false,
-            enableBriefInterruption: c.decode(Bool.self, forKey: .enableBriefInterruption)
+            enableBriefInterruption: c.decode(Bool.self, forKey: .enableBriefInterruption),
+            enableMainSpeakerContinuation: c.decodeIfPresent(Bool.self, forKey: .enableMainSpeakerContinuation) ?? false
         )
         _ = try self.validated()
     }
@@ -194,11 +202,11 @@ nonisolated enum MeetingSpeakerAttributionRelation: String, Codable, Sendable {
 nonisolated enum MeetingSpeakerAttributionRule: String, Codable, Sendable {
     case rawOnly, rawAssigned, singleAcousticSupport, residualSuppression, acousticDominance, insufficientSupport
     case ambiguous, conflict, barrier, neighborAgreement, incomingSpeaker, boundaryContinuation
-    case briefInterruption
+    case briefInterruption, mainSpeakerContinuation
 
     var isHeuristic: Bool {
         switch self {
-        case .neighborAgreement, .incomingSpeaker, .boundaryContinuation, .briefInterruption,
+        case .neighborAgreement, .incomingSpeaker, .boundaryContinuation, .briefInterruption, .mainSpeakerContinuation,
              .residualSuppression, .acousticDominance: return true
         default: return false
         }
@@ -378,6 +386,13 @@ nonisolated enum MeetingSpeakerAttribution {
                         units: ordered, decisions: &decisions, anchors: anchors,
                         temporalBarriers: temporalBarriers, contextBarriers: contextIndexes[epoch], index: index, policy: policy,
                         diagnostics: &diagnostics
+                    )
+                }
+                if policy.enableMainSpeakerContinuation {
+                    try self.resolveMainSpeakerContinuation(
+                        units: ordered, decisions: &decisions, anchors: anchors,
+                        temporalBarriers: temporalBarriers, contextBarriers: contextIndexes[epoch],
+                        index: index, policy: policy, diagnostics: &diagnostics
                     )
                 }
             }
@@ -810,6 +825,107 @@ nonisolated enum MeetingSpeakerAttribution {
             else { return false }
         }
         return true
+    }
+
+    /// Indexes refer to the caller's immutable, chronologically ordered source rows. The
+    /// projection can therefore reuse this timing rule with canonical tokens or saved identities.
+    struct ContinuationRun: Equatable, Sendable {
+        let first: Int
+        let last: Int
+        let before: Int
+        let after: Int
+    }
+
+    /// Shared presentation ownership for a short mixed/interruption run between the same
+    /// independent original speaker. Callers establish native precision, evidence eligibility,
+    /// source/epoch scope, manual-edit protection and contextual barriers. Unknown words may
+    /// accompany a mixed word, but an unknown-only run or a clean reply cannot activate this rule.
+    /// Invalid ordering fails closed; overlapping clusters block only the affected cue paths.
+    static func continuingSpeakerRuns(
+        intervals: [MeetingSpeakerAttributionInterval], candidates: [Bool], interruptions: [Bool],
+        anchors: [Bool], sameSpeaker: (Int, Int) -> Bool, policy: MeetingSpeakerAttributionPolicy
+    ) throws -> [ContinuationRun] {
+        try Task.checkCancellation()
+        guard policy.enableMainSpeakerContinuation, intervals.count >= 3,
+              candidates.count == intervals.count, interruptions.count == intervals.count,
+              anchors.count == intervals.count else { return [] }
+        for position in intervals.indices {
+            try self.checkCancellation(at: position)
+            let interval = intervals[position]
+            guard MeetingEvidenceInterval.isValid(start: interval.start, end: interval.end),
+                  position == 0 || interval.start >= intervals[position - 1].start else { return [] }
+        }
+        let blocked = try self.overlappingIntervalIndices(intervals, tolerance: policy.comparisonTolerance,
+            checkpoint: { try self.checkCancellation(at: $0) })
+        func canFill(_ index: Int) -> Bool {
+            candidates[index] && !anchors[index] && !blocked.contains(index)
+        }
+        var result: [ContinuationRun] = [], position = 0
+        while position < intervals.count {
+            try self.checkCancellation(at: position)
+            guard canFill(position) else { position += 1; continue }
+            let first = position
+            var containsInterruption = false
+            while position < intervals.count, canFill(position) {
+                try self.checkCancellation(at: position)
+                containsInterruption = containsInterruption || interruptions[position]
+                position += 1
+            }
+            let before = first - 1, after = position
+            guard containsInterruption, before >= 0, after < intervals.count,
+                  anchors[before], anchors[after], !blocked.contains(before), !blocked.contains(after),
+                  sameSpeaker(before, after),
+                  self.admitsNeighborRun(Array(intervals[before...after]), policy: policy, sameSpeaker: true)
+            else { continue }
+            result.append(.init(first: first, last: after - 1, before: before, after: after))
+        }
+        try Task.checkCancellation()
+        return result
+    }
+
+    private static func resolveMainSpeakerContinuation(
+        units: [MeetingFinalTextUnit], decisions: inout [Decision], anchors: [Bool],
+        temporalBarriers: Set<String>, contextBarriers: ContextBarrierIndex?,
+        index: ActivityIndex, policy: MeetingSpeakerAttributionPolicy,
+        diagnostics: inout MeetingSpeakerAttributionDiagnostics
+    ) throws {
+        var candidates: [Bool] = [], interruptions: [Bool] = []
+        candidates.reserveCapacity(units.count); interruptions.reserveCapacity(units.count)
+        for position in units.indices {
+            try self.checkCancellation(at: position)
+            let unit = units[position], decision = decisions[position]
+            let isMixed: Bool
+            if case .ambiguous = decision.rawAssignment { isMixed = true }
+            else { isMixed = decision.relation == .simultaneous || decision.rule == .briefInterruption }
+            let positive = decision.candidates.filter { $0.supportSeconds > policy.comparisonTolerance }
+            let eligible = unit.precision == .word && !temporalBarriers.contains(unit.id)
+                && decision.rule != .barrier && decision.relation != .conflict && positive.count <= 2
+            candidates.append(eligible && (isMixed || self.canContextualize(unit, decision, blocked: temporalBarriers)))
+            interruptions.append(eligible && isMixed)
+        }
+        let runs = try self.continuingSpeakerRuns(
+            intervals: units.map { .init(start: $0.analysisStart, end: $0.analysisEnd) },
+            candidates: candidates, interruptions: interruptions, anchors: anchors,
+            sameSpeaker: { decisions[$0].selectedToken == decisions[$1].selectedToken }, policy: policy
+        )
+        for run in runs {
+            try Task.checkCancellation()
+            let start = units[run.before].analysisStart, end = units[run.after].analysisEnd
+            guard let main = decisions[run.before].selectedToken,
+                  contextBarriers?.intersects(start: start, end: end) != true else { continue }
+            let context = try index.query(start: start, end: end, diagnostics: &diagnostics)
+            // A third voice can occur in a gap omitted by ASR. Require the whole cue window
+            // to contain only the continuing speaker and at most one other acoustic identity.
+            let voices = Set(context.filter {
+                min($0.interval.end, end) - max($0.interval.start, start) > policy.comparisonTolerance
+            }.map(\.token))
+            guard voices.contains(main), voices.count <= 2 else { continue }
+            let cues = [units[run.before].id, units[run.after].id]
+            for position in run.first...run.last {
+                try self.checkCancellation(at: position)
+                decisions[position] = decisions[position].choosing(main, rule: .mainSpeakerContinuation, cues: cues)
+            }
+        }
     }
 
     private static func resolveNeighbors(
