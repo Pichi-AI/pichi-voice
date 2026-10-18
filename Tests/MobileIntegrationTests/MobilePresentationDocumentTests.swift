@@ -136,4 +136,95 @@ final class MobilePresentationDocumentTests: XCTestCase {
         XCTAssertTrue(disabled)
         XCTAssertEqual(writes, [true, true, true, true])
     }
+    func testInactiveAndBackgroundScenesReleaseAndActiveSceneReacquires() throws {
+        var disabled = false, writes: [Bool] = []
+        let awake = MobilePresentationAwakeRegistry(getDisabled: { disabled }, setDisabled: {
+            disabled = $0; writes.append($0)
+        })
+        let document = try MobilePresentationDocument(url: URL(fileURLWithPath: "/synthetic.pdf"),
+            startAccess: { _ in false }, isReadablePDF: { _ in true }, loadPDF: { _ in self.stubPDF() })
+        let coordinator = MobilePresentationPDFView.Coordinator(document: document, awake: awake)
+        coordinator.update(isRecording: true, isSceneActive: true)
+        coordinator.update(isRecording: true, isSceneActive: false) // inactive
+        XCTAssertFalse(disabled)
+        coordinator.update(isRecording: true, isSceneActive: false) // background
+        XCTAssertEqual(writes, [true, false])
+        coordinator.update(isRecording: true, isSceneActive: true)
+        XCTAssertTrue(disabled)
+        coordinator.finish()
+        XCTAssertFalse(disabled)
+        XCTAssertEqual(writes, [true, false, true, false])
+    }
+
+    func testActualPDFParseRunsOffMainAndPublishesOnMain() async throws {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-\(UUID()).pdf")
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 300, height: 400))
+        try renderer.pdfData { $0.beginPage(); $0.beginPage() }.write(to: fixture)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        let loader = MobilePresentationLoader()
+        let completed = expectation(description: "native PDF parsed and handed to UI")
+        let probe = MobilePresentationParseProbe()
+        var result: MobilePresentationDocument?
+        XCTAssertTrue(loader.load(url: fixture, parse: { url in
+            try MobilePresentationDocument(url: url, loadPDF: {
+                probe.recordParse(onMain: Thread.isMainThread)
+                return PDFDocument(url: $0)
+            })
+        }, completion: {
+            XCTAssertTrue(Thread.isMainThread)
+            result = try? $0.get()
+            completed.fulfill()
+        }))
+        await fulfillment(of: [completed], timeout: 5)
+        await loader.waitUntilFinished()
+        XCTAssertEqual(probe.parsedOnMain, false)
+        XCTAssertEqual(result?.pdf.pageCount, 2)
+        XCTAssertFalse(loader.isLoading)
+    }
+
+    func testCancelledParseJoinsRetainsScopeAndNeverPublishesStaleDocument() async throws {
+        let loader = MobilePresentationLoader()
+        let probe = MobilePresentationParseProbe()
+        let entered = expectation(description: "native parse entered")
+        let proceed = DispatchSemaphore(value: 0)
+        defer { proceed.signal() }
+        var publications = 0
+        XCTAssertTrue(loader.load(url: URL(fileURLWithPath: "/synthetic.pdf"), parse: { url in
+            try MobilePresentationDocument(url: url,
+                startAccess: { _ in true }, stopAccess: { _ in probe.recordRelease() },
+                isReadablePDF: { _ in true }, loadPDF: { _ in
+                    probe.recordParse(onMain: Thread.isMainThread)
+                    entered.fulfill()
+                    proceed.wait() // Deliberately non-cooperative native work.
+                    let pdf = PDFDocument()
+                    pdf.insert(PDFPage(), at: 0)
+                    return pdf
+                })
+        }, completion: { _ in publications += 1 }))
+        await fulfillment(of: [entered], timeout: 5)
+        loader.cancel()
+        XCTAssertTrue(loader.isLoading, "Cancellation must keep ownership until the parser joins")
+        XCTAssertEqual(probe.releaseCount, 0)
+        XCTAssertFalse(loader.load(url: URL(fileURLWithPath: "/second.pdf"), completion: { _ in
+            XCTFail("An overlapping import must never start")
+        }))
+        proceed.signal()
+        await loader.waitUntilFinished()
+        XCTAssertEqual(probe.parsedOnMain, false)
+        XCTAssertEqual(probe.releaseCount, 1)
+        XCTAssertFalse(loader.isLoading)
+        XCTAssertEqual(publications, 0)
+    }
+
+}
+
+
+nonisolated private final class MobilePresentationParseProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var onMain: Bool?
+    private var releases = 0
+    func recordParse(onMain: Bool) { lock.lock(); self.onMain = onMain; lock.unlock() }
+    func recordRelease() { lock.lock(); releases += 1; lock.unlock() }
+    var parsedOnMain: Bool? { lock.lock(); defer { lock.unlock() }; return onMain }
+    var releaseCount: Int { lock.lock(); defer { lock.unlock() }; return releases }
 }

@@ -36,6 +36,7 @@ struct MobileMeetingRoot: View {
     @State private var share: MeetingSharePayload?
     @State private var showPresentationPicker = false
     @State private var presentation: MobilePresentationDocument?
+    @StateObject private var presentationLoader = MobilePresentationLoader()
     @StateObject private var playback = MeetingSegmentPlayback()
     // Projection is independent of microphone meters, pending audio, playback progress
     // and other frequent view invalidations. Keep one result for the visible transcript.
@@ -124,12 +125,14 @@ struct MobileMeetingRoot: View {
             showPresentationPicker = false
             switch result {
             case .success(let url):
-                do {
-                    let document = try MobilePresentationDocument(url: url)
-                    presentation = document
+                presentationLoader.load(url: url) { result in
+                    switch result {
+                    case .success(let document): presentation = document
+                    case .failure:
+                        report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
+                            "The PDF presentation could not be opened. Choose a readable PDF file."]))
+                    }
                 }
-                catch { report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
-                    "The PDF presentation could not be opened. Choose a readable PDF file."])) }
             case .failure(let error):
                 if (error as NSError).code != NSUserCancelledError {
                     report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
@@ -164,8 +167,9 @@ struct MobileMeetingRoot: View {
             if coordinator.isRecording { playback.stop() }
             Task { await refreshHistory() }
         }
-        .onChange(of: destination) { _, _ in playback.stop() }
-        .onChange(of: selectedHistory?.id) { _, _ in playback.stop() }
+        .onChange(of: destination) { _, _ in playback.stop(); presentationLoader.cancel() }
+        .onChange(of: selectedHistory?.id) { _, _ in playback.stop(); presentationLoader.cancel() }
+        .onDisappear { presentationLoader.cancel() }
         .onChange(of: settings.meetingAudioRetentionPolicy) { _, _ in
             Task { await coordinator.sweepExpiredAudio(); await refreshHistory() }
         }
@@ -176,11 +180,13 @@ struct MobileMeetingRoot: View {
     private struct PDFPresentation: View {
         let document: MobilePresentationDocument
         @ObservedObject var coordinator: MeetingSessionCoordinator
+        @Environment(\.scenePhase) private var scenePhase
         let close: () -> Void
 
         var body: some View {
             NavigationStack {
-                MobilePresentationPDFView(document: document, isRecording: coordinator.isRecording)
+                MobilePresentationPDFView(document: document, isRecording: coordinator.isRecording,
+                                          isSceneActive: scenePhase == .active)
                     .ignoresSafeArea(edges: .bottom)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
@@ -258,8 +264,12 @@ struct MobileMeetingRoot: View {
             if item == .meetings, coordinator.isRecording || coordinator.isQuiescent {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showPresentationPicker = true } label: {
-                        Label(PichiLocalization.text("PDF Presentation"), systemImage: "doc.richtext")
+                        HStack {
+                            if presentationLoader.isLoading { ProgressView() }
+                            Label(PichiLocalization.text("PDF Presentation"), systemImage: "doc.richtext")
+                        }
                     }
+                    .disabled(presentationLoader.isLoading)
                     .accessibilityIdentifier("meeting.presentation")
                     .accessibilityHint(PichiLocalization.text("Open a PDF in this app while recording continues."))
                 }

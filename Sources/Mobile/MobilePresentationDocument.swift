@@ -6,7 +6,10 @@ import UniformTypeIdentifiers
 
 /// One transient, read-only document lease. PDFKit reads the original URL;
 /// it is never copied into meeting storage, bookmarked, renamed or deleted.
-final class MobilePresentationDocument: Identifiable {
+// The parser exclusively owns PDFKit until its detached worker has completed.
+// The joined result is then handed to the main-thread native viewer, with no
+// concurrent PDFDocument access across that handoff.
+nonisolated final class MobilePresentationDocument: Identifiable, @unchecked Sendable {
     let id = UUID()
     let url: URL
     let pdf: PDFDocument
@@ -37,6 +40,56 @@ final class MobilePresentationDocument: Identifiable {
     }
 
     deinit { releaseAccess?() }
+}
+
+/// One owned parse at a time. Cancelling invalidates publication immediately,
+/// but the operation keeps joining the non-cooperative native parser before
+/// releasing its scope or admitting another document. UI cancellation never waits.
+@MainActor
+final class MobilePresentationLoader: ObservableObject {
+    @Published private(set) var isLoading = false
+    private var generation: UUID?
+    private var worker: Task<MobilePresentationDocument, Error>?
+    private var operation: Task<Void, Never>?
+
+    @discardableResult
+    func load(url: URL,
+              parse: @escaping @Sendable (URL) throws -> MobilePresentationDocument = {
+                  try MobilePresentationDocument(url: $0)
+              },
+              completion: @escaping @MainActor (Result<MobilePresentationDocument, Error>) -> Void) -> Bool {
+        guard !isLoading else { return false }
+        let id = UUID()
+        generation = id
+        isLoading = true
+        let worker = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            let document = try parse(url)
+            try Task.checkCancellation()
+            return document
+        }
+        self.worker = worker
+        // Retain the owner through the join even if its scene disappears. The
+        // root cancels on navigation/disappearance, suppressing stale publication.
+        operation = Task { [self] in
+            let result = await worker.result
+            self.worker = nil
+            self.operation = nil
+            self.isLoading = false
+            guard self.generation == id, !Task.isCancelled else { return }
+            self.generation = nil
+            completion(result)
+        }
+        return true
+    }
+
+    func cancel() {
+        generation = nil
+        worker?.cancel()
+        operation?.cancel()
+    }
+
+    func waitUntilFinished() async { await operation?.value }
 }
 
 /// Multiple presentation windows share the process idle timer. Only the last
@@ -80,6 +133,7 @@ final class MobilePresentationAwakeRegistry {
 struct MobilePresentationPDFView: UIViewRepresentable {
     let document: MobilePresentationDocument
     let isRecording: Bool
+    let isSceneActive: Bool
 
     @MainActor
     final class Coordinator {
@@ -92,9 +146,10 @@ struct MobilePresentationPDFView: UIViewRepresentable {
             self.awake = awake ?? .shared
         }
 
-        func update(isRecording: Bool) {
-            if isRecording && document != nil && awakeToken == nil { awakeToken = awake.acquire() }
-            else if !isRecording, let token = awakeToken {
+        func update(isRecording: Bool, isSceneActive: Bool = true) {
+            let shouldStayAwake = isRecording && isSceneActive && document != nil
+            if shouldStayAwake && awakeToken == nil { awakeToken = awake.acquire() }
+            else if !shouldStayAwake, let token = awakeToken {
                 awakeToken = nil
                 awake.release(token)
             }
@@ -113,12 +168,12 @@ struct MobilePresentationPDFView: UIViewRepresentable {
         view.autoScales = true
         view.displayMode = .singlePageContinuous
         view.document = document.pdf
-        context.coordinator.update(isRecording: isRecording)
+        context.coordinator.update(isRecording: isRecording, isSceneActive: isSceneActive)
         return view
     }
 
     func updateUIView(_ view: PDFView, context: Context) {
-        context.coordinator.update(isRecording: isRecording)
+        context.coordinator.update(isRecording: isRecording, isSceneActive: isSceneActive)
     }
 
     static func dismantleUIView(_ view: PDFView, coordinator: Coordinator) {
