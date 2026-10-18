@@ -281,7 +281,10 @@ nonisolated enum MeetingTranscriptExporter {
         }, tolerance: MeetingSpeakerAttributionPolicy.standard.comparisonTolerance, checkpoint: { _ in })
         let active = Set(session.activeSpeakers.map(\.id))
         func safe(_ value: MeetingTranscriptSegment) -> Bool {
-            value.revision == 0 && value.originalText == nil && value.isUserTextEdited != true && value.status == .final
+            let automaticRevision = value.nativePrecision == .word && value.nativeUnitID != nil
+                && value.speakerAttribution.map { $0.unitID == value.nativeUnitID
+                    && $0.rawAssignment == value.nativeSpeakerAssignment } == true
+            return (value.revision == 0 || automaticRevision) && value.originalText == nil && value.isUserTextEdited != true && value.status == .final
                 && value.completeness == .complete && !value.isEcho && value.attributionState != .timingUncertain
                 && value.speakerAttribution?.relation != .conflict && value.speakerAttribution?.rule != .barrier
                 && value.speakerAttribution?.rule != .conflict
@@ -293,10 +296,17 @@ nonisolated enum MeetingTranscriptExporter {
         }
         let interruptions = segments.map { safe($0) && isInterruption($0) }
         let anchors: [SessionSpeakerID?] = segments.enumerated().map { index, value in
-            guard safe(value), !interruptions[index],
+            guard safe(value),
                   value.attributionState == nil || value.attributionState == .assigned,
-                  value.speakerAttributionInference == nil,
-                  value.speakerAttribution?.rule.isHeuristic != true else { return nil }
+                  value.speakerAttributionInference == nil else { return nil }
+            if let summary = value.speakerAttribution {
+                guard summary.rule.isIndependentAcousticSelection, summary.selectedSpeakerID == value.speakerID,
+                      summary.unitID == value.nativeUnitID, summary.rawAssignment == value.nativeSpeakerAssignment,
+                      let token = summary.selectedToken, token.analysisEpochID.trackID == value.sourceTrackID,
+                      summary.rawAssignment == .assigned(token) else { return nil }
+            } else {
+                guard !interruptions[index], value.revision == 0 else { return nil }
+            }
             return self.resolvedSpeakerID(value.speakerID, in: session, activeSpeakerIDs: active)
         }
         let candidates = segments.map(safe)
@@ -355,26 +365,30 @@ nonisolated enum MeetingTranscriptExporter {
                   let native = segment.nativeSpeakerAssignment, let summary = segment.speakerAttribution,
                   summary.unitID == nativeID, summary.rawAssignment == native,
                   summary.rule != .barrier, summary.rule != .conflict, summary.relation != .conflict,
-                  let token = summary.selectedToken, token.analysisEpochID.trackID == segment.sourceTrackID
+                  summary.selectedToken.map({ $0.analysisEpochID.trackID == segment.sourceTrackID }) ?? true
             else { return nil }
             return summary
         }
-        var identities: [MeetingBackendSpeakerToken: Set<SessionSpeakerID>] = [:]
-        for segment in session.transcriptSegments {
-            guard safeNative(segment), segment.attributionState == .assigned, segment.overlap == .none,
+        func anchorToken(_ segment: MeetingTranscriptSegment) -> MeetingBackendSpeakerToken? {
+            guard safeNative(segment), segment.attributionState == .assigned,
                   let native = segment.nativeSpeakerAssignment, case let .assigned(token) = native,
                   token.analysisEpochID.trackID == segment.sourceTrackID,
-                  let id = self.resolvedSpeakerID(segment.speakerID, in: session, activeSpeakerIDs: active)
-            else { continue }
+                  self.resolvedSpeakerID(segment.speakerID, in: session, activeSpeakerIDs: active) != nil
+            else { return nil }
             if let summary = evidence(segment) {
-                guard !summary.rule.isHeuristic, summary.relation == .single,
-                      summary.selectedToken == token, summary.selectedSpeakerID == segment.speakerID else { continue }
+                guard summary.rule.isIndependentAcousticSelection,
+                      summary.selectedToken == token, summary.selectedSpeakerID == segment.speakerID else { return nil }
             } else {
-                // Compact native assignments intentionally omit a redundant reading summary.
-                // A revised nil-summary row can instead be a manual reassignment; it cannot
-                // establish a token identity without explicit automatic provenance.
-                guard segment.speakerAttribution == nil, segment.revision == 0 else { continue }
+                // Revised nil-summary rows can be manual assignments. Only pristine compact
+                // native evidence establishes a new acoustic anchor without a summary.
+                guard segment.speakerAttribution == nil, segment.revision == 0, segment.overlap == .none else { return nil }
             }
+            return token
+        }
+        var identities: [MeetingBackendSpeakerToken: Set<SessionSpeakerID>] = [:]
+        for segment in session.transcriptSegments {
+            guard let token = anchorToken(segment),
+                  let id = self.resolvedSpeakerID(segment.speakerID, in: session, activeSpeakerIDs: active) else { continue }
             identities[token, default: []].insert(id)
         }
         var owners: [MeetingTranscriptSegmentID: SessionSpeakerID] = [:]
@@ -389,6 +403,58 @@ nonisolated enum MeetingTranscriptExporter {
                 owners[segment.id] = mapped.first
             default: break
             }
+        }
+        // Reuse canonical bounded neighbor admission for original unresolved evidence. Acoustic
+        // selections can anchor this pass; none of its contextual results become new anchors.
+        let anchors = segments.map { segment -> MeetingBackendSpeakerToken? in
+            guard let token = anchorToken(segment), identities[token]?.count == 1 else { return nil }
+            return token
+        }
+        let eligible = segments.map { segment -> Bool in
+            guard safeNative(segment), segment.speakerID == nil,
+                  segment.attributionState == .unassigned || segment.attributionState == .overlappingSpeakers else { return false }
+            if let summary = segment.speakerAttribution {
+                guard evidence(segment) != nil, summary.selectedToken == nil else { return false }
+                if summary.rule == .ambiguous, case let .ambiguous(tokens) = summary.rawAssignment {
+                    return Set(tokens).count >= 2
+                }
+                return summary.rawAssignment == .unassigned && summary.relation == .none && summary.candidates.isEmpty
+            }
+            return segment.revision == 0 && segment.nativeSpeakerAssignment == .unassigned
+        }
+        let candidateTokens = segments.map { segment in
+            Set((segment.nativeSpeakerAssignment?.tokens ?? [])
+                + (segment.speakerAttribution?.candidates.map(\.token) ?? [])
+                + (segment.speakerAttribution?.background.map(\.token) ?? []))
+        }
+        let intervals = segments.map { MeetingSpeakerAttributionInterval(start: $0.nativeTiming?.start ?? $0.start.seconds,
+                                                                          end: $0.nativeTiming?.end ?? $0.end.seconds) }
+        let runs = (try? MeetingSpeakerAttribution.neighborRuns(intervals: intervals, eligible: eligible,
+            anchorIdentities: anchors, candidateIdentities: candidateTokens, policy: .standard)) ?? []
+        let source = session.transcriptSegments.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+        }.map(\.element)
+        let positions = Dictionary(source.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        guard positions.count == source.count else { return owners }
+        let blocked = MeetingSpeakerAttribution.overlappingIntervalIndices(source.map {
+            .init(start: $0.nativeTiming?.start ?? $0.start.seconds, end: $0.nativeTiming?.end ?? $0.end.seconds)
+        }, tolerance: MeetingSpeakerAttributionPolicy.standard.comparisonTolerance, checkpoint: { _ in })
+        for run in runs {
+            let range = run.before...run.after, first = segments[run.before], last = segments[run.after]
+            guard let token = anchors[run.after], let id = identities[token]?.first,
+                  let start = positions[first.id], range.allSatisfy({
+                      positions[segments[$0].id] == start + $0 - run.before
+                          && !blocked.contains(start + $0 - run.before)
+                          && segments[$0].sourceTrackID == first.sourceTrackID
+                  }), !(session.transcriptCoverageGaps ?? []).contains(where: {
+                      $0.trackID == first.sourceTrackID && (!$0.start.isFinite || !$0.end.isFinite
+                          || ($0.start < last.end.seconds && $0.end > first.start.seconds))
+                  }) else { continue }
+            let epochs = Set(range.flatMap { index in
+                (segments[index].nativeSpeakerAssignment?.tokens ?? []) + [anchors[index]].compactMap { $0 }
+            }.map(\.analysisEpochID))
+            guard epochs.count == 1 else { continue }
+            for index in run.first...run.last { owners[segments[index].id] = id }
         }
         return owners
     }

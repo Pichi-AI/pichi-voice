@@ -29,6 +29,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     let enableSameSpeakerPauseResolution: Bool
     let enableBriefInterruption: Bool
     let enableMainSpeakerContinuation: Bool
+    let enableIndependentAcousticAnchors: Bool
 
     init(
         schemaVersion: Int = Self.currentVersion,
@@ -49,7 +50,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         enableNeighborResolution: Bool = true,
         enableSameSpeakerPauseResolution: Bool = true,
         enableBriefInterruption: Bool = true,
-        enableMainSpeakerContinuation: Bool = true
+        enableMainSpeakerContinuation: Bool = true,
+        enableIndependentAcousticAnchors: Bool = true
     ) {
         self.schemaVersion = schemaVersion
         self.comparisonTolerance = comparisonTolerance
@@ -70,6 +72,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         self.enableSameSpeakerPauseResolution = enableSameSpeakerPauseResolution
         self.enableBriefInterruption = enableBriefInterruption
         self.enableMainSpeakerContinuation = enableMainSpeakerContinuation
+        self.enableIndependentAcousticAnchors = enableIndependentAcousticAnchors
     }
 
     /// Exact, length-framed values avoid locale, delimiter and rounding collisions. Zero has one
@@ -105,6 +108,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         if self.enableMainSpeakerContinuation {
             entries.append(("mainSpeakerContinuationEnabled", "true"))
         }
+        if self.enableIndependentAcousticAnchors {
+            entries.append(("independentAcousticAnchorsEnabled", "true"))
+        }
         let canonical = MeetingConfigFingerprintEncoding.encode(entries)
         let digest = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
         return "speaker-attribution-v\(self.schemaVersion):\(digest)"
@@ -139,6 +145,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         case maximumInterruptionWordSeconds, maximumBriefInterruptionGapSeconds
         case enableDominance, enableNeighborResolution, enableSameSpeakerPauseResolution, enableBriefInterruption
         case enableMainSpeakerContinuation
+        case enableIndependentAcousticAnchors
     }
 
     init(from decoder: Decoder) throws {
@@ -162,7 +169,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
             enableNeighborResolution: c.decode(Bool.self, forKey: .enableNeighborResolution),
             enableSameSpeakerPauseResolution: c.decodeIfPresent(Bool.self, forKey: .enableSameSpeakerPauseResolution) ?? false,
             enableBriefInterruption: c.decode(Bool.self, forKey: .enableBriefInterruption),
-            enableMainSpeakerContinuation: c.decodeIfPresent(Bool.self, forKey: .enableMainSpeakerContinuation) ?? false
+            enableMainSpeakerContinuation: c.decodeIfPresent(Bool.self, forKey: .enableMainSpeakerContinuation) ?? false,
+            enableIndependentAcousticAnchors: c.decodeIfPresent(Bool.self, forKey: .enableIndependentAcousticAnchors) ?? false
         )
         _ = try self.validated()
     }
@@ -203,6 +211,15 @@ nonisolated enum MeetingSpeakerAttributionRule: String, Codable, Sendable {
     case rawOnly, rawAssigned, singleAcousticSupport, residualSuppression, acousticDominance, insufficientSupport
     case ambiguous, conflict, barrier, neighborAgreement, incomingSpeaker, boundaryContinuation
     case briefInterruption, mainSpeakerContinuation
+
+    /// These choices use only the current word's acoustic activity, before contextual passes.
+    /// Heuristic uncertainty and independence from neighboring text are separate properties.
+    var isIndependentAcousticSelection: Bool {
+        switch self {
+        case .singleAcousticSupport, .residualSuppression, .acousticDominance: return true
+        default: return false
+        }
+    }
 
     var isHeuristic: Bool {
         switch self {
@@ -374,7 +391,7 @@ nonisolated enum MeetingSpeakerAttribution {
             if !contextualBarrierEpochIDs.contains(epoch) {
                 let temporalBarriers = try self.overlappingUnits(ordered, tolerance: policy.comparisonTolerance)
                 let anchors = zip(ordered, decisions).map { unit, decision in
-                    self.isOriginalAnchor(unit: unit, decision: decision, tolerance: policy.comparisonTolerance)
+                    self.isOriginalAnchor(unit: unit, decision: decision, policy: policy)
                         && !temporalBarriers.contains(unit.id) && !barrierUnitIDs.contains(unit.id)
                 }
                 if policy.enableNeighborResolution {
@@ -751,11 +768,21 @@ nonisolated enum MeetingSpeakerAttribution {
         return result
     }
 
-    private static func isOriginalAnchor(unit: MeetingFinalTextUnit, decision: Decision, tolerance: Double) -> Bool {
+    private static func isOriginalAnchor(unit: MeetingFinalTextUnit, decision: Decision,
+                                         policy: MeetingSpeakerAttributionPolicy) -> Bool {
         guard unit.precision == .word, case let .assigned(token) = unit.speaker,
-              decision.rule == .singleAcousticSupport, decision.selectedToken == token,
+              decision.selectedToken == token else { return false }
+        if policy.enableIndependentAcousticAnchors {
+            // acousticDecision already validated the existing noise/dominance thresholds.
+            // Require the selected native token's real unsuppressed support; contextual or
+            // raw-only selections can never bootstrap another contextual choice.
+            return decision.rule.isIndependentAcousticSelection
+                && decision.candidates.contains { $0.token == token && !$0.isSuppressed
+                    && $0.supportSeconds > policy.comparisonTolerance }
+        }
+        guard decision.rule == .singleAcousticSupport,
               decision.relation == .single,
-              decision.candidates.filter({ $0.supportSeconds > tolerance }).count == 1
+              decision.candidates.filter({ $0.supportSeconds > policy.comparisonTolerance }).count == 1
         else { return false }
         return true
     }
@@ -922,9 +949,12 @@ nonisolated enum MeetingSpeakerAttribution {
                 latestAnchor = isAnchor ? after : nil
                 continue
             }
-            if isAnchor { latestAnchor = after }
+            // A mixed acoustic selection can establish an independent next cue, but first
+            // preserve the preceding owner of this interruption. Otherwise its own new
+            // anchor would erase the A in A / acoustically dominant B / A.
             if pendingBefore == nil, interruptions[after], let before = latestAnchor, before < after,
                canAwaitReturn(before: before, through: after) { pendingBefore = before }
+            if isAnchor { latestAnchor = after }
         }
         try Task.checkCancellation()
         return result
@@ -968,35 +998,52 @@ nonisolated enum MeetingSpeakerAttribution {
         }
     }
 
+    /// Canonical and reading consumers share run bounds and original-candidate admission.
+    /// Anchors are supplied from independent acoustic evidence, never this pass's output.
+    /// No support durations or word timestamps are manufactured for a reading projection.
+    static func neighborRuns<Identity: Hashable & Sendable>(
+        intervals: [MeetingSpeakerAttributionInterval], eligible: [Bool],
+        anchorIdentities: [Identity?], candidateIdentities: [Set<Identity>],
+        policy: MeetingSpeakerAttributionPolicy
+    ) throws -> [ContinuationRun] {
+        guard policy.enableNeighborResolution, intervals.count >= 3,
+              eligible.count == intervals.count, anchorIdentities.count == intervals.count,
+              candidateIdentities.count == intervals.count else { return [] }
+        var result: [ContinuationRun] = [], position = 0
+        while position < intervals.count {
+            try self.checkCancellation(at: position)
+            guard eligible[position] else { position += 1; continue }
+            let first = position
+            while position < intervals.count, eligible[position] {
+                try self.checkCancellation(at: position); position += 1
+            }
+            let last = position - 1
+            guard first > 0, position < intervals.count,
+                  let previous = anchorIdentities[first - 1], let next = anchorIdentities[position],
+                  self.admitsNeighborRun(Array(intervals[(first - 1)...position]), policy: policy, sameSpeaker: previous == next),
+                  (first...last).allSatisfy({ candidateIdentities[$0].allSatisfy { $0 == previous || $0 == next } })
+            else { continue }
+            result.append(.init(first: first, last: last, before: first - 1, after: position))
+        }
+        return result
+    }
+
     private static func resolveNeighbors(
         units: [MeetingFinalTextUnit], decisions: inout [Decision], anchors: [Bool],
         temporalBarriers: Set<String>, contextBarriers: ContextBarrierIndex?,
         policy: MeetingSpeakerAttributionPolicy
     ) throws {
-        var position = 0
-        while position < units.count {
+        let runs = try self.neighborRuns(intervals: units.map { .init(start: $0.analysisStart, end: $0.analysisEnd) },
+            eligible: units.indices.map { self.canContextualize(units[$0], decisions[$0], blocked: temporalBarriers, policy: policy) },
+            anchorIdentities: units.indices.map { anchors[$0] ? decisions[$0].selectedToken : nil },
+            candidateIdentities: decisions.map { Set($0.candidates.filter { $0.supportSeconds > policy.comparisonTolerance }.map(\.token)) },
+            policy: policy)
+        for run in runs {
             try Task.checkCancellation()
-            guard self.canContextualize(units[position], decisions[position], blocked: temporalBarriers, policy: policy) else {
-                position += 1; continue
-            }
-            let first = position
-            while position < units.count,
-                  self.canContextualize(units[position], decisions[position], blocked: temporalBarriers, policy: policy) {
-                try self.checkCancellation(at: position)
-                position += 1
-            }
-            let last = position - 1
-            guard first > 0, position < units.count, anchors[first - 1], anchors[position],
-                  let previous = decisions[first - 1].selectedToken,
-                  let next = decisions[position].selectedToken,
-                  contextBarriers?.intersects(start: units[first - 1].analysisStart,
-                                              end: units[position].analysisEnd) != true
-            else { continue }
-            guard self.admitsNeighborRun(units[(first - 1)...position].map {
-                .init(start: $0.analysisStart, end: $0.analysisEnd)
-            }, policy: policy, sameSpeaker: previous == next) else { continue }
-            let runCandidates = decisions[first...last].flatMap(\.candidates).filter { $0.supportSeconds > policy.comparisonTolerance }
-            guard runCandidates.allSatisfy({ $0.token == previous || $0.token == next }) else { continue }
+            let first = run.first, last = run.last, position = run.after
+            guard let previous = decisions[run.before].selectedToken, let next = decisions[run.after].selectedToken,
+                  contextBarriers?.intersects(start: units[run.before].analysisStart,
+                                              end: units[run.after].analysisEnd) != true else { continue }
             let cues = [units[first - 1].id, units[position].id]
             for index in first...last {
                 var token = next

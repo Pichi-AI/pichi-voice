@@ -735,6 +735,90 @@ struct MeetingSessionStoreCheckpointTests {
             scoped.transcriptSegments[index].speakerAttribution = .init(decision: decision, speakerIDs: [otherToken: speakerA.id])
         }
         remainsUnmapped(scoped, "Equal slot labels in different analysis epochs are separate voices")
+        for acousticRule in [MeetingSpeakerAttributionRule.residualSuppression, .acousticDominance] {
+            for sameSpeaker in [false, true] {
+                for mixed in [false, true] {
+                    var contextual = baseline
+                    let incoming = sameSpeaker ? speakerA : speakerB
+                    let incomingToken = sameSpeaker ? token : MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "synthetic-b")
+                    func acoustic(_ input: MeetingTranscriptSegment, owner: UUID,
+                                  voice: MeetingBackendSpeakerToken) -> MeetingTranscriptSegment {
+                        var value = input
+                        value.speakerID = owner; value.nativeSpeakerAssignment = .assigned(voice)
+                        value.overlap = .ambiguous; value.attributionState = .assigned
+                        let duration = value.nativeTiming!.end - value.nativeTiming!.start
+                        let support = MeetingSpeakerAttributionCandidateSupport(token: voice,
+                            intervals: [.init(start: value.nativeTiming!.start, end: value.nativeTiming!.end)],
+                            supportSeconds: duration, isSuppressed: false)
+                        let decision = MeetingSpeakerAttributionDecision(unitID: value.nativeUnitID!, rawAssignment: .assigned(voice),
+                            candidates: [support], activeSupportSeconds: duration, simultaneousIntervals: [], relation: .simultaneous,
+                            selectedToken: voice, rule: acousticRule, cueUnitIDs: [], backgroundTokens: [],
+                            policyVersion: 2, policyFingerprint: "synthetic-acoustic-rule-provenance")
+                        value.speakerAttribution = .init(decision: decision, speakerIDs: [voice: owner])
+                        return value
+                    }
+                    contextual.transcriptSegments[0] = acoustic(baseline.transcriptSegments[0], owner: speakerA.id, voice: token)
+                    contextual.transcriptSegments[2] = acoustic(baseline.transcriptSegments[2], owner: incoming.id, voice: incomingToken)
+                    contextual.transcriptSegments[1].revision = mixed ? 1 : 0
+                    contextual.transcriptSegments[1].speakerAttribution = nil
+                    if mixed {
+                        let candidates = Array(Set([token, incomingToken]))
+                        // Add a second original voice when matching neighbors keep the main turn.
+                        let second = sameSpeaker ? MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "interrupter") : incomingToken
+                        let raw = MeetingBackendSpeakerAssignment.ambiguous(Array(Set(candidates + [second])))
+                        let decision = MeetingSpeakerAttributionDecision(unitID: contextual.transcriptSegments[1].nativeUnitID!, rawAssignment: raw,
+                            candidates: [], activeSupportSeconds: 0.08, simultaneousIntervals: [], relation: .simultaneous,
+                            selectedToken: nil, rule: .ambiguous, cueUnitIDs: [], backgroundTokens: [],
+                            policyVersion: 2, policyFingerprint: "synthetic-acoustic-rule-provenance")
+                        contextual.transcriptSegments[1].nativeSpeakerAssignment = raw
+                        contextual.transcriptSegments[1].speakerAttribution = .init(decision: decision, speakerIDs: [:])
+                        contextual.transcriptSegments[1].attributionState = .overlappingSpeakers
+                        contextual.transcriptSegments[1].overlap = .ambiguous
+                    }
+                    let original = contextual
+                    let expectedOwner: UUID? = incoming.id
+                    check(MeetingTranscriptExporter.speakerPresentations(in: contextual)[islandID]?.participantID == expectedOwner,
+                          "Independent acoustic selections can anchor bounded unresolved reading without swallowing a third voice")
+                    check(contextual == original, "Contextual reading cannot change original native evidence")
+                    if sameSpeaker && mixed {
+                        var reply = contextual
+                        reply.transcriptSegments[1] = acoustic(reply.transcriptSegments[1], owner: speakerB.id,
+                            voice: .init(analysisEpochID: epoch, label: "mixed-independent-b"))
+                        check(MeetingTranscriptExporter.speakerPresentations(in: reply)[islandID]?.participantID == speakerA.id,
+                              "An independently selected mixed B cannot erase the preceding A owner in A/B/A reading")
+                    }
+                    if mixed && !sameSpeaker {
+                        var thirdVoice = contextual
+                        let originalSummary = thirdVoice.transcriptSegments[1].speakerAttribution!
+                        let third = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "third-original-candidate")
+                        let extra = MeetingSpeakerAttributionCandidateSupport(token: third, intervals: [.init(start: 3.6, end: 3.68)],
+                            supportSeconds: 0.08, isSuppressed: false)
+                        let decision = MeetingSpeakerAttributionDecision(unitID: originalSummary.unitID,
+                            rawAssignment: originalSummary.rawAssignment, candidates: [extra], activeSupportSeconds: 0.08,
+                            simultaneousIntervals: [], relation: .simultaneous, selectedToken: nil, rule: .ambiguous,
+                            cueUnitIDs: [], backgroundTokens: [], policyVersion: 2, policyFingerprint: "synthetic-third-voice")
+                        thirdVoice.transcriptSegments[1].speakerAttribution = .init(decision: decision, speakerIDs: [:])
+                        check(MeetingTranscriptExporter.speakerPresentations(in: thirdVoice)[islandID]?.participantID == nil,
+                              "Summary-only third voice evidence cannot disappear from neighbor admission")
+                    }
+                    if expectedOwner != nil {
+                        for index in contextual.transcriptSegments.indices {
+                            var edited = contextual; edited.transcriptSegments[index].isUserTextEdited = true
+                            check(MeetingTranscriptExporter.speakerPresentations(in: edited)[islandID]?.participantID == nil,
+                                  "Manual text edits block targets and acoustic anchor paths")
+                        }
+                        var conflict = contextual
+                        conflict.transcriptSegments[1].attributionState = .timingUncertain
+                        check(MeetingTranscriptExporter.speakerPresentations(in: conflict)[islandID]?.participantID == nil,
+                              "Timing uncertainty remains a contextual boundary")
+                        conflict = contextual
+                        conflict.transcriptCoverageGaps = [.init(trackID: epoch.trackID, start: 3.4, end: 3.6, reason: .processingFailed)]
+                        check(MeetingTranscriptExporter.speakerPresentations(in: conflict)[islandID]?.participantID == nil,
+                              "Coverage gaps remain contextual boundaries")
+                    }
+                }
+            }
+        }
         let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(baseline))
         check(MeetingTranscriptExporter.speakerPresentations(in: restored)[islandID]?.participantID == speakerA.id,
               "The canonical identity completion works after production archive decoding")

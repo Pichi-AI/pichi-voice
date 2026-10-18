@@ -39,7 +39,7 @@ struct MeetingSpeakerAttributionTests {
     // Replay the previously frozen interruption policy independently of the new default.
     static func resolveLegacy(
         _ units: [MeetingFinalTextUnit], _ activity: [MeetingBackendSpeakerActivity],
-        policy: MeetingSpeakerAttributionPolicy = .init(enableMainSpeakerContinuation: false),
+        policy: MeetingSpeakerAttributionPolicy = .init(enableMainSpeakerContinuation: false, enableIndependentAcousticAnchors: false),
         barriers: Set<String> = [], epochs: Set<MeetingAnalysisEpochID> = []
     ) throws -> [MeetingSpeakerAttributionDecision] {
         try self.resolve(units, activity, policy: policy, barriers: barriers, epochs: epochs)
@@ -55,6 +55,7 @@ struct MeetingSpeakerAttributionTests {
         try self.acoustics()
         try self.initialAcousticProjection()
         try self.neighbors()
+        try self.independentAcousticAnchors()
         try self.mixedIncomingNeighbors()
         self.neighborAdmission()
         try self.sameSpeakerPauses()
@@ -575,6 +576,66 @@ struct MeetingSpeakerAttributionTests {
         }
     }
 
+    static func independentAcousticAnchors() throws {
+        for rule in [MeetingSpeakerAttributionRule.singleAcousticSupport, .residualSuppression, .acousticDominance] {
+            self.check(rule.isIndependentAcousticSelection)
+        }
+        for rule in [MeetingSpeakerAttributionRule.rawOnly, .rawAssigned, .ambiguous, .conflict, .barrier,
+                     .neighborAgreement, .incomingSpeaker, .boundaryContinuation, .briefInterruption, .mainSpeakerContinuation] {
+            self.check(!rule.isIndependentAcousticSelection, "Contextual results cannot become acoustic anchors")
+        }
+        for offset in [0.0, 70.0, 3600.0] {
+            for dominance in [false, true] {
+                for same in [false, true] {
+                    let a = token("a"), b = token(same ? "a" : "b")
+                    let words = [unit("left", offset, offset + 1, .assigned(a)),
+                                 unit("gap", offset + 1.1, offset + 1.2),
+                                 unit("right", offset + 1.3, offset + 2.3, .assigned(b))]
+                    let noise = dominance ? 0.15 : 0.02
+                    let support = [activity("a", offset, offset + 1), activity("noise", offset + 0.1, offset + 0.1 + noise),
+                                   activity(b.label, offset + 1.3, offset + 2.3), activity("noise", offset + 1.4, offset + 1.4 + noise)]
+                    let baseline = try resolve(words, support, policy: .init(enableIndependentAcousticAnchors: false))
+                    let changed = try resolve(words, support)
+                    self.check(baseline[1].selectedToken == nil, "Frozen older attempts retain old anchor behavior")
+                    self.check(changed[0].rule == (dominance ? .acousticDominance : .residualSuppression))
+                    self.check(changed[2].rule == changed[0].rule)
+                    self.check(changed[1].selectedToken == b && changed[1].rule == (same ? .neighborAgreement : .incomingSpeaker))
+                    self.check(changed[0].rawAssignment == baseline[0].rawAssignment && changed[0].candidates == baseline[0].candidates)
+                    for raw in [MeetingBackendSpeakerAssignment.unassigned, .ambiguous([a, token("noise")])] {
+                        var missingOriginal = words; missingOriginal[0] = unit("left", offset, offset + 1, raw)
+                        self.check(try resolve(missingOriginal, support)[1].selectedToken == nil,
+                                   "A selected token without original assigned native evidence cannot reanchor context")
+                    }
+                    self.check(try resolve(Array(words.dropLast()), support)[1].selectedToken == nil,
+                               "A contextual output cannot supply a missing independent future anchor")
+                    var conflict = support.filter { $0.start >= offset + 1.3 }
+                    conflict.append(activity("wrong", offset, offset + 1))
+                    self.check(try resolve(words, conflict)[1].selectedToken == nil)
+                    self.check(try resolve(words, support, barriers: ["left"])[1].selectedToken == nil)
+                }
+            }
+        }
+        let intervals: [MeetingSpeakerAttributionInterval] = [.init(start: 0, end: 1), .init(start: 1.1, end: 1.2), .init(start: 1.3, end: 2)]
+        self.check(try MeetingSpeakerAttribution.neighborRuns(intervals: intervals, eligible: [false, true, false],
+            anchorIdentities: ["a", nil, "b"], candidateIdentities: [[], ["c"], []], policy: .standard).isEmpty,
+                   "A third voice cannot be swallowed by endpoint context")
+        self.check(try MeetingSpeakerAttribution.neighborRuns(intervals: intervals, eligible: [false, true, false],
+            anchorIdentities: ["a", nil, nil], candidateIdentities: [[], [], []], policy: .standard).isEmpty)
+        for dominance in [false, true] {
+            let a = token("a"), b = token("b")
+            let words = [unit("main-before", 0, 0.4, .assigned(a)),
+                         unit("mixed-acoustic-b", 0.5, 1.5, .assigned(b)),
+                         unit("main-after", 1.6, 2, .assigned(a))]
+            let residual = dominance ? 0.15 : 0.02
+            let support = [activity("a", 0, 0.4), activity("b", 0.5, 1.5),
+                           activity("a", 0.6, 0.6 + residual), activity("a", 1.6, 2)]
+            let output = try resolve(words, support)
+            self.check(output[1].selectedToken == a && output[1].rule == .mainSpeakerContinuation,
+                       "An independent mixed B selection cannot erase the preceding A before detecting A/B/A continuity")
+            self.check(output[1].rawAssignment == .assigned(b), "Reading continuity preserves independent native evidence")
+        }
+    }
+
     static func continuationAdmission() throws {
         typealias Interval = MeetingSpeakerAttributionInterval
         let intervals: [Interval] = [.init(start: 0, end: 0.2), .init(start: 0.3, end: 0.4),
@@ -794,20 +855,31 @@ struct MeetingSpeakerAttributionTests {
         let oldFingerprint = "speaker-attribution-v2:196d1cbbd5ce49c733b1fce3a7d1a9c3036448ccba13619cad8eb12b7e032a9a"
         let oldPolicy = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: oldJSON)
         self.check(!oldPolicy.enableSameSpeakerPauseResolution && !oldPolicy.enableMainSpeakerContinuation && oldPolicy.schemaVersion == 2)
-        self.check(oldPolicy == MeetingSpeakerAttributionPolicy(enableSameSpeakerPauseResolution: false, enableMainSpeakerContinuation: false))
+        self.check(oldPolicy == MeetingSpeakerAttributionPolicy(enableSameSpeakerPauseResolution: false,
+            enableMainSpeakerContinuation: false, enableIndependentAcousticAnchors: false))
         self.check(oldPolicy.fingerprint == oldFingerprint && policy.fingerprint != oldFingerprint)
         let oldRoundTrip = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: JSONEncoder().encode(oldPolicy))
         self.check(oldRoundTrip == oldPolicy && oldRoundTrip.fingerprint == oldFingerprint)
         var priorObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         priorObject.removeValue(forKey: "enableMainSpeakerContinuation")
+        priorObject.removeValue(forKey: "enableIndependentAcousticAnchors")
         let priorPolicy = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONSerialization.data(withJSONObject: priorObject))
         self.check(priorPolicy.enableSameSpeakerPauseResolution && !priorPolicy.enableMainSpeakerContinuation)
-        self.check(priorPolicy == .init(enableMainSpeakerContinuation: false))
+        self.check(priorPolicy == .init(enableMainSpeakerContinuation: false, enableIndependentAcousticAnchors: false))
         self.check(priorPolicy.fingerprint == "speaker-attribution-v2:0207a0b121f07fa78e18222b5ddfbfd17ac65c2560a17b26f9e36cb365be8fb3")
         self.check(priorPolicy.fingerprint != policy.fingerprint && priorPolicy.fingerprint != oldFingerprint)
         self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONEncoder().encode(priorPolicy)).fingerprint == priorPolicy.fingerprint)
+        var beforeAcoustic = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
+        beforeAcoustic.removeValue(forKey: "enableIndependentAcousticAnchors")
+        let frozen = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
+            from: JSONSerialization.data(withJSONObject: beforeAcoustic))
+        self.check(!frozen.enableIndependentAcousticAnchors && policy.enableIndependentAcousticAnchors)
+        self.check(frozen.fingerprint == "speaker-attribution-v2:00622a913604f7a3bb029e865dedb93e1ea27aa50cd86972d11115a1a78fe53a")
+        self.check(frozen == .init(enableIndependentAcousticAnchors: false) && frozen.fingerprint != policy.fingerprint)
+        self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
+            from: JSONEncoder().encode(frozen)) == frozen)
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         object["schemaVersion"] = MeetingSpeakerAttributionPolicy.currentVersion + 1
         do {
