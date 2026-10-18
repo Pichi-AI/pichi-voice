@@ -679,6 +679,107 @@ nonisolated enum MeetingTranscriptExporter {
         return try encoder.encode(document)
     }
 
+    /// Eligibility follows the recording's frozen publication policy, independently of
+    /// settings for future recordings. An unprotected archive cannot acquire a privacy
+    /// declaration merely because its export omits the original-text field.
+    static func canExportProtectedTranscript(_ session: MeetingSession) -> Bool {
+        session.state == .completed && session.piiRedactionEnabled == true
+            && session.transcriptSegments.allSatisfy { $0.originalText == nil }
+    }
+
+    enum PortableExportError: LocalizedError {
+        case protectedTranscriptRequired, invalidTranscript, limitExceeded
+
+        var errorDescription: String? {
+            switch self {
+            case .protectedTranscriptRequired:
+                return PichiLocalization.text("A protected transcript export requires a completed meeting captured with sensitive data redaction enabled.")
+            case .invalidTranscript:
+                return PichiLocalization.text("This meeting cannot be exported in the portable transcript format.")
+            case .limitExceeded:
+                return PichiLocalization.text("This transcript exceeds the portable export limits.")
+            }
+        }
+    }
+
+    /// Portable handoff uses an explicit allowlist instead of the canonical evidence
+    /// export. No audio, paths, original text, identity suggestions or inference evidence
+    /// can enter this schema. Its turns are the same reading projection as the saved UI.
+    static func protectedTranscriptJSON(for session: MeetingSession) throws -> Data {
+        try Task.checkCancellation()
+        guard canExportProtectedTranscript(session) else { throw PortableExportError.protectedTranscriptRequired }
+        let maximumBytes = 750_000
+        let maximumTextUnits = 100_000
+        let durationSeconds = session.duration
+        guard session.title.utf16.count <= 200, session.languageCode.utf16.count <= 35,
+              session.activeSpeakers.allSatisfy({ $0.displayName.utf16.count <= 200 })
+        else { throw PortableExportError.limitExceeded }
+        guard session.startedAt.timeIntervalSince1970.isFinite,
+              session.endedAt?.timeIntervalSince1970.isFinite != false,
+              durationSeconds.isFinite, durationSeconds >= 0,
+              Set(session.speakers.map(\.id)).count == session.speakers.count,
+              Set(session.transcriptSegments.map(\.id)).count == session.transcriptSegments.count
+        else { throw PortableExportError.invalidTranscript }
+
+        var textUnits = 0
+        for segment in session.transcriptSegments where !segment.isEcho {
+            guard segment.status == .final, segment.start.timescale > 0, segment.end.timescale > 0,
+                  segment.start.seconds.isFinite, segment.end.seconds.isFinite,
+                  segment.start.seconds >= 0, segment.end.seconds >= segment.start.seconds
+            else { throw PortableExportError.invalidTranscript }
+            textUnits += segment.text.utf16.count
+            guard textUnits <= maximumTextUnits else { throw PortableExportError.limitExceeded }
+        }
+        let ordered = session.transcriptSegments.enumerated().filter { !$0.element.isEcho }.sorted {
+            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+        }.map(\.element)
+        try Task.checkCancellation()
+        let paragraphs = displayParagraphs(for: ordered, in: session)
+        try Task.checkCancellation()
+        guard paragraphs.count <= 10_000 else { throw PortableExportError.limitExceeded }
+        let presentations = speakerPresentations(in: session)
+        textUnits = 0
+        let segments = try paragraphs.map { paragraph in
+            textUnits += paragraph.text.utf16.count
+            guard textUnits <= maximumTextUnits else { throw PortableExportError.limitExceeded }
+            // Group envelopes use actual member bounds. A paragraph is not a native word
+            // or utterance unit, so native precision, timing and unit IDs are all omitted.
+            return PortableTranscript.Segment(
+                id: paragraph.id,
+                startSeconds: paragraph.segments.map { $0.start.seconds }.min()!,
+                endSeconds: paragraph.segments.map { $0.end.seconds }.max()!,
+                speakerID: presentations[paragraph.id]?.participantID,
+                text: paragraph.text)
+        }
+        let document = PortableTranscript(
+            sessionID: session.id, title: session.title, languageCode: session.languageCode,
+            startedAt: session.startedAt, endedAt: session.endedAt, durationSeconds: durationSeconds,
+            speakers: session.activeSpeakers.map {
+                .init(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser)
+            }, segments: segments)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(document)
+        try Task.checkCancellation()
+        guard data.count <= maximumBytes else { throw PortableExportError.limitExceeded }
+        return data
+    }
+
+    /// Like readingParagraphs, sharing must not run contextual attribution on the UI
+    /// actor. Join the worker on cancellation before any share file is staged.
+    static func protectedTranscriptJSONForSharing(for session: MeetingSession) async throws -> Data {
+        try Task.checkCancellation()
+        let export = Task.detached(priority: .userInitiated) {
+            try protectedTranscriptJSON(for: session)
+        }
+        return try await withTaskCancellationHandler {
+            let result = try await export.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: { export.cancel() }
+    }
+
     /// A segment can still reference a merged speaker. Resolve its alias chain so JSON export
     /// never references a speaker absent from the exported `speakers` array.
     private static func resolvedSpeakerID(
@@ -716,6 +817,42 @@ private struct ExportedSpeaker: Codable {
     var id: SessionSpeakerID
     var displayName: String
     var isLocalUser: Bool
+}
+
+/// A separate DTO is necessary because the full JSON export intentionally preserves
+/// canonical evidence that must never be handed to a transcript-only importer.
+nonisolated private struct PortableTranscript: Encodable {
+    let format = "pichi-voice-transcript"
+    let schemaVersion = 1
+    let sessionID: UUID
+    let title: String
+    let languageCode: String
+    let startedAt: Date
+    let endedAt: Date?
+    let durationSeconds: TimeInterval
+    let speakers: [Speaker]
+    let segments: [Segment]
+    let privacy = Privacy()
+
+    struct Speaker: Encodable {
+        let id: UUID
+        let displayName: String
+        let isLocalUser: Bool
+    }
+
+    struct Segment: Encodable {
+        let id: UUID
+        let startSeconds: TimeInterval
+        let endSeconds: TimeInterval
+        let speakerID: UUID?
+        let text: String
+    }
+
+    struct Privacy: Encodable {
+        let transcriptPIIRedacted = true
+        let includesAudio = false
+        let metadataMayContainPersonalData = true
+    }
 }
 
 private struct ExportedSegment: Codable {

@@ -1,6 +1,74 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Export Protected Transcript": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export Protected Transcript"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспортировать защищённую расшифровку"
+          }
+        }
+      }
+    },
+    "A protected transcript export requires a completed meeting captured with sensitive data redaction enabled.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A protected transcript export requires a completed meeting captured with sensitive data redaction enabled."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для защищённого экспорта нужна завершённая встреча, записанная с включённым скрытием конфиденциальных данных."
+          }
+        }
+      }
+    },
+    "This meeting cannot be exported in the portable transcript format.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This meeting cannot be exported in the portable transcript format."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эту встречу нельзя экспортировать в переносимом формате расшифровки."
+          }
+        }
+      }
+    },
+    "This transcript exceeds the portable export limits.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This transcript exceeds the portable export limits."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта расшифровка превышает ограничения переносимого формата экспорта."
+          }
+        }
+      }
+    },
     "Identify speakers during recording": {
       "extractionState": "manual",
       "localizations": {

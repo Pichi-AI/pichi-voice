@@ -47,6 +47,7 @@ struct MeetingSessionStoreCheckpointTests {
         try Self.checkManualCorrectionOfProjectedOwner(template: session, check: check)
         try Self.checkUnmappedCanonicalReadingOwner(template: session, check: check)
         try await Self.checkReadingProjectionCache(template: session, check: check)
+        try await Self.checkProtectedPortableExport(check: check)
 
         let nativePresentation = MeetingTranscriptExporter.speakerPresentation(
             for: session.transcriptSegments[0], in: session)
@@ -779,6 +780,11 @@ struct MeetingSessionStoreCheckpointTests {
                     let expectedOwner: UUID? = incoming.id
                     check(MeetingTranscriptExporter.speakerPresentations(in: contextual)[islandID]?.participantID == expectedOwner,
                           "Independent acoustic selections can anchor bounded unresolved reading without swallowing a third voice")
+                    let handoff = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: contextual)) as! [String: Any]
+                    let handoffRows = handoff["segments"] as! [[String: Any]]
+                    check(handoffRows.first(where: { ($0["text"] as? String)?.contains("island") == true })?["speakerID"] as? String
+                          == expectedOwner?.uuidString,
+                          "Portable handoff resolves an unmapped canonical member to its final contextual reading owner")
                     check(contextual == original, "Contextual reading cannot change original native evidence")
                     if sameSpeaker && mixed {
                         var reply = contextual
@@ -786,6 +792,9 @@ struct MeetingSessionStoreCheckpointTests {
                             voice: .init(analysisEpochID: epoch, label: "mixed-independent-b"))
                         check(MeetingTranscriptExporter.speakerPresentations(in: reply)[islandID]?.participantID == speakerA.id,
                               "An independently selected mixed B cannot erase the preceding A owner in A/B/A reading")
+                        let handoff = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: reply)) as! [String: Any]
+                        check((handoff["segments"] as! [[String: Any]]).allSatisfy { $0["speakerID"] as? String == speakerA.id.uuidString },
+                              "Portable grouped interruptions follow the continuing UI owner rather than the raw word assignment")
                     }
                     if mixed && !sameSpeaker {
                         var thirdVoice = contextual

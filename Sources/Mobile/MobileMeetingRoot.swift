@@ -460,6 +460,9 @@ struct MobileMeetingRoot: View {
                     Menu {
                         Button(PichiLocalization.text("Export as Text")) { exportTranscript(session, json: false) }
                         Button(PichiLocalization.text("Export as JSON")) { exportTranscript(session, json: true) }
+                        Button(PichiLocalization.text("Export Protected Transcript")) { exportProtectedTranscript(session) }
+                            .disabled(!MeetingTranscriptExporter.canExportProtectedTranscript(session))
+                            .accessibilityIdentifier("transcript.exportProtected")
                         if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
                             if session.hasRetryableAudio {
                                 Button(PichiLocalization.text("Retry transcription")) {
@@ -659,6 +662,14 @@ struct MobileMeetingRoot: View {
                   fresh.hasFinalizedAudio, let directory = try await store.existingSessionDirectory(for: fresh.id)
             else { throw CocoaError(.fileNoSuchFile) }
             share = try await MeetingSharePayload.audio(session: fresh, directory: directory)
+        }
+    }
+
+    private func exportProtectedTranscript(_ session: MeetingSession) {
+        run {
+            guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
+            let data = try await MeetingTranscriptExporter.protectedTranscriptJSONForSharing(for: fresh)
+            share = try MeetingSharePayload.transcript(data: data, title: fresh.title, fileExtension: "json")
         }
     }
 }
