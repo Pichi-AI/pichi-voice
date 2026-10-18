@@ -207,17 +207,26 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             sourceTrackID: track, speakerID: nil, text: "Synthetic coarse utterance", revision: 0,
             status: .final, overlap: .none, completeness: .complete, nativePrecision: .utterance,
             nativeUnitID: "coarse", nativeTiming: .init(start: 0, end: duration))
-        let words = (0..<count).map { index in
-            MeetingTranscriptSegment(id: UUID(), start: self.mediaTime(Double(index * 2)),
-                end: self.mediaTime(Double(index * 2 + 1)), sourceTrackID: track, speakerID: nil,
+        var words: [MeetingTranscriptSegment] = []
+        words.reserveCapacity(count)
+        for index in 0..<count {
+            let start = Double(index * 2)
+            let end = start + 1
+            words.append(MeetingTranscriptSegment(id: UUID(), start: self.mediaTime(start),
+                end: self.mediaTime(end), sourceTrackID: track, speakerID: nil,
                 text: "word-\(index)", revision: 0, status: .final, overlap: .none, completeness: .complete,
                 nativePrecision: .word, nativeUnitID: "native-\(index)",
-                nativeTiming: .init(start: Double(index * 2), end: Double(index * 2 + 1)))
+                nativeTiming: .init(start: start, end: end)))
         }
         let transcript = MeetingPCMTranscriptBatch(segments: [coarse] + words)
-        let activity = (0..<count).flatMap { index in [
-            MeetingBackendSpeakerActivity(token: first, start: Double(index * 2), end: Double(index * 2 + 1)),
-            MeetingBackendSpeakerActivity(token: second, start: Double(index * 2 + 1), end: Double(index * 2 + 2))]
+        var activity: [MeetingBackendSpeakerActivity] = []
+        activity.reserveCapacity(count * 2)
+        for index in 0..<count {
+            let start = Double(index * 2)
+            let boundary = start + 1
+            let end = start + 2
+            activity.append(MeetingBackendSpeakerActivity(token: first, start: start, end: boundary))
+            activity.append(MeetingBackendSpeakerActivity(token: second, start: boundary, end: end))
         }
         let result = try MeetingPCMRecordingAttribution.assemble(transcript: transcript, activity: activity,
             epoch: epoch, attemptID: attempt, duration: duration, speakerNameFormat: "Speaker %lld")

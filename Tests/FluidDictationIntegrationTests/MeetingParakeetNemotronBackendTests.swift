@@ -2076,12 +2076,21 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
     func testPCMIndexedBatchPreserves8192NativeWordsAndHonorsFrozenPolicy() throws {
         let (first, second) = self.attributionTokens()
         let count = 8_192
-        let words = (0..<count).map { index in
-            ASRWordTiming(text: "native-\(index)", start: Double(index * 2), end: Double(index * 2 + 1))
+        var words: [ASRWordTiming] = []
+        words.reserveCapacity(count)
+        for index in 0..<count {
+            let start = Double(index * 2)
+            let end = start + 1
+            words.append(ASRWordTiming(text: "native-\(index)", start: start, end: end))
         }
-        let activity = (0..<count).flatMap { index in [
-            MeetingBackendSpeakerActivity(token: first, start: Double(index * 2), end: Double(index * 2 + 1)),
-            MeetingBackendSpeakerActivity(token: second, start: Double(index * 2 + 1), end: Double(index * 2 + 2))]
+        var activity: [MeetingBackendSpeakerActivity] = []
+        activity.reserveCapacity(count * 2)
+        for index in 0..<count {
+            let start = Double(index * 2)
+            let boundary = start + 1
+            let end = start + 2
+            activity.append(MeetingBackendSpeakerActivity(token: first, start: start, end: boundary))
+            activity.append(MeetingBackendSpeakerActivity(token: second, start: boundary, end: end))
         }
         let units = try MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Native words"),
             words: words, epoch: first.analysisEpochID, duration: Double(count * 2),
