@@ -10,6 +10,7 @@ extension PIIRedactor {
         let source = text as NSString
         let full = NSRange(location: 0, length: source.length)
         let utf16 = Array(text.utf16)
+        let cardAmounts = try Self.paymentCards(in: text).explicitAmounts
         func valid(_ range: NSRange) -> Bool {
             range.location >= 0 && range.length > 0 && range.location <= source.length
                 && range.length <= source.length - range.location
@@ -67,7 +68,8 @@ extension PIIRedactor {
             // Only an entirely known non-person span shares the durable exclusion.
             // A span containing any unknown name fragment still waits for context.
             if span.label == "PER", !candidateWords.isEmpty, candidateWords.allSatisfy(Self.isKnownNonPersonWord) { continue }
-            if !covered(span.range) { retreat(span.range.location) }
+            guard let precisionRange = Self.cardNERPrecisionRange(span, explicitAmounts: cardAmounts) else { continue }
+            if !covered(precisionRange) { retreat(precisionRange.location) }
         }
         let cuePatterns: [(PIIKind, String)] = [
             (.phone, #"(?:номер\s+)?(?:телефон[а-яё]*|тел\.?|позвон[а-яё]*|мобильн[а-яё]*|phone|call)"#),
@@ -138,22 +140,31 @@ extension PIIRedactor {
         let englishSentenceStarts = Set("a an the this that these those i we you they he she it today now hello".split(separator: " ").map(String.init))
         var confirmedQuantityUnits: Set<NSRange> = []
         for index in words.indices {
+            let word = source.substring(with: words[index].range)
+            let numeric = word.first?.isNumber == true
+            // Only the next lexical unit can qualify this number. Bound each
+            // suffix to that word rather than copying the remaining transcript.
+            let suffixEnd = index + 1 < words.count ? NSMaxRange(words[index + 1].range) : source.length
+            let suffix = numeric ? source.substring(with: NSRange(location: NSMaxRange(words[index].range),
+                length: suffixEnd - NSMaxRange(words[index].range))) : ""
+            let knownDoseUnit = numeric && index + 1 < words.count && units.contains(source.substring(with: words[index + 1].range).lowercased())
+            let explicitQuantity = numeric
+                ? quantityUnit.firstMatch(in: suffix, range: NSRange(location: 0, length: suffix.utf16.count)) : nil
+            // A conservative numeric mask may include a quantity-shaped suffix.
+            // Its explicit currency/dose unit remains ordinary prose even when
+            // the numeric word itself is already covered by the canonical mask.
+            if word.first?.isNumber == true, index + 1 < words.count,
+               knownDoseUnit || explicitQuantity.map({ NSMaxRange(words[index + 1].range) <= NSMaxRange(words[index].range) + NSMaxRange($0.range) }) == true {
+                confirmedQuantityUnits.insert(words[index + 1].range)
+            }
             if covered(words[index].range) || medicationWords.contains(words[index].range) || confirmedQuantityUnits.contains(words[index].range)
                 || resolvedCues.contains(where: { contains($0, words[index].range) }) { continue }
-            let word = source.substring(with: words[index].range)
             let lower = word.lowercased()
             if spokenNumbers.contains(lower) || numberWord.firstMatch(in: word, range: NSRange(location: 0, length: word.utf16.count)) != nil {
                 retreat(words[index].range.location)
             }
             if word.first?.isNumber == true {
-                let suffix = source.substring(from: NSMaxRange(words[index].range))
-                let knownDoseUnit = index + 1 < words.count && units.contains(source.substring(with: words[index + 1].range).lowercased())
-                let explicitQuantity = quantityUnit.firstMatch(in: suffix, range: NSRange(location: 0, length: suffix.utf16.count))
                 let quantity = knownDoseUnit || explicitQuantity != nil
-                if index + 1 < words.count,
-                   knownDoseUnit || explicitQuantity.map({ NSMaxRange(words[index + 1].range) <= NSMaxRange(words[index].range) + NSMaxRange($0.range) }) == true {
-                    confirmedQuantityUnits.insert(words[index + 1].range)
-                }
                 if !quantity {
                     // A preceding street/month/local-part word may already be
                     // private before a numeric continuation supplies its syntax.

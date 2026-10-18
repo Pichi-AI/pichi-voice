@@ -130,14 +130,18 @@ final class PichiTextPrivacyTests: XCTestCase {
         for text in ["дозировка 500 мг количество 123456 участников", "число 41111111111111115000", "номер 4111 1111 1111 1112"] {
             XCTAssertEqual(try PIIRedactor.redact(text, ner: []).text, text)
         }
-        // At least one extension below passes Luhn too: an explicit amount unit
-        // must keep that separate quantity outside the card's replacement span.
+        // A longer valid PAN wins over an ambiguous amount interpretation.
+        // The explicit unit does not permit exposing a checksum-valid PAN tail.
         XCTAssertTrue(PIIRedactor.luhnValid("4111111111111111508".compactMap(\.wholeNumberValue)))
-        for amount in ["500", "503", "508", "1 500"] {
+        for amount in ["500", "503", "1 500"] {
             for unit in ["рублей", "мг", "USD"] {
                 let text = "карта 4111 1111 1111 1111 \(amount) \(unit)"
                 XCTAssertEqual(try PIIRedactor.redact(text, ner: []).text, "карта [КАРТА] \(amount) \(unit)")
             }
+        }
+        for unit in ["рублей", "мг", "USD"] {
+            let ambiguous = "карта 4111 1111 1111 1111 508 \(unit)"
+            XCTAssertEqual(try PIIRedactor.redact(ambiguous, ner: []).text, "карта [КАРТА] \(unit)")
         }
     }
 
@@ -160,11 +164,22 @@ final class PichiTextPrivacyTests: XCTestCase {
     func testUngroupedAmountsAfterValidCardArePreservedAtAllGroupLengths() throws {
         let card = "3782 822463 10005"
         for separator in [" ", "  "] {
-            for amount in ["1008 рублей", "123456 рублей", "1 008 рублей", "10 008 рублей", "0.50 руб", "1008 мг"] {
+            for amount in ["1009 рублей", "123456 рублей", "1 009 рублей", "10 008 рублей", "0.50 руб", "1009 мг"] {
                 let input = "карта " + card + separator + amount
                 let result = try PIIRedactor.redact(input, ner: [])
                 XCTAssertEqual(result.text, "карта [КАРТА]" + separator + amount, input)
                 XCTAssertEqual(result.spans.first?.range, (input as NSString).range(of: card), input)
+            }
+        }
+    }
+
+    func testCompetingCompleteCardChecksumsKeepEveryCandidateMasked() throws {
+        for value in ["4111 1111 1111 1111 508", "3782 822463 10005 1008", "3782 822463 10005 1 008"] {
+            XCTAssertTrue(PIIRedactor.luhnValid(value.compactMap(\.wholeNumberValue)))
+            for unit in ["рублей", "мг", "USD"] {
+                let text = "карта " + value + " " + unit
+                XCTAssertEqual(try PIIRedactor.redact(text, ner: []).text, "карта [КАРТА] " + unit,
+                               "An explicit unit cannot rule out a longer complete PAN")
             }
         }
     }

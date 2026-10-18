@@ -299,7 +299,10 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
             ("телефон 273", ["55", "55 11 метотрексат 15 мг"], ["273", "55 11"], "метотрексат 15 мг"),
             ("дата рождения 12", ["мая", "мая 1980 инсулин 10 единиц"], ["12", "мая 1980"], "инсулин 10 единиц"),
             ("домашний адрес улица Примерная", ["дом", "дом 12 квартира 7 лизиноприл 10 мг"], ["Примерная", "квартира 7"], "лизиноприл 10 мг"),
-            ("карта 4111", ["1111", "1111 1111", "1111 1111 1111 508 рублей оземпик"], ["4111", "1111"], "508 рублей оземпик"),
+            ("карта 4111", ["1111", "1111 1111", "1111 1111 1111 500 рублей оземпик"], ["4111", "1111"], "500 рублей оземпик"),
+            // Appending 508 also produces a valid 19-digit PAN. Keep that
+            // ambiguous amount masked, preserving the following ordinary text.
+            ("карта 4111", ["1111", "1111 1111", "1111 1111 1111 508 рублей оземпик"], ["4111", "1111", "508"], "рублей оземпик"),
         ]
         for (initial, partials, privateWords, medication) in cases {
             let utterance = MeetingLiveUtterance(id: UUID(), speaker: .you, text: initial, start: 0, end: 1)
@@ -366,10 +369,10 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         XCTAssertTrue(joinedWords.contains("метформин 500 мг"))
         XCTAssertEqual(safeWords.segments.map(\.id), words.map(\.id))
         XCTAssertEqual(safeWords.segments.map(\.start), words.map(\.start))
-        let cardAndAmount = "карта 3782 822463 10005 1008 рублей метформин 500 мг"
+        let cardAndAmount = "карта 3782 822463 10005 1009 рублей метформин 500 мг"
         let amountWords = cardAndAmount.split(separator: " ").enumerated().map { segment(String($0.element), Int64($0.offset)) }
         let safeAmount = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: amountWords), using: privacy)
-        XCTAssertEqual(safeAmount.segments.suffix(5).map(\.text), ["1008", "рублей", "метформин", "500", "мг"])
+        XCTAssertEqual(safeAmount.segments.suffix(5).map(\.text), ["1009", "рублей", "метформин", "500", "мг"])
         for privatePart in ["3782", "822463", "10005"] {
             XCTAssertFalse(safeAmount.segments.map(\.text).joined(separator: " ").contains(privatePart))
         }
@@ -382,7 +385,7 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         XCTAssertEqual(safeAddress.segments.map(\.start), addressWords.map(\.start))
         original.transcriptSegments = [segment("телефон", 0), segment("273 55 11", 1),
             segment("дата рождения", 2), segment("12 мая 1980", 3), segment("домашний адрес", 4),
-            segment("улица Примерная дом 12", 5), segment("метформин 500 мг", 6)]
+            segment("улица Примерная дом 12", 5), segment("врач Иван Тестов", 6), segment("метформин 500 мг", 7)]
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: original, using: privacy)
         XCTAssertEqual(safe.transcriptSegments.map(\.id), original.transcriptSegments.map(\.id))
         XCTAssertEqual(safe.transcriptSegments.map(\.start), original.transcriptSegments.map(\.start))
@@ -390,9 +393,18 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         try await store.create(safe)
         let loadedValue = try await store.load(id: safe.id)
         let loaded = try XCTUnwrap(loadedValue)
-        for value in ["273 55 11", "12 мая 1980", "улица Примерная дом 12", "Иван Тестов"] {
+        for value in ["273 55 11", "12 мая 1980", "улица Примерная дом 12"] {
             XCTAssertFalse(String(decoding: try MeetingTranscriptExporter.json(for: loaded), as: UTF8.self).contains(value))
         }
+
+        // Names in explicit title/device metadata are user data, not speech.
+        // The same name occurs in recognized speech and must be masked there;
+        // a whole-JSON prohibition would also scrub permitted metadata.
+        XCTAssertEqual(loaded.title, original.title)
+        XCTAssertEqual(loaded.selectedMicrophone, original.selectedMicrophone)
+        XCTAssertEqual(loaded.audioTracks, original.audioTracks)
+        XCTAssertTrue(loaded.transcriptSegments.allSatisfy { $0.originalText == nil })
+        XCTAssertFalse(loaded.transcriptSegments.map(\.text).joined(separator: " ").contains("Иван Тестов"))
 
         // A possible first-half phone remains in bounded RAM, and both halves
         // are filtered before any strict checkpoint/export can observe them.
@@ -432,7 +444,13 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
             }
             XCTAssertEqual(strict.transcriptSegments.map(\.id), (cardA + cardB).map(\.id))
             XCTAssertEqual(strict.transcriptSegments.map(\.start), (cardA + cardB).map(\.start))
-            XCTAssertEqual(strict.transcriptSegments.suffix(3).map(\.text), [amount, "мг", "метформин500мг"])
+            XCTAssertEqual(strict.transcriptSegments.suffix(2).map(\.text), ["мг", "метформин500мг"])
+            if amount == "508" {
+                XCTAssertFalse(strict.transcriptSegments.map(\.text).joined(separator: " ").contains(amount),
+                               "A checksum-valid 19-digit PAN tail must remain masked")
+            } else {
+                XCTAssertEqual(strict.transcriptSegments.suffix(3).map(\.text), [amount, "мг", "метформин500мг"])
+            }
             XCTAssertTrue(strict.transcriptSegments.allSatisfy { $0.originalText == nil })
         }
 

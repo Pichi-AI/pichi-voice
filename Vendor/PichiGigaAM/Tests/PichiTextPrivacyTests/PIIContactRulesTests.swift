@@ -83,6 +83,70 @@ final class PIIContactRulesTests: XCTestCase {
         }
     }
 
+    func testTypedCardNERCannotConsumeAnExplicitAmountAfterAValidatedPAN() throws {
+        let tail = ". Подготовим материалы к следующей встрече и проверим условия хранения."
+        for (pan, amounts) in [("4111 1111 1111 1111", ["500", "503", "1 500"]),
+                               ("3782 822463 10005", ["1009", "10 008"])] {
+            for amount in amounts {
+                for unit in ["рублей", "мг", "USD"] {
+                    let text = "🙂 карта \(pan) \(amount) \(unit) оземпик" + tail
+                    let source = text as NSString
+                    let baseline = try PIIRedactor.redact(text, ner: [])
+                    let baselineLimit = try PIIRedactor.provisionalSafePrefix(in: text, ner: [], redactedSpans: baseline.spans)
+                    // Cover both a BIO extension of the PAN and a separate
+                    // false-positive amount entity without changing source offsets.
+                    for value in [pan + " " + amount, amount] {
+                        let ner = [PIINERSpan(range: source.range(of: value), label: "CARD", score: 1)]
+                        let result = try PIIRedactor.redact(text, ner: ner)
+                        XCTAssertEqual(result.text, "🙂 карта [КАРТА] \(amount) \(unit) оземпик" + tail, text)
+                        XCTAssertEqual(result.spans.map(\.range), [source.range(of: pan)], text)
+                        XCTAssertEqual(try PIIRedactor.provisionalSafePrefix(in: text, ner: ner, redactedSpans: result.spans), baselineLimit, text)
+                    }
+                    let secret = PIINERSpan(range: source.range(of: amount, options: .backwards), label: "SECRET", score: 1)
+                    XCTAssertFalse(try PIIRedactor.redact(text, ner: [secret]).text.contains(" " + amount + " "),
+                                   "An amount exclusion must never weaken an independent secret detection")
+                }
+            }
+        }
+        // Absent a validated PAN or explicit unit, model evidence stays masked.
+        for value in ["4111 1111 1111 1112 508", "4111 1111 508", "4111 1111 1111 1111 508"] {
+            let text = "карта " + value + " обсудим условия" + tail
+            let ner = [PIINERSpan(range: (text as NSString).range(of: value), label: "CARD", score: 1)]
+            XCTAssertFalse(try PIIRedactor.redact(text, ner: ner).text.contains("508"), text)
+        }
+        // A valid short prefix is not enough to expose a longer PAN's final
+        // group. These have both 13/16 or 16/19 valid checksum interpretations.
+        for pan in ["4111 1111 1111 1111", "4222 2222 22222 006", "4222 2222 22222 105", "4111 1111 1111 1111 102"] {
+            XCTAssertTrue(PIIRedactor.luhnValid(pan.compactMap(\.wholeNumberValue)))
+            let value = pan + " 508"
+            let text = "карта " + value + " рублей" + tail
+            for ner in [[], [PIINERSpan(range: (text as NSString).range(of: value), label: "CARD", score: 1)]] {
+                let result = try PIIRedactor.redact(text, ner: ner)
+                XCTAssertFalse(result.text.contains(pan.split(separator: " ").last!.description),
+                               "Neither model misses nor a shorter prefix may expose a valid PAN tail")
+            }
+        }
+        let ambiguous = "4111 1111 1111 1111 508"
+        let ambiguousText = "карта " + ambiguous + " рублей" + tail
+        for ner in [[], [PIINERSpan(range: (ambiguousText as NSString).range(of: ambiguous), label: "CARD", score: 1)]] {
+            XCTAssertEqual(try PIIRedactor.redact(ambiguousText, ner: ner).text, "карта [КАРТА] рублей" + tail)
+        }
+        let shifted = "карта 19 4222 2222 22222 105 508 рублей" + tail
+        let shiftedValue = "4222 2222 22222 105 508"
+        for ner in [[], [PIINERSpan(range: (shifted as NSString).range(of: shiftedValue), label: "CARD", score: 1)]] {
+            XCTAssertFalse(try PIIRedactor.redact(shifted, ner: ner).text.contains("105"),
+                           "A preceding number cannot hide a valid PAN beginning at the next group")
+        }
+        let twoCards = "4111 1111 1111 1111 3782 822463 10005"
+        let text = "карты " + twoCards + " 1009 рублей" + tail
+        let ner = [PIINERSpan(range: (text as NSString).range(of: twoCards), label: "CARD", score: 1)]
+        let result = try PIIRedactor.redact(text, ner: ner)
+        XCTAssertFalse(result.text.contains("4111"))
+        XCTAssertFalse(result.text.contains("3782"))
+        XCTAssertFalse(result.text.contains("10005"))
+        XCTAssertTrue(result.text.contains("1009 рублей"))
+    }
+
     func testPreviewResolvesWholeQualifiedCredentialsAndHoldsPartialTypedSpans() throws {
         let ordinary = "Мы обсуждаем проект в Москве. Затем обсуждаем результаты работы и план на следующий месяц."
         let unchanged = try PIIRedactor.redact(ordinary, ner: [])
