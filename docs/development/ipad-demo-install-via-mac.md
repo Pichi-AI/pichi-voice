@@ -48,6 +48,23 @@ open Fluid.xcodeproj
 
 `setup.sh` выполняет переносимые проверки и настройку read-only upstream. Он не устанавливает модели и не доказывает, что приложение собрано. `scripts/dev/mobile.sh` предназначен для симулятора с отключённой подписью, а не для установки на настоящий iPad.
 
+### Если разработчик передал архив исходников
+
+Этот маршрут не требует доступа к приватному GitHub. Получить отдельно полный SHA исходной ревизии и SHA-256 архива, сверить архив через `shasum -a 256 /absolute/path/to/source.zip`, распаковать в новый пустой каталог. Архив не содержит `.git`, моделей, записей, настроек, профиля голоса или подписи. Сохранить исходный SHA и хеш архива во внешнем manifest рядом с архивом, не выдавать локальный commit за оригинальный.
+
+В распакованном каталоге создать только локальный репозиторий и рабочую копию. Эти команды не меняют глобальную Git identity и ничего не публикуют:
+
+```bash
+git init -b main
+git add .
+git -c user.name='Local Demo' -c user.email='demo@example.invalid' commit -m 'Import delivered demo sources'
+PICHI_LOCAL_SOURCE_COMMIT="$(git rev-parse HEAD)"
+PICHI_DEMO_ORIGINAL_REVISION='FULL_ORIGINAL_COMMIT_FROM_VERIFIED_HANDOFF'
+bash scripts/dev/new-worktree.sh ratibor-demo "$PICHI_LOCAL_SOURCE_COMMIT"
+```
+
+Затем перейти в напечатанный worktree и выполнить `assert-worktree.sh` и `setup.sh`, как выше. Локальный commit отличается от переданного SHA, хотя исходные файлы совпадают. В параметре `PICHI_SOURCE_REVISION` при сборке ниже явно передать **оригинальный полный SHA из проверенного handoff**, вместо локального `git rev-parse HEAD`. Сохранять собственные team и bundle ID, собирать Release и запускать без отладчика по тем же шагам. Архив не является подписанной сборкой и не переносит уже существующие встречи.
+
 ## Подключить iPad и настроить Xcode
 
 1. Подключить разблокированный iPad кабелем. Подтвердить доверие к Mac на iPad и выполнить сопряжение в Xcode, если оно запрошено.
@@ -71,7 +88,7 @@ open Fluid.xcodeproj
 PICHI_DEMO_TEAM='YOUR_PERSONAL_TEAM_ID'
 PICHI_DEMO_BUNDLE='YOUR_UNIQUE_BUNDLE_ID'
 PICHI_DEMO_DEVICE='YOUR_CONNECTED_IPAD_ID'
-PICHI_DEMO_REVISION="$(git rev-parse HEAD)"
+PICHI_DEMO_REVISION="${PICHI_DEMO_ORIGINAL_REVISION:-$(git rev-parse HEAD)}"
 
 xcodebuild -project Fluid.xcodeproj -scheme PichiVoiceMobile \
   -configuration Release -sdk iphoneos \
@@ -100,11 +117,13 @@ xcrun devicectl device install app --device "$PICHI_DEMO_DEVICE" "$PICHI_DEMO_AP
 
 Это настройка внутри приложения после установки, на Wi-Fi. Не приносить на демо устройство, где модели ещё скачиваются.
 
-1. `Настройки > Распознавание речи`: скачать **Pichi GigaAM v3**, затем выбрать `Use Model` / «Использовать модель», если модель не выбрана. Для этого русского демо используется штатная INT8-модель. Другие модели не устанавливать «на всякий случай».
-2. `Настройки > Запись`: язык русский; включить определение участников и **определение участников во время записи**. Скачать ресурсы участников и дождаться готовности. Это выбирает штатный потоковый backend и нужный encoder владельца; не подменять его отдельным импортом fast32.
+1. `Настройки > Распознавание речи`: скачать **Pichi GigaAM v3**, затем выбрать `Use Model` / «Использовать модель», если модель не выбрана. Для этого русского демо штатная загрузка использует **GigaAM v3 E2E CTC INT8 без EOU-головы**. Сохранённый внутренний ID `gigaam-v3-eou` оставлен для совместимости настроек, а точную модель определяет fingerprint артефакта. Другие модели не устанавливать «на всякий случай».
+2. `Настройки > Запись`: язык русский; включить определение участников и **определение участников во время записи**. Скачать ресурсы участников и дождаться готовности. Зарегистрированный потоковый профиль использует **Nemotron fast128 FP16, CPU**, а для собственного голоса отдельно загружает **legacy WeSpeaker v2 Core ML**. **fast32 W8A8 относится к обработке после записи**, не подменять им потоковый профиль.
 3. `Настройки > Запись > Мой голос`: сам Ратибор в тихой комнате читает текст естественным голосом 15-20 секунд. Нажать Stop и **Save** после принятия образца. Убедиться, что показано сохранённое состояние. Чужой образец не использовать. Сохранять профиль **до начала** проверяемой встречи.
 4. `Настройки > Приватность`: выключить **Save audio recordings**; включить **Redact sensitive data**, дождаться подготовки локальной PII-модели и убедиться, что переключатель включён. На новой установке нельзя полагаться на значения по умолчанию.
 5. Завершить все загрузки и пробный запуск до отключения интернета. Не менять модель или профиль внутри текущей встречи.
+
+Модельная карта выше сверена с регистрацией и дескрипторами ревизии `9414bbe1`. Публичные веса загружаются отдельно и не входят в архив исходников. В [Notices](../../Sources/Fluid/Resources/Notices) сохранены точные pinned-источники и атрибуция: GigaAM использует MIT, A1 INT8 использует Apache-2.0 с отдельным раскрытием нерешённых вопросов происхождения обучающих данных NEREL, веса Nemotron используют OpenMDW-1.1, legacy WeSpeaker использует CC-BY-4.0. Apache-2.0 notice Swift runtime не заменяет лицензию весов Nemotron. При передаче исходников сохранять весь каталог Notices и исходный GPL-3.0 [LICENSE](../../LICENSE); при включении самих модельных материалов также сохранять применимые лицензии, атрибуцию и сведения об их преобразованиях. Эти документы не подтверждают точность на любом iPad или полную очистку прав на все обучающие данные.
 
 ## Репетиция полного сценария на целевом iPad
 
@@ -127,3 +146,5 @@ xcrun devicectl device install app --device "$PICHI_DEMO_DEVICE" "$PICHI_DEMO_AP
 Before starting or while a meeting records, choose **PDF Presentation** in its toolbar, then select a PDF through the standard Files picker. The native PDF viewer displays the selected PDF inside the same app. Use **Done** to return to the recording and stop it normally. The selected PDF is opened once on an owned background worker and read directly, with security access retained until the native viewer is removed. Only while the PDF belongs to an active foreground window and this meeting is recording, the app keeps the screen awake. Closing the PDF or finishing the recording restores the previous screen idle timer setting after the last recording presentation window releases it. Navigation cancels a pending import without blocking recording controls; a cancelled parse finishes under its file lease before another import is admitted and can never reopen the viewer. The app does not copy the document into meeting storage or retain it for later. Audio retention and sensitive data settings still belong to the meeting captured before the PDF was opened.
 
 This is an optional foreground workflow. It does not establish that recording and inference remain reliable after switching to a separate presentation application. Test the exact device with the selected PDF, real microphone, current model and final export before a demo.
+
+The ordinary Release background test on the 2017 A10X iPad was terminated by the operating system for its background CPU budget. That device is outside the requested 2020-and-newer range; the result does not establish the behavior of an A12 iPad. The in-app PDF route is a limited foreground alternative, not a fix or acceptance of the separate-application background scenario. Successful foreground tests alone do not make that full scenario demo-ready.

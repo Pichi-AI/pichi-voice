@@ -1,0 +1,29 @@
+A1 Russian PII training-data provenance disclosure
+
+Model: Powpowpow23/ru-pii-ner-a1
+Pinned revision: 67a6270bf24661bf62ea0e93582d02edcc8ee517
+Pinned maintainer's complete data-provenance disclosure:
+https://huggingface.co/Powpowpow23/ru-pii-ner-a1/blob/67a6270bf24661bf62ea0e93582d02edcc8ee517/DATA_PROVENANCE.md
+Pinned model card:
+https://huggingface.co/Powpowpow23/ru-pii-ner-a1/blob/67a6270bf24661bf62ea0e93582d02edcc8ee517/README.md
+
+The model is published under Apache-2.0; inherited source-model attribution
+and license are included in A1-TextPrivacy-NOTICE.txt and
+A1-TextPrivacy-LICENSE.txt. A weights license does not erase training history.
+
+The pinned disclosure records training on redmadrobot-rnd/pii_train,
+Scanpatch controlled PII corpus, Nerus, iluvvatar/NEREL, and locally generated
+templates and augmentations. The training mixture is not wholly synthetic.
+The maintainer reports no explicit license in the pinned NEREL metadata and
+an unresolved independent permission review. Nerus source-text rights were
+not independently adjudicated. Permission for generated material and derived
+weights was confirmed by the maintainer, but that confirmation does not
+establish a NEREL license. The disclosure does not determine that use is
+prohibited, and it does not establish that all training sources are cleared.
+
+The maintainer also records masked-template overlap, development-set
+similarities and repeated entity values. Fully decontaminated training and
+formal privacy or memorization guarantees have not been established. The
+source disclosure describes these findings and the distinct evaluation
+sources in more detail. Pichi Voice does not redistribute the source corpora
+or private evaluation text. Model weights are downloaded separately.
