@@ -55,6 +55,7 @@ struct MeetingSpeakerAttributionTests {
         try self.acoustics()
         try self.initialAcousticProjection()
         try self.neighbors()
+        try self.mixedIncomingNeighbors()
         self.neighborAdmission()
         try self.sameSpeakerPauses()
         try self.interruptions()
@@ -244,6 +245,54 @@ struct MeetingSpeakerAttributionTests {
         self.check(try self.resolve(utterance, activity)[1].selectedToken == nil)
         let foreignWeak = try self.resolve(units, activity + [self.activity("c", 0.3, 0.32)])[1]
         self.check(foreignWeak.selectedToken == self.token("c") && foreignWeak.rule == .singleAcousticSupport)
+    }
+
+    static func mixedIncomingNeighbors() throws {
+        let a = self.token("a"), c = self.token("c")
+        for offset in [0.0, 10_000.0] {
+            let left = self.unit("left", offset, offset + 0.2, .assigned(a))
+            let right = self.unit("right", offset + 0.7, offset + 0.9, .assigned(c))
+            let activity = [self.activity("a", offset, offset + 0.2), self.activity("a", offset + 0.3, offset + 0.6),
+                            self.activity("c", offset + 0.3, offset + 0.6), self.activity("c", offset + 0.7, offset + 0.9)]
+            for raw in [MeetingBackendSpeakerAssignment.unassigned, .ambiguous([a, c]), .assigned(a)] {
+                let words = [left, self.unit("mixed", offset + 0.3, offset + 0.6, raw), right]
+                let original = try self.resolve(words, activity, epochs: [Self.epoch])[1]
+                self.check(original.selectedToken == nil && original.rule == .ambiguous)
+                let incoming = try self.resolve(words, activity)[1]
+                self.check(incoming.selectedToken == c && incoming.rule == .incomingSpeaker)
+                self.check(incoming.cueUnitIDs == ["left", "right"] && incoming.backgroundTokens.isEmpty)
+                self.check(incoming.rawAssignment == original.rawAssignment && incoming.candidates == original.candidates
+                           && incoming.simultaneousIntervals == original.simultaneousIntervals
+                           && incoming.activeSupportSeconds == original.activeSupportSeconds && incoming.relation == original.relation)
+                let legacy = try self.resolve(words, activity, policy: .init(enableMainSpeakerContinuation: false))[1]
+                self.check(legacy.selectedToken == nil && legacy.rule == .ambiguous)
+                let third = try self.resolve(words, activity + [self.activity("b", offset + 0.4, offset + 0.5)])[1]
+                self.check(third.selectedToken == nil && third.rule == .ambiguous && third.candidates.count == 3,
+                           "Incoming attribution consumed a voice outside both anchors")
+                for barrier in ["left", "mixed", "right"] {
+                    self.check(try self.resolve(words, activity, barriers: [barrier])[1].rule != .incomingSpeaker)
+                }
+                let utterance = [left, self.unit("mixed", offset + 0.3, offset + 0.6, raw, precision: .utterance), right]
+                self.check(try self.resolve(utterance, activity)[1].selectedToken == nil)
+            }
+            let mixedRun = [left] + (0..<5).map {
+                self.unit("mixed-\($0)", offset + 0.3 + Double($0) * 0.05,
+                          offset + 0.35 + Double($0) * 0.05, .ambiguous([a, c]))
+            } + [right]
+            let runOutput = try self.resolve(mixedRun, activity)
+            self.check(runOutput[1...5].allSatisfy { $0.selectedToken == c && $0.rule == .incomingSpeaker },
+                       "A contiguous mixed run between different anchors retained an uncertainty island")
+            // The contextual path cannot replace an already selected acoustic foreground.
+            let dominant = [left, self.unit("dominant", offset + 0.3, offset + 0.6, .ambiguous([a, c])), right]
+            let strongA = [activity[0], activity[1], self.activity("c", offset + 0.4, offset + 0.41), activity[3]]
+            let foreground = try self.resolve(dominant, strongA)[1]
+            self.check(foreground.selectedToken == a && foreground.rule == .residualSuppression)
+            // Matching A anchors reject C under the incoming rule and use the later explicit
+            // continuation convention, with original overlap evidence retained.
+            let same = [left, dominant[1], self.unit("right", offset + 0.7, offset + 0.9, .assigned(a))]
+            let sameActivity = Array(activity.dropLast()) + [self.activity("a", offset + 0.7, offset + 0.9)]
+            self.check(try self.resolve(same, sameActivity)[1].rule == .mainSpeakerContinuation)
+        }
     }
 
     static func sameSpeakerPauses() throws {

@@ -789,9 +789,16 @@ nonisolated enum MeetingSpeakerAttribution {
         return blocked
     }
 
-    private static func canContextualize(_ unit: MeetingFinalTextUnit, _ decision: Decision, blocked: Set<String>) -> Bool {
-        guard unit.precision == .word, !blocked.contains(unit.id), case .unassigned = unit.speaker,
-              decision.rule != .barrier, decision.relation != .conflict,
+    private static func canContextualize(
+        _ unit: MeetingFinalTextUnit, _ decision: Decision, blocked: Set<String>,
+        policy: MeetingSpeakerAttributionPolicy
+    ) -> Bool {
+        guard unit.precision == .word, !blocked.contains(unit.id),
+              decision.rule != .barrier, decision.relation != .conflict else { return false }
+        // New reading ownership also reuses the incoming-speaker rule for an unresolved
+        // mixed word. The caller still requires every positive candidate to match an anchor.
+        if policy.enableMainSpeakerContinuation, decision.selectedToken == nil, decision.rule == .ambiguous { return true }
+        guard case .unassigned = unit.speaker,
               decision.relation == .none || decision.relation == .single,
               decision.candidates.allSatisfy(\.isSuppressed)
         else { return false }
@@ -949,12 +956,12 @@ nonisolated enum MeetingSpeakerAttribution {
         var position = 0
         while position < units.count {
             try Task.checkCancellation()
-            guard self.canContextualize(units[position], decisions[position], blocked: temporalBarriers) else {
+            guard self.canContextualize(units[position], decisions[position], blocked: temporalBarriers, policy: policy) else {
                 position += 1; continue
             }
             let first = position
             while position < units.count,
-                  self.canContextualize(units[position], decisions[position], blocked: temporalBarriers) {
+                  self.canContextualize(units[position], decisions[position], blocked: temporalBarriers, policy: policy) {
                 try self.checkCancellation(at: position)
                 position += 1
             }
