@@ -829,6 +829,76 @@ struct MeetingSessionStoreCheckpointTests {
                 }
             }
         }
+        // Independent native selection may precede participant admission just as a
+        // contextual selection can. A distant exact-token anchor completes identity only;
+        // no neighboring words, pauses or acoustic decisions are reinterpreted here.
+        for rule in [MeetingSpeakerAttributionRule.singleAcousticSupport, .residualSuppression, .acousticDominance] {
+            for revision in [0, 1, 7] {
+                var selected = baseline
+                selected.endedAt = selected.startedAt.addingTimeInterval(40)
+                var target = word(1, start: 30, end: 31, owner: nil, rule: rule, revision: revision)
+                func selection(_ raw: MeetingBackendSpeakerAssignment = .assigned(token),
+                               chosen: MeetingBackendSpeakerToken = token,
+                               rule: MeetingSpeakerAttributionRule = rule,
+                               relation: MeetingSpeakerAttributionRelation = .single) -> MeetingTranscriptSpeakerAttribution {
+                    let decision = MeetingSpeakerAttributionDecision(unitID: target.nativeUnitID!, rawAssignment: raw,
+                        candidates: [], activeSupportSeconds: 1, simultaneousIntervals: [], relation: relation,
+                        selectedToken: chosen, rule: rule, cueUnitIDs: [], backgroundTokens: [],
+                        policyVersion: 2, policyFingerprint: "synthetic-independent-unmapped")
+                    return .init(decision: decision, speakerIDs: [:])
+                }
+                target.nativeSpeakerAssignment = .assigned(token)
+                target.speakerAttribution = selection()
+                selected.transcriptSegments = [word(0, start: 0, end: 0.2, owner: speakerA.id, rule: .singleAcousticSupport), target]
+                let original = selected, originalJSON = try MeetingTranscriptExporter.json(for: selected)
+                check(MeetingTranscriptExporter.speakerPresentations(in: selected)[target.id]?.participantID == speakerA.id,
+                      "An independently selected unmapped native token resolves from its unique exact-epoch identity without nearby cues")
+                let handoff = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: selected)) as! [String: Any]
+                check((handoff["segments"] as! [[String: Any]]).allSatisfy { $0["speakerID"] as? String == speakerA.id.uuidString },
+                      "Protected export and reading use the same admitted native identity")
+                let repeatedJSON = try MeetingTranscriptExporter.json(for: selected)
+                check(selected == original && repeatedJSON == originalJSON,
+                      "Completing participant identity preserves raw unit IDs, times, native assignment, decisions and canonical JSON")
+                for negative in 0..<12 {
+                    var blocked = selected
+                    switch negative {
+                    case 0: blocked.transcriptSegments[1].isUserTextEdited = true
+                    case 1: blocked.transcriptSegments[1].speakerAttribution = nil
+                    case 2: blocked.transcriptSegments[1].speakerAttribution = selection(rule: .conflict)
+                    case 3: blocked.transcriptSegments[1].speakerAttribution = selection(rule: .barrier)
+                    case 4: blocked.transcriptSegments[1].speakerAttribution = selection(relation: .conflict)
+                    case 5: blocked.transcriptSegments[1].nativeSpeakerAssignment = .unassigned
+                    case 6:
+                        let mixed = MeetingBackendSpeakerAssignment.ambiguous([token, .init(analysisEpochID: epoch, label: "other")])
+                        blocked.transcriptSegments[1].nativeSpeakerAssignment = mixed
+                        blocked.transcriptSegments[1].speakerAttribution = selection(mixed)
+                    case 7:
+                        let otherEpoch = MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: epoch.trackID, ordinal: 1), label: token.label)
+                        blocked.transcriptSegments[1].nativeSpeakerAssignment = .assigned(otherEpoch)
+                        blocked.transcriptSegments[1].speakerAttribution = selection(.assigned(otherEpoch), chosen: otherEpoch)
+                    case 8:
+                        blocked.transcriptSegments.append(word(2, start: 35, end: 36, owner: speakerB.id, rule: .singleAcousticSupport))
+                    case 9:
+                        blocked.transcriptSegments[0].revision = 1
+                        blocked.transcriptSegments[0].speakerAttribution = nil
+                    case 10: blocked.transcriptSegments[1].sourceTrackID = UUID()
+                    default:
+                        let otherToken = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "other-selected")
+                        var otherAnchor = word(2, start: 35, end: 36, owner: speakerB.id, rule: .singleAcousticSupport)
+                        otherAnchor.nativeSpeakerAssignment = .assigned(otherToken)
+                        let decision = MeetingSpeakerAttributionDecision(unitID: otherAnchor.nativeUnitID!, rawAssignment: .assigned(otherToken),
+                            candidates: [], activeSupportSeconds: 1, simultaneousIntervals: [], relation: .single,
+                            selectedToken: otherToken, rule: .singleAcousticSupport, cueUnitIDs: [], backgroundTokens: [],
+                            policyVersion: 2, policyFingerprint: "synthetic-other-independent-anchor")
+                        otherAnchor.speakerAttribution = .init(decision: decision, speakerIDs: [otherToken: speakerB.id])
+                        blocked.transcriptSegments.append(otherAnchor)
+                        blocked.transcriptSegments[1].speakerAttribution = selection(chosen: otherToken)
+                    }
+                    check(MeetingTranscriptExporter.speakerPresentations(in: blocked)[target.id]?.participantID == nil,
+                          "Manual, mismatched, ambiguous, conflicting or wrong-epoch native identity cannot be adopted (\(negative))")
+                }
+            }
+        }
         let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(baseline))
         check(MeetingTranscriptExporter.speakerPresentations(in: restored)[islandID]?.participantID == speakerA.id,
               "The canonical identity completion works after production archive decoding")

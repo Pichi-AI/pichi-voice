@@ -400,6 +400,12 @@ nonisolated enum MeetingTranscriptExporter {
                   let mapped = identities[token], mapped.count == 1,
                   segment.attributionState == .unassigned || segment.attributionState == .overlappingSpeakers
             else { continue }
+            // The voice can already be independently selected while its participant UUID
+            // was not admitted yet. Complete only that exact native token's unique mapping.
+            if summary.rule.isIndependentAcousticSelection, summary.rawAssignment == .assigned(token) {
+                owners[segment.id] = mapped.first
+                continue
+            }
             switch summary.rule {
             case .neighborAgreement, .incomingSpeaker, .boundaryContinuation, .mainSpeakerContinuation:
                 owners[segment.id] = mapped.first
