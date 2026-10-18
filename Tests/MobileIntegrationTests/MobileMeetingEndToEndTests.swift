@@ -1396,7 +1396,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 progress?.emit(force: true)
                 streamingEvidence["retainedRecovery"] = try await retainedStreamingRecovery(completed: completed,
                     store: store, settings: settings, privacyModelDirectory: assets.appendingPathComponent("models/privacy"), reference: reference,
-                    root: root, sourceFrames: offset, expectedProfile: expectedProfile)
+                    root: root, sourceFrames: offset, expectedDiarizationFingerprint: expectedDiarization)
                 progress?.update(phase: "retainedRecoveryEnd", deliveredFrames: Int(input.length), protectedUtterances: 0,
                     protectedPartials: 0, protectedFinalSegments: completed.transcriptSegments.count)
                 progress?.emit(force: true)
@@ -1588,13 +1588,15 @@ final class MobileMeetingEndToEndTests: XCTestCase {
 
     private func retainedStreamingRecovery(completed: MeetingSession, store: MeetingSessionStore,
         settings: SettingsStore, privacyModelDirectory: URL, reference: CombinedMeetingReference,
-        root: URL, sourceFrames: Int, expectedProfile: MeetingNemotronModelProfile) async throws -> [String: Any] {
+        root: URL, sourceFrames: Int, expectedDiarizationFingerprint: String) async throws -> [String: Any] {
         let directory = try await store.sessionDirectory(for: completed.id)
         let sourceBefore = try retainedAudioProof(session: completed, directory: directory, root: root)
         XCTAssertEqual(sourceBefore.frames, sourceFrames, "The real retained writer must finalize every paced source frame")
         XCTAssertFalse(sourceBefore.digests.isEmpty)
         let completedAttemptIDs = Set(completed.processingAttempts.map(\.id))
         let originalAttempt = try XCTUnwrap(completed.processingAttempts.last(where: { $0.completedAt != nil }))
+        XCTAssertEqual(originalAttempt.diarizationModel, expectedDiarizationFingerprint,
+                       "The first attempt must pin the complete streaming recipe, including owner verification")
         let freshPrivacy = PichiTranscriptPrivacyService(modelStore: .init(directory: privacyModelDirectory))
         let privacyReadyBeforeRetry = await freshPrivacy.isReady
         XCTAssertFalse(privacyReadyBeforeRetry, "Fresh privacy runtime must start unprepared")
@@ -1671,8 +1673,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(attempt.asrModel, SettingsStore.SpeechModel.gigaam.rawValue)
             XCTAssertEqual(attempt.asrArtifactFingerprint, originalAttempt.asrArtifactFingerprint,
                            "Recovery must retain the same actual ASR artifact")
-            XCTAssertEqual(attempt.diarizationModel, expectedProfile.implementationFingerprint,
-                           "Retained recovery must use the pinned streaming profile, with no W8A8 fallback")
+            XCTAssertEqual(attempt.diarizationModel, expectedDiarizationFingerprint,
+                           "Retained recovery must use the exact pinned streaming and owner-verification recipe")
+            XCTAssertEqual(attempt.diarizationModel, originalAttempt.diarizationModel,
+                           "Fresh recovery must preserve the first attempt's complete diarization identity")
             XCTAssertEqual(attempt.backendID, originalAttempt.backendID)
             XCTAssertTrue(fresh.meetingProcessingPipeline.memoryAttempts.isEmpty,
                           "Retained retry must not manufacture a replacement live capture attempt")
