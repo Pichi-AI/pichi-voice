@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Save native mobile frames at one-second cadence and index pixel changes locally.
 
-Requires Xcode devicectl (physical device) or simctl (simulator) and Pillow.
-Never deletes frames. A STOP file or SIGTERM ends capture between native requests.
+Requires Xcode and Pillow. The default uses devicectl or simctl screenshots.
+For physical devices, --stream-device-id selects ONLY that exact paired muxed
+screen, using an isolated source-hash/compiler-keyed native video-only tool.
+Existing video authorization is required; no prompts or camera fallback.
+READY.json means the first streamed frame was decoded and indexed successfully.
+Never deletes frames. STOP or SIGTERM requests a joined bounded shutdown.
+--self-test runs synthetic transport/index tests without opening any device.
 """
 import argparse
 import hashlib
@@ -10,6 +15,7 @@ import json
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,15 +36,209 @@ def pixel_digest(path):
         return digest.hexdigest(), list(image.size)
 
 
+
+def capture_stream(args, out, state, should_stop):
+    """Index independently of the native capture queue; retain every PNG."""
+    source = Path(__file__).resolve().with_name("mobile-screen-stream.swift")
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    compiler = subprocess.run(["xcrun", "swiftc", "--version"], check=True,
+                              capture_output=True, timeout=20).stdout
+    build_key = hashlib.sha256(source_hash.encode() + compiler).hexdigest()
+    build = source.parents[2] / ".build" / "mobile-screen-capture" / build_key
+    build.mkdir(parents=True, exist_ok=True)
+    binary = build / "mobile-screen-stream"
+    with (out / "capture.log").open("ab") as log:
+        if not binary.exists():
+            temporary = build / f"compiler-{__import__('os').getpid()}"
+            subprocess.run(["xcrun", "swiftc", "-O", "-module-cache-path", str(build / "ModuleCache"),
+                            str(source), "-o", str(temporary)], stdout=log, stderr=log,
+                           check=True, timeout=90)
+            temporary.replace(binary)
+        state.update(captureBackend="pairedMuxedVideoStream", nativeSourceSHA256=source_hash,
+                     nativeToolSHA256=hashlib.sha256(binary.read_bytes()).hexdigest(),
+                     schedule="First delivered native frame in each one-second native PTS slot; no cached backfill",
+                     audioOutputs=0, streamDeviceIDSHA256=hashlib.sha256(args.stream_device_id.encode()).hexdigest())
+        process = subprocess.Popen([str(binary), "--stream-device-id", args.stream_device_id,
+                                    "--output", str(out), "--prefix", f"{args.test_case}-{args.revision[:8]}",
+                                    "--duration", str(args.duration)], stdout=log, stderr=log)
+        previous = None
+        seen = {}
+        reason = "duration"
+        started = time.monotonic()
+        native_path = out / "native-frames.jsonl"
+        reader = None
+        pending_line = ""
+        def persist():
+            state["elapsedSeconds"] = time.monotonic() - started
+            temporary = out / "status.pending.json"
+            temporary.write_text(json.dumps(state, indent=2))
+            temporary.replace(out / "status.json")
+        try:
+            with (out / "frames.jsonl").open("a") as index, (out / "changed.jsonl").open("a") as changed, \
+                    (out / "unique.jsonl").open("a") as unique:
+                print(json.dumps(dict(captureStarted=True, output=str(out), intervalSeconds=1,
+                                      captureBackend="pairedMuxedVideoStream")), flush=True)
+                while True:
+                    if should_stop():
+                        (out / "STOP").touch(exist_ok=True)
+                    # Observe exit before reading: if finished is true, the following
+                    # read drains an immutable file. Never poll again for this EOF decision.
+                    finished = process.poll() is not None
+                    if reader is None and native_path.exists():
+                        reader = native_path.open()
+                    fragment = reader.readline() if reader is not None else ""
+                    pending_line += fragment
+                    if not pending_line.endswith("\n"):
+                        if finished:
+                            if pending_line:
+                                raise ValueError("Truncated native frame index")
+                            break
+                        if time.monotonic() - started > args.duration + 15:
+                            raise TimeoutError("Native capture exceeded bounded duration")
+                        time.sleep(0.05)
+                        continue
+                    row = json.loads(pending_line)
+                    pending_line = ""
+                    if row.get("kind") == "stopped":
+                        state["nativeSummary"] = row["summary"]
+                        reason = row["summary"]["stopReason"]
+                    if row.get("kind") != "frame":
+                        persist()
+                        continue
+                    relative = Path(row["file"])
+                    if relative.is_absolute() or len(relative.parts) != 2 or relative.parts[0] != "frames" or relative.suffix != ".png":
+                        raise ValueError("Invalid native frame index path")
+                    target = out / relative
+                    digest, dimensions = pixel_digest(target)
+                    row.update(dimensions=dimensions, pixelSHA256=digest,
+                               pngSHA256=hashlib.sha256(target.read_bytes()).hexdigest(),
+                               changedFromPrevious=digest != previous, firstPixelOccurrence=digest not in seen,
+                               matchesEarlierSecond=seen.get(digest))
+                    state["savedFrames"] += 1
+                    state["missedScheduleSlots"] += row["missedSlotsBefore"]
+                    if row["changedFromPrevious"]:
+                        state["changedFrames"] += 1
+                        changed.write(json.dumps(row) + "\n"); changed.flush()
+                    if row["firstPixelOccurrence"]:
+                        state["uniquePixelFrames"] += 1
+                        seen[digest] = row["requestedSecond"]
+                        unique.write(json.dumps(row) + "\n"); unique.flush()
+                    previous = digest
+                    index.write(json.dumps(row) + "\n"); index.flush()
+                    state["lastAttempt"] = row
+                    persist()
+                    if state["savedFrames"] == 1:
+                        (out / "READY.json").write_text(json.dumps(dict(firstValidFrame=row["file"], nativeSourceSHA256=source_hash)))
+            code = process.wait(timeout=10)
+            if code != 0 or state["savedFrames"] == 0 or "nativeSummary" not in state:
+                state["captureErrors"] += 1
+                reason = "nativeCaptureFailure"
+        except Exception as error:
+            state["captureErrors"] += 1
+            state["errorType"] = type(error).__name__
+            reason = "nativeCaptureFailure"
+            raise
+        finally:
+            if reader is not None:
+                reader.close()
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill(); process.wait(timeout=5)
+            state.update(status="stopped", stopReason=reason, endedAtUTC=utc())
+            persist()
+    print(json.dumps({k: state[k] for k in ["status", "stopReason", "savedFrames", "changedFrames",
+                                          "uniquePixelFrames", "missedScheduleSlots", "captureErrors"]}), flush=True)
+    return 0 if reason in ["duration", "stopRequested"] else 1
+
+
+def self_test():
+    """Synthetic transport tests only; never enumerate or open capture devices."""
+    import tempfile
+    import unittest
+    from unittest.mock import patch
+    from types import SimpleNamespace
+
+    class StreamTests(unittest.TestCase):
+        def run_transport(self, invalid=False):
+            with tempfile.TemporaryDirectory(prefix="mobile-frame-test-") as temporary:
+                out = Path(temporary)
+                (out / "frames").mkdir()
+                (out / "native-frames.jsonl").touch()
+                state = dict(savedFrames=0, changedFrames=0, uniquePixelFrames=0,
+                             missedScheduleSlots=0, captureErrors=0)
+                args = SimpleNamespace(stream_device_id="synthetic-only", test_case="synthetic",
+                                       revision="abcdef12", duration=3)
+                class Process:
+                    polls = 0
+                    def poll(inner):
+                        inner.polls += 1
+                        if inner.polls == 1:
+                            return None
+                        if inner.polls == 2:
+                            rows = []
+                            for slot, color in enumerate(["red", "red", "blue"]):
+                                name = f"frames/synthetic-abcdef12-{slot:06d}.png"
+                                Image.new("RGB", (3, 2), color).save(out / name)
+                                rows.append(dict(kind="frame", file=name, requestedSecond=slot,
+                                                 missedSlotsBefore=0, valid=True))
+                            rows.append(dict(kind="stopped", summary=dict(stopReason="duration")))
+                            with (out / "native-frames.jsonl").open("a") as index:
+                                if invalid:
+                                    index.write("{broken\n")
+                                else:
+                                    index.write("".join(json.dumps(row) + "\n" for row in rows))
+                        return 0
+                    def wait(inner, timeout=None):
+                        return 0
+                def compile_mock(command, **kwargs):
+                    if "--version" in command:
+                        return SimpleNamespace(stdout=b"synthetic-test-compiler-no-device")
+                    Path(command[-1]).write_bytes(b"synthetic-test-binary-never-executed")
+                    return SimpleNamespace(returncode=0)
+                with patch.object(subprocess, "run", compile_mock), patch.object(subprocess, "Popen", return_value=Process()), patch.object(time, "sleep"):
+                    if invalid:
+                        with self.assertRaises(ValueError):
+                            capture_stream(args, out, state, lambda: False)
+                        final = json.loads((out / "status.json").read_text())
+                        self.assertEqual(final["stopReason"], "nativeCaptureFailure")
+                        self.assertEqual(final["captureErrors"], 1)
+                    else:
+                        self.assertEqual(capture_stream(args, out, state, lambda: False), 0)
+                        self.assertEqual(state["savedFrames"], 3)
+                        self.assertEqual(state["changedFrames"], 2)
+                        self.assertEqual(state["uniquePixelFrames"], 2)
+                        self.assertEqual(len(list((out / "frames").glob("*.png"))), 3)
+                        self.assertEqual(len((out / "frames.jsonl").read_text().splitlines()), 3)
+                        self.assertTrue((out / "READY.json").exists())
+                        self.assertIn("nativeSummary", state)
+        def test_exit_drains_final_native_records_and_keeps_unchanged_frames(self):
+            self.run_transport()
+        def test_parse_failure_cannot_record_clean_stop(self):
+            self.run_transport(invalid=True)
+
+    result = unittest.TextTestRunner().run(unittest.defaultTestLoader.loadTestsFromTestCase(StreamTests))
+    if not result.wasSuccessful():
+        raise SystemExit(1)
+
+
 def main():
+    if sys.argv[1:] == ["--self-test"]:
+        self_test()
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", required=True)
+    parser.add_argument("--stream-device-id", help="Explicit AVFoundation muxed device ID. Enables USB video-only streaming on physical devices; no camera fallback.")
     parser.add_argument("--platform", choices=["device", "simulator"], default="device")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--test-case", required=True)
     parser.add_argument("--duration", type=float, default=7200)
     args = parser.parse_args()
+    if args.stream_device_id and args.platform != "device":
+        parser.error("stream-device-id is only supported for physical devices")
     if not 0 < args.duration <= 43_200:
         parser.error("duration must be positive and at most twelve hours")
     if not all(c.isalnum() or c in "-_." for c in args.test_case) or not args.test_case:
@@ -63,6 +263,16 @@ def main():
                  changedFrames=0, uniquePixelFrames=0, missedScheduleSlots=0, captureErrors=0,
                  differenceMethod="SHA256 of decoded RGBA pixels and dimensions; PNG metadata ignored",
                  scope="Native device display capture. All valid frames retained; changed and unique indexes select review candidates. Capture can affect runtime measurements; this is not touch-latency or FPS evidence.")
+    if args.stream_device_id:
+        try:
+            code = capture_stream(args, out, state, lambda: stopped)
+        except Exception as error:
+            state.update(status="stopped", stopReason="nativeCaptureFailure", endedAtUTC=utc(),
+                         errorType=type(error).__name__)
+            state["captureErrors"] = max(1, state["captureErrors"])
+            (out / "status.json").write_text(json.dumps(state, indent=2))
+            raise
+        raise SystemExit(code)
     previous = None
     seen = {}
     slot = 0
