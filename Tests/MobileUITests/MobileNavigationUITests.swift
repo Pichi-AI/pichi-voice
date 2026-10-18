@@ -56,6 +56,18 @@ final class MobileNavigationUITests: XCTestCase {
         let backgroundSmoke = environment["PICHI_PHYSICAL_PRODUCTION_BACKGROUND_SMOKE"] == "1"
         let longSmoke = environment["PICHI_PHYSICAL_PRODUCTION_LONG_SMOKE"] == "1"
         let presentationFile = environment["PICHI_PHYSICAL_PRODUCTION_PRESENTATION_FILE"]
+        let saveExportName = environment["PICHI_PHYSICAL_PRODUCTION_SAVE_EXPORT_NAME"]
+        if let saveExportName {
+            let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+            guard saveExportName.count <= 128, saveExportName.hasSuffix(".json"),
+                  saveExportName.count > 5, !saveExportName.hasPrefix("."),
+                  saveExportName.unicodeScalars.allSatisfy({ allowed.contains($0) }),
+                  environment["PICHI_PRESENTATION_FIXTURE_LOCATION"]?.isEmpty == false,
+                  environment["PICHI_PRESENTATION_FIXTURE_FOLDER"] == "Codex-Pichi-Demo-20261018" else {
+                throw NSError(domain: "ProductionUISmoke", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Native export needs a unique JSON basename and the explicit owned Files location/folder"])
+            }
+        }
         guard presentationFile == nil || (!backgroundSmoke && presentationFile?.isEmpty == false) else {
             throw NSError(domain: "ProductionUISmoke", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "A presentation is a foreground test and needs a staged synthetic PDF filename"])
@@ -178,6 +190,7 @@ final class MobileNavigationUITests: XCTestCase {
                 "outcome": outcome, "events": events, "plannedRecordingObservationSeconds": observationSeconds,
                 "backgroundSmoke": backgroundSmoke, "backgroundObservedSeconds": backgroundObservedSeconds,
                 "longSmoke": longSmoke, "presentationFile": presentationFile ?? "",
+                "nativeExportFilename": saveExportName ?? "",
                 "backgroundObservationScope": "Sum of intervals between consecutive runningBackground samples; app state alone does not prove audio capture, text or speaker progress",
                 "speechPlaybackOwner": "parent_external_player",
                 "measurementScope": "XCTest action returns and accessibility observations, including synchronization and polling; not touch latency or recognition accuracy"
@@ -316,6 +329,24 @@ final class MobileNavigationUITests: XCTestCase {
                         "Protected export must reload the saved session and present the native activity UI")
             mark("native_activity_visible")
             capture("production-11-native-protected-export")
+            if let saveExportName {
+                mark("native_files_save_requested")
+                try saveProtectedExportToOwnedFiles(filename: saveExportName)
+                try require(activityList.waitForNonExistence(timeout: 15) && more.isHittable,
+                            "Native Files Save must return to the same completed transcript")
+                mark("native_files_saved")
+                print("[PRODUCTION_UI_SMOKE] native_files_saved")
+                capture("production-11-native-files-saved")
+                // Preserve the existing share cancellation check after real Save.
+                more.tap()
+                try require(export.waitForExistence(timeout: 5) && export.isHittable,
+                            "The completed meeting must remain exportable after native Files Save")
+                export.tap()
+                try require(activityList.waitForExistence(timeout: 15),
+                            "Native sharing must reopen after saving the protected export")
+                mark("native_activity_reopened_after_save")
+                capture("production-11-native-export-reopened")
+            }
             let identifiedClose = app.buttons["header.closeButton"]
             let close = identifiedClose.exists ? identifiedClose : app.buttons.matching(
                 NSPredicate(format: "label IN %@", ["Close", "Закрыть", "Cancel", "Отмена"])).firstMatch
@@ -1124,6 +1155,97 @@ final class MobileNavigationUITests: XCTestCase {
                     "Native QuickLook must show the PDF inside the foreground AUT")
         capture("presentation-native-preview")
         return done
+    }
+
+    /// Saves only through the native activity UI into an explicitly staged test folder.
+    /// The parent reads back the exact file and validates its actual protected payload.
+    private func saveProtectedExportToOwnedFiles(filename: String) throws {
+        func require(_ condition: Bool, _ message: String) throws {
+            guard condition else { throw NSError(domain: "ProductionUISmoke", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message]) }
+        }
+        let environment = ProcessInfo.processInfo.environment
+        let locationName = try XCTUnwrap(environment["PICHI_PRESENTATION_FIXTURE_LOCATION"])
+        let folderName = try XCTUnwrap(environment["PICHI_PRESENTATION_FIXTURE_FOLDER"])
+        let saveFiles = app.cells.matching(NSPredicate(format: "label IN %@",
+            ["Save to Files", "Сохранить в Файлы", "Сохранить в «Файлы»"])).firstMatch
+        try require(saveFiles.waitForExistence(timeout: 10) && saveFiles.isHittable,
+                    "The native activity list must offer Save to Files")
+        saveFiles.tap()
+        capture("production-files-picker")
+        let description = XCTAttachment(string: app.debugDescription)
+        description.name = "production-files-picker-accessibility"
+        description.lifetime = .keepAlways
+        add(description)
+        do {
+            let save = app.buttons["DOCPicker.actionButton"]
+            try require(save.waitForExistence(timeout: 10), "The native save destination picker must open")
+            let location = app.cells.matching(NSPredicate(format: "label == %@", locationName)).firstMatch
+            for step in 0..<5 where !location.isHittable {
+                let browse = app.buttons.matching(NSPredicate(format: "label IN %@", ["Browse", "Обзор"])).firstMatch
+                let back = app.buttons["BackButton"]
+                if browse.exists && browse.isHittable { browse.tap() }
+                else if back.exists && back.isHittable { back.tap() }
+                else { break }
+                capture("production-files-location-\(step)")
+            }
+            try require(location.waitForExistence(timeout: 5) && location.isHittable,
+                        "Only the explicit staged Files location may receive this export")
+            location.tap()
+            capture("production-files-known-location")
+            let folderCell = app.cells.matching(NSPredicate(format: "label BEGINSWITH %@", folderName)).firstMatch
+            let folderText = app.staticTexts[folderName].firstMatch
+            try require(folderCell.waitForExistence(timeout: 10) || folderText.exists,
+                        "The owned export folder must already exist; no new folders are created")
+            if folderCell.exists && folderCell.isHittable { folderCell.tap() }
+            else {
+                try require(folderText.isHittable, "The owned folder must be selectable")
+                folderText.tap()
+            }
+            capture("production-files-owned-folder")
+            let ownedFolderTitle = app.navigationBars[folderName]
+            try require(ownedFolderTitle.waitForExistence(timeout: 5),
+                        "The native picker must confirm the exact owned destination folder")
+            let stem = (filename as NSString).deletingPathExtension
+            let existing = app.cells.matching(NSPredicate(format: "label == %@ OR label BEGINSWITH %@",
+                filename, stem + ",")).firstMatch
+            try require(!existing.exists && !app.staticTexts[filename].exists && !app.staticTexts[stem].exists,
+                        "The unique export destination must not already exist; overwrite is forbidden")
+            let nameField = app.textFields["DOCPicker.filenameTextField"]
+            try require(nameField.waitForExistence(timeout: 5) && nameField.isHittable,
+                        "The native save picker must expose its filename field")
+            let previous = try XCTUnwrap(nameField.value as? String)
+            try require(previous.count <= 256, "The initial native filename must be bounded")
+            nameField.tap()
+            // Files commonly hides the existing extension in the editable field.
+            // Keep its current convention to avoid creating a doubled .json suffix.
+            let enteredName = previous.hasSuffix(".json") ? filename : stem
+            nameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count) + enteredName)
+            try require(nameField.value as? String == enteredName,
+                        "The exact unique export filename must be present before Save")
+            try require(save.isEnabled && save.isHittable, "The native Save action must be enabled")
+            capture("production-files-save-ready")
+            save.tap()
+            try require(save.waitForNonExistence(timeout: 15) && app.alerts.count == 0,
+                        "Native Files Save must dismiss without replacement, conflict resolution or any confirmation")
+        } catch {
+            capture("production-files-save-unavailable")
+            // Return the native destination picker through Cancel only. Never
+            // accept a replacement prompt or recover by copying private app data.
+            let cancel = app.buttons.matching(NSPredicate(format: "label IN %@",
+                ["Cancel", "Отмена", "Отменить"])).firstMatch
+            for step in 0..<5 where !cancel.isHittable {
+                let back = app.buttons["BackButton"]
+                guard back.exists && back.isHittable else { break }
+                back.tap()
+                capture("production-files-cancel-location-\(step)")
+            }
+            if cancel.exists && cancel.isHittable {
+                cancel.tap()
+                capture("production-files-picker-cancelled-after-failure")
+            }
+            throw error
+        }
     }
 
     private func waitForOrientation(portrait: Bool) {
