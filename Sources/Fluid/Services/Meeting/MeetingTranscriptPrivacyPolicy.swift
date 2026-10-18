@@ -24,7 +24,9 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         }
         for i in copy.audioTracks.indices { copy.audioTracks[i].sourceDisplayName = try await redactor.redact(copy.audioTracks[i].sourceDisplayName) }
         for i in copy.speakers.indices {
-            copy.speakers[i].displayName = try await redactor.redact(copy.speakers[i].displayName)
+            // Participant labels are explicit user metadata, not recognized speech. Keep
+            // aliases intact through corrections, repeated publication and export. External
+            // identity suggestions remain filtered independently below.
             for j in copy.speakers[i].identityCandidates.indices {
                 copy.speakers[i].identityCandidates[j].displayName = try await redactor.redact(copy.speakers[i].identityCandidates[j].displayName)
                 copy.speakers[i].identityCandidates[j].source = try await redactor.redact(copy.speakers[i].identityCandidates[j].source)
@@ -58,7 +60,8 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
             copy.livePreview = .init(id: id, text: text, start: first.start.seconds, end: projection.provisionalEnd)
         }
         for i in copy.speakers.indices {
-            copy.speakers[i].displayName = try await redactor.redact(copy.speakers[i].displayName)
+            // A resumed batch can carry existing aliases. Never run transcript redaction
+            // over participant labels; mergingSpeakers also preserves the saved alias.
             copy.speakers[i].diarizationEmbedding = nil
             copy.speakers[i].diarizationEmbeddingObservationCount = nil
             copy.speakers[i].diarizationQuality = nil

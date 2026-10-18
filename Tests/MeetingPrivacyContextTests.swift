@@ -118,6 +118,7 @@ struct MeetingPrivacyContextTests {
               status: .final, overlap: .none, completeness: .complete)
     }
     static func main() async throws {
+        try await participantAliasSuite()
         let coverageTrack = UUID()
         let coverageBatch = MeetingPCMTranscriptBatch(segments: [segment("слово", track: coverageTrack, start: 0),
             segment("продолжение", track: coverageTrack, start: 1)])
@@ -180,6 +181,30 @@ struct MeetingPrivacyContextTests {
         let cancelledTail = try await cancelled.finish()
         try check(cancelledTail == nil, "cancelled transform committed a raw pending tail")
         print("Meeting privacy context tests passed: actual segments/evidence, structured rules, opt-in native NER, delayed tail and final flush")
+    }
+
+    static func participantAliasSuite() async throws {
+        let track = UUID()
+        let alias = "Иван Тестов"
+        var source = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic alias privacy",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture microphone"), piiRedactionEnabled: true),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        source.speakers = [.init(id: UUID(), displayName: "Speaker 1", diarizationClusterID: "synthetic",
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
+        source.transcriptSegments = [segment("Пациент Иван Тестов просит копию.", track: track, start: 0)]
+        try source.renameSpeaker(id: source.speakers[0].id, to: "  \(alias)  ")
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: source, using: ClinicalNERFixtureRedactor())
+        try check(safe.speakers[0].displayName == alias, "An explicit participant name is outside transcript redaction")
+        try check(!safe.transcriptSegments[0].text.contains("Иван"), "The same name spoken in a transcript must still be redacted")
+        try check(safe.transcriptSegments[0].originalText == nil, "Alias exemption cannot restore original voice text")
+        let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(safe))
+        let repeated = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: restored, using: ClinicalNERFixtureRedactor())
+        try check(repeated.speakers[0].displayName == alias, "Repeated publication after reload must preserve the explicit alias")
+        let batch = try await MeetingTranscriptPrivacyPolicy.redactedBatch(
+            .init(segments: source.transcriptSegments, speakers: source.speakers), using: ClinicalNERFixtureRedactor())
+        try check(batch.speakers[0].displayName == alias, "PCM publication must preserve a resumed participant alias")
+        try check(!batch.segments[0].text.contains("Иван"), "PCM alias exemption must not exempt speech from redaction")
+        try check(source.transcriptSegments[0].text.contains("Иван"), "Publication cannot mutate source speech")
     }
 
     static func knownNonPersonPCMContextSuite(using redactor: any TranscriptTextRedacting) async throws {

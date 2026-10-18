@@ -4279,6 +4279,67 @@ final class MeetingRecoveryTests: XCTestCase {
 
     // MARK: - Batched speaker rename (Assign speakers sheet)
 
+    private struct SpeakerAliasRedactor: TranscriptTextRedacting {
+        func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+            let source = text as NSString
+            let range = source.range(of: "Иван Тестов")
+            guard range.location != NSNotFound else { return .init(text: text, spans: []) }
+            return .init(text: source.replacingCharacters(in: range, with: "[PERSON]"),
+                spans: [.init(range: range, replacement: "[PERSON]")])
+        }
+    }
+
+    func testSpeakerAliasesAreExplicitMetadataWithAndWithoutTranscriptRedaction() async throws {
+        for privacyEnabled in [false, true] {
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let store = MeetingSessionStore(rootDirectory: dir)
+            let fixture = self.makeCorrectionSession(state: .completed)
+            var session = fixture.session
+            session.piiRedactionEnabled = privacyEnabled
+            session.transcriptSegments[0].text = "Врач Иван Тестов просит инструкцию."
+            session.transcriptSegments[0].originalText = "Иван Тестов"
+            try await store.create(session)
+            let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                processing: StubProcessingController(), audioArbiter: StubArbiter(),
+                redactorProvider: { SpeakerAliasRedactor() })
+
+            let renamed = try await coordinator.renameSpeaker(sessionID: session.id,
+                speakerID: fixture.speakerA, to: "  Иван Тестов  ")
+            XCTAssertEqual(renamed.speakers[0].displayName, "Иван Тестов")
+            XCTAssertEqual(renamed.transcriptSegments[0].text,
+                privacyEnabled ? "Врач [PERSON] просит инструкцию." : session.transcriptSegments[0].text)
+            XCTAssertEqual(renamed.transcriptSegments[0].originalText, privacyEnabled ? nil : "Иван Тестов")
+            XCTAssertEqual(renamed.transcriptSegments[0].start, session.transcriptSegments[0].start)
+            XCTAssertEqual(renamed.transcriptSegments[0].end, session.transcriptSegments[0].end)
+
+            let assigned = try await coordinator.renameSpeakers(sessionID: session.id,
+                names: [fixture.speakerB: "Иван Тестов"])
+            XCTAssertTrue(assigned.speakers.allSatisfy { $0.displayName == "Иван Тестов" })
+            let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+            XCTAssertEqual(undone.speakers[0].displayName, "Иван Тестов")
+            XCTAssertEqual(undone.speakers[1].displayName, "Speaker B")
+
+            // A new coordinator must read the durable alias, then preserve it through
+            // another whole-session privacy publication and a transcript correction.
+            let restoredCoordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                processing: StubProcessingController(), audioArbiter: StubArbiter(),
+                redactorProvider: { SpeakerAliasRedactor() })
+            _ = try await restoredCoordinator.renameSession(sessionID: session.id, to: "Synthetic renamed meeting")
+            let corrected = try await restoredCoordinator.editTranscriptText(sessionID: session.id,
+                segmentID: fixture.segmentID, text: "Иван Тестов просит копию.",
+                expectedRevision: undone.transcriptSegments[0].revision)
+            XCTAssertEqual(corrected.speakers[0].displayName, "Иван Тестов")
+            XCTAssertEqual(corrected.transcriptSegments[0].text,
+                privacyEnabled ? "[PERSON] просит копию." : "Иван Тестов просит копию.")
+            let value = try await store.load(id: session.id)
+            let saved = try XCTUnwrap(value)
+            XCTAssertEqual(saved.speakers[0].displayName, "Иван Тестов")
+            XCTAssertEqual(saved.transcriptSegments, corrected.transcriptSegments)
+            XCTAssertTrue(MeetingTranscriptExporter.text(for: saved).contains("Иван Тестов:"))
+        }
+    }
+
     func testRenameSpeakersAppliesEveryChangedNameInOneCall() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

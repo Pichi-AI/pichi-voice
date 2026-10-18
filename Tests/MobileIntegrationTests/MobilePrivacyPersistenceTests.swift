@@ -16,6 +16,62 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 /// Synthetic text isolates data handling from probabilistic model accuracy.
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
+    func testExplicitParticipantAliasSurvivesPrivacyPublicationAndCheckpointRoundTrip() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingSessionStore(rootDirectory: root)
+        var source = fixture()
+        source.audioStorageMode = .retainedFiles
+        source.speakerLabelsEnabled = true
+        let participant = MeetingSessionSpeaker(id: UUID(), displayName: "Speaker 1", diarizationClusterID: "synthetic",
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [.init(id: UUID(),
+                displayName: "Иван Тестов", source: "Иван Тестов", rejected: false, confirmedAt: nil)])
+        source.speakers = [participant]
+        source.transcriptSegments[0].speakerID = participant.id
+        try source.renameSpeaker(id: participant.id, to: "  Иван Тестов  ")
+
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: source, using: FixturePersonRedactor())
+        XCTAssertEqual(safe.speakers[0].displayName, "Иван Тестов")
+        XCTAssertEqual(safe.speakers[0].identityCandidates[0].displayName, "[PERSON]")
+        XCTAssertEqual(safe.speakers[0].identityCandidates[0].source, "[PERSON]")
+        XCTAssertEqual(safe.transcriptSegments[0].text, "Врач [PERSON] просит инструкцию. Метформин 500 мг.")
+        XCTAssertNil(safe.transcriptSegments[0].originalText)
+        try await store.create(safe)
+        let saved = try await store.load(id: safe.id)
+        let loaded = try XCTUnwrap(saved)
+        XCTAssertEqual(loaded.speakers[0].displayName, "Иван Тестов")
+
+        let directory = try await store.sessionDirectory(for: safe.id)
+        let working = MeetingRetainedProcessingCheckpoint(sessionDirectory: directory)
+        let configuration = MeetingFinalProcessingConfiguration(languageCode: safe.languageCode, speakerLabelsEnabled: true)
+        let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: safe.id,
+            backendID: .init(rawValue: "synthetic-alias"), backendVersion: "1", configuration: configuration,
+            piiRedactionEnabled: true, privacyFingerprint: "synthetic-person-detector")
+        try working.write(.init(pin: pin, inputFingerprint: "synthetic-source", ownerVoiceIdentity: nil,
+            runtimeFingerprint: nil, payload: JSONEncoder().encode(loaded)), session: loaded)
+        let checkpoint = try XCTUnwrap(working.read(session: loaded))
+        let resumed = try JSONDecoder().decode(MeetingSession.self, from: checkpoint.payload)
+        let republished = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: resumed, using: FixturePersonRedactor())
+        XCTAssertEqual(republished.speakers[0].displayName, "Иван Тестов")
+        XCTAssertEqual(republished.transcriptSegments, safe.transcriptSegments)
+        XCTAssertTrue(MeetingTranscriptExporter.text(for: republished).contains("Иван Тестов:"))
+        let exported = try XCTUnwrap(JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: republished)) as? [String: Any])
+        let exportedSpeakers = try XCTUnwrap(exported["speakers"] as? [[String: Any]])
+        let exportedSegments = try XCTUnwrap(exported["segments"] as? [[String: Any]])
+        XCTAssertEqual(exportedSpeakers[0]["displayName"] as? String, "Иван Тестов")
+        XCTAssertEqual(exportedSegments[0]["text"] as? String, safe.transcriptSegments[0].text)
+        XCTAssertNil(exportedSegments[0]["originalText"])
+
+        // A streaming/resumed batch can contain saved aliases. Strip voice/identity
+        // evidence as before while keeping the explicit name and protected speech.
+        let batch = try await MeetingTranscriptPrivacyPolicy.redactedBatch(
+            .init(segments: source.transcriptSegments, speakers: source.speakers), using: FixturePersonRedactor())
+        XCTAssertEqual(batch.speakers[0].displayName, "Иван Тестов")
+        XCTAssertTrue(batch.speakers[0].identityCandidates.isEmpty)
+        XCTAssertEqual(batch.segments, safe.transcriptSegments)
+        XCTAssertEqual(batch.mergingSpeakers(into: republished.speakers)[0].displayName, "Иван Тестов")
+    }
+
     func testNativeStablePCMHypothesisSurvivesNativeAndCoarseTimingPartitions() async throws {
         let assets = try MobileInferenceTestAssets.resolve()
         let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
