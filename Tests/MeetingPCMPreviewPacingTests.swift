@@ -58,12 +58,10 @@ struct MeetingPCMPreviewPacingTests {
         clock.advance(90) // The capture source can pause for arbitrarily long.
         timing.endExclusion(since: pcmWait)
         clock.advance(3.3) // Buffered ASR inference.
-        let previewWait = timing.beginExclusion()
-        clock.advance(120) // Slow UI publication is not decoder compute.
-        timing.endExclusion(since: previewWait)
+        clock.advance(120) // Protected publication delays the next owned window too.
         clock.advance(0.2 + 4.3 + 2.7) // Sequential model load, diarization and voice.
-        try require(abs(timing.computeSeconds - 11.9) < 0.000_001,
-                    "Active compute includes all model phases and excludes PCM/UI waits")
+        try require(abs(timing.computeSeconds - 131.9) < 0.000_001,
+                    "Owned work includes protected publication and excludes only future PCM waits")
         pacing.record(computeSeconds: timing.computeSeconds, audioSeconds: 12)
         try require(!pacing.permitsIntermediateObservations, "Measured slow decoder suppresses repeated growing-prefix work")
         print("PASS fake-clock compute accounting across sequential phases")

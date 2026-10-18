@@ -39,10 +39,11 @@ public actor GigaAMRuntime {
             let environment = try ORTEnv(loggingLevel: .warning)
             let options = try ORTSessionOptions()
             #if os(iOS)
-            // A physical background CPU-fatal report sampled parallel ORT GEMM work.
-            // Limit this provider's intra-op work before opening its immutable session;
-            // sustained background throughput still requires device validation.
-            try options.setIntraOpNumThreads(1)
+            // A single intra-op thread still exceeded the physical background CPU limit
+            // and slowed measured 20s foreground inference from about 2.9s to 8.5s.
+            // Restore bounded foreground throughput in the immutable prepared session;
+            // this is not evidence of safe sustained background execution.
+            try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
             try options.addConfigEntry(withKey: "session.intra_op.allow_spinning", value: "0")
             try options.addConfigEntry(withKey: "session.inter_op.allow_spinning", value: "0")
             #else

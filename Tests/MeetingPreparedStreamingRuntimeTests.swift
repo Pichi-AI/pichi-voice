@@ -51,6 +51,7 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     var segments: [MeetingTranscriptSegment]
     var speakers: [MeetingSessionSpeaker] = []
     var isComplete = true
+    var speechObservationIsFinal = true
     func mergingSpeakers(into existing: [MeetingSessionSpeaker]) -> [MeetingSessionSpeaker] {
         existing + self.speakers.filter { candidate in !existing.contains { $0.id == candidate.id } }
     }
@@ -359,6 +360,7 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
     static func main() async throws {
         try await shortAndEmptyFinalizationMatrix()
         try await lifecyclePreviewAdmission()
+        try await streamingPreviewDoesNotRepeatSealedPrivacy()
         let r = Recorder(); let s = make(r)
         let w = MeetingPCMProgressiveWindow.fixture()
         let task = Task { try await s.recognize(window: w, offset: 0, preview: nil) }
@@ -457,7 +459,57 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
         try await adaptiveOwnerEvidence()
         try await ownerScopeRetiresModelsBeforeEncoder()
         try await optionalOwnerPreflightAndCancellation()
-        print("14 prepared streaming runtime contract groups passed")
+        print("15 prepared streaming runtime contract groups passed")
+    }
+
+    private static func streamingPreviewDoesNotRepeatSealedPrivacy() async throws {
+        for emptyFinal in [false, true] {
+            let recorder = Recorder(), asr = LifecycleASR(recorder, decisions: [true])
+            let runtime = MeetingPreparedStreamingRuntime(runtime: .init(), asr: asr,
+                diarizer: SyntheticDiarizer(recorder), trackID: UUID(), attemptID: UUID(),
+                configuration: .init(), speakerNameFormat: "Speaker %lld", onProgress: { _ in })
+            let window = MeetingPCMProgressiveWindow.fixture()
+            let operation = Task {
+                try await runtime.recognize(window: window, offset: 0, preview: { batch in
+                    try require(!batch.speechObservationIsFinal,
+                        "The streaming adapter must not repeat final-window privacy as a preview")
+                    recorder.event("preview-privacy:\(batch.segments.first?.end ?? -1)")
+                })
+            }
+            for (index, frames) in [48_000, 160_000, 112_000].enumerated() {
+                window.fixtureAppend(Array(repeating: Float(0.1), count: frames),
+                                     final: index == 2 && !emptyFinal)
+                for _ in 0..<10_000 {
+                    if recorder.snapshot.filter({ $0.hasPrefix("asr:") }).count >= index + 1 { break }
+                    await Task.yield()
+                }
+                try require(recorder.snapshot.filter { $0.hasPrefix("asr:") }.count >= index + 1,
+                            "Each growing source update must still reach ASR")
+                if index < 2 || emptyFinal {
+                    for _ in 0..<10_000 {
+                        if recorder.snapshot.filter({ $0.hasPrefix("preview-privacy:") }).count >= index + 1 { break }
+                        await Task.yield()
+                    }
+                    try require(recorder.snapshot.filter { $0.hasPrefix("preview-privacy:") }.count == index + 1,
+                                "Genuinely growing observations retain the protected preview gate")
+                }
+            }
+            if emptyFinal { window.fixtureAppend([], final: true) }
+            let result = try await operation.value
+            let expected = ["preview-privacy:3.0", "preview-privacy:13.0"]
+                + (emptyFinal ? ["preview-privacy:20.0"] : [])
+            try require(recorder.snapshot.filter { $0.hasPrefix("preview-privacy:") } == expected,
+                "Only nonfinal growing observations may run preview privacy")
+            try require(result.batch.segments.map(\.text) == ["synthetic"]
+                && result.batch.segments.first?.end == 20
+                && result.asrStableThroughSample == 320_000,
+                "The complete native final text and timing still reach the canonical privacy owner")
+            let final = try await runtime.finishStreaming()
+            try require(final.isFinal && final.asrStableThroughSample == 320_000,
+                        "Stop must flush the exact final source cursor without a preview")
+            await runtime.cleanup()
+        }
+        print("PASS growing protected previews, no duplicate sealed privacy, final native words and Stop coverage")
     }
 
     private static func lifecyclePreviewAdmission() async throws {

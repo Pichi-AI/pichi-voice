@@ -67,8 +67,8 @@ nonisolated struct MeetingPCMPreviewPacing: Sendable {
     }
 }
 
-/// Measures active window work across executor hops. Waiting for PCM and publication
-/// is excluded, so a slow microphone source or UI cannot incorrectly suppress previews.
+/// Measures owned window work across executor hops. Waiting for future PCM is excluded;
+/// awaited protected publication remains charged because it delays the next live window.
 final nonisolated class MeetingPCMWindowComputeTiming: @unchecked Sendable {
     private let lock = NSLock()
     private let now: @Sendable () -> TimeInterval
@@ -610,8 +610,6 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     output = observed
                 }
                 if let preview, hasSpeech || output?.sampleCount == observed.sampleCount {
-                    let publicationStarted = timing.beginExclusion()
-                    defer { timing.endExclusion(since: publicationStarted) }
                     try await preview(self.pcmSpeechObservation(output: observed, epoch: epoch,
                         offset: offset, duration: Double(samples.count) / 16_000,
                         attemptID: attemptID, isFinal: update.isFinal))
@@ -624,8 +622,6 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 // even when the final update brought additional PCM.
                 if let output, let preview,
                    (!hasNewPCM && !shouldInfer) || output.sampleCount != samples.count {
-                    let publicationStarted = timing.beginExclusion()
-                    defer { timing.endExclusion(since: publicationStarted) }
                     try await preview(self.pcmSpeechObservation(output: output, epoch: epoch,
                         offset: offset, duration: Double(output.sampleCount) / 16_000,
                         attemptID: attemptID, isFinal: true))

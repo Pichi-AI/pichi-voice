@@ -35,7 +35,9 @@ end_loop = runtime.index('    func pcmSpeechObservation(', start_loop)
 assembly = '''
     func pcmSpeechObservation(output: MeetingParakeetEpochOutput, epoch: MeetingAnalysisEpochID,
         offset: Double, duration: Double, attemptID: UUID, isFinal: Bool) throws -> MeetingPCMTranscriptBatch {
-        self.batch(output, epoch: epoch, offset: offset)
+        var result = self.batch(output, epoch: epoch, offset: offset)
+        result.speechObservationIsFinal = isFinal
+        return result
     }
     func attributePCMSpeech(samples: [Float], output: MeetingParakeetEpochOutput, epoch: MeetingAnalysisEpochID,
         offset: Double, attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,

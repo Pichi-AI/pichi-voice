@@ -58,9 +58,20 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         }
         let epoch = MeetingAnalysisEpochID(trackID: self.trackID, ordinal: self.update.acceptedThroughSample)
         let timing = MeetingPCMWindowComputeTiming()
+        // A sealed window immediately enters the canonical protected transcript below.
+        // Sending it through the optional speech preview first repeats the same NER work
+        // and can exhaust live capture headroom. Keep only genuinely growing previews;
+        // the canonical privacy gate still owns every final word and its lexical tail.
+        let growingPreview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?
+        if let preview {
+            growingPreview = { batch in
+                guard !batch.speechObservationIsFinal else { return }
+                try await preview(batch)
+            }
+        } else { growingPreview = nil }
         let phase = try await self.runtime.recognizeProgressivePCMPhase(session: self.asr, window: window,
             offset: offset, epoch: epoch, attemptID: self.attemptID, timing: timing,
-            permitsIntermediateObservations: self.pacing.permitsIntermediateObservations, preview: preview,
+            permitsIntermediateObservations: self.pacing.permitsIntermediateObservations, preview: growingPreview,
             consumePCM: { samples, start in
                 try Task.checkCancellation()
                 if self.useAdaptiveOwnerEvidence {
@@ -82,14 +93,9 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
                     try Task.checkCancellation()
                     try self.accept(next, expectedAccepted: start + samples.count, final: false)
                 }
-                let publication = timing.beginExclusion()
-                do {
-                    try await self.onProgress(self.observation())
-                    timing.endExclusion(since: publication)
-                } catch {
-                    timing.endExclusion(since: publication)
-                    throw error
-                }
+                // Publication joins durable IO and UI projection on the same worker.
+                // It consumes real capture headroom, unlike waiting for future PCM.
+                try await self.onProgress(self.observation())
                 try Task.checkCancellation()
             })
         try Task.checkCancellation()
