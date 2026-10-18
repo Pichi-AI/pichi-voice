@@ -11,18 +11,12 @@ nonisolated enum MeetingPrivacyPublicationError: LocalizedError {
     }
 }
 
-/// Privacy transforms affect publication values, never source fingerprints or timestamps.
+/// Privacy transforms protect recognized speech and external identity evidence. User-entered
+/// display metadata, source fingerprints and timestamps remain intact.
 /// Exporting a legacy session returns a separate copy and never rewrites stored history.
 nonisolated enum MeetingTranscriptPrivacyPolicy {
     static func redactedCopy(session: MeetingSession, using redactor: any TranscriptTextRedacting, preservingPublicationArtifacts: Bool = false) async throws -> MeetingSession {
         var copy = session
-        copy.title = try await redactor.redact(copy.title)
-        if let title = copy.defaultTitleBase { copy.defaultTitleBase = try await redactor.redact(title) }
-        copy.selectedMicrophone.displayName = try await redactor.redact(copy.selectedMicrophone.displayName)
-        if let application = copy.capturedApplication {
-            copy.capturedApplication?.displayName = try await redactor.redact(application.displayName)
-        }
-        for i in copy.audioTracks.indices { copy.audioTracks[i].sourceDisplayName = try await redactor.redact(copy.audioTracks[i].sourceDisplayName) }
         for i in copy.speakers.indices {
             // Participant labels are explicit user metadata, not recognized speech. Keep
             // aliases intact through corrections, repeated publication and export. External
@@ -50,7 +44,6 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                               provisionalPreviewID: UUID? = nil,
                               provisionalSegmentIDs: Set<UUID> = []) async throws -> MeetingPCMTranscriptBatch {
         var copy = batch
-        if let source = copy.sourceTrack { copy.sourceTrack?.sourceDisplayName = try await redactor.redact(source.sourceDisplayName) }
         let projection = try await self.redactedSegments(copy.segments, using: redactor, contextPrefixes: contextPrefixes,
                                                         provisionalSegmentIDs: provisionalSegmentIDs)
         copy.segments = projection.segments

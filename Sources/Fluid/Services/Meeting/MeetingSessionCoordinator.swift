@@ -215,6 +215,13 @@ final class MeetingSessionCoordinator: ObservableObject {
             movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int, previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?, previousLegacyInference: MeetingSpeakerAttributionInference?)]
         )
         case renameBatch([(speakerID: SessionSpeakerID, previousName: String)])
+
+        var isParticipantRename: Bool {
+            switch self {
+            case .rename, .renameBatch: return true
+            default: return false
+            }
+        }
     }
 
     private var correctionUndoStacks: [MeetingSessionID: [TranscriptCorrection]] = [:]
@@ -1122,7 +1129,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         let before = target
         let inverse = try mutate(&target)
         guard target != before else { return target }
-        if target.piiRedactionEnabled == true {
+        // Alias-only corrections do not introduce or change voice text. Recognition and
+        // transcript editing own privacy admission; renaming must not rerun the model over
+        // the entire saved transcript or require it to be resident.
+        if target.piiRedactionEnabled == true, !inverse.isParticipantRename {
             guard let redactor = try self.redactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
             target = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: target, using: redactor, preservingPublicationArtifacts: true)
         }
@@ -1290,11 +1300,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         target.updatedAt = Date()
 
         do {
-            if target.piiRedactionEnabled == true {
-            guard let redactor = try self.redactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
-            target = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: target, using: redactor, preservingPublicationArtifacts: true)
-        }
-        try await self.store.save(target)
+            if target.piiRedactionEnabled == true, !correction.isParticipantRename {
+                guard let redactor = try self.redactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+                target = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: target, using: redactor, preservingPublicationArtifacts: true)
+            }
+            try await self.store.save(target)
         } catch {
             stack.append(correction)
             self.correctionUndoStacks[sessionID] = stack
@@ -1331,10 +1341,6 @@ final class MeetingSessionCoordinator: ObservableObject {
         target.title = trimmed
         target.defaultTitleBase = nil
         target.updatedAt = Date()
-        if target.piiRedactionEnabled == true {
-            guard let redactor = try self.redactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
-            target = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: target, using: redactor, preservingPublicationArtifacts: true)
-        }
         try await self.store.save(target)
 
         self.refreshSlots(with: target)

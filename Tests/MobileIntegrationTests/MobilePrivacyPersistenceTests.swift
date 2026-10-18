@@ -31,6 +31,9 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         try source.renameSpeaker(id: participant.id, to: "  Иван Тестов  ")
 
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: source, using: FixturePersonRedactor())
+        XCTAssertEqual(safe.title, source.title)
+        XCTAssertEqual(safe.selectedMicrophone, source.selectedMicrophone)
+        XCTAssertEqual(safe.audioTracks, source.audioTracks)
         XCTAssertEqual(safe.speakers[0].displayName, "Иван Тестов")
         XCTAssertEqual(safe.speakers[0].identityCandidates[0].displayName, "[PERSON]")
         XCTAssertEqual(safe.speakers[0].identityCandidates[0].source, "[PERSON]")
@@ -386,7 +389,7 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         for case let url as URL in files {
             guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
             XCTAssertEqual(url.pathExtension, "json", url.lastPathComponent)
-            XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("Иван Тестов"))
+            XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("\"originalText\""))
         }
 
         for (data, ext) in [(Data(MeetingTranscriptExporter.text(for: loaded).utf8), "txt"),
@@ -394,7 +397,16 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
             let payload = try MeetingSharePayload.transcript(data: data, title: loaded.title, fileExtension: ext)
             defer { payload.cleanup() }
             let url = try XCTUnwrap(payload.items.first as? URL)
-            XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("Иван Тестов"))
+            let shared = try Data(contentsOf: url)
+            if ext == "txt" {
+                XCTAssertFalse(String(decoding: shared, as: UTF8.self).contains("Иван Тестов"))
+            } else {
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: shared) as? [String: Any])
+                XCTAssertEqual(json["title"] as? String, source.title, "Display metadata stays explicit user data")
+                let segments = try XCTUnwrap(json["segments"] as? [[String: Any]])
+                XCTAssertEqual(segments.first?["text"] as? String, loaded.transcriptSegments[0].text)
+                XCTAssertNil(segments.first?["originalText"])
+            }
             XCTAssertFalse(payload.includesAudio)
             let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
             #if targetEnvironment(simulator)
@@ -420,9 +432,14 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         XCTAssertTrue(source.title.contains("Иван Тестов"))
         XCTAssertTrue(source.transcriptSegments[0].text.contains("Иван Тестов"))
         XCTAssertNotNil(source.transcriptSegments[0].originalText)
-        XCTAssertFalse(safe.title.contains("Иван Тестов"))
+        XCTAssertEqual(safe.title, source.title)
+        XCTAssertEqual(safe.selectedMicrophone, source.selectedMicrophone)
+        XCTAssertEqual(safe.audioTracks, source.audioTracks)
         XCTAssertNil(safe.transcriptSegments[0].originalText)
-        XCTAssertFalse(String(decoding: try MeetingTranscriptExporter.json(for: safe), as: UTF8.self).contains("Иван Тестов"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: safe)) as? [String: Any])
+        let segments = try XCTUnwrap(json["segments"] as? [[String: Any]])
+        XCTAssertEqual(segments[0]["text"] as? String, "Врач [PERSON] просит инструкцию. Метформин 500 мг.")
+        XCTAssertNil(segments[0]["originalText"])
     }
 
     private func fixture() -> MeetingSession {

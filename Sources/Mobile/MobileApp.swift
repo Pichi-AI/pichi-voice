@@ -71,14 +71,13 @@ final class AppServices: ObservableObject {
                     microphone: microphone, timestampDefaultTitle: true, audioStorageMode: storageMode,
                     speakerLabelsEnabled: speakerLabelsEnabled, speakerProcessingMode: speakerProcessingMode,
                     piiRedactionEnabled: piiRedactionEnabled)
-                // Deployment admission uses the frozen privacy request before preparing even
-                // the text redactor. Start/capture owners repeat it after asynchronous work.
+                // Deployment admission uses the frozen privacy request. The processing owner
+                // prepares its pinned text redactor before recognizing or publishing speech.
                 if storageMode == .memoryOnly || configuration.effectiveSpeakerProcessingMode == .streaming {
                     let backendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
                         selectedModelID: modelID, savedBackendID: savedBackendID)
                     _ = try pipeline.validateMemoryAudioInput(configuration: configuration, backendID: backendID)
                 }
-                if piiRedactionEnabled, !(await privacy.isReady) { try await privacy.prepare() }
                 try Task.checkCancellation()
                 guard settings.selectedSpeechModel.rawValue == modelID,
                       settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }

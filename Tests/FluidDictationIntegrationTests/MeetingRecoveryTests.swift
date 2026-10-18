@@ -4279,8 +4279,11 @@ final class MeetingRecoveryTests: XCTestCase {
 
     // MARK: - Batched speaker rename (Assign speakers sheet)
 
-    private struct SpeakerAliasRedactor: TranscriptTextRedacting {
+    @MainActor
+    private final class SpeakerAliasRedactor: TranscriptTextRedacting {
+        private(set) var inputs: [String] = []
         func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+            self.inputs.append(text)
             let source = text as NSString
             let range = source.range(of: "Иван Тестов")
             guard range.location != NSNotFound else { return .init(text: text, spans: []) }
@@ -4299,10 +4302,15 @@ final class MeetingRecoveryTests: XCTestCase {
             session.piiRedactionEnabled = privacyEnabled
             session.transcriptSegments[0].text = "Врач Иван Тестов просит инструкцию."
             session.transcriptSegments[0].originalText = "Иван Тестов"
+            let redactor = SpeakerAliasRedactor()
+            if privacyEnabled {
+                session = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: session, using: redactor)
+            }
             try await store.create(session)
+            let admittedCalls = redactor.inputs.count
             let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
                 processing: StubProcessingController(), audioArbiter: StubArbiter(),
-                redactorProvider: { SpeakerAliasRedactor() })
+                redactorProvider: { redactor })
 
             let renamed = try await coordinator.renameSpeaker(sessionID: session.id,
                 speakerID: fixture.speakerA, to: "  Иван Тестов  ")
@@ -4312,6 +4320,7 @@ final class MeetingRecoveryTests: XCTestCase {
             XCTAssertEqual(renamed.transcriptSegments[0].originalText, privacyEnabled ? nil : "Иван Тестов")
             XCTAssertEqual(renamed.transcriptSegments[0].start, session.transcriptSegments[0].start)
             XCTAssertEqual(renamed.transcriptSegments[0].end, session.transcriptSegments[0].end)
+            XCTAssertEqual(renamed.transcriptSegments, session.transcriptSegments)
 
             let assigned = try await coordinator.renameSpeakers(sessionID: session.id,
                 names: [fixture.speakerB: "Иван Тестов"])
@@ -4324,8 +4333,11 @@ final class MeetingRecoveryTests: XCTestCase {
             // another whole-session privacy publication and a transcript correction.
             let restoredCoordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
                 processing: StubProcessingController(), audioArbiter: StubArbiter(),
-                redactorProvider: { SpeakerAliasRedactor() })
-            _ = try await restoredCoordinator.renameSession(sessionID: session.id, to: "Synthetic renamed meeting")
+                redactorProvider: { redactor })
+            let retitled = try await restoredCoordinator.renameSession(sessionID: session.id, to: "Встреча: Иван Тестов")
+            XCTAssertEqual(retitled.title, "Встреча: Иван Тестов")
+            XCTAssertEqual(retitled.transcriptSegments, session.transcriptSegments)
+            XCTAssertEqual(redactor.inputs.count, admittedCalls, "Metadata-only corrections and undo cannot rerun transcript NER")
             let corrected = try await restoredCoordinator.editTranscriptText(sessionID: session.id,
                 segmentID: fixture.segmentID, text: "Иван Тестов просит копию.",
                 expectedRevision: undone.transcriptSegments[0].revision)
@@ -4337,7 +4349,31 @@ final class MeetingRecoveryTests: XCTestCase {
             XCTAssertEqual(saved.speakers[0].displayName, "Иван Тестов")
             XCTAssertEqual(saved.transcriptSegments, corrected.transcriptSegments)
             XCTAssertTrue(MeetingTranscriptExporter.text(for: saved).contains("Иван Тестов:"))
+            XCTAssertEqual(redactor.inputs.count > admittedCalls, privacyEnabled, "Actual transcript edits keep the privacy gate")
         }
+    }
+
+    func testParticipantRenameDoesNotRequireAResidentPrivacyModel() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let fixture = self.makeCorrectionSession(state: .completed)
+        var session = fixture.session
+        session.piiRedactionEnabled = true
+        session.transcriptSegments[0].text = "[PERSON] просит копию."
+        try await store.create(session)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), redactorProvider: {
+                XCTFail("Manual display metadata cannot require a loaded privacy model")
+                return nil
+            })
+        _ = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: fixture.speakerA, to: "Иван Тестов")
+        _ = try await coordinator.renameSpeakers(sessionID: session.id, names: [fixture.speakerB: "Анна Тестова"])
+        _ = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        _ = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        let retitled = try await coordinator.renameSession(sessionID: session.id, to: "Встреча: Иван Тестов")
+        XCTAssertEqual(retitled.title, "Встреча: Иван Тестов")
+        XCTAssertEqual(retitled.transcriptSegments, session.transcriptSegments)
     }
 
     func testRenameSpeakersAppliesEveryChangedNameInOneCall() async throws {

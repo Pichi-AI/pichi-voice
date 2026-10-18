@@ -186,14 +186,16 @@ struct MeetingPrivacyContextTests {
     static func participantAliasSuite() async throws {
         let track = UUID()
         let alias = "Иван Тестов"
-        var source = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic alias privacy",
-            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture microphone"), piiRedactionEnabled: true),
+        var source = MeetingSession(configuration: .init(mode: .inRoom, title: alias,
+            microphone: .init(captureDeviceID: "fixture", displayName: alias), piiRedactionEnabled: true),
             timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
         source.speakers = [.init(id: UUID(), displayName: "Speaker 1", diarizationClusterID: "synthetic",
             trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
         source.transcriptSegments = [segment("Пациент Иван Тестов просит копию.", track: track, start: 0)]
         try source.renameSpeaker(id: source.speakers[0].id, to: "  \(alias)  ")
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: source, using: ClinicalNERFixtureRedactor())
+        try check(safe.title == alias && safe.selectedMicrophone.displayName == alias,
+                  "Explicit meeting and device display metadata must remain intact")
         try check(safe.speakers[0].displayName == alias, "An explicit participant name is outside transcript redaction")
         try check(!safe.transcriptSegments[0].text.contains("Иван"), "The same name spoken in a transcript must still be redacted")
         try check(safe.transcriptSegments[0].originalText == nil, "Alias exemption cannot restore original voice text")
