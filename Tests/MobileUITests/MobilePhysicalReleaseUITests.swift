@@ -33,9 +33,14 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                                    options: .regularExpression) != nil,
                     "Use a bounded ASCII JSON basename with a fresh random 32-hex suffix; no paths or overwrite")
         let app = try attachReadOnlyPhysicalApp(revision: revision)
-        try require(completedReadOnlyTranscriptVisible(in: app, title: title),
-                    "Begin on the exact parent-verified completed transcript, with no active attempt")
-        captureProtectedExportStep("root-export-01-owned-current", app: app, revision: revision)
+        let starts = app.buttons.matching(identifier: "meeting.start")
+        let ready = app.descendants(matching: .any)["meeting.ready"].firstMatch.exists
+            && starts.count == 1 && starts.firstMatch.isHittable && starts.firstMatch.isEnabled
+        try require(!app.otherElements["ActivityListView"].exists
+                    && !app.otherElements["Browse View (Picker)"].exists
+                    && (ready || completedReadOnlyTranscriptVisible(in: app, title: title)),
+                    "Begin ready or on the exact owned completed transcript, without pre-existing native export UI")
+        captureProtectedExportStep("root-export-01-idle-entry", app: app, revision: revision)
         try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
         captureProtectedExportStep("root-export-02-owned-history-list", app: app, revision: revision)
         let rows = app.buttons.matching(identifier: "history.session.\(sessionID)")
@@ -53,7 +58,8 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try require(app.buttons.matching(identifier: "transcript.exportProtected").count == 1,
                     "Only the unique protected transcript export may be selected")
         try tap(app.buttons["transcript.exportProtected"], "Open only protected transcript export")
-        let activity = app.otherElements["ActivityListView"]
+        let activities = app.otherElements.matching(identifier: "ActivityListView")
+        let activity = activities.firstMatch
         let identifiedSaves = app.buttons.matching(identifier: "DOCPicker.actionButton")
         let identifiedNames = app.textFields.matching(identifier: "DOCPicker.filenameTextField")
         let nativePickers = app.otherElements.matching(identifier: "Browse View (Picker)")
@@ -90,14 +96,22 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                         captureProtectedExportStep("root-export-cleanup-picker-cancel", app: app, revision: revision)
                     }
                 }
-                let close = app.buttons.matching(identifier: "header.closeButton")
-                if ownsActivity && activity.exists && close.count == 1 && close.firstMatch.isHittable {
+                // iPadOS 17 exposes a label-only Close inside this owned native
+                // activity navbar. Never close an unrelated or pre-existing UI.
+                let identifiedClose = activities.buttons.matching(identifier: "header.closeButton")
+                let contentBars = activities.navigationBars.matching(identifier: "UIActivityContentView")
+                let nativeClose = contentBars.buttons.matching(NSPredicate(format: "label IN %@", ["Close", "Закрыть"]))
+                let close = identifiedClose.count > 0 ? identifiedClose : nativeClose
+                let uniqueClose = identifiedClose.count > 0 ? identifiedClose.count == 1
+                    : contentBars.count == 1 && nativeClose.count == 1
+                if ownsActivity && activities.count == 1 && app.alerts.count == 0 && uniqueClose
+                    && close.firstMatch.isEnabled && close.firstMatch.isHittable {
                     close.firstMatch.tap()
                     captureProtectedExportStep("root-export-cleanup-activity-close", app: app, revision: revision)
                 }
             }
         }
-        try require(activity.waitForExistence(timeout: 15) && app.alerts.count == 0,
+        try require(activity.waitForExistence(timeout: 15) && activities.count == 1 && app.alerts.count == 0,
                     "Protected export must present the native activity UI without alerts")
         captureProtectedExportStep("root-export-05-native-activity", app: app, revision: revision)
         let saveFiles = app.cells.matching(NSPredicate(format: "label IN %@",
