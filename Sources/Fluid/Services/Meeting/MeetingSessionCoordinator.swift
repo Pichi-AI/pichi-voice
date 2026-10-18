@@ -768,6 +768,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             if Self.usesPCMProcessing(configuration), let latest = self.activeSession {
                 session.transcriptSegments = latest.transcriptSegments
                 session.speakers = latest.speakers
+                session.transcriptIsComplete = latest.transcriptIsComplete
             }
             if let firstPresentationTime = startResult.firstPresentationTime {
                 session.timebase.firstPresentationTime = firstPresentationTime
@@ -1987,7 +1988,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         let state = session.state
         let events = session.events
         let failures = session.failures
+        let wasIncomplete = session.transcriptIsComplete == false
         session = latest
+        if wasIncomplete { session.transcriptIsComplete = false }
         if !capturedTracks.isEmpty { session.audioTracks = capturedTracks }
         if captureTimebase.firstPresentationTime != nil { session.timebase = captureTimebase }
         session.endedAt = endedAt ?? session.endedAt
@@ -2201,8 +2204,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             // by the pipeline; legacy attempts leave this nil. The reference only becomes durable
             // with the session save below, and the checkpoint survives until that save succeeds.
             session.resultSidecarReference = result.resultSidecarReference
+            let discardedMemoryPCM = session.audioStorageMode == .memoryOnly && session.transcriptIsComplete == false
+                && session.events.contains(where: { $0.kind == .writerBackpressure })
             session.transcriptIsComplete = (result.resultSidecarReference != nil || Self.usesPCMProcessing(session))
-                ? result.isComplete
+                ? result.isComplete && !discardedMemoryPCM
                 : nil
             if result.resultSidecarReference != nil || Self.usesPCMProcessing(session) {
                 session.transcriptTimeDomain = .meetingRelative
@@ -2482,6 +2487,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 trackID: trackID,
                 detail: detail
             ))
+            Self.markDiscardedMemoryCaptureIncomplete(&session, event: kind)
             if kind == .captureStoppedUnexpectedly {
                 session.state = .interrupted
                 self.state = .interrupted(session.id)
@@ -2707,6 +2713,15 @@ final class MeetingSessionCoordinator: ObservableObject {
             lastCompletedTrackID: nil,
             errorCode: nil
         )
+    }
+
+    /// A rejected PCM block has no replay source in strict memory-only capture. A final
+    /// accepted batch can be complete locally while this captured session still has a hole.
+    private static func markDiscardedMemoryCaptureIncomplete(
+        _ session: inout MeetingSession, event: MeetingInterruptionKind
+    ) {
+        guard event == .writerBackpressure, session.audioStorageMode == .memoryOnly else { return }
+        session.transcriptIsComplete = false
     }
 
     private func preserveCaptureStopHandoff(

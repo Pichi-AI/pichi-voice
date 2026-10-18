@@ -686,6 +686,78 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(arbiter.releaseCount, 1)
     }
 
+    func testRejectedMemoryCaptureRemainsIncompleteAcrossFinalCheckpointAndTerminalPaths() async throws {
+        for path in ["unexpected", "termination", "partialFailure"] {
+            try await self.assertRejectedMemoryCaptureIncomplete(path)
+        }
+    }
+
+    private func assertRejectedMemoryCaptureIncomplete(_ path: String) async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel, originalBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = originalModel; settings.meetingTranscriptionBackendID = originalBackend }
+        settings.selectedSpeechModel = .whisperTiny
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let directory = self.makeTempDirectory(), store = MeetingSessionStore(rootDirectory: directory)
+        let track = self.makeMicrophoneTrack(chunks: [])
+        let capture = SingleUseDrainingCaptureController(track: track)
+        let processing = MemoryCheckpointProcessingController(), arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: arbiter)
+        self.addTeardownBlock { @MainActor in
+            await capture.releaseRuntimeStop(); await capture.releaseModelDrain()
+            await coordinator.shutdownForTermination()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        var configuration = self.makeConfiguration()
+        configuration.audioStorageMode = .memoryOnly; configuration.languageCode = "en"
+        let session = try await coordinator.startRecording(configuration: configuration)
+        let first = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1), end: .init(value: 1, timescale: 1),
+            sourceTrackID: track.id, speakerID: nil, text: "Protected before rejection", revision: 0,
+            status: .final, overlap: .none, completeness: .complete)
+        var tail = first; tail.id = UUID(); tail.text = "Protected joined accepted tail"
+        tail.start = .init(value: 1, timescale: 1); tail.end = .init(value: 2, timescale: 1)
+        let acceptedTail = tail
+        try await processing.checkpoint(.init(segments: [first], isComplete: true))
+        XCTAssertEqual(coordinator.currentSession?.transcriptIsComplete, true)
+        let stopResult = MeetingCaptureStopResult(tracks: [track], stoppedAt: session.startedAt.addingTimeInterval(5))
+        await capture.configure(result: stopResult, partialFailure: path == "partialFailure") {
+            try await processing.checkpoint(.init(segments: [acceptedTail], isComplete: true))
+        }
+        await capture.emit(.interrupted(kind: .writerBackpressure, trackID: track.id, detail: "Synthetic rejected PCM"))
+        for _ in 0..<1_000 {
+            if coordinator.currentSession?.events.contains(where: { $0.kind == .writerBackpressure }) == true { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(coordinator.currentSession?.transcriptIsComplete, false,
+            "A rejected memory-only PCM block has no replay source")
+        await capture.emit(.interrupted(kind: .captureStoppedUnexpectedly, trackID: track.id, detail: "Synthetic stop after rejection"))
+        try await capture.waitForRuntimeStop(); await capture.releaseRuntimeStop()
+        try await capture.waitForModelDrain()
+        if path == "termination" {
+            let termination = Task { @MainActor in await coordinator.shutdownForTermination() }
+            try await capture.waitForStopWaiterCancellation()
+            await capture.releaseModelDrain()
+            await termination.value
+        } else {
+            await capture.releaseModelDrain()
+            for _ in 0..<1_000 {
+                if arbiter.releaseCount > 0 { break }
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+        }
+        let persisted = try await store.load(id: session.id)
+        let saved = try XCTUnwrap(persisted)
+        XCTAssertEqual(saved.state, .interrupted)
+        XCTAssertEqual(saved.transcriptSegments.map(\.text), [first.text, acceptedTail.text])
+        XCTAssertEqual(saved.transcriptIsComplete, false,
+            "A locally complete final batch cannot erase discarded capture coverage")
+        XCTAssertTrue(saved.events.contains { $0.kind == .writerBackpressure })
+        XCTAssertTrue(saved.events.contains { $0.kind == .captureStoppedUnexpectedly })
+        XCTAssertEqual(saved.endedAt, stopResult.stoppedAt)
+        XCTAssertEqual(saved.failures.count, path == "partialFailure" ? 1 : 0)
+        XCTAssertEqual(arbiter.releaseCount, 1)
+    }
+
     private func assertMemoryTailSurvivesTerminalPath(_ path: String) async throws {
         let settings = SettingsStore.shared
         let originalModel = settings.selectedSpeechModel
@@ -751,6 +823,8 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(persisted?.transcriptSegments.map(\.text), [first.text, tail.text], "Terminal snapshot must never roll back joined durable text")
         XCTAssertEqual(persisted?.endedAt, capture.stopResult?.stoppedAt,
             "Every terminal path retains the audio-stop timestamp through final checkpoint publication")
+        XCTAssertEqual(persisted?.transcriptIsComplete, true,
+            "An unexpected Stop alone does not imply missing protected text when the complete tail joined")
         let patchedFirst = try XCTUnwrap(persisted?.transcriptSegments.first)
         XCTAssertEqual(patchedFirst.speakerID, speaker.id, "Joined speaker-only tail revisions must survive every terminal path")
         XCTAssertEqual(patchedFirst.revision, first.revision + 1)
@@ -6418,6 +6492,7 @@ private actor SingleUseDrainingCaptureController: MeetingCaptureControlling {
     private var result: MeetingCaptureStopResult?
     private var partialFailure = false
     private var checkpoint: (@Sendable () async throws -> Void)?
+    private var eventHandler: (@Sendable (MeetingCaptureEvent) -> Void)?
     private var stopTask: Task<MeetingCaptureStopResult, Error>?
     private let runtimeEntered = PermissionPreflightGate(), runtimeReleased = PermissionPreflightGate()
     private let modelEntered = PermissionPreflightGate(), modelReleased = PermissionPreflightGate()
@@ -6434,6 +6509,7 @@ private actor SingleUseDrainingCaptureController: MeetingCaptureControlling {
                eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
                liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?) async throws -> MeetingCaptureStartResult {
         activeID = session.id
+        self.eventHandler = eventHandler
         return .init(tracks: [initialTrack], firstPresentationTime: nil)
     }
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
@@ -6458,6 +6534,7 @@ private actor SingleUseDrainingCaptureController: MeetingCaptureControlling {
             Task { await cancelled.open() }
         }
     }
+    func emit(_ event: MeetingCaptureEvent) { eventHandler?(event) }
     func shutdownForTermination() async { shutdownCalls += 1 }
     func waitForRuntimeStop() async throws { try await waitUntilOpen(runtimeEntered) }
     func releaseRuntimeStop() async { await runtimeReleased.open() }

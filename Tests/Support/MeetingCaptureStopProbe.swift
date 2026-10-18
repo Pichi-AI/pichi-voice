@@ -131,8 +131,33 @@ final class MeetingCaptureStopHandoffProbe {
     // PRODUCTION_TAKE_HANDOFF
 }
 
+final class MeetingCaptureLossCompletenessProbe {
+    enum Storage { case memoryOnly, retainedFiles }
+    enum MeetingInterruptionKind { case writerBackpressure, captureStoppedUnexpectedly, microphoneDisconnected }
+    struct Session { var audioStorageMode: Storage; var transcriptIsComplete: Bool? }
+    typealias MeetingSession = Session
+    static func apply(_ session: inout Session, event: MeetingInterruptionKind) {
+        markDiscardedMemoryCaptureIncomplete(&session, event: event)
+    }
+    // PRODUCTION_DISCARDED_CAPTURE_COMPLETENESS
+}
+
 extension MeetingCapturePCMTransportTests {
     static func testCaptureStopBoundary() async throws {
+        for flag: Bool? in [nil, true, false] {
+            var lost = MeetingCaptureLossCompletenessProbe.Session(audioStorageMode: .memoryOnly, transcriptIsComplete: flag)
+            MeetingCaptureLossCompletenessProbe.apply(&lost, event: .writerBackpressure)
+            try require(lost.transcriptIsComplete == false, "A fresh rejected strict-memory PCM block marks captured coverage incomplete")
+            var retained = MeetingCaptureLossCompletenessProbe.Session(audioStorageMode: .retainedFiles, transcriptIsComplete: flag)
+            MeetingCaptureLossCompletenessProbe.apply(&retained, event: .writerBackpressure)
+            try require(retained.transcriptIsComplete == flag, "The bounded strict-memory loss policy does not reclassify retained-audio attempts")
+            for event in [MeetingCaptureLossCompletenessProbe.MeetingInterruptionKind.captureStoppedUnexpectedly, .microphoneDisconnected] {
+                var noDemonstratedLoss = MeetingCaptureLossCompletenessProbe.Session(audioStorageMode: .memoryOnly, transcriptIsComplete: flag)
+                MeetingCaptureLossCompletenessProbe.apply(&noDemonstratedLoss, event: event)
+                try require(noDemonstratedLoss.transcriptIsComplete == flag,
+                    "An interruption event alone cannot manufacture missing transcript coverage")
+            }
+        }
         let sessionID = UUID(), generation = UUID()
         let handoff = MeetingCaptureStopHandoffProbe(sessionID: sessionID, generation: generation)
         let physical = MeetingCaptureStopResult(tracks: [.init()], stoppedAt: Date(timeIntervalSince1970: 17))

@@ -43,6 +43,15 @@ coordinator = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingSessionCoordin
 stop_probe = stop_probe.replace('// PRODUCTION_STOP_TIMER', declaration(coordinator, 'var elapsedTime:'))
 stop_probe = stop_probe.replace('// PRODUCTION_PRESERVE_HANDOFF', declaration(coordinator, 'private func preserveCaptureStopHandoff('))
 stop_probe = stop_probe.replace('// PRODUCTION_TAKE_HANDOFF', declaration(coordinator, 'private func takeCaptureStopHandoff('))
+stop_probe = stop_probe.replace('// PRODUCTION_DISCARDED_CAPTURE_COMPLETENESS', declaration(coordinator, 'private static func markDiscardedMemoryCaptureIncomplete('))
+event_body = declaration(coordinator, 'private func handleCaptureEvent(')
+assert 'Self.markDiscardedMemoryCaptureIncomplete(&session, event: kind)' in event_body
+assert coordinator.count('Self.markDiscardedMemoryCaptureIncomplete(') == 1, 'Only fresh admitted capture events classify new loss'
+merge_body = declaration(coordinator, 'private func mergeLatestMemoryCheckpoint(')
+assert 'let wasIncomplete = session.transcriptIsComplete == false' in merge_body
+assert 'if wasIncomplete { session.transcriptIsComplete = false }' in merge_body
+process_body = declaration(coordinator, 'private func process(')
+assert 'session.transcriptIsComplete == false' in process_body and 'result.isComplete && !discardedMemoryPCM' in process_body
 stop_body = declaration(coordinator, 'private func performStopAndTranscribe(')
 assert stop_body.index('guard self.operationGeneration == generation') < stop_body.index('self.state = .stopping')
 assert 'if self.captureStopHandoff?.sessionID != session.id || self.captureStopHandoff?.generation != generation' in stop_body
