@@ -542,6 +542,70 @@ final class MeetingRecoveryTests: XCTestCase {
     func testMemoryTailCheckpointSurvivesNormalStop() async throws {
         try await self.assertMemoryTailSurvivesTerminalPath("normal")
     }
+
+    func testCompletedPCMAllowsAliasUndoAndNewCaptureBeforeTermination() async throws {
+        let suite = "CompletedPCMLifecycle.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .parakeetTDTv2
+        settings.meetingTranscriptionBackendID = .productionDefault
+        settings.meetingAudioRetentionPolicy = .never
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+        let processing = MemoryCheckpointProcessingController()
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
+            processing: processing, audioArbiter: arbiter, settings: settings)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        var configuration = self.makeConfiguration()
+        configuration.audioStorageMode = .memoryOnly
+        configuration.languageCode = "en"
+        let session = try await coordinator.startRecording(configuration: configuration)
+        let speaker = MeetingSessionSpeaker(id: UUID(), displayName: "Participant",
+            diarizationClusterID: "synthetic-voice", trackKind: .microphone,
+            isLocalUser: false, identityCandidates: [])
+        let segment = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1),
+            end: .init(value: 1, timescale: 1), sourceTrackID: track.id, speakerID: speaker.id,
+            text: "Protected checkpoint", revision: 0, status: .final, overlap: .none, completeness: .complete)
+        try await processing.checkpoint(.init(segments: [segment], speakers: [speaker]))
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(completed.state, .completed)
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        // Retention has its own mutation gate. This lifecycle test excludes that separate
+        // background operation instead of weakening its serialization or using termination.
+        for _ in 0..<200 {
+            if coordinator.isQuiescent { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(coordinator.isQuiescent)
+        let renamed = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speaker.id, to: "Explicit alias")
+        XCTAssertEqual(renamed.speakers.first?.displayName, "Explicit alias")
+        XCTAssertEqual(renamed.transcriptSegments, completed.transcriptSegments)
+        let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        XCTAssertEqual(undone.speakers, completed.speakers)
+        XCTAssertEqual(undone.transcriptSegments, completed.transcriptSegments)
+        let next = try await coordinator.startRecording(configuration: configuration)
+        XCTAssertNotEqual(next.id, session.id)
+        XCTAssertEqual(arbiter.acquireCount, 2)
+        await coordinator.shutdownForTermination()
+        XCTAssertEqual(arbiter.releaseCount, 2)
+        do {
+            _ = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speaker.id, to: "After termination")
+            XCTFail("Termination permanently closes this coordinator's mutation owner")
+        } catch let error as MeetingCoordinatorError {
+            guard case .activityInProgress = error else { return XCTFail("Expected activityInProgress, got \(error)") }
+        }
+        let persisted = try await store.load(id: session.id)
+        XCTAssertEqual(persisted?.speakers, completed.speakers)
+        XCTAssertEqual(persisted?.transcriptSegments, completed.transcriptSegments)
+    }
+
     private func assertMemoryTailSurvivesTerminalPath(_ path: String) async throws {
         let settings = SettingsStore.shared
         let originalModel = settings.selectedSpeechModel

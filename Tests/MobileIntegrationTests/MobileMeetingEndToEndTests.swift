@@ -1017,6 +1017,36 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertNil(services.asr.activeExclusiveActivity)
             XCTAssertFalse(services.asr.hasActiveModelPreparation)
             XCTAssertFalse(services.asr.hasActiveModelDownload)
+            try await privacy.unload()
+            let privacyStillReady = await privacy.isReady
+            XCTAssertFalse(privacyStillReady)
+            var explicitAliasSaveSeconds: Double?
+            var explicitAliasMaintenanceWaitSeconds: Double?
+            if detailedProfiling, let participant = completed.activeSpeakers.first {
+                // A completed coordinator still owns normal history actions. Termination
+                // deliberately closes that owner permanently, so benchmark before shutdown.
+                // Exclude independent retention from this save-only measurement, and report
+                // its wait separately rather than attributing background work to alias I/O.
+                let maintenanceBegan = ProcessInfo.processInfo.systemUptime
+                for _ in 0..<200 {
+                    if coordinator.isQuiescent { break }
+                    try await Task.sleep(nanoseconds: 25_000_000)
+                }
+                explicitAliasMaintenanceWaitSeconds = ProcessInfo.processInfo.systemUptime - maintenanceBegan
+                XCTAssertTrue(coordinator.isQuiescent, "Background retention must release its mutation gate before the alias benchmark")
+                let beforeAlias = ProcessInfo.processInfo.systemUptime
+                let renamed = try await coordinator.renameSpeaker(sessionID: completed.id,
+                    speakerID: participant.id, to: "Explicit participant alias")
+                explicitAliasSaveSeconds = ProcessInfo.processInfo.systemUptime - beforeAlias
+                XCTAssertEqual(renamed.activeSpeakers.first(where: { $0.id == participant.id })?.displayName,
+                               "Explicit participant alias")
+                XCTAssertEqual(renamed.transcriptSegments, completed.transcriptSegments)
+                let restored = try await coordinator.undoTranscriptCorrection(sessionID: completed.id)
+                XCTAssertEqual(restored.activeSpeakers, completed.activeSpeakers)
+                XCTAssertEqual(restored.transcriptSegments, completed.transcriptSegments)
+                let privacyReadyAfterAlias = await privacy.isReady
+                XCTAssertFalse(privacyReadyAfterAlias, "Renaming must not prepare the speech privacy model again")
+            }
             await coordinator.shutdownForTermination()
             if recoverAfterStop {
                 resourceSamples.capture(since: started)
@@ -1048,24 +1078,6 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                               "Fresh retained retry must not write media outside this test-owned root")
                 streamingEvidence["newPersistentAudioOrMediaPathsObserved"] = observedNewAudioPaths.count
                 streamingEvidence["audioInventoryScope"] = "App container including temporary directory; before preparation, every15seconds during paced capture, and before/after joined Stop and retained retry; transient create/delete between observations not proven absent"
-            }
-            try await privacy.unload()
-            let privacyStillReady = await privacy.isReady
-            XCTAssertFalse(privacyStillReady)
-            var explicitAliasSaveSeconds: Double?
-            if detailedProfiling, let participant = completed.activeSpeakers.first {
-                let beforeAlias = ProcessInfo.processInfo.systemUptime
-                let renamed = try await coordinator.renameSpeaker(sessionID: completed.id,
-                    speakerID: participant.id, to: "Explicit participant alias")
-                explicitAliasSaveSeconds = ProcessInfo.processInfo.systemUptime - beforeAlias
-                XCTAssertEqual(renamed.activeSpeakers.first(where: { $0.id == participant.id })?.displayName,
-                               "Explicit participant alias")
-                XCTAssertEqual(renamed.transcriptSegments, completed.transcriptSegments)
-                let restored = try await coordinator.undoTranscriptCorrection(sessionID: completed.id)
-                XCTAssertEqual(restored.activeSpeakers, completed.activeSpeakers)
-                XCTAssertEqual(restored.transcriptSegments, completed.transcriptSegments)
-                let privacyReadyAfterAlias = await privacy.isReady
-                XCTAssertFalse(privacyReadyAfterAlias, "Renaming must not prepare the speech privacy model again")
             }
             phase = "cleanup"
             resourceSamples.setPhase(phase)
@@ -1129,7 +1141,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "startCommandScope": "Coordinator admission to synthetic capture start return; not physical microphone activation or touch latency.",
                 "mainActorResponsiveness": mainActorSamples.json(interval: mainActorInterval),
                 "explicitAliasSaveSeconds": explicitAliasSaveSeconds as Any? ?? NSNull(),
-                "explicitAliasSaveScope": "Coordinator load, metadata correction and durable save on the actual protected fixture output; excludes touch and layout. Alias restored afterward.",
+                "explicitAliasMaintenanceWaitSeconds": explicitAliasMaintenanceWaitSeconds as Any? ?? NSNull(),
+                "explicitAliasSaveScope": "Coordinator load, metadata correction and durable save on the actual protected fixture output; excludes separately reported retention wait, touch and layout. Alias restored afterward.",
                 "postStopToAudioRatio": stopSeconds / duration,
                 "processCPUMilliseconds": cpuMilliseconds as Any? ?? NSNull(),
                 "firstProtectedTextSeconds": firstProtectedTextSeconds as Any? ?? NSNull(),
