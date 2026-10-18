@@ -4283,7 +4283,7 @@ final class MeetingRecoveryTests: XCTestCase {
     private final class SpeakerAliasRedactor: TranscriptTextRedacting {
         private(set) var inputs: [String] = []
         func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
-            self.inputs.append(text)
+            await MainActor.run { self.inputs.append(text) }
             let source = text as NSString
             let range = source.range(of: "Иван Тестов")
             guard range.location != NSNotFound else { return .init(text: text, spans: []) }
