@@ -360,7 +360,7 @@ struct MobileMeetingRoot: View {
                     .foregroundStyle(theme.palette.accent)
                 Spacer()
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text(MeetingTranscriptExporter.timestampText(session.duration))
+                    Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))
                         .monospacedDigit().accessibilityIdentifier("meeting.timer")
                 }
             }

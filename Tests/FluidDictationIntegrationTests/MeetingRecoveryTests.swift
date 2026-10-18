@@ -578,6 +578,10 @@ final class MeetingRecoveryTests: XCTestCase {
         try await processing.checkpoint(.init(segments: [segment], speakers: [speaker]))
         let completed = try await coordinator.stopAndTranscribe()
         XCTAssertEqual(completed.state, .completed)
+        XCTAssertEqual(completed.duration, 2, accuracy: 0.000_001)
+        XCTAssertEqual(completed.endedAt, capture.stopResult?.stoppedAt)
+        let savedCompleted = try await store.load(id: session.id)
+        XCTAssertEqual(savedCompleted?.endedAt, capture.stopResult?.stoppedAt)
         XCTAssertEqual(arbiter.releaseCount, 1)
         // Retention has its own mutation gate. This lifecycle test excludes that separate
         // background operation instead of weakening its serialization or using termination.
@@ -641,7 +645,15 @@ final class MeetingRecoveryTests: XCTestCase {
         let firstRevision = MeetingPCMTranscriptBatch.SpeakerRevision(attributedFirst)
         XCTAssertEqual(coordinator.liveTranscript.utterances.first?.participant?.label, .unknown,
             "Protected PCM rows use product speaker presentation even before attribution")
-        capture.onStop = {
+        capture.onStop = { [weak coordinator] in
+            let coordinator = try XCTUnwrap(coordinator)
+            let elapsedAtStop = await coordinator.elapsedTime
+            try await Task.sleep(nanoseconds: 30_000_000)
+            if path == "normal" || path == "partialFailure" {
+                let elapsedAfterDelay = await coordinator.elapsedTime
+                XCTAssertEqual(elapsedAfterDelay, elapsedAtStop, accuracy: 0.000_001,
+                    "The live Stop timer stays frozen while the captured model tail drains")
+            }
             try await processing.checkpoint(.init(segments: [tail], speakers: [speaker]))
             var revisionOnly = MeetingPCMTranscriptBatch(segments: [])
             revisionOnly.speakerRevisions = [firstRevision]
@@ -663,6 +675,8 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let persisted = try await store.load(id: session.id)
         XCTAssertEqual(persisted?.transcriptSegments.map(\.text), [first.text, tail.text], "Terminal snapshot must never roll back joined durable text")
+        XCTAssertEqual(persisted?.endedAt, capture.stopResult?.stoppedAt,
+            "Every terminal path retains the audio-stop timestamp through final checkpoint publication")
         let patchedFirst = try XCTUnwrap(persisted?.transcriptSegments.first)
         XCTAssertEqual(patchedFirst.speakerID, speaker.id, "Joined speaker-only tail revisions must survive every terminal path")
         XCTAssertEqual(patchedFirst.revision, first.revision + 1)

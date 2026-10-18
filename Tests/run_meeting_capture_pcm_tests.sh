@@ -34,6 +34,17 @@ callbacks = '\n'.join(declaration(inroom, marker) for marker in [
     'func captureOutput(', 'private func failTranscription(', 'private func enqueueForTranscription('])
 probe = pathlib.Path('Tests/Support/MeetingMacCaptureTeeProbe.swift').read_text()
 root.joinpath('MacCaptureTee.swift').write_text(probe.replace('// PRODUCTION_CALLBACKS', callbacks))
+ios = pathlib.Path('Sources/Fluid/Services/Meeting/Platform/IOSMeetingCaptureEngine.swift').read_text()
+stop_probe = pathlib.Path('Tests/Support/MeetingCaptureStopProbe.swift').read_text()
+stop_probe = stop_probe.replace('// PRODUCTION_CAPTURE_ERROR', declaration(contract, 'nonisolated enum MeetingCaptureError:'))
+stop_probe = stop_probe.replace('// PRODUCTION_IOS_STOP', declaration(ios, 'func stop(sessionID:'))
+stop_probe = stop_probe.replace('// PRODUCTION_DESKTOP_STOP', declaration(engine, 'func stop(sessionID:'))
+coordinator = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift').read_text()
+stop_probe = stop_probe.replace('// PRODUCTION_STOP_TIMER', declaration(coordinator, 'var elapsedTime:'))
+assert 'self.stopRequestedAt = (session.id, Date())' in coordinator
+mobile_ui = pathlib.Path('Sources/Mobile/MobileMeetingRoot.swift').read_text()
+assert 'Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))' in mobile_ui
+root.joinpath('CaptureStop.swift').write_text(stop_probe)
 PY
 xcrun swiftc -parse-as-library -swift-version 6 \
     Sources/Fluid/Localization/PichiLocalization.swift \
@@ -41,6 +52,6 @@ xcrun swiftc -parse-as-library -swift-version 6 \
     Sources/Fluid/Services/Meeting/Platform/MeetingCapturePCMTransport.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingPipeline+MemoryAudio.swift \
     Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift \
-    "$task_test_dir/Contracts.swift" "$task_test_dir/SampleCopy.swift" "$task_test_dir/MacCaptureTee.swift" \
+    "$task_test_dir/Contracts.swift" "$task_test_dir/SampleCopy.swift" "$task_test_dir/MacCaptureTee.swift" "$task_test_dir/CaptureStop.swift" \
     Tests/MeetingCapturePCMTransportTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"

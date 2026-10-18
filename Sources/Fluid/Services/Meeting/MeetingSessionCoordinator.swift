@@ -164,6 +164,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// this token until recognition/privacy finalization and terminal persistence have completed.
     private var memoryCheckpointGeneration: UUID?
     private var operationGeneration: UUID?
+    private var stopRequestedAt: (sessionID: MeetingSessionID, date: Date)?
+
     private var stopTask: Task<MeetingSession, Error>? {
         willSet { if (newValue == nil) != (self.stopTask == nil) { self.objectWillChange.send() } }
     }
@@ -326,6 +328,11 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     var elapsedTime: TimeInterval {
         guard let session = self.activeSession else { return 0 }
+        // Freeze the visible timer immediately on Stop. The final persisted boundary is
+        // supplied by capture after the audio runtime joins, not this UI request estimate.
+        if self.state == .stopping(session.id), let request = self.stopRequestedAt, request.sessionID == session.id {
+            return max(0, (session.endedAt ?? request.date).timeIntervalSince(session.startedAt))
+        }
         return max(0, (session.endedAt ?? Date()).timeIntervalSince(session.startedAt))
     }
 
@@ -1887,6 +1894,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         #endif
         guard var session = self.activeSession else { throw MeetingCoordinatorError.noActiveMeeting }
+        self.stopRequestedAt = (session.id, Date())
         self.state = .stopping(session.id)
         session.state = .stopping
         session.updatedAt = Date()

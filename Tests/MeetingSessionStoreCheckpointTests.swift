@@ -46,6 +46,7 @@ struct MeetingSessionStoreCheckpointTests {
         try Self.checkPlainParticipantLabels(template: session, check: check)
         try Self.checkManualCorrectionOfProjectedOwner(template: session, check: check)
         try Self.checkUnmappedCanonicalReadingOwner(template: session, check: check)
+        try Self.checkNativeBoundaryReadingOwner(template: session, check: check)
         try await Self.checkReadingProjectionCache(template: session, check: check)
         try await Self.checkProtectedPortableExport(check: check)
 
@@ -831,6 +832,144 @@ struct MeetingSessionStoreCheckpointTests {
         let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(baseline))
         check(MeetingTranscriptExporter.speakerPresentations(in: restored)[islandID]?.participantID == speakerA.id,
               "The canonical identity completion works after production archive decoding")
+    }
+
+    private static func checkNativeBoundaryReadingOwner(
+        template: MeetingSession, check: (Bool, String) -> Void
+    ) throws {
+        var source = template
+        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(4)
+        source.transcriptIsComplete = true; source.transcriptCoverageGaps = []
+        let firstSpeaker = source.speakers[0]
+        var nextSpeaker = firstSpeaker; nextSpeaker.id = UUID(); nextSpeaker.displayName = "Incoming voice"
+        source.speakers = [firstSpeaker, nextSpeaker]
+        let epoch = MeetingAnalysisEpochID(trackID: source.audioTracks[0].id, ordinal: 0)
+        let previousToken = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "outgoing")
+        let nextToken = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "incoming")
+        func word(_ start: Double, _ end: Double, text: String, owner: UUID?,
+                  token: MeetingBackendSpeakerToken?, revision: Int = 0) -> MeetingTranscriptSegment {
+            .init(id: UUID(), start: .init(value: Int64((start * 1000).rounded()), timescale: 1000),
+                end: .init(value: Int64((end * 1000).rounded()), timescale: 1000), sourceTrackID: epoch.trackID,
+                speakerID: owner, text: text, revision: revision, status: .final, overlap: .none, completeness: .complete,
+                attributionState: owner == nil ? .unassigned : .assigned, nativePrecision: .word,
+                nativeUnitID: UUID().uuidString, nativeSpeakerAssignment: token.map { .assigned($0) } ?? .unassigned,
+                nativeTiming: .init(start: start, end: end))
+        }
+        source.transcriptSegments = [word(0, 0.4, text: "Outgoing", owner: firstSpeaker.id, token: previousToken),
+            word(0.48, 0.52, text: "М", owner: nil, token: nil),
+            word(1.44, 1.7, text: "Incoming", owner: nextSpeaker.id, token: nextToken, revision: 3)]
+        let baseline = source, islandID = source.transcriptSegments[1].id
+        func owner(_ value: MeetingSession) -> UUID? {
+            MeetingTranscriptExporter.speakerPresentations(in: value)[islandID]?.participantID
+        }
+        for state in [MeetingSessionState.recording, .completed] {
+            var value = baseline; value.state = state
+            let originalJSON = try MeetingTranscriptExporter.json(for: value)
+            check(owner(value) == firstSpeaker.id,
+                  "A tiny adjacent unsupported native tail stays in the outgoing live and final reading turn")
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: value.transcriptSegments, in: value)
+            check(paragraphs.count == 2 && paragraphs[0].segments == Array(value.transcriptSegments.prefix(2)),
+                  "The reading projection removes the isolated tiny-tail header without moving the next voice")
+            if state == .completed {
+                let handoff = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: value)) as! [String: Any]
+                let rows = handoff["segments"] as! [[String: Any]]
+                check(rows.count == 2 && rows[0]["speakerID"] as? String == firstSpeaker.id.uuidString,
+                      "Protected handoff uses the same reading owner as the live and saved views")
+            }
+            check(try MeetingTranscriptExporter.json(for: value) == originalJSON && value.transcriptSegments == baseline.transcriptSegments,
+                  "Boundary reading preserves original text, unit IDs, revisions, raw ownership and native word times")
+        }
+        for negative in 0..<23 {
+            var value = baseline
+            switch negative {
+            case 0: value.transcriptSegments[0].revision = 1 // Could be a manual speaker correction.
+            case 1: value.transcriptSegments[0].isUserTextEdited = true
+            case 2: value.transcriptSegments[1].isUserTextEdited = true
+            case 3: value.transcriptSegments[1].attributionState = .timingUncertain
+            case 4: value.transcriptSegments[1].completeness = .incompleteTrack
+            case 5: value.transcriptSegments[1].status = .provisional
+            case 6: value.transcriptSegments[1].isLikelyEcho = true
+            case 7: value.transcriptSegments[1].sourceTrackID = UUID()
+            case 8:
+                value.transcriptSegments[1].nativeTiming = .init(start: 0.48, end: 0.9)
+                value.transcriptSegments[1].end = .init(value: 900, timescale: 1000)
+            case 9:
+                value.transcriptSegments[1].start = .init(value: 500, timescale: 1000)
+                value.transcriptSegments[1].nativeTiming = .init(start: 0.5, end: 0.52)
+            case 10:
+                value.transcriptSegments[2].start = .init(value: 1200, timescale: 1000)
+                value.transcriptSegments[2].nativeTiming = .init(start: 1.2, end: 1.7)
+            case 11:
+                value.transcriptSegments[2].nativeSpeakerAssignment = .assigned(.init(
+                    analysisEpochID: .init(trackID: epoch.trackID, ordinal: 1), label: "new-epoch"))
+            case 12:
+                value.transcriptCoverageGaps = [.init(trackID: epoch.trackID, start: 0.4, end: 0.48, reason: .processingFailed)]
+            case 13: value.transcriptSegments[1].overlap = .ambiguous
+            case 14: value.transcriptSegments[2].status = .provisional
+            case 15: value.transcriptSegments[2].completeness = .incompleteTrack
+            case 16: value.transcriptSegments[2].attributionState = .timingUncertain
+            case 17: value.transcriptSegments[2].isUserTextEdited = true
+            case 18: value.transcriptSegments[2].nativeTiming = .init(start: 1.5, end: 1.7)
+            case 19:
+                let next = value.transcriptSegments[2]
+                let decision = MeetingSpeakerAttributionDecision(unitID: next.nativeUnitID!, rawAssignment: .assigned(nextToken),
+                    candidates: [], activeSupportSeconds: 0, simultaneousIntervals: [], relation: .none,
+                    selectedToken: nil, rule: .barrier, cueUnitIDs: [], backgroundTokens: [],
+                    policyVersion: 2, policyFingerprint: "synthetic-following-quarantine")
+                value.transcriptSegments[2].speakerAttribution = .init(decision: decision, speakerIDs: [:])
+            case 20:
+                value.transcriptCoverageGaps = [.init(trackID: epoch.trackID, start: 0.6, end: 0.8, reason: .processingFailed)]
+            case 21: value.transcriptSegments[2].overlap = .ambiguous
+            default: value.transcriptSegments[2].speakerID = nil
+            }
+            check(owner(value) == nil, "Unsafe or manually revised native boundaries keep their uncertainty (\(negative))")
+        }
+        var independentInterjection = baseline
+        independentInterjection.transcriptSegments[1].speakerID = nextSpeaker.id
+        independentInterjection.transcriptSegments[1].attributionState = .assigned
+        independentInterjection.transcriptSegments[1].nativeSpeakerAssignment = .assigned(nextToken)
+        check(owner(independentInterjection) == nextSpeaker.id,
+              "A real independently assigned brief other voice is never swallowed as a residual")
+        var nearbyIncoming = baseline
+        nearbyIncoming.transcriptSegments[2].revision = 0
+        nearbyIncoming.transcriptSegments[2].start = .init(value: 1200, timescale: 1000)
+        nearbyIncoming.transcriptSegments[2].nativeTiming = .init(start: 1.2, end: 1.7)
+        check(owner(nearbyIncoming) == nextSpeaker.id, "Existing bounded incoming-voice admission remains authoritative")
+        var punctuation = baseline
+        punctuation.transcriptSegments.removeLast()
+        punctuation.transcriptSegments[0].end = .init(value: 400, timescale: 1000)
+        punctuation.transcriptSegments[1].text = "."
+        punctuation.transcriptSegments[1].start = .init(value: 3280, timescale: 1000)
+        punctuation.transcriptSegments[1].end = .init(value: 3300, timescale: 1000)
+        punctuation.transcriptSegments[1].nativeTiming = .init(start: 3.28, end: 3.3)
+        let before = punctuation
+        check(owner(punctuation) == firstSpeaker.id && MeetingTranscriptExporter.displayParagraphs(
+            for: punctuation.transcriptSegments, in: punctuation).count == 1,
+              "Unsupported terminal punctuation attaches typographically without a separate unknown-voice paragraph")
+        check(punctuation == before && punctuation.transcriptSegments[1].speakerID == nil,
+              "Attaching punctuation never claims a native speaker or changes silence timing")
+        for symbol in ["(", "[", "«", "-", "\"", "🙂"] {
+            var opener = baseline; opener.transcriptSegments[1].text = symbol
+            check(owner(opener) == nil, "Short nonlexical openers or symbols cannot enter the lexical residual path")
+        }
+        var shortDigit = baseline; shortDigit.transcriptSegments[1].text = "7"
+        check(owner(shortDigit) == firstSpeaker.id, "A bounded numeric lexical residual can remain with its adjacent outgoing voice")
+        for symbol in ["(", "[", "«", "-", "\"", "7", "🙂"] {
+            var opener = punctuation; opener.transcriptSegments[1].text = symbol
+            check(owner(opener) == nil, "An opening quote/bracket, separator, symbol or number cannot masquerade as trailing punctuation")
+        }
+        punctuation.transcriptSegments[1].start = .init(value: 5000, timescale: 1000)
+        punctuation.transcriptSegments[1].end = .init(value: 5020, timescale: 1000)
+        punctuation.transcriptSegments[1].nativeTiming = .init(start: 5, end: 5.02)
+        check(owner(punctuation) == nil, "Punctuation cannot bridge an unbounded silence")
+        var barrier = baseline
+        let unresolved = barrier.transcriptSegments[1]
+        let decision = MeetingSpeakerAttributionDecision(unitID: unresolved.nativeUnitID!, rawAssignment: .unassigned,
+            candidates: [], activeSupportSeconds: 0, simultaneousIntervals: [], relation: .none,
+            selectedToken: nil, rule: .barrier, cueUnitIDs: [], backgroundTokens: [],
+            policyVersion: 2, policyFingerprint: "synthetic-quarantine-barrier")
+        barrier.transcriptSegments[1].speakerAttribution = .init(decision: decision, speakerIDs: [:])
+        check(owner(barrier) == nil, "Explicit quarantine barriers remain visible rather than being hidden by reading attachment")
     }
 
     private static func indexIDs(at url: URL) throws -> [String] {

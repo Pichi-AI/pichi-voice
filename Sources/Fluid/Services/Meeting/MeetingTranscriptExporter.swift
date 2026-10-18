@@ -221,10 +221,12 @@ nonisolated enum MeetingTranscriptExporter {
             }.joined()
         }
 
+        static let closingPunctuation = ".,;:!?…)]}»"
+
         static func separator(after previous: String?, before next: String) -> String {
             guard let last = previous?.last, let first = next.first,
                   !last.isWhitespace, !first.isWhitespace else { return "" }
-            if ".,;:!?…)]}»".contains(first) || "([{«".contains(last) { return "" }
+            if Self.closingPunctuation.contains(first) || "([{«".contains(last) { return "" }
             return " "
         }
     }
@@ -459,6 +461,122 @@ nonisolated enum MeetingTranscriptExporter {
         return owners
     }
 
+    /// A very short unsupported lexical tail next to an independent outgoing word can
+    /// remain outside both voices at an ASR window edge. Keep that residual with its
+    /// adjacent outgoing reading turn only when a separated following word proves the
+    /// same source epoch. Punctuation alone attaches typographically to the prior turn.
+    /// Neither convention creates acoustic evidence or changes any canonical member.
+    private static func boundaryReadingOwners(
+        for segments: [MeetingTranscriptSegment], in session: MeetingSession,
+        existingOwners: [MeetingTranscriptSegmentID: SessionSpeakerID]
+    ) -> [MeetingTranscriptSegmentID: SessionSpeakerID] {
+        guard segments.count >= 2 else { return [:] }
+        let policy = MeetingSpeakerAttributionPolicy.standard
+        let source = session.transcriptSegments.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+        }.map(\.element)
+        guard source.allSatisfy({ $0.start.seconds.isFinite && $0.end.seconds.isFinite
+            && $0.start.seconds >= 0 && $0.end.seconds > $0.start.seconds }) else { return [:] }
+        let positions = Dictionary(source.enumerated().map { ($0.element.id, $0.offset) },
+                                   uniquingKeysWith: { first, _ in first })
+        guard positions.count == source.count else { return [:] }
+        let blocked = MeetingSpeakerAttribution.overlappingIntervalIndices(source.map {
+            .init(start: $0.nativeTiming?.start ?? $0.start.seconds, end: $0.nativeTiming?.end ?? $0.end.seconds)
+        }, tolerance: policy.comparisonTolerance, checkpoint: { _ in })
+        let active = Set(session.activeSpeakers.map(\.id))
+        func safe(_ word: MeetingTranscriptSegment, allowsRevisedCompactTiming: Bool = false) -> Bool {
+            guard word.revision >= 0, !word.text.isEmpty, word.status == .final, word.completeness == .complete, !word.isEcho,
+                  word.originalText == nil, word.isUserTextEdited != true,
+                  word.attributionState != .timingUncertain, word.overlap == .none,
+                  word.nativePrecision == .word, word.nativeUnitID?.isEmpty == false,
+                  let timing = word.nativeTiming, timing.start.isFinite, timing.end.isFinite,
+                  timing.start >= 0, timing.end > timing.start,
+                  abs(timing.start - word.start.seconds) <= 0.001,
+                  abs(timing.end - word.end.seconds) <= 0.001,
+                  word.speakerAttributionInference == nil else { return false }
+            if let summary = word.speakerAttribution {
+                return summary.unitID == word.nativeUnitID && summary.rawAssignment == word.nativeSpeakerAssignment
+                    && summary.rule != .barrier && summary.rule != .conflict && summary.relation != .conflict
+            }
+            // An automatically revised compact row can prove following native timing/epoch,
+            // but cannot become a new outgoing ownership anchor without its summary.
+            return word.revision == 0 || allowsRevisedCompactTiming
+        }
+        func anchor(_ word: MeetingTranscriptSegment) -> (SessionSpeakerID, MeetingBackendSpeakerToken)? {
+            guard safe(word), word.attributionState == .assigned,
+                  let id = self.resolvedSpeakerID(word.speakerID, in: session, activeSpeakerIDs: active),
+                  case let .assigned(token) = word.nativeSpeakerAssignment,
+                  token.analysisEpochID.trackID == word.sourceTrackID else { return nil }
+            if let summary = word.speakerAttribution {
+                guard summary.rule.isIndependentAcousticSelection, summary.selectedToken == token,
+                      summary.selectedSpeakerID == word.speakerID else { return nil }
+            }
+            return (id, token)
+        }
+        func eligible(_ word: MeetingTranscriptSegment) -> Bool {
+            guard safe(word), word.speakerID == nil, existingOwners[word.id] == nil,
+                  word.attributionState == .unassigned, word.nativeSpeakerAssignment == .unassigned else { return false }
+            guard let summary = word.speakerAttribution else { return true }
+            return summary.selectedToken == nil && summary.selectedSpeakerID == nil
+                && summary.relation == .none && summary.candidates.isEmpty && summary.background.isEmpty
+        }
+        func punctuation(_ word: MeetingTranscriptSegment) -> Bool {
+            let scalars = word.text.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars
+            return !scalars.isEmpty && scalars.allSatisfy { DisplayParagraph.closingPunctuation.unicodeScalars.contains($0) }
+        }
+        var owners: [MeetingTranscriptSegmentID: SessionSpeakerID] = [:]
+        var position = 0
+        while position < segments.count {
+            guard eligible(segments[position]) else { position += 1; continue }
+            let first = position
+            while position < segments.count, eligible(segments[position]) { position += 1 }
+            let last = position - 1
+            guard first > 0, let (owner, token) = anchor(segments[first - 1]),
+                  let sourceStart = positions[segments[first - 1].id] else { continue }
+            let range = (first - 1)...last
+            let prior = segments[first - 1], head = segments[first], tail = segments[last]
+            guard existingOwners[prior.id].map({ $0 == owner }) ?? true,
+                  range.allSatisfy({ positions[segments[$0].id] == sourceStart + $0 - first + 1
+                      && !blocked.contains(sourceStart + $0 - first + 1)
+                      && segments[$0].sourceTrackID == prior.sourceTrackID }),
+                  !(session.transcriptCoverageGaps ?? []).contains(where: {
+                      $0.trackID == prior.sourceTrackID && (!$0.start.isFinite || !$0.end.isFinite
+                          || ($0.start < tail.end.seconds && $0.end > prior.start.seconds))
+                  }) else { continue }
+            let gap = head.start.seconds - prior.end.seconds
+            guard gap >= -policy.comparisonTolerance else { continue }
+            let allPunctuation = (first...last).allSatisfy { punctuation(segments[$0]) }
+            if allPunctuation {
+                // This is typography, not a claim that a voice spoke punctuation in silence.
+                guard tail.end.seconds - prior.end.seconds <= policy.maximumUnknownRunSeconds
+                    + policy.comparisonTolerance else { continue }
+            } else {
+                guard (first...last).allSatisfy({ punctuation(segments[$0])
+                        || segments[$0].text.unicodeScalars.contains(where: CharacterSet.alphanumerics.contains) }),
+                      tail.end.seconds - head.start.seconds <= policy.maximumBoundaryResidualSeconds
+                        + policy.comparisonTolerance,
+                      gap <= policy.maximumBoundaryResidualSeconds + policy.comparisonTolerance,
+                      position < segments.count else { continue }
+                let next = segments[position]
+                guard safe(next, allowsRevisedCompactTiming: true), next.attributionState == .assigned,
+                      self.resolvedSpeakerID(next.speakerID, in: session, activeSpeakerIDs: active) != nil,
+                      next.start.seconds - tail.end.seconds > policy.maximumNeighborGapSeconds
+                        + policy.comparisonTolerance,
+                      next.sourceTrackID == prior.sourceTrackID,
+                      positions[next.id] == sourceStart + position - first + 1,
+                      !blocked.contains(sourceStart + position - first + 1),
+                      case let .assigned(nextToken) = next.nativeSpeakerAssignment,
+                      nextToken.analysisEpochID == token.analysisEpochID,
+                      !(session.transcriptCoverageGaps ?? []).contains(where: {
+                          $0.trackID == prior.sourceTrackID && (!$0.start.isFinite || !$0.end.isFinite
+                              || ($0.start < next.end.seconds && $0.end > prior.start.seconds))
+                      }) else { continue }
+            }
+            for index in first...last { owners[segments[index].id] = owner }
+        }
+        return owners
+    }
+
     /// Pre-canonical archives have no native word precision or activity to replay. A completed,
     /// untouched legacy gap between known speakers uses the shared bounded neighbor admission:
     /// equal neighbors keep that voice, different neighbors select the incoming voice. Unsafe
@@ -541,8 +659,10 @@ nonisolated enum MeetingTranscriptExporter {
         let legacyBridges = self.legacyReadingBridges(for: segments, in: session)
         let continuations = self.mainSpeakerReadingOwners(for: segments, in: session)
         let canonicalMappings = self.unmappedCanonicalReadingOwners(for: segments, in: session)
-        let readingOwners = legacyBridges.merging(canonicalMappings) { _, canonical in canonical }
+        let contextualOwners = legacyBridges.merging(canonicalMappings) { _, canonical in canonical }
             .merging(continuations) { _, continuation in continuation }
+        let readingOwners = contextualOwners.merging(self.boundaryReadingOwners(
+            for: segments, in: session, existingOwners: contextualOwners)) { contextual, _ in contextual }
         var paragraphs: [DisplayParagraph] = []
         var members: [MeetingTranscriptSegment] = []
         var containsLegacyBridge = false

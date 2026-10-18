@@ -227,6 +227,7 @@ struct MeetingCapturePCMTransportTests {
     }
 
     static func main() async throws {
+        try await testCaptureStopBoundary()
         try await testDesktopWriterRejection()
         try await testCaptureBeforePreparation()
 
