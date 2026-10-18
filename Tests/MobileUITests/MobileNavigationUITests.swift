@@ -281,6 +281,8 @@ final class MobileNavigationUITests: XCTestCase {
                 presentationDone.tap()
                 mark("presentation_dismissed")
                 capture("production-presentation-dismissed")
+                try require(presentationDone.waitForNonExistence(timeout: 10),
+                            "Native PDF dismissal must finish before accessing recording controls")
                 try require(app.buttons["meeting.stop"].waitForExistence(timeout: 10),
                             "Dismissing the PDF must return to the same owned recording")
             }
@@ -392,6 +394,7 @@ final class MobileNavigationUITests: XCTestCase {
             let done = try openSyntheticPresentation(filename: filename)
             capture("presentation-\(language)-native-pdf")
             done.tap()
+            XCTAssertTrue(done.waitForNonExistence(timeout: 10))
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 10))
             XCTAssertTrue(app.buttons["meeting.start"].isHittable)
             XCTAssertFalse(app.buttons["meeting.stop"].exists)
@@ -400,6 +403,7 @@ final class MobileNavigationUITests: XCTestCase {
             let reopenedDone = try openSyntheticPresentation(filename: filename)
             capture("presentation-\(language)-reopened-pdf")
             reopenedDone.tap()
+            XCTAssertTrue(reopenedDone.waitForNonExistence(timeout: 10))
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 10))
             capture("presentation-\(language)-reopened-dismissed")
         }
