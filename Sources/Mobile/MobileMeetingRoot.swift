@@ -109,8 +109,7 @@ struct MobileMeetingRoot: View {
                         // The picker opens a revision-checked member editor before saving.
                         throw MeetingDomainError.segmentNotFound
                     }
-                    if selectedHistory?.id == result.id { selectedHistory = result }
-                    await refreshHistory()
+                    acceptCommittedSession(result)
                 }
             }
         }
@@ -470,8 +469,7 @@ struct MobileMeetingRoot: View {
                                 playback.stop()
                                 run {
                                     let updated = try await coordinator.deleteAudio(sessionID: session.id)
-                                    if selectedHistory?.id == updated.id { selectedHistory = updated }
-                                    await refreshHistory()
+                                    acceptCommittedSession(updated)
                                 }
                             }
                         }
@@ -480,8 +478,7 @@ struct MobileMeetingRoot: View {
                             Button(PichiLocalization.text("Undo correction")) {
                                 run {
                                     let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
-                                    if selectedHistory?.id == updated.id { selectedHistory = updated }
-                                    await refreshHistory()
+                                    acceptCommittedSession(updated)
                                 }
                             }
                         }
@@ -615,6 +612,10 @@ struct MobileMeetingRoot: View {
         }
         error = PichiLocalization.text(failure.localizedDescription)
         showError = true
+    }
+    private func acceptCommittedSession(_ session: MeetingSession) {
+        historySnapshot.applyCommitted(session)
+        if selectedHistory?.id == session.id { selectedHistory = session }
     }
     private func refreshHistory() async {
         await historySnapshot.refresh()

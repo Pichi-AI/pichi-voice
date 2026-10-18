@@ -17,6 +17,22 @@ final class MeetingHistorySnapshot: ObservableObject {
         self.load = load
     }
 
+    /// The coordinator returns this value only after its store commit succeeds.
+    /// Corrections do not require decoding every other meeting before updating UI.
+    func applyCommitted(_ session: MeetingSession) {
+        if let index = self.sessions.firstIndex(where: { $0.id == session.id }) {
+            self.sessions[index] = session
+        } else {
+            self.sessions.append(session)
+            self.sessions.sort { $0.startedAt > $1.startedAt }
+        }
+        self.errorMessage = nil
+        self.hasLoaded = true
+        // An older in-flight disk read cannot overwrite the committed local value.
+        // Its existing owner performs the follow-up, without blocking this action.
+        if self.refreshTask != nil { self.refreshRequested = true }
+    }
+
     func refresh() async {
         self.refreshRequested = true
         if let refreshTask {
