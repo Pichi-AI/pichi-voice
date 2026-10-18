@@ -10,6 +10,22 @@ private nonisolated struct OwnerVoiceComparisonOptions: Sendable {
     enum Failure: Error { case invalidOptions, invalidInput, unavailableProfile, invalidQuery, invalidReport }
     let audioSHA256: String
     let sourceFrames: Int
+    let readOnlyProfileURL: URL?
+
+    private static var isSimulator: Bool {
+        #if targetEnvironment(simulator)
+        true
+        #else
+        false
+        #endif
+    }
+
+    static func validateReadOnlyProfilePath(_ value: String?, simulator: Bool) throws -> URL? {
+        guard let value else { return nil }
+        guard simulator, !value.isEmpty, value.utf8.count <= 4096, !value.contains("\0"),
+              (value as NSString).isAbsolutePath else { throw Failure.invalidOptions }
+        return URL(fileURLWithPath: value)
+    }
 
     init(environment: [String: String]) throws {
         guard environment["PICHI_OWNER_VOICE_PRIVATE_DIAGNOSTIC"] == "1",
@@ -22,6 +38,8 @@ private nonisolated struct OwnerVoiceComparisonOptions: Sendable {
               (102_400...320_000).contains(frames) else { throw Failure.invalidOptions }
         self.audioSHA256 = digest
         self.sourceFrames = frames
+        self.readOnlyProfileURL = try Self.validateReadOnlyProfilePath(
+            environment["PICHI_OWNER_VOICE_DIAGNOSTIC_PROFILE_PATH"], simulator: Self.isSimulator)
     }
 
     func read(root: URL) throws -> [Float] {
@@ -83,6 +101,8 @@ private nonisolated struct OwnerVoiceComparisonScalars: Encodable, Sendable {
         let verifiedOwnerCount: Int
         let sameSourceEarlyReferenceConfirmedCount: Int
         let duplicateEncodingDistance: Float?
+        let duplicateEncodingMatchedMaximumDistance: Float?
+        let duplicateEncodingMaximumAbsoluteDifference: Float?
     }
     let schemaVersion: Int
     let sourceQuality: Quality
@@ -112,7 +132,10 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
         }
         let options = try OwnerVoiceComparisonOptions(environment: environment)
         let root = try MobileInferenceTestAssets.resolve(environment: environment)
-        let profileStore = MeetingOwnerVoiceProfileStore()
+        // Simulator-only explicit host read: no copy to its global application profile.
+        // Physical devices always use their existing enrolled application profile.
+        let profileStore = options.readOnlyProfileURL.map { MeetingOwnerVoiceProfileStore(fileURL: $0) }
+            ?? MeetingOwnerVoiceProfileStore()
         guard let owner = try profileStore.load(), MeetingOwnerVoiceProfileStore.isValid(owner) else {
             throw OwnerVoiceComparisonOptions.Failure.unavailableProfile
         }
@@ -145,6 +168,7 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
             throw OwnerVoiceComparisonOptions.Failure.invalidReport
         }
         report["ownerProfileUnchanged"] = unchanged
+        report["externalReadOnlySimulatorReference"] = options.readOnlyProfileURL != nil
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]),
                                        uniformTypeIdentifier: "public.json")
         attachment.name = "PrivateOwnerVoiceScalarComparison.json"
@@ -210,13 +234,25 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
             let crossDistance = MeetingSpeakerVoiceMatcher.distance(profile, reference)
             let verified = MeetingOwnerVoiceVerifier.confirmedTokens(owner: owner, profiles: [profile]).count
             let sameSource = MeetingOwnerVoiceVerifier.confirmedTokens(owner: earlyReference, profiles: [profile]).count
+            var repeatedDistance: Float?
+            var repeatedDifference: Float?
+            if IDs[index] == 6 {
+                for (left, right) in zip(profile.embeddings, first.embeddings) {
+                    if let distance = MeetingSpeakerEmbeddingIndex.cosineDistance(left, right) {
+                        repeatedDistance = max(repeatedDistance ?? 0, distance)
+                    }
+                    for (a, b) in zip(left, right) { repeatedDifference = max(repeatedDifference ?? 0, abs(a - b)) }
+                }
+            }
             variants.append(.init(variantID: IDs[index], inputQuality: requests[index].clips.map(OwnerVoiceComparisonScalars.Quality.init),
                 querySelfDistance: selfDistance, querySelfMatrix: OwnerVoiceComparisonScalars.matrix(profile.embeddings, profile.embeddings),
                 crossOwnerMatrix: OwnerVoiceComparisonScalars.matrix(profile.embeddings, owner.embeddings), crossOwnerWorstDistance: crossDistance,
                 queryPassesSelfConsistency: selfDistance.map { $0 <= MeetingSpeakerVoiceMatcher.maximumDistance } ?? false,
                 queryPassesOwnerDistance: crossDistance.map { $0 <= MeetingSpeakerVoiceMatcher.maximumDistance } ?? false,
                 verifiedOwnerCount: verified, sameSourceEarlyReferenceConfirmedCount: sameSource,
-                duplicateEncodingDistance: IDs[index] == 6 ? MeetingSpeakerVoiceMatcher.distance(profile, first) : nil))
+                duplicateEncodingDistance: IDs[index] == 6 ? MeetingSpeakerVoiceMatcher.distance(profile, first) : nil,
+                duplicateEncodingMatchedMaximumDistance: repeatedDistance,
+                duplicateEncodingMaximumAbsoluteDifference: repeatedDifference))
         }
         return .init(schemaVersion: 1, sourceQuality: .init(samples),
             ownerReferenceSelfDistance: MeetingSpeakerVoiceMatcher.distance(reference, reference),
@@ -239,6 +275,16 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
         for frames in ["-1", "0", "102399", "320001", "999999999999999999999999", "nan"] {
             var invalid = enabled; invalid["PICHI_OWNER_VOICE_DIAGNOSTIC_SOURCE_FRAMES"] = frames
             XCTAssertThrowsError(try OwnerVoiceComparisonOptions(environment: invalid))
+        }
+    }
+
+    func testExternalOwnerReferenceIsReadOnlyAndSimulatorOnly() throws {
+        let path = "/private/ignored-fixture/OwnerVoice/profile.json"
+        XCTAssertEqual(try OwnerVoiceComparisonOptions.validateReadOnlyProfilePath(path, simulator: true)?.path, path)
+        XCTAssertNil(try OwnerVoiceComparisonOptions.validateReadOnlyProfilePath(nil, simulator: false))
+        XCTAssertThrowsError(try OwnerVoiceComparisonOptions.validateReadOnlyProfilePath(path, simulator: false))
+        for value in ["", "relative/profile.json", "https://example.invalid/profile.json", "\0invalid", String(repeating: "x", count: 4097)] {
+            XCTAssertThrowsError(try OwnerVoiceComparisonOptions.validateReadOnlyProfilePath(value, simulator: true))
         }
     }
 
