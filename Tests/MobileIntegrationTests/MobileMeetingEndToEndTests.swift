@@ -61,6 +61,8 @@ private final class SyntheticPrivacyReplayDiagnostics: TranscriptTextRedacting {
     private var observations: [Observation] = []
     private var retainedUTF16 = 0
     private var omittedObservations = 0
+    private(set) var backgroundSuccessfulCalls = 0
+    private(set) var backgroundRedactedCalls = 0
 
     init(wrapping wrapped: any TranscriptTextRedacting) { self.wrapped = wrapped }
     nonisolated var checkpointIdentity: String? { wrapped.checkpointIdentity }
@@ -68,6 +70,10 @@ private final class SyntheticPrivacyReplayDiagnostics: TranscriptTextRedacting {
 
     @MainActor func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         let result = try await wrapped.redactWithSpans(text)
+        if UIApplication.shared.applicationState == .background {
+            backgroundSuccessfulCalls += 1
+            if !result.spans.isEmpty { backgroundRedactedCalls += 1 }
+        }
         let size = text.utf16.count + result.text.utf16.count
         if observations.count < 128, size <= 32_768, retainedUTF16 + size <= 131_072 {
             retainedUTF16 += size
@@ -2686,20 +2692,37 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         try await verifyPhysicalStrictMeeting(model: .parakeetTDT)
     }
 
+    /// External synthetic speech reaches the real microphone. No in-app player can
+    /// keep this host alive or provide a second reason for audio background execution.
+    func testPhysicalStreamingExternalSpeechContinuesInBackground() async throws {
+        guard ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STREAMING_EXTERNAL_SPEECH"] == "1" else {
+            throw XCTSkip("Explicitly enable the real-microphone external synthetic speech probe")
+        }
+        try await verifyPhysicalStrictMeeting(model: .gigaam, externalStreamingSpeech: true)
+    }
+
     /// The exact user configuration that serial, unpaced ASR fixtures did not cover.
-    /// Speech comes from the device speaker through the real selected microphone.
-    private func verifyPhysicalStrictMeeting(model: SettingsStore.SpeechModel) async throws {
+    /// Speech comes through the real selected microphone, from the device speaker
+    /// or the explicitly selected external synthetic speech source.
+    private func verifyPhysicalStrictMeeting(model: SettingsStore.SpeechModel,
+                                             externalStreamingSpeech: Bool = false) async throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("Requires explicitly enabled physical strict meeting recording")
         #else
         guard ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_MEETING_E2E"] == "1" else {
             throw XCTSkip("Enable physical strict ASR, diarization and PII replay explicitly")
         }
-        guard let duration = Int(ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_MEETING_SECONDS"] ?? "60"),
-              (60...300).contains(duration) else {
+        let environment = ProcessInfo.processInfo.environment
+        guard let duration = Int(environment["PICHI_PHYSICAL_STRICT_MEETING_SECONDS"] ?? (externalStreamingSpeech ? "180" : "60")),
+              (60...(externalStreamingSpeech ? 3_600 : 300)).contains(duration) else {
             throw NSError(domain: "PhysicalStrictMeetingDuration", code: 1)
         }
-        guard AVAudioSession.sharedInstance().outputVolume > 0.05 else {
+        #if DEBUG
+        guard !IOSMeetingDebugFileInput.isRequested else {
+            throw NSError(domain: "PhysicalStrictMeetingRequiresHardwareMicrophone", code: 1)
+        }
+        #endif
+        guard externalStreamingSpeech || AVAudioSession.sharedInstance().outputVolume > 0.05 else {
             throw XCTSkip("Physical speech replay requires audible device output")
         }
         let assets = try MobileInferenceTestAssets.resolve()
@@ -2712,16 +2735,22 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         settings.meetingSaveAudio = false
         settings.meetingSpeakerLabelsEnabled = true
         settings.meetingPIIRedactionEnabled = true
+        if externalStreamingSpeech {
+            settings.meetingRecordingDefaults.languageCode = "ru"
+            settings.meetingSpeakerProcessingMode = .streaming
+        }
         let store = MeetingSessionStore(rootDirectory: root)
         let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: assets.appendingPathComponent("models/privacy")))
-        let diagnostics = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_PRIVACY_DIAGNOSTICS"] == "1"
+        let diagnostics = externalStreamingSpeech || environment["PICHI_PHYSICAL_STRICT_PRIVACY_DIAGNOSTICS"] == "1"
             ? SyntheticPrivacyReplayDiagnostics(wrapping: privacy) : nil
         let services = AppServices(store: store, settings: settings, privacy: privacy, privacyRedactor: diagnostics)
         let coordinator = services.meetingSessionCoordinator
+        let visibleUI = externalStreamingSpeech ? try CombinedVisibleMeetingUI(services: services) : nil
+        defer { visibleUI?.close() }
         let twoVoiceFixture = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_TWO_VOICES"] == "1"
         let fixture = twoVoiceFixture ? "audio/mixed-two-voices.wav" : "audio/ru.wav"
-        let player = try AVAudioPlayer(contentsOf: assets.appendingPathComponent(fixture))
-        player.numberOfLoops = -1
+        let player = externalStreamingSpeech ? nil : try AVAudioPlayer(contentsOf: assets.appendingPathComponent(fixture))
+        player?.numberOfLoops = -1
         var firstTextSecond: Int?
         var firstPendingSecond: Int?
         var largestPendingCount = 0
@@ -2731,9 +2760,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         var lastBackgroundUpdateSecond = 0
         var previousIDs: Set<UUID> = []
         var previousPartial: MeetingLivePartial?
-        let requiresBackground = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_MEETING_BACKGROUND"] == "1"
+        let requiresBackground = externalStreamingSpeech || environment["PICHI_PHYSICAL_STRICT_MEETING_BACKGROUND"] == "1"
         var backgroundSeconds: TimeInterval = 0
         var backgroundUpdates = 0
+        var backgroundParticipantIDs: Set<SessionSpeakerID> = []
         var wasBackground = false
         do {
             let configuration: MeetingCaptureConfiguration
@@ -2750,8 +2780,12 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(recording.audioStorageMode, .memoryOnly)
             XCTAssertEqual(recording.speakerLabelsEnabled, true)
             XCTAssertEqual(recording.piiRedactionEnabled, true)
-            try AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
-            XCTAssertTrue(player.play())
+            if externalStreamingSpeech {
+                XCTAssertEqual(recording.effectiveSpeakerProcessingMode, .streaming)
+            } else {
+                try AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
+                XCTAssertTrue(player?.play() == true)
+            }
             let captureStart = ProcessInfo.processInfo.systemUptime
             var previousResourceTime = captureStart
             var previousCPU = DiagnosticProcessCPUTime.capture()
@@ -2793,6 +2827,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     if adjacentBackgroundObservation {
                         backgroundUpdates += 1
                         lastBackgroundUpdateSecond = second
+                        let newParticipants = snapshot.utterances.filter { !previousIDs.contains($0.id) }
+                            .compactMap { $0.participant?.participantID }
+                        backgroundParticipantIDs.formUnion(newParticipants.prefix(max(0, 512 - backgroundParticipantIDs.count)))
                     }
                 }
                 previousIDs = ids
@@ -2810,7 +2847,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 }
             }
             let capturedSeconds = ProcessInfo.processInfo.systemUptime - captureStart
-            player.stop()
+            player?.stop()
             XCTAssertGreaterThanOrEqual(capturedSeconds, Double(duration))
             XCTAssertNotNil(firstPendingSecond, "Real accepted microphone audio must show capture progress before recognition completes")
             XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
@@ -2819,9 +2856,20 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(lastUpdateSecond, duration - 15,
                                         "Protected text must keep advancing near the end, not only during the first window")
             if requiresBackground {
-                XCTAssertGreaterThanOrEqual(backgroundSeconds, duration == 300 ? 280.0 : 20.0,
+                let requiredBackgroundSeconds = externalStreamingSpeech ? Double(duration - 20) : duration == 300 ? 280.0 : 20.0
+                XCTAssertGreaterThanOrEqual(backgroundSeconds, requiredBackgroundSeconds,
                                             "The host must actually leave the foreground during paced recording")
                 XCTAssertGreaterThan(backgroundUpdates, 0, "Safe text must advance between actual background observations")
+                if externalStreamingSpeech {
+                    XCTAssertGreaterThanOrEqual(lastBackgroundUpdateSecond, duration - 15,
+                                                "Streaming protected text must still advance in the background near the end")
+                    XCTAssertGreaterThan(diagnostics?.backgroundSuccessfulCalls ?? 0, 0,
+                                         "Production PII inference must complete while the app is in the background")
+                    XCTAssertGreaterThan(diagnostics?.backgroundRedactedCalls ?? 0, 0,
+                                         "External synthetic speech must exercise actual PII masking in the background")
+                    XCTAssertGreaterThanOrEqual(backgroundParticipantIDs.count, twoVoiceFixture ? 2 : 1,
+                                                "New protected background utterances must carry native participant attribution")
+                }
             }
             if duration == 300 {
                 XCTAssertGreaterThanOrEqual(lastUpdateSecond, 280, "Protected text must still advance near the end of the five-minute capture")
@@ -2833,6 +2881,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertFalse(completed.transcriptSegments.isEmpty)
             if twoVoiceFixture {
                 XCTAssertGreaterThanOrEqual(completed.speakers.count, 2, "Two-voice stress input must actually exercise speaker identification")
+            }
+            if externalStreamingSpeech {
+                XCTAssertTrue(completed.transcriptSegments.contains { $0.speakerID != nil },
+                              "The real streaming microphone path must publish speaker attribution")
             }
             XCTAssertFalse(completed.hasFinalizedAudio)
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
@@ -2850,7 +2902,16 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "firstTextSecond": firstTextSecond ?? -1,
                 "firstPendingSecond": firstPendingSecond ?? -1, "largestPendingCount": largestPendingCount,
                 "protectedUpdateSeconds": protectedUpdateSeconds,
-                "backgroundSeconds": backgroundSeconds
+                "backgroundSeconds": backgroundSeconds,
+                "backgroundUpdates": backgroundUpdates,
+                "backgroundParticipantCount": backgroundParticipantIDs.count,
+                "lastBackgroundUpdateSecond": lastBackgroundUpdateSecond,
+                "externalSpeechWithoutInAppPlayback": externalStreamingSpeech,
+                "speakerProcessingMode": recording.effectiveSpeakerProcessingMode.rawValue,
+                "backgroundPrivacySuccessfulCalls": diagnostics?.backgroundSuccessfulCalls ?? 0,
+                "backgroundPrivacyRedactedCalls": diagnostics?.backgroundRedactedCalls ?? 0,
+                "identifiedOwnerCount": completed.speakers.filter(\.isLocalUser).count,
+                "ownerAccuracyEvaluated": false
             ], options: [.prettyPrinted, .sortedKeys])
             let timingAttachment = XCTAttachment(data: timingData, uniformTypeIdentifier: "public.json")
             timingAttachment.name = "Physical-strict-protected-update-timing-\(model.rawValue)"
@@ -2873,7 +2934,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             try await privacy.unload()
             try await addPrivatePrivacyDiagnostics(diagnostics, model: model)
         } catch {
-            player.stop()
+            player?.stop()
             await coordinator.shutdownForTermination()
             try? await privacy.unload()
             try await addPrivatePrivacyDiagnostics(diagnostics, model: model)
