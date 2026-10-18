@@ -277,7 +277,8 @@ struct MobileMeetingRoot: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Label(PichiLocalization.text("Recording"), systemImage: "record.circle")
+                Label(PichiLocalization.text(coordinator.state == .stopping(session.id) ? "Stopping..." : "Recording"),
+                      systemImage: coordinator.state == .stopping(session.id) ? "stop.circle" : "record.circle")
                     .foregroundStyle(theme.palette.accent)
                 Spacer()
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
@@ -309,7 +310,9 @@ struct MobileMeetingRoot: View {
                 .frame(height: max(200, geometry.size.height - 250))
                 .accessibilityIdentifier("meeting.liveTranscript")
             if session.speakerLabelsEnabled != false {
-                Text(PichiLocalization.text("Speaker labels are added after recording."))
+                Text(PichiLocalization.text(session.effectiveSpeakerProcessingMode == .streaming
+                    ? "Speaker labels update during recording. A short delay is expected."
+                    : "Speaker labels are added after recording."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
                 }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
