@@ -64,6 +64,30 @@ activity limits. A long pause alone is not a failure. Input gaps, exhausted budg
 unsupported native timings or failed inference stop the attempt explicitly and preserve
 completed protected text. There is no silent frame dropping or hidden full-audio fallback.
 
+## Capture admission and interface work
+
+The capture owner freezes the request and completes required installation, permission and
+audio-session checks. Native model loading then belongs to the processing attempt, rather
+than a throwaway ASR warm-up before microphone activation. Streaming preparation begins
+when the first progressive PCM window arrives. The existing bounded transport holds initial
+samples during preparation; it does not add a second audio queue. Both PCM modes prepare
+their pinned privacy capability before publishing recognized text. Cancellation joins native
+preparation even when the underlying load cannot stop cooperatively. Hardware activation
+and first-time permission prompts still have real latency.
+
+Protected transcript history is separate from the bounded acoustic and privacy working tails.
+The interface can retain every approved word while model context stays bounded. Reading
+projection and paragraph composition run outside MainActor, with generation checks before
+publication. Lazy lists render visible paragraphs. Health-level changes do not invalidate
+saved transcript reading caches. Manual scrolling pauses automatic following until the user
+returns to the bottom or explicitly requests the latest text.
+
+Speech redaction applies to recognized transcript content, including correction text and
+external identity suggestions. Explicit participant aliases, meeting titles and input display
+metadata remain user data. Renaming a participant or title does not change transcript bytes
+or rerun NER over the meeting. Transcript edits and speech publication keep their privacy
+admission; metadata exemption does not authorize publishing new unprotected words.
+
 ## Stop, retained audio and compatibility
 
 Normal Stop joins native capture, queued inference, the diarizer's final context and the
@@ -108,6 +132,10 @@ holds, bounded protected history, long silence, late speaker revisions and joine
 cleanup. The opt-in mobile E2E test separately measures paced joint inference, pre-Stop safe
 publication, native word preservation, no-audio-file behavior, resource samples and Stop tail.
 Detailed profiling is explicitly gated and records scalar timing/resource metadata.
+The paced diagnostic also records configuration admission, synthetic capture-command latency
+and bounded MainActor executor wait samples. Executor waits measure scheduler availability,
+not physical touch latency or rendered frame rate. Startup diagnostics distinguish command
+admission, capture request and capture return without recording speech or participant names.
 
 Automatic Fathom annotations are a weak comparison reference, not manually verified DER
 ground truth. One ASR stream also cannot reliably recover both word sequences in overlapping
