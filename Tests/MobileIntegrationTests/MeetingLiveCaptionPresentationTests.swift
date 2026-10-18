@@ -981,7 +981,10 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
             word.originalText = nil; word.revision = 0
             return word
         }
-        let original = try MeetingTranscriptExporter.json(for: source)
+        // Active export duration advances with wall time; the persisted source codec must not.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let original = try encoder.encode(source)
         let preview = MeetingLivePartial(id: UUID(), text: "Только защищённый предпросмотр", start: 721)
         let result = try await MeetingSessionCoordinator.protectedLiveHistory(session: source, revision: 8, preview: preview)
         XCTAssertEqual(result.revision, 8)
@@ -993,7 +996,7 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
         XCTAssertEqual(paragraphs.flatMap(\.rows).map(\.id), rows.map(\.id))
         XCTAssertEqual(paragraphs.first?.id, source.transcriptSegments.first?.id)
         XCTAssertEqual(result.partials[.you]?.id, preview.id)
-        XCTAssertEqual(try MeetingTranscriptExporter.json(for: source), original)
+        XCTAssertEqual(try encoder.encode(source), original)
 
         let revised = try await MeetingSessionCoordinator.protectedLiveHistory(session: source, revision: 9, preview: nil)
         XCTAssertEqual(revised.utterances.map(\.id), result.utterances.map(\.id))
