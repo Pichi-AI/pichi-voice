@@ -542,6 +542,34 @@ final class MeetingRecoveryTests: XCTestCase {
         try await self.assertMemoryTailSurvivesTerminalPath("normal")
     }
 
+    func testSessionManifestRoundTripPreservesMediaTimesAndWholeSecondWallClockDates() async throws {
+        let directory = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MeetingSessionStore(rootDirectory: directory)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000.625)
+        let stoppedAt = startedAt.addingTimeInterval(2)
+        var track = self.makeMicrophoneTrack(chunks: [])
+        track.health.status = .stopped
+        track.health.lastSampleAt = stoppedAt
+        var session = self.makeSession(state: .completed, startedAt: startedAt, endedAt: stoppedAt, audioTracks: [track])
+        var segment = self.makeTranscriptSegment(sourceTrackID: track.id, speakerID: nil)
+        segment.start = .init(value: 125, timescale: 1000)
+        segment.end = .init(value: 875, timescale: 1000)
+        session.transcriptSegments = [segment]
+        try await store.create(session)
+        let persisted = try await store.load(id: session.id)
+        let saved = try XCTUnwrap(persisted)
+        XCTAssertEqual(saved.startedAt, Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertEqual(saved.endedAt, Date(timeIntervalSince1970: 1_700_000_002))
+        XCTAssertNotEqual(saved.endedAt, stoppedAt, "The existing ISO-8601 manifest omits wall-clock fractions")
+        XCTAssertEqual(saved.endedAt, try self.sessionManifestRoundTrip(stoppedAt))
+        XCTAssertNotEqual(saved.endedAt, try self.sessionManifestRoundTrip(stoppedAt.addingTimeInterval(2)),
+            "Second-precision expectations still reject substituting model-drain completion for audio Stop")
+        XCTAssertEqual(saved.duration, 2, accuracy: 0.000_001)
+        XCTAssertEqual(saved.audioTracks, try self.sessionManifestRoundTrip([track]))
+        XCTAssertEqual(saved.transcriptSegments, [segment], "Fractional media times and every other transcript field remain exact")
+    }
+
     func testCompletedPCMAllowsAliasUndoAndNewCaptureBeforeTermination() async throws {
         let suite = "CompletedPCMLifecycle.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -581,7 +609,7 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(completed.duration, 2, accuracy: 0.000_001)
         XCTAssertEqual(completed.endedAt, capture.stopResult?.stoppedAt)
         let savedCompleted = try await store.load(id: session.id)
-        XCTAssertEqual(savedCompleted?.endedAt, capture.stopResult?.stoppedAt)
+        XCTAssertEqual(savedCompleted?.endedAt, try self.sessionManifestRoundTrip(capture.stopResult?.stoppedAt))
         XCTAssertEqual(arbiter.releaseCount, 1)
         // Retention has its own mutation gate. This lifecycle test excludes that separate
         // background operation instead of weakening its serialization or using termination.
@@ -673,9 +701,10 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let persisted = try await store.load(id: session.id)
         let saved = try XCTUnwrap(persisted)
-        XCTAssertEqual(saved.endedAt, stopResult.stoppedAt)
+        XCTAssertEqual(saved.endedAt, try self.sessionManifestRoundTrip(stopResult.stoppedAt))
         XCTAssertEqual(saved.duration, 2, accuracy: 0.000_001)
-        XCTAssertEqual(saved.audioTracks, stopResult.tracks, "The final stopped-track facts survive the generation handoff")
+        XCTAssertEqual(saved.audioTracks, try self.sessionManifestRoundTrip(stopResult.tracks),
+            "All final stopped-track facts survive the generation handoff at the manifest's wall-clock precision")
         XCTAssertEqual(saved.transcriptSegments.map(\.text), [first.text, tail.text], "The latest protected drain checkpoint cannot be replaced by an old session copy")
         XCTAssertEqual(saved.state, .interrupted)
         XCTAssertEqual(saved.failures.count, partialFailure ? 1 : 0, "A real partial failure is retained; no synthetic second-stop failure is introduced")
@@ -753,7 +782,7 @@ final class MeetingRecoveryTests: XCTestCase {
             "A locally complete final batch cannot erase discarded capture coverage")
         XCTAssertTrue(saved.events.contains { $0.kind == .writerBackpressure })
         XCTAssertTrue(saved.events.contains { $0.kind == .captureStoppedUnexpectedly })
-        XCTAssertEqual(saved.endedAt, stopResult.stoppedAt)
+        XCTAssertEqual(saved.endedAt, try self.sessionManifestRoundTrip(stopResult.stoppedAt))
         XCTAssertEqual(saved.failures.count, path == "partialFailure" ? 1 : 0)
         XCTAssertEqual(arbiter.releaseCount, 1)
     }
@@ -821,7 +850,7 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let persisted = try await store.load(id: session.id)
         XCTAssertEqual(persisted?.transcriptSegments.map(\.text), [first.text, tail.text], "Terminal snapshot must never roll back joined durable text")
-        XCTAssertEqual(persisted?.endedAt, capture.stopResult?.stoppedAt,
+        XCTAssertEqual(persisted?.endedAt, try self.sessionManifestRoundTrip(capture.stopResult?.stoppedAt),
             "Every terminal path retains the audio-stop timestamp through final checkpoint publication")
         XCTAssertEqual(persisted?.transcriptIsComplete, true,
             "An unexpected Stop alone does not imply missing protected text when the complete tail joined")
@@ -2143,6 +2172,16 @@ final class MeetingRecoveryTests: XCTestCase {
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         try png.write(to: output.appendingPathComponent("\(name)-\(scheme)-\(Int(width)).png"))
         return bitmap
+    }
+
+    // Match MeetingSessionStore's existing codec only for expectations read from disk.
+    // Live Stop values, durations, media times and every non-Date field stay exact.
+    private func sessionManifestRoundTrip<Value: Codable>(_ value: Value) throws -> Value {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(Value.self, from: encoder.encode(value))
     }
 
     private func makeTempDirectory() -> URL {
