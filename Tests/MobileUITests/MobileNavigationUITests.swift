@@ -364,8 +364,8 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(inferred.exists, "A selected participant uses its plain name while retaining inference metadata")
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)
-            XCTAssertTrue(label.exists && mixedText.exists)
             try revealParagraphAboveNavigation(mixedText, step: "attribution-\(language)-landscape")
+            XCTAssertTrue(label.exists && mixedText.exists)
             capture("attribution-\(language)-landscape-foreground")
         }
     }
