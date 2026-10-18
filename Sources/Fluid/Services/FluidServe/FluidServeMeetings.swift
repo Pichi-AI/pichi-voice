@@ -41,10 +41,12 @@ nonisolated enum FluidServeMeetings {
     struct Meeting: Decodable, Equatable {
         fileprivate let source: MeetingSession
         fileprivate let speakerNames: [SessionSpeakerID: String]
+        fileprivate let speakerPresentations: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation]
 
         init(source: MeetingSession) {
             self.source = source
             self.speakerNames = Dictionary(source.activeSpeakers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+            self.speakerPresentations = MeetingTranscriptExporter.speakerPresentations(in: source)
         }
 
         init(from decoder: Decoder) throws {
@@ -287,10 +289,13 @@ nonisolated enum FluidServeMeetings {
 
     // MARK: - Rendering
 
-    /// Uses the same persisted decision, identity resolver and localized qualification as the app.
+    /// Reuses the full meeting's reading-owner projection for JSON, search and single lines.
     static func speakerLabel(for segment: Segment, in meeting: Meeting) -> String {
-        MeetingTranscriptExporter.speakerLabel(for: segment.source, in: meeting.source,
-                                               speakerNames: meeting.speakerNames)
+        if let presentation = meeting.speakerPresentations[segment.source.id] {
+            return MeetingTranscriptExporter.speakerLabel(for: presentation)
+        }
+        return MeetingTranscriptExporter.speakerLabel(for: segment.source, in: meeting.source,
+                                                      speakerNames: meeting.speakerNames)
     }
 
     /// Additive CLI JSON projection. The canonical exporter resolves speaker aliases and preserves
@@ -334,13 +339,12 @@ nonisolated enum FluidServeMeetings {
     /// The shared readable projection groups timed fragments without discarding their evidence.
     /// A range still includes turns by their native start, matching the existing CLI options.
     static func transcript(for meeting: Meeting, from: TimeInterval? = nil, to: TimeInterval? = nil) -> String {
-        var source = meeting.source
-        source.transcriptSegments = meeting.turns.filter { segment in
+        let segmentIDs = Set(meeting.turns.filter { segment in
             if let from, segment.start.seconds < from { return false }
             if let to, segment.start.seconds > to { return false }
             return true
-        }.map(\.source)
-        return MeetingTranscriptExporter.text(for: source)
+        }.map { $0.source.id })
+        return MeetingTranscriptExporter.text(for: meeting.source, segmentIDs: segmentIDs)
     }
 
     static func header(for entry: Entry, timeZone: TimeZone = .current) -> String {

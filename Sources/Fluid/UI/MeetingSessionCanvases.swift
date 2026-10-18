@@ -400,12 +400,6 @@ struct MeetingResultCanvas: View {
         self.isShowingAssignSpeakers = true
     }
 
-    private var speakerNames: [SessionSpeakerID: String] {
-        Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map {
-            ($0.id, MeetingTranscriptExporter.speakerDisplayName($0, language: PichiLocalization.language))
-        })
-    }
-
     private func chipTint(for speaker: MeetingSessionSpeaker) -> Color? {
         speaker.isLocalUser ? self.theme.palette.accent : self.speakerTints[speaker.id]
     }
@@ -424,24 +418,31 @@ struct MeetingResultCanvas: View {
         self.showsProbableEchoes ? sorted : sorted.filter { !$0.isEcho }
     }
 
-    /// Sorted once with per-row display state — no per-row re-sorting. Compares the resolved
-    /// displayed label (not the raw speaker id) so consecutive nil-speaker rows in different
-    /// attribution states — e.g. `unassigned` then `timingUncertain` — each still show a label.
+    /// Preserve correction and playback members while sharing one full-session reading map.
+    /// Participant identity, rather than raw background evidence, controls visible headers.
     private func rows(
-        for visibleSegments: [MeetingTranscriptSegment]
-    ) -> [(segment: MeetingTranscriptSegment, showsLabel: Bool, isLocal: Bool)] {
-        MeetingTranscriptExporter.displayRows(for: visibleSegments, in: self.session).map { row in
-            (row.segment, row.showsLabel, self.isLocalSegment(row.segment))
+        for visibleSegments: [MeetingTranscriptSegment],
+        presentations: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation]
+    ) -> [(segment: MeetingTranscriptSegment, presentation: MeetingSpeakerPresentation,
+           showsLabel: Bool, speaker: MeetingSessionSpeaker?)] {
+        let speakers = Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map { ($0.id, $0) })
+        var previousIdentity: String?
+        return visibleSegments.map { segment in
+            let presentation = presentations[segment.id]
+                ?? MeetingTranscriptExporter.speakerPresentation(for: segment, in: self.session)
+            let showsLabel = previousIdentity != presentation.identity
+            previousIdentity = presentation.identity
+            return (segment, presentation, showsLabel, presentation.participantID.flatMap { speakers[$0] })
         }
     }
 
     var body: some View {
-        let speakerNames = self.speakerNames
         let sorted = self.session.transcriptSegments.sorted { $0.start.seconds < $1.start.seconds }
         let visibleSegments = self.visibleSegments(sorted: sorted)
         let visibleSpeakerIDs = Set(visibleSegments.compactMap(\.speakerID))
         let activeSpeakers = self.session.activeSpeakers.filter { visibleSpeakerIDs.contains($0.id) }
-        let rows = self.rows(for: visibleSegments)
+        let presentations = MeetingTranscriptExporter.speakerPresentations(in: self.session)
+        let rows = self.rows(for: visibleSegments, presentations: presentations)
         // One scroller preserves a readable document at short window heights.
         let document = ScrollView {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
@@ -488,21 +489,20 @@ struct MeetingResultCanvas: View {
                                 MeetingTranscriptSegmentRow(
                                     segment: row.segment,
                                     speakerName: MeetingTranscriptExporter.speakerLabel(
-                                        for: row.segment,
-                                        in: self.session,
-                                        speakerNames: speakerNames,
+                                        for: row.presentation,
                                         language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language
                                     ),
-                                    speakerTint: row.segment.speakerID.flatMap { self.speakerTints[$0] },
+                                    showsSpeakerLabel: row.showsLabel,
+                                    speakerTint: row.speaker.flatMap { self.speakerTints[$0.id] },
                                     onRenameSpeakerTapped: {
-                                        if let speakerID = row.segment.speakerID {
-                                            self.presentAssignSpeakers(focusing: speakerID)
+                                        if let speaker = row.speaker {
+                                            self.presentAssignSpeakers(focusing: speaker.id)
                                         } else {
                                             self.pendingNameUnknownSegmentID = row.segment.id
                                             self.pendingUnknownSpeakerName = ""
                                         }
                                     },
-                                    isLocalUser: row.isLocal,
+                                    isLocalUser: row.speaker?.isLocalUser == true,
                                     reassignTargets: activeSpeakers.filter { $0.id != row.segment.speakerID },
                                     isQuiescent: self.isQuiescent,
                                     onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) },
@@ -776,14 +776,6 @@ struct MeetingResultCanvas: View {
 
     private func displayName(for speaker: MeetingSessionSpeaker) -> String {
         MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language)
-    }
-
-    // Only explicitly persisted legacy ownership metadata receives the local-user treatment.
-    private func isLocalSegment(_ segment: MeetingTranscriptSegment) -> Bool {
-        guard let speakerID = segment.speakerID,
-              let speaker = self.session.speakers.first(where: { $0.id == speakerID })
-        else { return false }
-        return speaker.isLocalUser
     }
 
     private var meetingMetadata: some View {
@@ -1120,6 +1112,7 @@ private struct MeetingSpeakerChip: View {
 private struct MeetingTranscriptSegmentRow: View {
     let segment: MeetingTranscriptSegment
     let speakerName: String
+    let showsSpeakerLabel: Bool
     let speakerTint: Color?
     let onRenameSpeakerTapped: (() -> Void)?
     let isLocalUser: Bool
@@ -1144,7 +1137,7 @@ private struct MeetingTranscriptSegmentRow: View {
                 .frame(height: 28)
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
-                    self.speakerLabel
+                    if self.showsSpeakerLabel { self.speakerLabel }
                     Spacer(minLength: self.theme.metrics.spacing.md)
                     Button(PichiLocalization.text("action.edit", defaultValue: "Edit"), systemImage: "pencil", action: self.onEditText)
                         .fluidGlassAction()
