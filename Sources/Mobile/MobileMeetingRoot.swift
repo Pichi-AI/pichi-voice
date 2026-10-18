@@ -1,6 +1,5 @@
 import AVFoundation
 import Combine
-import QuickLook
 import UniformTypeIdentifiers
 import SwiftUI
 import UIKit
@@ -37,7 +36,6 @@ struct MobileMeetingRoot: View {
     @State private var share: MeetingSharePayload?
     @State private var showPresentationPicker = false
     @State private var presentation: MobilePresentationDocument?
-    @State private var presentationURL: URL?
     @StateObject private var playback = MeetingSegmentPlayback()
     // Projection is independent of microphone meters, pending audio, playback progress
     // and other frequent view invalidations. Keep one result for the visible transcript.
@@ -129,7 +127,6 @@ struct MobileMeetingRoot: View {
                 do {
                     let document = try MobilePresentationDocument(url: url)
                     presentation = document
-                    presentationURL = document.url
                 }
                 catch { report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
                     "The PDF presentation could not be opened. Choose a readable PDF file."])) }
@@ -140,11 +137,8 @@ struct MobileMeetingRoot: View {
                 }
             }
         }
-        // QuickLook is presented by this scene, so choosing or dismissing a PDF never
-        // changes the meeting coordinator or sends the app to another application.
-        .quickLookPreview($presentationURL)
-        .onChange(of: presentationURL) { _, url in
-            if url == nil { presentation = nil }
+        .fullScreenCover(item: $presentation) { document in
+            PDFPresentation(document: document, coordinator: coordinator) { presentation = nil }
         }
         .confirmationDialog(PichiLocalization.text("Delete Meeting"), isPresented: Binding(
             get: { deleteCandidate != nil }, set: { if !$0 { deleteCandidate = nil } }
@@ -174,6 +168,27 @@ struct MobileMeetingRoot: View {
         .onChange(of: selectedHistory?.id) { _, _ in playback.stop() }
         .onChange(of: settings.meetingAudioRetentionPolicy) { _, _ in
             Task { await coordinator.sweepExpiredAudio(); await refreshHistory() }
+        }
+    }
+
+    // Observe the coordinator inside the presented subtree as well, so Stop or
+    // failure releases screen ownership even while the recording screen is covered.
+    private struct PDFPresentation: View {
+        let document: MobilePresentationDocument
+        @ObservedObject var coordinator: MeetingSessionCoordinator
+        let close: () -> Void
+
+        var body: some View {
+            NavigationStack {
+                MobilePresentationPDFView(document: document, isRecording: coordinator.isRecording)
+                    .ignoresSafeArea(edges: .bottom)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(PichiLocalization.text("Done"), action: close)
+                                .accessibilityIdentifier("meeting.presentation.close")
+                        }
+                    }
+            }
         }
     }
 

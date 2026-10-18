@@ -150,8 +150,8 @@ final class MobileNavigationUITests: XCTestCase {
                             // This selector owns the PDF/picker it opened. Close only
                             // that presentation before using normal owned Stop.
                             let closePresentation = self.app.buttons.matching(NSPredicate(
-                                format: "identifier == %@ OR label IN %@", "QLOverlayDoneButtonAccessibilityIdentifier",
-                                ["Done", "Готово", "Close", "Закрыть", "закрыть", "Cancel", "Отмена", "Отменить"])).firstMatch
+                                format: "identifier == %@ OR label IN %@", "meeting.presentation.close",
+                                ["Cancel", "Отмена", "Отменить"])).firstMatch
                             if closePresentation.exists && closePresentation.isHittable {
                                 closePresentation.tap()
                                 self.capture("production-failure-owned-presentation-dismissed")
@@ -1166,10 +1166,9 @@ final class MobileNavigationUITests: XCTestCase {
         // observed item's thumbnail rather than its editable filename label.
         fileCell.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
         capture("presentation-file-selected")
-        let done = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label IN %@",
-            "QLOverlayDoneButtonAccessibilityIdentifier", ["Done", "Готово", "Close", "Закрыть", "закрыть"])).firstMatch
+        let done = app.buttons["meeting.presentation.close"]
         try require(done.waitForExistence(timeout: 15) && app.state == .runningForeground,
-                    "Native QuickLook must show the PDF inside the foreground AUT")
+                    "Native PDF viewer must show the PDF inside the foreground AUT")
         capture("presentation-native-preview")
         return done
     }
