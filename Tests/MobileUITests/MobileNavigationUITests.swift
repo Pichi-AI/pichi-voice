@@ -1112,7 +1112,13 @@ final class MobileNavigationUITests: XCTestCase {
         }
         try require(file.waitForExistence(timeout: 15) && file.isHittable,
                     "The exact staged synthetic PDF must be selectable in Files")
-        file.tap()
+        let fileCell = app.cells.matching(NSPredicate(format: "label BEGINSWITH %@", stem)).firstMatch
+        try require(fileCell.exists && fileCell.isEnabled && fileCell.isHittable,
+                    "The approved PDF must be an enabled Files item")
+        // In icon mode the filename has its own text interaction. Select the
+        // observed item's thumbnail rather than its editable filename label.
+        fileCell.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).tap()
+        capture("presentation-file-selected")
         let done = app.buttons.matching(NSPredicate(format: "label IN %@", ["Done", "Готово"])).firstMatch
         try require(done.waitForExistence(timeout: 15) && app.state == .runningForeground,
                     "Native QuickLook must show the PDF inside the foreground AUT")
