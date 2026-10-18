@@ -20,6 +20,7 @@ root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia
     + 'class MeetingProcessingPipeline {}\n'
     + 'final class DebugLogger: Sendable { static let shared = DebugLogger(); func info(_ message: String, source: String) {} }\n'
     + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = [] }\n'
+    + 'struct MeetingBackendSpeakerActivity: Sendable {}\n'
     + 'final class MeetingMemoryAudioArchive: @unchecked Sendable { private let lock = NSLock(); private var count = 0; var totalSampleCount: Int { lock.withLock { count } }; func append(_ samples: UnsafeBufferPointer<Float>) throws { lock.withLock { count += samples.count } }; func seal() throws {} }\n')
 source = pathlib.Path('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift').read_text()
 # Compile the complete production copier, without unrelated declarations appended later.
@@ -39,6 +40,7 @@ xcrun swiftc -parse-as-library -swift-version 6 \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Sources/Fluid/Services/Meeting/Platform/MeetingCapturePCMTransport.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingPipeline+MemoryAudio.swift \
+    Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift \
     "$task_test_dir/Contracts.swift" "$task_test_dir/SampleCopy.swift" "$task_test_dir/MacCaptureTee.swift" \
     Tests/MeetingCapturePCMTransportTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"

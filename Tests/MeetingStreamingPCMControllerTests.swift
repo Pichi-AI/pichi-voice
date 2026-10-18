@@ -88,7 +88,82 @@ nonisolated struct MeetingStreamingPCMControllerTests {
         try await self.testLatePreviewAndCallbackReentry()
         try await self.testCleanupFailureDoesNotPublishFinal()
         try await self.testDetachedScopePreservesReentry()
+        try await self.testDeferredPreparationAndEarlyStop()
+        try await self.testDeferredFailureAndCancellation()
         print("PASS streaming controller preparation, single-command admission, actual PCM wait cancellation, guarded previews and joined resource teardown")
+    }
+
+    static func testDeferredPreparationAndEarlyStop() async throws {
+        let evidence = Evidence(), entered = Signal(), preparation = Signal()
+        let scope = self.scoped(Prepared(evidence: evidence))
+        let controller = MeetingStreamingPCMController.deferred { body in
+            await entered.release()
+            await preparation.wait()
+            try await scope(body)
+        }
+        try require(await evidence.events.isEmpty, "Admitting capture does not open either native model")
+        let first = Task {
+            try await controller.recognize(window: .controllerTestWindow(samples: [0, 0.1, -0.1], sealed: true), offset: 0)
+        }
+        await entered.wait()
+        try require(await evidence.events.isEmpty, "The first captured PCM remains owned while models prepare")
+        await preparation.release()
+        let result = try await first.value
+        try require(result.batch.text == "safe-3", "All initially captured samples reach the sole prepared worker")
+        _ = try await controller.finishStreaming()
+        try require(await evidence.events == ["prepared-both", "recognize", "finish", "cleaned"],
+                    "Deferred capture uses one resource scope and joins finalization")
+
+        let shortEvidence = Evidence()
+        let short = MeetingStreamingPCMController.deferred(using: self.scoped(.init(evidence: shortEvidence)))
+        _ = try await short.finishStreaming()
+        try require(await shortEvidence.events == ["prepared-both", "finish", "cleaned"],
+                    "Stop before the first PCM window has one joined final command")
+    }
+
+    static func testDeferredFailureAndCancellation() async throws {
+        let failureEvidence = Evidence()
+        let failed = MeetingStreamingPCMController.deferred { _ in
+            await failureEvidence.record("cleaned")
+            throw ExpectedFailure.prepare
+        }
+        do {
+            _ = try await failed.recognize(window: .controllerTestWindow(samples: [0], sealed: true), offset: 0)
+            throw NSError(domain: "ExpectedDeferredFailure", code: 1)
+        } catch ExpectedFailure.prepare { }
+        try require(await failureEvidence.events == ["cleaned"], "Deferred failure never publishes a false ready result")
+
+        let untouchedEvidence = Evidence()
+        let untouched = MeetingStreamingPCMController.deferred(using: self.scoped(.init(evidence: untouchedEvidence)))
+        await untouched.cancelAndWait()
+        try require(await untouchedEvidence.events.isEmpty, "Cancellation before first use opens no resources")
+
+        let emptyEvidence = Evidence()
+        let empty = MeetingStreamingPCMController.deferred(using: self.scoped(.init(evidence: emptyEvidence)))
+        try require(empty.cancelIfUnstarted(), "Empty capture closes without opening native engines")
+        await empty.cancelAndWait()
+        try require(await emptyEvidence.events.isEmpty, "Failed microphone admission has no model cleanup to create")
+
+        let evidence = Evidence(), entered = Signal(), preparation = Signal(), cleanup = Signal()
+        let scope = self.scoped(.init(evidence: evidence), cleanupGate: cleanup)
+        let controller = MeetingStreamingPCMController.deferred { body in
+            await entered.release()
+            await preparation.wait() // Deliberately non-cooperative native preparation.
+            try await scope(body)
+        }
+        let task = Task {
+            do {
+                _ = try await controller.recognize(window: .controllerTestWindow(samples: [0], sealed: true), offset: 0)
+                throw NSError(domain: "ExpectedDeferredCancellation", code: 1)
+            } catch is CancellationError { await evidence.record("returned") }
+        }
+        await entered.wait()
+        task.cancel()
+        await preparation.release()
+        try require(await !evidence.contains("returned"), "Cancelling startup waits for native preparation and cleanup")
+        await cleanup.release()
+        try await task.value
+        try require(await evidence.events.suffix(2) == ["cleaned", "returned"], "No task escapes a cancelled deferred scope")
     }
 
     static func testSuccessAndFinishJoin() async throws {

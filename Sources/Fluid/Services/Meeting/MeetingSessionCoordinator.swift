@@ -435,6 +435,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         else { throw MeetingCoordinatorError.recordingAlreadyActive }
         let reservation = UUID()
         self.startReservation = reservation
+        if DebugLogger.diagnosticsEnabled {
+            DebugLogger.shared.info("captureID=\(reservation) phase=start_admitted uptimeMs=\(Int64(ProcessInfo.processInfo.systemUptime * 1000))", source: "MeetingCaptureStartup")
+        }
         defer { if self.startReservation == reservation { self.startReservation = nil } }
         await self.ensureRestored()
         let passiveOffer = passiveOffer ?? self.activeSession.flatMap { offer in
@@ -509,7 +512,14 @@ final class MeetingSessionCoordinator: ObservableObject {
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
         // This callback belongs to the ambient selected-ASR lifecycle. Explicit requests
         // are prepared by the existing requested-backend pipeline/runtime owners below.
-        if configuration.transcriptionBackendID == nil { try await self.validateRecordingModels() }
+        // An installed PCM provider is prepared by its immutable pipeline attempt. Warming
+        // the ambient selected provider here would load it twice and delay microphone start.
+        // A missing installation still uses the existing download owner before admission.
+        if configuration.transcriptionBackendID == nil,
+           !Self.usesPCMProcessing(configuration)
+            || PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) != true {
+            try await self.validateRecordingModels()
+        }
         try Task.checkCancellation()
         guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
               self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
@@ -538,12 +548,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             throw MeetingCoordinatorError.maintenanceInProgress
         }
 
-        var publicationConfiguration = configuration
+        let publicationConfiguration = configuration
         let recordingRedactor = configuration.piiRedactionEnabled == true ? try self.redactorProvider() : nil
         if configuration.piiRedactionEnabled == true {
-            guard let redactor = recordingRedactor else { throw MeetingPrivacyPublicationError.redactorUnavailable }
-            publicationConfiguration.title = try await redactor.redact(configuration.title)
-            publicationConfiguration.microphone.displayName = try await redactor.redact(configuration.microphone.displayName)
+            // Explicit meeting/input metadata is user-authored. Only recognized speech is
+            // redacted; warming NER here would also delay microphone admission.
+            guard recordingRedactor != nil else { throw MeetingPrivacyPublicationError.redactorUnavailable }
         }
         let lease = try await self.audioArbiter.acquireMeetingCapture()
         let recordingModelID: String
@@ -694,6 +704,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 })
             }
             captureStartAttempted = true
+            if DebugLogger.diagnosticsEnabled {
+                DebugLogger.shared.info("captureID=\(reservation) phase=capture_requested uptimeMs=\(Int64(ProcessInfo.processInfo.systemUptime * 1000))", source: "MeetingCaptureStartup")
+            }
             let startResult = try await self.capture.start(
                 session: session,
                 configuration: publicationConfiguration,
@@ -714,6 +727,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 }
             )
             captureStarted = true
+            if DebugLogger.diagnosticsEnabled {
+                DebugLogger.shared.info("captureID=\(reservation) phase=capture_started uptimeMs=\(Int64(ProcessInfo.processInfo.systemUptime * 1000))", source: "MeetingCaptureStartup")
+            }
             guard self.operationGeneration == generation, !Task.isCancelled else {
                 throw CancellationError()
             }

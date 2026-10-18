@@ -24,15 +24,28 @@ extension MeetingProcessingPipeline {
             }
             Self.logStreamingEmission(emission, attemptID: attemptID, phase: phase)
         }
-        let controller = try await MeetingStreamingPCMController.prepare { body in
+        let sessionID = attempt.request.session.id
+        let backendID = attempt.descriptor.id.rawValue
+        let controller = MeetingStreamingPCMController.deferred { body in
             try await DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
+                let started = ProcessInfo.processInfo.systemUptime
+                DebugLogger.shared.info("prepare_started session=\(sessionID) backend=\(backendID) model=\(configuration.asrModel) captureAdmitted=true", source: "MeetingMemoryAudio")
+                defer {
+                    let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+                    DebugLogger.shared.info("streaming_scope_finished elapsedMs=\(elapsed)", source: "MeetingMemoryAudio")
+                }
+                try await attempt.preparePrivacy()
                 try await service.withMeetingModelResidency(attemptID: attemptID,
                     acceptsCompletedCancellation: { _ in false }) {
+                    try await runtime.preparePCMResources(attemptID: attemptID, configuration: configuration)
                     try await runtime.withPreparedStreamingPCM(trackID: track.id, attemptID: attemptID,
                         configuration: configuration, onProgress: { observation in
                             let emission = try await state.observe(observation)
                             try await publish(emission, "progress")
-                        }, body: body)
+                        }, body: { session in
+                            DebugLogger.shared.info("prepare_ready elapsedMs=\(Int((ProcessInfo.processInfo.systemUptime - started) * 1000)) captureAdmitted=true", source: "MeetingMemoryAudio")
+                            try await body(session)
+                        })
                 }
             }
         }
@@ -55,6 +68,10 @@ extension MeetingProcessingPipeline {
                         try await controller.discardActivity(beforeSample: await state.retainActivityFromSample)
                     }
                 }, finalize: {
+                    if controller.cancelIfUnstarted() {
+                        await state.cancel()
+                        return nil
+                    }
                     let final = try await controller.finishStreaming()
                     let emission = try await state.finish(final)
                     Self.logStreamingEmission(emission, attemptID: attemptID, phase: "finish")
