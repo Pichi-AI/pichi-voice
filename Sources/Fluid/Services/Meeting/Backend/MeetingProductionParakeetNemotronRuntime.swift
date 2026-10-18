@@ -351,7 +351,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         guard configuration.speakerLabelsEnabled, configuration.effectiveSpeakerProcessingMode == .streaming,
               artifact.compiledModelURL != nil, artifact.profile.isExperimental,
               artifact.profile.computePreference == .cpuOnly,
-              configuration.diarizationFingerprint == artifact.profile.streamingImplementationFingerprint else {
+              artifact.profile.acceptsStreamingImplementationFingerprint(configuration.diarizationFingerprint) else {
             throw MeetingModelResidencyError.staleGrant
         }
     }
@@ -385,6 +385,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         defer { self.pcmIdentityState.end() }
         let ownerEvidence = StreamingOwnerEvidenceBox()
         let collectOwnerEvidence = self.ownerVoiceProfileSnapshot != nil
+            && artifact.profile.verifiesStreamingOwner(implementationFingerprint: configuration.diarizationFingerprint)
         _ = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration) { asr in
             _ = try await self.withNemotronDiarization(artifact: artifact) { factory in
                 let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: 0)

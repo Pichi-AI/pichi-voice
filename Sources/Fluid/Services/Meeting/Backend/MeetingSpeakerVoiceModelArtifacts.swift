@@ -92,4 +92,14 @@ extension MeetingNemotronModelProfile {
         self.implementationFingerprint + (self.supportsOwnerVoiceVerification
             ? ";voice=wespeaker@" + MeetingSpeakerVoiceModelArtifacts.revision + ";owner-stream=bounded-two-3s-v1" : "")
     }
+
+    /// Exact persisted anonymous recipes remain resumable. The new owner stage is additive
+    /// only for its own composite identity; arbitrary suffixes and changed policies stay invalid.
+    nonisolated func acceptsStreamingImplementationFingerprint(_ value: String) -> Bool {
+        value == self.implementationFingerprint || value == self.streamingImplementationFingerprint
+    }
+
+    nonisolated func verifiesStreamingOwner(implementationFingerprint value: String) -> Bool {
+        self.supportsOwnerVoiceVerification && value == self.streamingImplementationFingerprint
+    }
 }

@@ -17,6 +17,12 @@ nonisolated struct MeetingNemotronModelArtifact: Sendable {
     struct Profile: Sendable {
         enum Preference { case cpuOnly, devicePreferred }
         var streamingImplementationFingerprint = "synthetic-pinned-profile"
+        func acceptsStreamingImplementationFingerprint(_ value: String) -> Bool {
+            value == self.streamingImplementationFingerprint || value == "synthetic-legacy-anonymous"
+        }
+        func verifiesStreamingOwner(implementationFingerprint value: String) -> Bool {
+            value == self.streamingImplementationFingerprint
+        }
         var isExperimental = true
         var computePreference = Preference.cpuOnly
     }
@@ -330,11 +336,14 @@ private actor SyntheticDiarizer: MeetingIncrementalNemotronDiarizerSession {
         print("12 prepared streaming runtime contract groups passed")
     }
     private nonisolated static func ownerScopeRetiresModelsBeforeEncoder() async throws {
-        for failEncoder in [false, true] {
+        for (failEncoder, legacyAnonymous) in [(false, false), (true, false), (false, true)] {
             let scope = StreamingScopeFixture(failEncoder: failEncoder)
+            var configuration = MeetingFinalProcessingConfiguration()
+            if legacyAnonymous { configuration.diarizationFingerprint = "synthetic-legacy-anonymous" }
+            let frozenConfiguration = configuration
             let runtime = MeetingParakeetNemotronRuntime(scope: scope)
             let controller = MeetingStreamingPCMController.deferred { body in
-                try await runtime.withPreparedStreamingPCM(trackID: UUID(), attemptID: UUID(), configuration: .init(),
+                try await runtime.withPreparedStreamingPCM(trackID: UUID(), attemptID: UUID(), configuration: frozenConfiguration,
                     onProgress: { value in
                         if !value.batch.speakers.isEmpty {
                             try require(value.batch.segments.isEmpty, "Owner publication must never replace protected words")
@@ -350,9 +359,13 @@ private actor SyntheticDiarizer: MeetingIncrementalNemotronDiarizerSession {
             let events = scope.snapshot
             try require(events.prefix(4) == ["asr-scope-open", "speaker-scope-open", "speaker-scope-closed", "asr-scope-closed"],
                         "Both native inference scopes must retire before owner encoding")
-            try require(events.dropFirst(4).first == "voice-encode", "The voice encoder runs only after both model scopes close")
-            try require(events.contains("identity-published") == !failEncoder,
-                        "An encoder failure preserves the meeting and cannot claim owner identity")
+            if legacyAnonymous {
+                try require(events.count == 4, "A frozen anonymous recipe cannot run a new owner stage even when a profile exists")
+            } else {
+                try require(events.dropFirst(4).first == "voice-encode", "The voice encoder runs only after both model scopes close")
+            }
+            try require(events.contains("identity-published") == (!failEncoder && !legacyAnonymous),
+                        "An unavailable encoder or legacy recipe preserves anonymous speech without claiming owner identity")
         }
         print("PASS actual production streaming scope releases both model owners before optional encoder and identity publication")
     }

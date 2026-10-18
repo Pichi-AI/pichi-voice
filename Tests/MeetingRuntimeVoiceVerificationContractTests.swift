@@ -6,6 +6,7 @@ nonisolated enum AppBrand {
     static let storageNamespace = "owner-verification-contract-tests"
     static func format(_ key: String, _ value: String) -> String { key.replacingOccurrences(of: "%@", with: value) }
 }
+nonisolated enum MeetingSpeakerVoiceModelArtifacts { static let revision = "synthetic-pinned-voice-revision" }
 nonisolated struct MeetingSpeakerVoiceSamples: Sendable {}
 nonisolated struct MeetingSpeakerVoiceProfile: Sendable {}
 nonisolated enum MeetingPCMRuntimeDiagnostics {
@@ -39,6 +40,17 @@ private nonisolated enum Refusal: Error { case notUsed }
     }
     static func main() async throws {
         for profile in MeetingNemotronModelProfile.allCases {
+            try require(profile.acceptsStreamingImplementationFingerprint(profile.implementationFingerprint),
+                        "An exact anonymous streaming recipe remains admissible")
+            try require(profile.acceptsStreamingImplementationFingerprint(profile.streamingImplementationFingerprint),
+                        "The exact current composite recipe remains admissible")
+            try require(!profile.verifiesStreamingOwner(implementationFingerprint: profile.implementationFingerprint),
+                        "An old anonymous fingerprint cannot authorize owner confirmation")
+            try require(profile.verifiesStreamingOwner(implementationFingerprint: profile.streamingImplementationFingerprint)
+                        == profile.supportsOwnerVoiceVerification, "Only the exact supported composite enables owner verification")
+            for changed in [profile.implementationFingerprint + "-changed", profile.streamingImplementationFingerprint + ";compute=cpuAndGPU"] {
+                try require(!profile.acceptsStreamingImplementationFingerprint(changed), "Unregistered recipe changes remain refused")
+            }
             let locator: any MeetingNemotronModelLocating = MeetingNemotronModelLocator(profile: profile)
             let enabled = locator.supportsOwnerVoiceVerification
             let runtime = VoiceVerificationProbe(verificationEnabled: enabled)
@@ -51,6 +63,14 @@ private nonisolated enum Refusal: Error { case notUsed }
             try require(empty.isEmpty && MeetingSpeakerVoiceEncoder.calls.count == before + (enabled ? 1 : 0),
                         "Empty voice work cannot load a model")
         }
+        let legacyAnonymous = MeetingNemotronModelLocator(profile: .experimentalFast128FP16CPU).withoutOwnerVoiceVerification()
+        try require(!legacyAnonymous.supportsOwnerVoiceVerification,
+                    "A frozen anonymous streaming recipe cannot load the newly supported owner encoder")
+        let beforeLegacy = MeetingSpeakerVoiceEncoder.calls.count
+        let anonymousResult = try await VoiceVerificationProbe(verificationEnabled: legacyAnonymous.supportsOwnerVoiceVerification)
+            .speakerVoiceProfiles(samples: [.init()])
+        try require(anonymousResult.isEmpty && MeetingSpeakerVoiceEncoder.calls.count == beforeLegacy,
+                    "Resuming a legacy anonymous recipe keeps its original encoder-free resource plan")
         let legacy: any MeetingNemotronModelLocating = LegacyInjectedLocator()
         try require(legacy.supportsOwnerVoiceVerification, "An existing injected locator keeps the legacy capability")
         let cancelled = Task {

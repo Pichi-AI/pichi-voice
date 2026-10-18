@@ -197,7 +197,18 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
     let injectedURL: URL?
     let environment: [String: String]
     let profile: MeetingNemotronModelProfile
-    var supportsOwnerVoiceVerification: Bool { self.profile.supportsOwnerVoiceVerification }
+    private var ownerVoiceVerificationDisabled = false
+    var supportsOwnerVoiceVerification: Bool {
+        self.profile.supportsOwnerVoiceVerification && !self.ownerVoiceVerificationDisabled
+    }
+
+    /// A frozen legacy anonymous recipe shares the exact diarizer artifacts, but must not
+    /// acquire owner identity merely because the app now supports that optional stage.
+    func withoutOwnerVoiceVerification() -> Self {
+        var frozen = self
+        frozen.ownerVoiceVerificationDisabled = true
+        return frozen
+    }
 
     init(
         injectedURL: URL? = nil,

@@ -206,10 +206,13 @@ enum PichiMeetingProviderFactory {
         if configuration.effectiveSpeakerProcessingMode == .streaming {
             guard let registration = self.registrations[configuration.asrModel],
                   let expected = registration.speakerProcessingProfiles[.streaming], matched == expected,
-                  configuration.diarizationFingerprint == expected.streamingImplementationFingerprint else {
+                  expected.acceptsStreamingImplementationFingerprint(configuration.diarizationFingerprint) else {
                 throw MeetingBackendError.unsupportedSpeakerProcessingMode(
                     backend: self.registrations[configuration.asrModel]?.descriptor.id ?? .productionDefault, mode: .streaming)
             }
+            let locator = MeetingNemotronModelLocator(profile: expected)
+            return expected.verifiesStreamingOwner(implementationFingerprint: configuration.diarizationFingerprint)
+                ? locator : locator.withoutOwnerVoiceVerification()
         }
         return MeetingNemotronModelLocator(profile: matched ?? .fast32SplitW8A8)
     }

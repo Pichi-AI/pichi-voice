@@ -19,7 +19,9 @@ final nonisolated class VoiceVerificationProbe: Sendable {
     private let usesDefaultVoiceModelDirectory = false
     init(verificationEnabled: Bool) { self.ownerVoiceVerificationEnabled = verificationEnabled }
 '''
-Path(sys.argv[1]).write_text(context + source[start:end] + '\n}\n')
+voice = Path('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceModelArtifacts.swift').read_text()
+extension_start = voice.index('extension MeetingNemotronModelProfile {')
+Path(sys.argv[1]).write_text(context + source[start:end] + '\n}\n' + voice[extension_start:])
 PY
 swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
     -module-cache-path "$pichi_build/ModuleCache" \

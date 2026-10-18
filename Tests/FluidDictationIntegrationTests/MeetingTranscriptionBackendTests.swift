@@ -1450,7 +1450,22 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         let oldAnonymous = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
             diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint,
             speakerProcessingMode: .streaming)
-        XCTAssertThrowsError(try PichiMeetingProviderFactory.modelLocator(for: oldAnonymous))
+        let frozenIdentity = oldAnonymous.identityFingerprint
+        let frozenBytes = try JSONEncoder().encode(oldAnonymous)
+        let legacyLocator = try PichiMeetingProviderFactory.modelLocator(for: oldAnonymous)
+        XCTAssertEqual(legacyLocator.profile, .experimentalFast128FP16CPU)
+        XCTAssertFalse(legacyLocator.supportsOwnerVoiceVerification,
+                       "Resuming an anonymous recipe must not introduce a current enrolled owner or change its checkpoint identity")
+        XCTAssertTrue(try PichiMeetingProviderFactory.modelLocator(for: selected).supportsOwnerVoiceVerification)
+        XCTAssertEqual(oldAnonymous.identityFingerprint, frozenIdentity)
+        XCTAssertEqual(try JSONDecoder().decode(MeetingFinalProcessingConfiguration.self, from: frozenBytes), oldAnonymous)
+        XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(oldAnonymous, isAppleSilicon: true))
+        for invalid in [oldAnonymous.diarizationFingerprint + ";voice=unknown",
+                        selected.diarizationFingerprint + ";changed=true"] {
+            let unregistered = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
+                diarizationFingerprint: invalid, speakerProcessingMode: .streaming)
+            XCTAssertThrowsError(try PichiMeetingProviderFactory.modelLocator(for: unregistered))
+        }
     }
 
     func testSpeakerProcessingPreferenceUsesRegisteredTopologyAndDoesNotChangePrivacy() throws {
