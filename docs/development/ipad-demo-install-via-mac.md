@@ -121,3 +121,9 @@ xcrun devicectl device install app --device "$PICHI_DEMO_DEVICE" "$PICHI_DEMO_AP
 ## Что ещё нужно от владельца устройства
 
 Точные данные iPad и Mac, установленный Xcode, доступность своего Apple Account и GitHub, кабеля и необходимых прав на управляемом iPad, время демо и используемая презентация/CRM. Подпись и работа на конкретном устройстве считаются подтверждёнными только после этой установки и репетиции, а не после чтения инструкции.
+
+## Optional PDF presentation in the recording screen
+
+Before starting or while a meeting records, choose **PDF Presentation** in its toolbar, then select a PDF through the standard Files picker. Native QuickLook displays the selected PDF inside the same app. Use **Done** to return to the recording and stop it normally. The selected PDF is read directly, with security access retained only while the preview is open. The app does not copy the document into meeting storage or retain it for later. Audio retention and sensitive data settings still belong to the meeting captured before the PDF was opened.
+
+This is an optional foreground workflow. It does not establish that recording and inference remain reliable after switching to a separate presentation application. Test the exact device with the selected PDF, real microphone, current model and final export before a demo.

@@ -54,10 +54,17 @@ final class MobileNavigationUITests: XCTestCase {
                           userInfo: [NSLocalizedDescriptionKey: "A concrete frozen Release AUT revision is required"])
         }
         let backgroundSmoke = environment["PICHI_PHYSICAL_PRODUCTION_BACKGROUND_SMOKE"] == "1"
-        guard let observationSeconds = Int(environment["PICHI_PHYSICAL_PRODUCTION_SMOKE_SECONDS"] ?? "45"),
-              [45, 180].contains(observationSeconds), !backgroundSmoke || observationSeconds == 180 else {
+        let longSmoke = environment["PICHI_PHYSICAL_PRODUCTION_LONG_SMOKE"] == "1"
+        let presentationFile = environment["PICHI_PHYSICAL_PRODUCTION_PRESENTATION_FILE"]
+        guard presentationFile == nil || (!backgroundSmoke && presentationFile?.isEmpty == false) else {
             throw NSError(domain: "ProductionUISmoke", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Smoke duration must be 45 or 180 seconds; background mode requires 180"])
+                userInfo: [NSLocalizedDescriptionKey: "A presentation is a foreground test and needs a staged synthetic PDF filename"])
+        }
+        guard let observationSeconds = Int(environment["PICHI_PHYSICAL_PRODUCTION_SMOKE_SECONDS"] ?? "45"),
+              ([45, 180].contains(observationSeconds) || (longSmoke && observationSeconds == 3600)),
+              !backgroundSmoke || observationSeconds == 180 else {
+            throw NSError(domain: "ProductionUISmoke", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Smoke duration must be 45 or 180 seconds, or 3600 with explicit long opt-in; background requires 180"])
         }
         let began = ProcessInfo.processInfo.systemUptime
         var events: [[String: Any]] = []
@@ -127,6 +134,18 @@ final class MobileNavigationUITests: XCTestCase {
                             return
                         }
                         if completed() { break }
+                        if presentationFile != nil && !self.app.buttons["meeting.stop"].isHittable {
+                            // This selector owns the PDF/picker it opened. Close only
+                            // that presentation before using normal owned Stop.
+                            let closePresentation = self.app.buttons.matching(NSPredicate(
+                                format: "label IN %@", ["Done", "Готово", "Cancel", "Отмена", "Отменить"])).firstMatch
+                            if closePresentation.exists && closePresentation.isHittable {
+                                closePresentation.tap()
+                                self.capture("production-failure-owned-presentation-dismissed")
+                                try? await Task.sleep(nanoseconds: 250_000_000)
+                                continue
+                            }
+                        }
                         let stop = self.app.buttons["meeting.stop"]
                         if stop.exists, stop.isEnabled, stop.isHittable {
                             mark("cleanup_stop_tap_requested")
@@ -158,6 +177,7 @@ final class MobileNavigationUITests: XCTestCase {
                 "test": "testPhysicalProductionMeetingAndProtectedExport", "revision": revision,
                 "outcome": outcome, "events": events, "plannedRecordingObservationSeconds": observationSeconds,
                 "backgroundSmoke": backgroundSmoke, "backgroundObservedSeconds": backgroundObservedSeconds,
+                "longSmoke": longSmoke, "presentationFile": presentationFile ?? "",
                 "backgroundObservationScope": "Sum of intervals between consecutive runningBackground samples; app state alone does not prove audio capture, text or speaker progress",
                 "speechPlaybackOwner": "parent_external_player",
                 "measurementScope": "XCTest action returns and accessibility observations, including synchronization and polling; not touch latency or recognition accuracy"
@@ -201,6 +221,14 @@ final class MobileNavigationUITests: XCTestCase {
             mark("recording_visible")
             print("[PRODUCTION_UI_SMOKE] recording_visible")
             capture("production-03-recording-visible")
+            var presentationDone: XCUIElement?
+            if let presentationFile {
+                let done = try openSyntheticPresentation(filename: presentationFile)
+                presentationDone = done
+                mark("presentation_visible")
+                print("[PRODUCTION_UI_SMOKE] presentation_visible")
+                capture("production-presentation-preview")
+            }
             mark("recording_observation_began")
             let speechDeadline = ProcessInfo.processInfo.systemUptime + Double(observationSeconds)
             var previousState: XCUIApplication.State?
@@ -214,7 +242,12 @@ final class MobileNavigationUITests: XCTestCase {
                 }
                 switch state {
                 case .runningForeground:
-                    try require(recordingVisible(), "The owned foreground recording must remain visibly active")
+                    if let presentationDone {
+                        try require(presentationDone.exists,
+                                    "The in-app PDF must remain presented; recording continuity is checked in the saved session")
+                    } else {
+                        try require(recordingVisible(), "The owned foreground recording must remain visibly active")
+                    }
                 case .runningBackground:
                     try require(backgroundSmoke, "Background observation requires its explicit opt-in flag")
                     // The parent owns Safari switching and separately reads the saved
@@ -229,6 +262,14 @@ final class MobileNavigationUITests: XCTestCase {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
             }
             mark("recording_observation_ended")
+            if let presentationDone {
+                try require(presentationDone.isHittable, "The PDF must expose native Done before returning to Stop")
+                presentationDone.tap()
+                mark("presentation_dismissed")
+                capture("production-presentation-dismissed")
+                try require(app.buttons["meeting.stop"].waitForExistence(timeout: 10),
+                            "Dismissing the PDF must return to the same owned recording")
+            }
             capture("production-04-before-stop")
             try require(recordingVisible(), "The parent must return the still-recording AUT to foreground before Stop")
             try require(!backgroundSmoke || backgroundObservedSeconds > 0,
@@ -291,6 +332,35 @@ final class MobileNavigationUITests: XCTestCase {
             capture("production-failure-current-state")
             throw error
         }
+        #endif
+    }
+
+    func testPDFPresentationOpensAndReturnsToReadyInBothLanguages() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("The parent stages a synthetic PDF in an isolated simulator Files provider")
+        #else
+        let filename = ProcessInfo.processInfo.environment["PICHI_PRESENTATION_FIXTURE_NAME"] ?? "SyntheticDemoPresentation.pdf"
+        for (language, appearance) in [("en", "light"), ("ru", "dark")] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launch()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
+            capture("presentation-\(language)-ready")
+            let done = try openSyntheticPresentation(filename: filename)
+            capture("presentation-\(language)-native-pdf")
+            done.tap()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.buttons["meeting.start"].isHittable)
+            XCTAssertFalse(app.buttons["meeting.stop"].exists)
+            capture("presentation-\(language)-dismissed-ready")
+            // A released document can be chosen again without a stale modal or lease.
+            let reopenedDone = try openSyntheticPresentation(filename: filename)
+            capture("presentation-\(language)-reopened-pdf")
+            reopenedDone.tap()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 10))
+            capture("presentation-\(language)-reopened-dismissed")
+        }
+        app.terminate()
         #endif
     }
 
@@ -973,6 +1043,39 @@ final class MobileNavigationUITests: XCTestCase {
                 }
             }
         }
+    }
+
+    /// The parent stages this approved synthetic file through native Files storage.
+    /// No app data directory exposure, production launch flag or recording reset is used.
+    private func openSyntheticPresentation(filename: String) throws -> XCUIElement {
+        func require(_ condition: Bool, _ message: String) throws {
+            guard condition else { throw NSError(domain: "PresentationUISmoke", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message]) }
+        }
+        try require(!filename.isEmpty && !filename.contains("/") && filename.hasSuffix(".pdf"),
+                    "An exact staged synthetic PDF filename is required")
+        let presentation = app.buttons["meeting.presentation"]
+        try require(presentation.waitForExistence(timeout: 5) && presentation.isHittable,
+                    "The meeting toolbar must expose PDF Presentation")
+        presentation.tap()
+        capture("presentation-files-picker")
+        let stem = (filename as NSString).deletingPathExtension
+        let file = app.staticTexts.matching(NSPredicate(format: "label IN %@", [filename, stem])).firstMatch
+        if !file.waitForExistence(timeout: 5) {
+            let search = app.searchFields.firstMatch
+            try require(search.waitForExistence(timeout: 5) && search.isHittable,
+                        "Stage the approved synthetic PDF in native Files before this test")
+            search.tap()
+            search.typeText(stem + "\n")
+        }
+        try require(file.waitForExistence(timeout: 15) && file.isHittable,
+                    "The exact staged synthetic PDF must be selectable in Files")
+        file.tap()
+        let done = app.buttons.matching(NSPredicate(format: "label IN %@", ["Done", "Готово"])).firstMatch
+        try require(done.waitForExistence(timeout: 15) && app.state == .runningForeground,
+                    "Native QuickLook must show the PDF inside the foreground AUT")
+        capture("presentation-native-preview")
+        return done
     }
 
     private func waitForOrientation(portrait: Bool) {

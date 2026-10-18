@@ -52393,6 +52393,57 @@
           }
         }
       }
+    },
+    "PDF Presentation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PDF Presentation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "PDF-презентация"
+          }
+        }
+      }
+    },
+    "Open a PDF in this app while recording continues.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a PDF in this app while recording continues."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть PDF в приложении, не прерывая запись."
+          }
+        }
+      }
+    },
+    "The PDF presentation could not be opened. Choose a readable PDF file.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The PDF presentation could not be opened. Choose a readable PDF file."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось открыть PDF-презентацию. Выберите доступный PDF-файл."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

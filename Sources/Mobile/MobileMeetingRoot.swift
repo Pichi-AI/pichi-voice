@@ -1,5 +1,7 @@
 import AVFoundation
 import Combine
+import QuickLook
+import UniformTypeIdentifiers
 import SwiftUI
 import UIKit
 
@@ -33,6 +35,8 @@ struct MobileMeetingRoot: View {
     @State private var edit: MeetingEditDraft?
     @State private var deleteCandidate: MeetingSession?
     @State private var share: MeetingSharePayload?
+    @State private var showPresentationPicker = false
+    @State private var presentation: MobilePresentationDocument?
     @StateObject private var playback = MeetingSegmentPlayback()
     // Projection is independent of microphone meters, pending audio, playback progress
     // and other frequent view invalidations. Keep one result for the visible transcript.
@@ -117,6 +121,24 @@ struct MobileMeetingRoot: View {
             MobileActivitySheet(items: payload.items) { share = nil }
                 .onDisappear { payload.cleanup() }
         }
+        .fileImporter(isPresented: $showPresentationPicker, allowedContentTypes: [.pdf]) { result in
+            switch result {
+            case .success(let url):
+                do { presentation = try MobilePresentationDocument(url: url) }
+                catch { report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
+                    "The PDF presentation could not be opened. Choose a readable PDF file."])) }
+            case .failure(let error):
+                if (error as NSError).code != NSUserCancelledError {
+                    report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
+                    "The PDF presentation could not be opened. Choose a readable PDF file."]))
+                }
+            }
+        }
+        // QuickLook is presented by this scene, so choosing or dismissing a PDF never
+        // changes the meeting coordinator or sends the app to another application.
+        .quickLookPreview(Binding(get: { presentation?.url }, set: { url in
+            if url == nil { presentation = nil }
+        }))
         .confirmationDialog(PichiLocalization.text("Delete Meeting"), isPresented: Binding(
             get: { deleteCandidate != nil }, set: { if !$0 { deleteCandidate = nil } }
         )) {
@@ -211,6 +233,15 @@ struct MobileMeetingRoot: View {
         .navigationTitle(item == .meetings ? AppBrand.meetingName : PichiLocalization.text(item.title))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if item == .meetings, coordinator.isRecording || coordinator.isQuiescent {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showPresentationPicker = true } label: {
+                        Label(PichiLocalization.text("PDF Presentation"), systemImage: "doc.richtext")
+                    }
+                    .accessibilityIdentifier("meeting.presentation")
+                    .accessibilityHint(PichiLocalization.text("Open a PDF in this app while recording continues."))
+                }
+            }
             if item == .meetings, coordinator.isQuiescent, !coordinator.isRecording {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { newMeeting() } label: { Label(PichiLocalization.text("New Meeting"), systemImage: "plus") }
