@@ -59,6 +59,7 @@ struct MeetingStreamingProtectedWordTailTests {
         try knownNeighborIdentity()
         try knownNeighborSafety()
         try knownContinuationIdentityAndPartitions()
+        try alternatingContinuationPartitions()
         try longStream(mode: 0)
         try longStream(mode: 1)
         try longStream(mode: 2)
@@ -136,7 +137,8 @@ struct MeetingStreamingProtectedWordTailTests {
         var hiddenThird = try tail()
         let blocked = try update(&hiddenThird, words: words,
             activity: activity + [Self.activity("c", 0.21, 0.25)], end: 1.1)
-        check(blocked.inserted[1].speakerAttribution?.rule != .mainSpeakerContinuation)
+        check(blocked.inserted[1].speakerAttribution?.rule == .mainSpeakerContinuation)
+        check(blocked.inserted[1].speakerAttribution?.selectedToken?.label == "a")
     }
 
     static func exactWordBoundary() throws {
@@ -358,8 +360,11 @@ struct MeetingStreamingProtectedWordTailTests {
         var mixed = try tail(prior: established.speakers)
         let ambiguous = try update(&mixed, words: source,
             activity: support + [activity("a", 26.3, 26.4), activity("b", 26.3, 26.4), activity("c", 26.3, 26.4)], end: 26.6)
-        check(ambiguous.inserted[2].speakerID == nil && ambiguous.inserted[2].overlap == .ambiguous,
-              "A mixed word gained a contextual identity")
+        check(ambiguous.inserted[2].speakerID == established.segments[1].speakerID
+              && ambiguous.inserted[2].overlap == .ambiguous,
+              "A bounded mixed word lost continuing reading ownership or original overlap evidence")
+        check(ambiguous.inserted[2].speakerAttribution?.rule == .mainSpeakerContinuation)
+        check(ambiguous.inserted[2].speakerAttribution?.candidates.count == 3)
         check(ambiguous.inserted[2].speakerAttribution?.rule != .neighborAgreement)
         var manualWords = source
         manualWords[2].speakerID = UUID()
@@ -378,21 +383,25 @@ struct MeetingStreamingProtectedWordTailTests {
         let knownID = established.segments[1].speakerID
         check(knownID != nil)
         let source = [word(92, 20, 26), word(93, 26.1, 26.2), word(94, 26.2, 26.3),
-                      word(95, 26.4, 26.6), word(96, 26.6, 26.7), word(97, 26.8, 27)]
-        let support = [activity("a", 20, 26), activity("b", 26.1, 26.2), activity("b", 26.4, 26.6),
-                       activity("c", 26.45, 26.55), activity("b", 26.8, 27)]
+                      word(95, 26.4, 26.5), word(96, 26.5, 26.6), word(97, 26.6, 26.7),
+                      word(98, 26.7, 26.8), word(99, 26.9, 27.1)]
+        let support = [activity("a", 20, 26), activity("b", 26.1, 26.2), activity("b", 26.4, 26.5),
+                       activity("b", 26.6, 26.7), activity("c", 26.45, 26.65), activity("d", 26.47, 26.49),
+                       activity("b", 26.9, 27.1)]
         var oneShot = try tail(prior: established.speakers)
         let canonical = try oneShot.finish(safeWords: .init(segments: source), activity: support,
-            watermarks: marks(27), attemptID: attempt, epoch: epoch)
-        for position in 2...4 {
+            watermarks: marks(27.1), attemptID: attempt, epoch: epoch)
+        for position in 2...6 {
             check(canonical.inserted[position].speakerID == knownID)
             check(canonical.inserted[position].speakerAttribution?.rule == .mainSpeakerContinuation)
             check(canonical.inserted[position].speakerAttribution?.selectedSpeakerID == knownID)
             check(canonical.inserted[position].speakerAttribution?.background.isEmpty == true)
         }
         check(canonical.inserted[2].speakerAttribution?.candidates.isEmpty == true)
-        check(canonical.inserted[4].speakerAttribution?.candidates.isEmpty == true)
-        check(canonical.inserted[3].speakerAttribution?.rawAssignment.tokens.count == 2)
+        check(canonical.inserted[6].speakerAttribution?.candidates.isEmpty == true)
+        check(canonical.inserted[3].speakerAttribution?.rawAssignment.tokens.count == 3)
+        check(canonical.inserted[4].speakerAttribution?.rawAssignment.tokens.map(\.label) == ["c"])
+        check(canonical.inserted[4].speakerAttribution?.relation == .single)
         for split in 0...source.count {
             var value = try tail(prior: established.speakers)
             let prefix = Array(source.prefix(split)), suffix = Array(source.dropFirst(split))
@@ -406,7 +415,7 @@ struct MeetingStreamingProtectedWordTailTests {
                       "Continuation used an absent future original anchor")
             }
             let final = try value.finish(safeWords: .init(segments: suffix), activity: support,
-                watermarks: marks(27), attemptID: attempt, epoch: epoch)
+                watermarks: marks(27.1), attemptID: attempt, epoch: epoch)
             var observed = Dictionary(uniqueKeysWithValues: (first.inserted + final.inserted).map { ($0.id, $0) })
             for patch in final.revisions {
                 guard var row = observed[patch.segmentID] else { check(false); continue }
@@ -424,13 +433,13 @@ struct MeetingStreamingProtectedWordTailTests {
             check(final.isFinal && final.provisionalSpeakerIDs.isEmpty)
         }
         var fresh = try tail()
-        let unadmitted = try update(&fresh, words: source, activity: support, end: 27)
-        for position in 2...4 {
+        let unadmitted = try update(&fresh, words: source, activity: support, end: 27.1)
+        for position in 2...6 {
             check(unadmitted.inserted[position].speakerID == nil,
                   "Continuation manufactured an identity for a never-admitted short speaker")
             check(unadmitted.inserted[position].speakerAttribution?.rule == .mainSpeakerContinuation)
         }
-        for unsafeIndex in 1...5 {
+        for unsafeIndex in 1...7 {
             for kind in 0..<4 {
                 var words = source
                 switch kind {
@@ -440,9 +449,54 @@ struct MeetingStreamingProtectedWordTailTests {
                 default: words[unsafeIndex].attributionState = .timingUncertain
                 }
                 var value = try tail(prior: established.speakers)
-                let blocked = try update(&value, words: words, activity: support, end: 27)
+                let blocked = try update(&value, words: words, activity: support, end: 27.1)
                 check(blocked.inserted[2].speakerAttribution?.rule != .mainSpeakerContinuation)
-                check(blocked.inserted[4].speakerAttribution?.rule != .mainSpeakerContinuation)
+                check(blocked.inserted[6].speakerAttribution?.rule != .mainSpeakerContinuation)
+            }
+        }
+    }
+
+    static func alternatingContinuationPartitions() throws {
+        let established = try MeetingPCMRecordingAttribution.assemble(
+            transcript: .init(segments: [word(100, 0, 6)]), activity: [activity("a", 0, 6)],
+            epoch: epoch, attemptID: attempt, duration: 6, speakerNameFormat: "Speaker %lld")
+        let knownID = established.segments[0].speakerID
+        check(knownID != nil)
+        let source = (0..<9).map { word(101 + $0, 20 + Double($0) * 0.3, 20.2 + Double($0) * 0.3) }
+        let support = [activity("a", 20, 20.5), activity("a", 20.9, 21.7), activity("a", 22.1, 22.6),
+                       activity("b", 20.4, 21), activity("b", 21.6, 22.2)]
+        var oneShot = try tail(prior: established.speakers)
+        let canonical = try oneShot.finish(safeWords: .init(segments: source), activity: support,
+            watermarks: marks(22.6), attemptID: attempt, epoch: epoch)
+        check(canonical.inserted.allSatisfy { $0.speakerID == knownID },
+              "Overlapping alternating claims split continuing A reading ownership")
+        for position in [2, 6] {
+            check(canonical.inserted[position].speakerAttribution?.rule == .mainSpeakerContinuation)
+            check(canonical.inserted[position].speakerAttribution?.rawAssignment.tokens.map(\.label) == ["b"])
+            check(canonical.inserted[position].speakerAttribution?.relation == .single)
+        }
+        for split in 0...source.count {
+            var value = try tail(prior: established.speakers)
+            let prefix = Array(source.prefix(split)), suffix = Array(source.dropFirst(split))
+            let cursor = prefix.last?.nativeTiming?.end ?? 0
+            let prefixSupport = support.filter { $0.start < cursor }.map {
+                MeetingBackendSpeakerActivity(token: $0.token, start: $0.start, end: min($0.end, cursor))
+            }
+            let first = try update(&value, words: prefix, activity: prefixSupport, end: cursor)
+            let final = try value.finish(safeWords: .init(segments: suffix), activity: support,
+                watermarks: marks(22.6), attemptID: attempt, epoch: epoch)
+            var observed = Dictionary(uniqueKeysWithValues: (first.inserted + final.inserted).map { ($0.id, $0) })
+            for patch in final.revisions {
+                guard var row = observed[patch.segmentID] else { check(false); continue }
+                _ = try patch.apply(to: &row)
+                observed[patch.segmentID] = row
+            }
+            for expected in canonical.inserted {
+                let row = observed[expected.id]!
+                check(row.speakerID == expected.speakerID && row.speakerAttribution == expected.speakerAttribution,
+                      "A Stop partition changed deterministic alternating-window ownership")
+                check(row.text == expected.text && row.nativeTiming == expected.nativeTiming
+                      && row.nativeSpeakerAssignment == expected.nativeSpeakerAssignment)
             }
         }
     }

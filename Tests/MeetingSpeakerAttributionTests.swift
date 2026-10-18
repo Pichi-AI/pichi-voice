@@ -437,8 +437,11 @@ struct MeetingSpeakerAttributionTests {
                 }
                 self.check(try self.resolve(Array(words.dropLast()), activity)[1].rule != .mainSpeakerContinuation)
                 self.check(try self.resolve(Array(words.dropFirst()), activity)[0].rule != .mainSpeakerContinuation)
-                self.check(try self.resolve(words, activity + [self.activity("c", offset + 0.22, offset + 0.25)])[1].rule != .mainSpeakerContinuation)
-                self.check(try self.resolve(words, activity + [self.activity("c", offset + 0.45, offset + 0.55)])[1].rule != .mainSpeakerContinuation)
+                self.check(try self.resolve(words, activity + [self.activity("c", offset + 0.22, offset + 0.25)])[1].rule == .mainSpeakerContinuation)
+                let several = try self.resolve(words, activity + [self.activity("c", offset + 0.45, offset + 0.55)])[1]
+                self.check(several.rule == .mainSpeakerContinuation && several.selectedToken == a)
+                self.check(several.candidates.count == 3 && several.simultaneousIntervals.contains { $0.tokens.count == 3 },
+                           "Reading ownership erased original third-voice evidence")
                 let overlap = words + [self.unit("nested", offset + 0.35, offset + 0.45)]
                 self.check(try self.resolve(overlap, activity).first { $0.unitID == "mixed" }?.rule != .mainSpeakerContinuation)
             }
@@ -465,6 +468,20 @@ struct MeetingSpeakerAttributionTests {
                 self.check(filled[position].backgroundTokens.isEmpty)
             }
             self.check(filled[1].candidates.isEmpty && filled[3].candidates.isEmpty)
+            let wholeBout = [left, self.unit("mixed1", offset + 0.3, offset + 0.45, .ambiguous([a, b])),
+                             self.unit("clean-b", offset + 0.45, offset + 0.55, .assigned(b)),
+                             self.unit("mixed2", offset + 0.55, offset + 0.8, .ambiguous([a, b])), right]
+            let boutActivity = [self.activity("a", offset, offset + 0.45),
+                                self.activity("a", offset + 0.55, offset + 1.1), self.activity("b", offset + 0.4, offset + 0.6)]
+            let boutOutput = try self.resolve(wholeBout, boutActivity)
+            for position in 1...3 {
+                self.check(boutOutput[position].selectedToken == a && boutOutput[position].rule == .mainSpeakerContinuation,
+                           "A clean word inside a mixed interruption bout split continuing ownership")
+                self.check(boutOutput[position].backgroundTokens.isEmpty)
+            }
+            self.check(boutOutput[2].rawAssignment == .assigned(b) && boutOutput[2].relation == .single)
+            self.check(boutOutput[2].candidates.map(\.token) == [b] && boutOutput[2].candidates[0].supportSeconds > 0)
+            self.check(try self.resolve(wholeBout.reversed(), boutActivity.reversed()) == boutOutput)
             let old = try self.resolve([left, adjacent[2], right], sparse, policy: .init(enableMainSpeakerContinuation: false))
             self.check(old[1].selectedToken == b && old[1].rule == .briefInterruption && old[1].backgroundTokens == [a])
             for target in [MeetingAnalysisEpochID(trackID: Self.epoch.trackID, ordinal: 1),
@@ -497,7 +514,10 @@ struct MeetingSpeakerAttributionTests {
                   same: Bool = true, policy: MeetingSpeakerAttributionPolicy = .standard) throws
             -> [MeetingSpeakerAttribution.ContinuationRun] {
             try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: values, candidates: candidates,
-                interruptions: interruptions, anchors: anchors, sameSpeaker: { _, _ in same }, policy: policy)
+                interruptions: interruptions,
+                anchorIdentities: anchors.enumerated().map { index, anchor -> String? in
+                    anchor ? (same || index == 0 ? "a" : "b") : nil
+                }, policy: policy)
         }
         self.check(try runs() == [.init(first: 1, last: 2, before: 0, after: 3)])
         self.check(try runs(same: false).isEmpty)
@@ -522,6 +542,33 @@ struct MeetingSpeakerAttributionTests {
         self.check(try runs(values, candidates: [false, false, false, true, true, false],
                             interruptions: [false, false, false, false, true, false],
                             anchors: [true, true, true, false, false, true]) == [.init(first: 3, last: 4, before: 2, after: 5)])
+        // The first closing matching anchor wins. Its interior anchors cannot start a later
+        // overlapping claim, while the closing anchor can begin an adjacent independent bout.
+        let alternating = (0..<9).map { Interval(start: Double($0) * 0.3, end: Double($0) * 0.3 + 0.2) }
+        let identities: [String?] = ["a", nil, "b", nil, "a", nil, "b", nil, "a"]
+        let expected: [MeetingSpeakerAttribution.ContinuationRun] = [.init(first: 1, last: 3, before: 0, after: 4),
+                                                                   .init(first: 5, last: 7, before: 4, after: 8)]
+        self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: alternating,
+            candidates: Array(repeating: true, count: 9), interruptions: [false, true, false, true, false, true, false, true, false],
+            anchorIdentities: identities, policy: .standard) == expected)
+        self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: alternating,
+            candidates: Array(repeating: true, count: 9), interruptions: Array(repeating: false, count: 9),
+            anchorIdentities: identities, policy: .standard).isEmpty)
+        let uuidA = UUID(), uuidB = UUID()
+        self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: alternating,
+            candidates: Array(repeating: true, count: 9), interruptions: [false, true, false, true, false, true, false, true, false],
+            anchorIdentities: identities.map { $0.map { $0 == "a" ? uuidA : uuidB } }, policy: .standard) == expected,
+                   "Saved UUID identities changed generic continuation admission")
+        let largeCount = 100_000
+        let dense = (0..<largeCount).map { Interval(start: Double($0) * 0.001, end: Double($0) * 0.001 + 0.0005) }
+        let manyAnchors: [Int?] = (0..<largeCount).map { $0.isMultiple(of: 2) ? $0 % 100 : nil }
+        let began = Date()
+        let indexed = try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: dense,
+            candidates: Array(repeating: true, count: largeCount), interruptions: (0..<largeCount).map { !$0.isMultiple(of: 2) },
+            anchorIdentities: manyAnchors, policy: .standard)
+        self.check(!indexed.isEmpty)
+        self.check(zip(indexed, indexed.dropFirst()).allSatisfy { $0.after <= $1.before })
+        print("ATTRIBUTION_CONTINUATION_LINEAR units=\(largeCount) runs=\(indexed.count) elapsed=\(Date().timeIntervalSince(began))")
     }
 
     static func scopeAndChronology() throws {
