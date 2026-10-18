@@ -462,6 +462,16 @@ final class MobileNavigationUITests: XCTestCase {
                 capture("explicit-alias-\(language)-selection-menu")
                 let selectAll = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@",
                     ["Select All", "Выбрать все", "Выбрать всё"])).firstMatch
+                // UIKit can put Select All on a later menu page on a narrow
+                // phone, independently of the app's interface language.
+                for page in 1...3 {
+                    if selectAll.waitForExistence(timeout: 0.5) { break }
+                    let nextPage = app.buttons.matching(NSPredicate(format: "label IN %@",
+                        ["Next page", "Следующая страница"])).firstMatch
+                    guard nextPage.waitForExistence(timeout: 1) else { break }
+                    nextPage.tap()
+                    capture("explicit-alias-\(language)-selection-page-\(page)")
+                }
                 XCTAssertTrue(selectAll.waitForExistence(timeout: 3))
                 selectAll.tap()
                 field.typeText(name)
