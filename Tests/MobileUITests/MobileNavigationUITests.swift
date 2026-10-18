@@ -389,7 +389,7 @@ final class MobileNavigationUITests: XCTestCase {
             app.terminate()
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
             app.launch()
-            openNavigation("meetings", title: "Meetings")
+            openNavigation("meetings", title: language == "ru" ? "Встречи" : "Meetings")
             // This isolated simulator can restore an earlier synthetic recovery
             // fixture. Use normal New Meeting without deleting its stored audio.
             if !app.buttons["meeting.start"].exists {
