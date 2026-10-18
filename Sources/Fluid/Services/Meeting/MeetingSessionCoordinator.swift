@@ -1969,9 +1969,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Only durable, privacy-filtered text is published by the bounded PCM path.
         var snapshot = MeetingLiveTranscriptSnapshot.empty
         snapshot.revision = self.liveTranscript.revision + 1
+        let reading = MeetingTranscriptExporter.speakerPresentations(in: session,
+            segments: Array(session.transcriptSegments.suffix(128)))
         snapshot.utterances = session.transcriptSegments.suffix(100).map {
             MeetingLiveUtterance(id: $0.id, speaker: .you, text: $0.text, start: $0.start.seconds, end: $0.end.seconds,
-                participant: MeetingTranscriptExporter.speakerPresentation(for: $0, in: session))
+                participant: reading[$0.id] ?? MeetingTranscriptExporter.speakerPresentation(for: $0, in: session))
         }
         // Approved held text is display-only. Only batch.segments above enter persistence,
         // Copy and Export; finish/cancellation clear the partial with the same generation.

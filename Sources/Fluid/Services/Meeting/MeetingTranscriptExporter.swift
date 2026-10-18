@@ -10,17 +10,19 @@ nonisolated enum MeetingTranscriptExporter {
         speaker.isLocalUser ? PichiLocalization.text("You", language: language, bundle: bundle) : speaker.displayName
     }
 
-    static func text(for session: MeetingSession, includeEchoes: Bool = false) -> String {
+    static func text(for session: MeetingSession, includeEchoes: Bool = false,
+                     segmentIDs: Set<MeetingTranscriptSegmentID>? = nil) -> String {
         let speakerNames = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
         let segments = session.transcriptSegments
             .filter { includeEchoes || !$0.isEcho }
             .enumerated().sorted {
                 ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
             }.map(\.element)
-        return self.displayParagraphs(for: segments, in: session).map { paragraph in
-            let segment = paragraph.firstSegment
+        return self.displayParagraphs(for: segments, in: session).compactMap { paragraph in
+            let selected = paragraph.segments.filter { segmentIDs?.contains($0.id) ?? true }
+            guard let segment = selected.first else { return nil }
             let speaker = Self.speakerLabel(for: paragraph, in: session, speakerNames: speakerNames)
-            return "[\(Self.timestampText(segment.start.seconds))] \(speaker): \(paragraph.text)"
+            return "[\(Self.timestampText(segment.start.seconds))] \(speaker): \(DisplayParagraph(segments: selected).text)"
         }.joined(separator: "\n\n")
     }
 
@@ -47,9 +49,46 @@ nonisolated enum MeetingTranscriptExporter {
         speakerNames: [SessionSpeakerID: String]? = nil
     ) -> MeetingSpeakerPresentation {
         let names = speakerNames ?? Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        let label = self.speakerLabelValue(for: segment, in: session, speakerNames: names)
         return MeetingSpeakerPresentation(
             identity: self.paragraphIdentity(for: segment, legacySpeakerID: nil, in: session, speakerNames: names),
-            label: self.speakerLabelValue(for: segment, in: session, speakerNames: names))
+            label: label, participantID: self.readingParticipantID(segment.speakerID, label: label, in: session))
+    }
+
+    /// One contextual reading pass per session or bounded live batch. Original members remain
+    /// untouched; every consumer uses the same projected owner without a per-word full scan.
+    static func speakerPresentations(in session: MeetingSession,
+                                     segments: [MeetingTranscriptSegment]? = nil)
+        -> [MeetingTranscriptSegmentID: MeetingSpeakerPresentation] {
+        var context = session
+        if let segments { context.transcriptSegments = segments }
+        let ordered = context.transcriptSegments.enumerated().filter { !$0.element.isEcho }.sorted {
+            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+        }.map(\.element)
+        let names = Dictionary(context.activeSpeakers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+        var result: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation] = [:]
+        for paragraph in self.displayParagraphs(for: ordered, in: context) {
+            let first = paragraph.firstSegment
+            let projected = paragraph.projectedSpeakerID
+            let label = projected.flatMap { self.speakerName($0, in: context, speakerNames: names) }
+                .map(MeetingSpeakerPresentation.Label.estimated)
+                ?? self.speakerLabelValue(for: first, in: context, speakerNames: names)
+            let participant = self.readingParticipantID(projected ?? first.speakerID, label: label, in: context)
+            let presentation = MeetingSpeakerPresentation(
+                identity: self.paragraphIdentity(for: first, legacySpeakerID: projected, in: context, speakerNames: names),
+                label: label, participantID: participant)
+            for member in paragraph.segments { result[member.id] = presentation }
+        }
+        return result
+    }
+
+    private static func readingParticipantID(_ id: SessionSpeakerID?, label: MeetingSpeakerPresentation.Label,
+                                            in session: MeetingSession) -> SessionSpeakerID? {
+        switch label {
+        case .identified, .estimated, .interrupting:
+            return self.resolvedSpeakerID(id, in: session, activeSpeakerIDs: Set(session.activeSpeakers.map(\.id)))
+        case .unknown, .candidates: return nil
+        }
     }
 
     static func speakerLabel(
@@ -66,28 +105,12 @@ nonisolated enum MeetingTranscriptExporter {
         func name(_ value: MeetingSpeakerPresentation.Name) -> String {
             value.isLocalUser ? PichiLocalization.text("You", language: language, bundle: bundle) : value.displayName
         }
-        func names(_ values: [MeetingSpeakerPresentation.Name?]) -> String {
-            values.map { $0.map(name) ?? PichiLocalization.text("Unidentified voice", language: language, bundle: bundle) }
-                .joined(separator: " + ")
-        }
         switch label {
         case .unknown:
             return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         case let .identified(value), let .estimated(value): return name(value)
-        case let .interrupting(value, background):
-            return PichiLocalization.format("%@ (interrupting; background: %@)", language: language, bundle: bundle,
-                                            arguments: [name(value), names(background)])
-        case let .candidates(values, relation):
-            if values.isEmpty {
-                return PichiLocalization.text("Several speakers", language: language, bundle: bundle)
-            }
-            let template: String
-            switch relation {
-            case .simultaneous: template = "Simultaneous speech: %@"
-            case .conflict: template = "Speaker evidence conflicts: %@"
-            case .several: template = "Several speakers: %@"
-            }
-            return PichiLocalization.format(template, language: language, bundle: bundle, arguments: [names(values)])
+        case let .interrupting(value, _): return name(value)
+        case .candidates: return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         }
     }
 
@@ -96,12 +119,7 @@ nonisolated enum MeetingTranscriptExporter {
         speakerNames: [SessionSpeakerID: String]
     ) -> MeetingSpeakerPresentation.Label {
         func name(_ speakerID: SessionSpeakerID?) -> MeetingSpeakerPresentation.Name? {
-            guard let speakerID else { return nil }
-            let resolvedID = self.resolvedAliasID(speakerID, in: session)
-            if let owner = session.activeSpeakers.first(where: { $0.id == resolvedID && $0.isLocalUser }) {
-                return .init(displayName: owner.displayName, isLocalUser: true)
-            }
-            return speakerNames[resolvedID].map { .init(displayName: $0, isLocalUser: false) }
+            self.speakerName(speakerID, in: session, speakerNames: speakerNames)
         }
         if segment.attributionState != .timingUncertain, let attribution = segment.speakerAttribution,
            attribution.selectedSpeakerID == segment.speakerID {
@@ -134,6 +152,16 @@ nonisolated enum MeetingTranscriptExporter {
         case .overlappingSpeakers: return .candidates([], relation: .several)
         case .unassigned, .timingUncertain: return .unknown
         }
+    }
+
+    private static func speakerName(_ speakerID: SessionSpeakerID?, in session: MeetingSession,
+                                    speakerNames: [SessionSpeakerID: String]) -> MeetingSpeakerPresentation.Name? {
+        guard let speakerID else { return nil }
+        let resolvedID = self.resolvedAliasID(speakerID, in: session)
+        if let owner = session.activeSpeakers.first(where: { $0.id == resolvedID && $0.isLocalUser }) {
+            return .init(displayName: owner.displayName, isLocalUser: true)
+        }
+        return speakerNames[resolvedID].map { .init(displayName: $0, isLocalUser: false) }
     }
 
     /// Presentation grouping key: labels alone are insufficient because two distinct speakers can
@@ -202,13 +230,6 @@ nonisolated enum MeetingTranscriptExporter {
         speakerNames: [SessionSpeakerID: String], language: PichiInterfaceLanguage = .english,
         bundle: Bundle = .main
     ) -> String {
-        if paragraph.firstSegment.speakerID == nil,
-           paragraph.projectedSpeakerID == nil,
-           paragraph.segments.allSatisfy({ $0.speakerAttribution == nil
-               && $0.nativePrecision == nil && $0.nativeSpeakerAssignment == nil }),
-           paragraph.segments.contains(where: { $0.attributionState == .overlappingSpeakers }) {
-            return self.speakerLabel(for: .candidates([], relation: .several), language: language, bundle: bundle)
-        }
         if let projected = paragraph.projectedSpeakerID {
             let resolved = self.resolvedAliasID(projected, in: session)
             if let speaker = session.activeSpeakers.first(where: { $0.id == resolved }),
@@ -230,14 +251,73 @@ nonisolated enum MeetingTranscriptExporter {
     ) -> String {
         if let speaker = legacySpeakerID ?? segment.speakerID,
            legacySpeakerID != nil || segment.attributionState == nil || segment.attributionState == .assigned {
-            let attribution = segment.speakerAttribution
-            let relation = attribution.map { [.simultaneous, .consecutive, .conflict].contains($0.relation) ? $0.relation.rawValue : "single" } ?? "single"
-            let background = attribution?.background.map {
-                "\($0.token.analysisEpochID):\($0.token.label):\($0.speakerID?.uuidString ?? "nil")"
-            }.sorted().joined(separator: ",") ?? ""
-            return [speaker.uuidString, "assigned", segment.overlap.rawValue, relation, background].joined(separator: "|")
+            return [self.resolvedAliasID(speaker, in: session).uuidString, "assigned"].joined(separator: "|")
         }
-        return self.speakerLabelIdentity(for: segment, in: session, speakerNames: speakerNames)
+        return "unknown"
+    }
+
+    /// Reading ownership follows a continuing participant across a bounded mixed bout. This
+    /// is the same contextual convention as the canonical resolver, not new voice evidence.
+    private static func mainSpeakerReadingOwners(
+        for segments: [MeetingTranscriptSegment], in session: MeetingSession
+    ) -> [MeetingTranscriptSegmentID: SessionSpeakerID] {
+        guard segments.count >= 3 else { return [:] }
+        let source = session.transcriptSegments.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+        }.map(\.element)
+        guard source.allSatisfy({ $0.start.seconds.isFinite && $0.end.seconds.isFinite
+            && $0.start.seconds >= 0 && $0.end.seconds > $0.start.seconds }) else { return [:] }
+        let positions = Dictionary(source.enumerated().map { ($0.element.id, $0.offset) },
+                                   uniquingKeysWith: { first, _ in first })
+        guard positions.count == source.count else { return [:] }
+        let blocked = MeetingSpeakerAttribution.overlappingIntervalIndices(source.map {
+            .init(start: $0.start.seconds, end: $0.end.seconds)
+        }, tolerance: MeetingSpeakerAttributionPolicy.standard.comparisonTolerance, checkpoint: { _ in })
+        let active = Set(session.activeSpeakers.map(\.id))
+        func safe(_ value: MeetingTranscriptSegment) -> Bool {
+            value.revision == 0 && value.originalText == nil && value.status == .final
+                && value.completeness == .complete && !value.isEcho && value.attributionState != .timingUncertain
+                && value.speakerAttribution?.relation != .conflict && value.speakerAttribution?.rule != .barrier
+                && value.speakerAttribution?.rule != .conflict
+        }
+        func isInterruption(_ value: MeetingTranscriptSegment) -> Bool {
+            value.attributionState == .overlappingSpeakers || value.overlap == .ambiguous
+                || value.speakerAttribution?.rule == .briefInterruption
+                || value.speakerAttribution?.relation == .simultaneous
+        }
+        let interruptions = segments.map { safe($0) && isInterruption($0) }
+        let anchors: [SessionSpeakerID?] = segments.enumerated().map { index, value in
+            guard safe(value), !interruptions[index],
+                  value.attributionState == nil || value.attributionState == .assigned,
+                  value.speakerAttribution?.rule.isHeuristic != true else { return nil }
+            return self.resolvedSpeakerID(value.speakerID, in: session, activeSpeakerIDs: active)
+        }
+        let candidates = segments.map(safe)
+        guard let runs = try? MeetingSpeakerAttribution.continuingSpeakerRuns(
+            intervals: segments.map { .init(start: $0.start.seconds, end: $0.end.seconds) },
+            candidates: candidates, interruptions: interruptions, anchorIdentities: anchors, policy: .standard)
+        else { return [:] }
+        var owners: [MeetingTranscriptSegmentID: SessionSpeakerID] = [:]
+        for run in runs {
+            let range = run.before...run.after
+            let first = segments[run.before], last = segments[run.after]
+            guard let owner = anchors[run.before], let sourceStart = positions[first.id],
+                  range.allSatisfy({ positions[segments[$0].id] == sourceStart + $0 - run.before
+                      && !blocked.contains(sourceStart + $0 - run.before)
+                      && segments[$0].sourceTrackID == first.sourceTrackID }),
+                  !(session.transcriptCoverageGaps ?? []).contains(where: {
+                      $0.trackID == first.sourceTrackID
+                          && (!$0.start.isFinite || !$0.end.isFinite
+                              || ($0.start < last.end.seconds && $0.end > first.start.seconds))
+                  }) else { continue }
+            let epochs = Set(range.flatMap { index in
+                (segments[index].nativeSpeakerAssignment?.tokens
+                    ?? segments[index].speakerAttribution?.rawAssignment.tokens ?? []).map(\.analysisEpochID)
+            })
+            guard epochs.count <= 1 else { continue }
+            for index in run.first...run.last { owners[segments[index].id] = owner }
+        }
+        return owners
     }
 
     /// Pre-canonical archives have no native word precision or activity to replay. A completed,
@@ -318,6 +398,8 @@ nonisolated enum MeetingTranscriptExporter {
     static func displayParagraphs(for segments: [MeetingTranscriptSegment], in session: MeetingSession) -> [DisplayParagraph] {
         let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
         let legacyBridges = self.legacyReadingBridges(for: segments, in: session)
+        let continuations = self.mainSpeakerReadingOwners(for: segments, in: session)
+        let readingOwners = legacyBridges.merging(continuations) { _, continuation in continuation }
         var paragraphs: [DisplayParagraph] = []
         var members: [MeetingTranscriptSegment] = []
         var containsLegacyBridge = false
@@ -325,12 +407,10 @@ nonisolated enum MeetingTranscriptExporter {
         for segment in segments {
             let startsParagraph = members.last.map { previous in
                 let bothUnknown = previous.speakerID == nil && segment.speakerID == nil
-                    && legacyBridges[previous.id] == nil && legacyBridges[segment.id] == nil
+                    && readingOwners[previous.id] == nil && readingOwners[segment.id] == nil
                 return ((!bothUnknown || previous.speakerAttribution != nil || segment.speakerAttribution != nil)
-                    && paragraphIdentity(for: previous, legacySpeakerID: legacyBridges[previous.id], in: session, speakerNames: names)
-                    != paragraphIdentity(for: segment, legacySpeakerID: legacyBridges[segment.id], in: session, speakerNames: names))
-                    || (previous.speakerAttribution?.policyFingerprint != nil && segment.speakerAttribution?.policyFingerprint != nil
-                        && previous.speakerAttribution?.policyFingerprint != segment.speakerAttribution?.policyFingerprint)
+                    && paragraphIdentity(for: previous, legacySpeakerID: readingOwners[previous.id], in: session, speakerNames: names)
+                    != paragraphIdentity(for: segment, legacySpeakerID: readingOwners[segment.id], in: session, speakerNames: names))
                     || previous.sourceTrackID != segment.sourceTrackID
                     || previous.status != segment.status || previous.completeness != segment.completeness
                     || previous.isEcho != segment.isEcho
@@ -341,7 +421,7 @@ nonisolated enum MeetingTranscriptExporter {
                 members = []
                 containsLegacyBridge = false
             }
-            if members.isEmpty { projectedSpeakerID = legacyBridges[segment.id] }
+            if members.isEmpty { projectedSpeakerID = readingOwners[segment.id] }
             members.append(segment)
             containsLegacyBridge = containsLegacyBridge || legacyBridges[segment.id] != nil
         }

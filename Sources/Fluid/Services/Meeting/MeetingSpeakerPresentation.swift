@@ -23,11 +23,19 @@ nonisolated struct MeetingSpeakerPresentation: Sendable, Equatable {
     /// Canonical readable-turn identity, independent of translated labels or per-word rules.
     let identity: String
     let label: Label
+    /// Reading owner for actions and styling; never substituted into stored acoustic evidence.
+    let participantID: SessionSpeakerID?
+
+    init(identity: String, label: Label, participantID: SessionSpeakerID? = nil) {
+        self.identity = identity
+        self.label = label
+        self.participantID = participantID
+    }
 
     /// Preserve the whole turn's internal estimate marker without changing the visible name.
     func markingEstimated() -> Self {
         guard case let .identified(name) = label else { return self }
-        return Self(identity: identity, label: .estimated(name))
+        return Self(identity: identity, label: .estimated(name), participantID: participantID)
     }
 
     var isEstimated: Bool {
