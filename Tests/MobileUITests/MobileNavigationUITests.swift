@@ -344,6 +344,7 @@ final class MobileNavigationUITests: XCTestCase {
             app.terminate()
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
             app.launch()
+            openNavigation("meetings", title: "Meetings")
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
             capture("presentation-\(language)-ready")
             let done = try openSyntheticPresentation(filename: filename)
