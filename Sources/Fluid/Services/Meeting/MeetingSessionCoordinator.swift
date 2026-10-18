@@ -2435,7 +2435,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             // indefinitely. Durable capture transitions still save immediately; canonical,
             // chunk and terminal saves include the latest complete health snapshot.
             requiresPersistence = previousHealth.status != health.status
-                || previousHealth.detail != health.detail || previousState != session.state
+                || previousHealth.detail != health.detail
+                || previousHealth.droppedSampleCount != health.droppedSampleCount
+                || previousState != session.state
         case let .chunkFinalized(trackID, chunk, format):
             guard let index = session.audioTracks.firstIndex(where: { $0.id == trackID }) else { return }
             if !session.audioTracks[index].chunks.contains(where: { $0.id == chunk.id }) {

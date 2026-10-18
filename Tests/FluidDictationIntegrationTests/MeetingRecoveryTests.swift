@@ -1074,22 +1074,31 @@ final class MeetingRecoveryTests: XCTestCase {
         try await store.waitForSnapshotCount(2)
         let degraded = try await disk.load(id: session.id)
         XCTAssertEqual(degraded?.state, .recordingDegraded)
-        XCTAssertEqual(degraded?.audioTracks.last?.health.status, .degraded)
-        XCTAssertNotNil(degraded?.audioTracks.last?.health.detail)
+        XCTAssertEqual(degraded?.audioTracks.first(where: { $0.id == application.id })?.health.status, .degraded)
+        XCTAssertNotNil(degraded?.audioTracks.first(where: { $0.id == application.id })?.health.detail)
         capture.emit(.trackHealth(trackID: application.id, health: application.health))
         await self.drainCaptureEvents()
         try await store.waitForSnapshotCount(3)
         let recovered = try await disk.load(id: session.id)
         XCTAssertEqual(recovered?.state, .recording)
-        XCTAssertEqual(recovered?.audioTracks.last?.health.status, .healthy)
-        XCTAssertNil(recovered?.audioTracks.last?.health.detail)
+        XCTAssertEqual(recovered?.audioTracks.first(where: { $0.id == application.id })?.health.status, .healthy)
+        XCTAssertNil(recovered?.audioTracks.first(where: { $0.id == application.id })?.health.detail)
         var detail = microphone.health; detail.detail = "Synthetic route observation"
         capture.emit(.trackHealth(trackID: microphone.id, health: detail))
         await self.drainCaptureEvents()
         try await store.waitForSnapshotCount(4)
         let detailed = try await disk.load(id: session.id)
-        XCTAssertEqual(detailed?.audioTracks.first?.health.detail, detail.detail,
+        XCTAssertEqual(detailed?.audioTracks.first(where: { $0.id == microphone.id })?.health.detail, detail.detail,
             "A detail-only change is durable even when status and recording state stay healthy")
+        detail.droppedSampleCount = 1
+        capture.emit(.trackHealth(trackID: microphone.id, health: detail))
+        await self.drainCaptureEvents()
+        try await store.waitForSnapshotCount(5)
+        let dropped = try await disk.load(id: session.id)
+        XCTAssertEqual(dropped?.audioTracks.first(where: { $0.id == microphone.id })?.health.droppedSampleCount, 1,
+            "A counter-only change is durable even when health status and detail do not change")
+        XCTAssertEqual(dropped?.audioTracks.first(where: { $0.id == microphone.id })?.health.status, .healthy)
+        XCTAssertEqual(dropped?.audioTracks.first(where: { $0.id == microphone.id })?.health.detail, detail.detail)
     }
 
     func testVoiceProcessingFallbackDoesNotDegradeHealthyRecording() async throws {
