@@ -1651,6 +1651,32 @@ final class MeetingSessionModelTests: XCTestCase {
         XCTAssertEqual(session.transcriptSegments[0].revision, originalRevision)
     }
 
+    func testReassignUncertainRawSpeakerToSameIdentityRecordsManualConfirmation() throws {
+        let uncertainCases: [(MeetingTranscriptAttributionState?, MeetingTranscriptOverlap)] = [
+            (.timingUncertain, .none), (.overlappingSpeakers, .ambiguous),
+            (.unassigned, .none), (.assigned, .overlapsOtherTrack), (nil, .ambiguous)
+        ]
+        for (state, overlap) in uncertainCases {
+            var session = MeetingModelFixture.makeSession()
+            let segmentID = session.transcriptSegments[0].id
+            let speakerID = try XCTUnwrap(session.transcriptSegments[0].speakerID)
+            session.transcriptSegments[0].attributionState = state
+            session.transcriptSegments[0].overlap = overlap
+            let original = session.transcriptSegments[0]
+
+            try session.reassignSegment(id: segmentID, to: speakerID)
+
+            var expected = original
+            expected.revision += 1
+            expected.attributionState = .assigned
+            expected.overlap = .none
+            XCTAssertEqual(session.transcriptSegments[0], expected)
+            let once = session
+            try session.reassignSegment(id: segmentID, to: speakerID)
+            XCTAssertEqual(session, once)
+        }
+    }
+
     func testReassignSegmentThrowsForMissingSegmentOrSpeaker() {
         var session = MeetingModelFixture.makeSession()
         XCTAssertThrowsError(try session.reassignSegment(id: UUID(), to: MeetingModelFixture.speakerID)) {

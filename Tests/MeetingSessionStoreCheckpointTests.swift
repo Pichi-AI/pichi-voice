@@ -522,6 +522,29 @@ struct MeetingSessionStoreCheckpointTests {
         let cleanID = clean.transcriptSegments[0].id
         try clean.reassignSegment(id: cleanID, to: speakerA.id, replacingReadingSpeakerID: speakerA.id)
         check(clean == original, "A clean same-participant selection creates no pointless manual revision")
+        let uncertainCases: [(MeetingTranscriptAttributionState?, MeetingTranscriptOverlap)] = [
+            (.timingUncertain, .none), (.overlappingSpeakers, .none), (.unassigned, .none),
+            (.assigned, .ambiguous), (.assigned, .overlapsOtherTrack), (nil, .ambiguous)
+        ]
+        for (state, overlap) in uncertainCases {
+            var uncertain = original
+            uncertain.transcriptSegments = [original.transcriptSegments[2]]
+            uncertain.transcriptSegments[0].attributionState = state
+            uncertain.transcriptSegments[0].overlap = overlap
+            let raw = uncertain.transcriptSegments[0]
+            let displayed = MeetingTranscriptExporter.speakerPresentations(in: uncertain)[raw.id]?.participantID
+            try uncertain.reassignSegment(id: raw.id, to: speakerB.id, replacingReadingSpeakerID: displayed)
+            let confirmed = uncertain.transcriptSegments[0]
+            check(confirmed.speakerID == speakerB.id && confirmed.revision == 1
+                  && confirmed.attributionState == .assigned && confirmed.overlap == .none,
+                  "Same-ID manual confirmation clears legacy timing, attribution and overlap uncertainty")
+            check(confirmed.id == raw.id && confirmed.text == raw.text && confirmed.start == raw.start
+                  && confirmed.end == raw.end && confirmed.nativeSpeakerAssignment == raw.nativeSpeakerAssignment,
+                  "Confirming an uncertain raw participant preserves source identity, text, timing and native evidence")
+            let confirmedOnce = uncertain
+            try uncertain.reassignSegment(id: raw.id, to: speakerB.id, replacingReadingSpeakerID: speakerB.id)
+            check(uncertain == confirmedOnce, "Repeating an already confirmed uncertain participant is a no-op")
+        }
         let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(source))
         check(restored == source
               && MeetingTranscriptExporter.speakerPresentations(in: restored)[targetID]?.participantID == speakerB.id,

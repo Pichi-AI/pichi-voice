@@ -1099,6 +1099,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 
     /// The reading projection can group a raw speaker into another participant's continuing
     /// turn. Selecting the raw speaker again is then an explicit correction, not a no-op.
+    /// The same confirmation also resolves legacy uncertainty without modern provenance.
     mutating func reassignSegment(
         id: MeetingTranscriptSegmentID,
         to speakerID: SessionSpeakerID,
@@ -1115,6 +1116,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         guard self.transcriptSegments[segmentIndex].speakerID != speakerID
             || self.transcriptSegments[segmentIndex].speakerAttribution != nil
             || self.transcriptSegments[segmentIndex].speakerAttributionInference != nil
+            || self.transcriptSegments[segmentIndex].attributionState.map({ $0 != .assigned }) == true
+            || self.transcriptSegments[segmentIndex].overlap != .none
             || replacingReadingSpeakerID.map({ $0 != speakerID }) == true else { return }
         self.transcriptSegments[segmentIndex].speakerID = speakerID
         self.transcriptSegments[segmentIndex].speakerAttribution = nil
