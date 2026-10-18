@@ -46,6 +46,16 @@ private actor BlockedRedactor: TranscriptTextRedacting {
     func release() { self.waiter?.resume(); self.waiter = nil }
 }
 
+private actor PreviewCountingRedactor: TranscriptTextRedacting {
+    private(set) var calls = 0
+    private(set) var maximumUTF16 = 0
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        self.calls += 1
+        self.maximumUTF16 = max(self.maximumUTF16, text.utf16.count)
+        return try await SyntheticMaskingRedactor().redactWithSpans(text)
+    }
+}
+
 private struct RejectedRedactor: TranscriptTextRedacting {
     enum Failure: Error { case rejected }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction { throw Failure.rejected }
@@ -107,6 +117,8 @@ struct MeetingStreamingTranscriptStateTests {
         try await noInventedASRProgress()
         try await diarizationLagAndWordClusters()
         try await privacyDrainAndLongSilence()
+        try await protectedPreviewAcrossSilenceAndFinalization()
+        try await protectedPreviewPublicationIsBounded()
         try await fractionalPrivacyBoundary()
         try await privacyAcrossWindows()
         try await privacyAcrossLongPause()
@@ -323,6 +335,86 @@ struct MeetingStreamingTranscriptStateTests {
         check(final.retainActivityFromSample == 620 * 16_000)
         check(await privacy.earliestHeldWordStart == nil)
         check(final.diagnostics.retainedAttributionWords == 0)
+    }
+
+    static func protectedPreviewAcrossSilenceAndFinalization() async throws {
+        let redactor = PreviewCountingRedactor()
+        let privacy = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let value = try state(privacy: privacy)
+        let words = (0..<6).map { word($0, text: $0 == 2 ? "private@example.test" : nil) }
+        let speech = try await value.observe(observation(words, accepted: 20, asr: 20))
+        let preview = speech.safeBatch.livePreview
+        check(preview?.text == words.map { $0.text == "private@example.test" ? "<EMAIL>" : $0.text }.joined(separator: " "))
+        check(preview?.start == words.first?.start.seconds && preview?.end == words.last?.end.seconds)
+        check(speech.safeBatch.segments.isEmpty && speech.hasPreviewChanges,
+            "Short safe speech must become visible before its canonical tail can drain")
+        check(speech.diagnostics.privacySafeThroughSample == 0)
+        let silence = try await value.observe(observation(accepted: 620, asr: 620))
+        check(silence.safeBatch.livePreview == preview && !silence.hasPreviewChanges,
+            "A long pause erased or republished the same protected preview")
+        check(silence.safeBatch.segments.isEmpty && silence.diagnostics.privacySafeThroughSample == 0)
+        check(await redactor.calls == 1, "Scored silence reran NER over the lexical tail")
+
+        // A new physical ASR window cannot invalidate the earlier sealed lexical tail.
+        var empty = MeetingPCMTranscriptBatch(segments: [])
+        empty.speechObservationIdentity = .init(attemptID: attempt,
+            epochID: .init(trackID: trackID, ordinal: 320_000))
+        check(try await privacy.previewSpeech(empty, preservingPendingPreview: true) == preview)
+        var foreign = empty
+        foreign.speechObservationIdentity = .init(attemptID: attempt,
+            epochID: .init(trackID: UUID(), ordinal: 320_000))
+        check(try await privacy.previewSpeech(foreign, preservingPendingPreview: true) == nil,
+            "An explicitly different source inherited this track's protected tail")
+        var unstable = MeetingPCMTranscriptBatch(segments: [word(100, start: 621, text: "new-hypothesis")])
+        unstable.speechObservationIdentity = empty.speechObservationIdentity
+        unstable.speechObservationIsFinal = false
+        check(try await privacy.previewSpeech(unstable, preservingPendingPreview: true) == preview)
+        check(await redactor.calls == 1, "An unaccepted hypothesis entered NER")
+        let final = try await value.finish(observation(accepted: 620, asr: 620, final: true))
+        check(final.safeBatch.livePreview == nil && final.hasPreviewChanges,
+            "Stop must replace the provisional row with canonical words")
+        check(final.safeBatch.segments.map(\.id) == words.map(\.id))
+        check(final.safeBatch.segments.map(\.nativeTiming) == words.map(\.nativeTiming))
+        check(final.safeBatch.segments.map(\.text).joined(separator: " ") == preview?.text)
+        check(await privacy.pendingPreview == nil)
+
+        let cancelled = try state(privacy: .init(redactor: SyntheticMaskingRedactor()))
+        let old = try await cancelled.observe(observation(words, accepted: 20, asr: 20))
+        await cancelled.cancel()
+        await expect(.cancelled) { _ = try await cancelled.observe(observation(accepted: 620, asr: 620)) }
+        let next = try state(privacy: .init(redactor: SyntheticMaskingRedactor()))
+        let initial = try await next.observe(observation(accepted: 20, asr: 20))
+        check(initial.safeBatch.livePreview == nil, "Another attempt inherited the old protected display")
+        let fresh = try await next.observe(observation([word(101, start: 21)], accepted: 40, asr: 40))
+        check(fresh.safeBatch.livePreview?.id != old.safeBatch.livePreview?.id)
+        check(fresh.safeBatch.livePreview?.text == "safe-101")
+        _ = try await next.finish(observation(accepted: 40, asr: 40, final: true))
+    }
+
+    static func protectedPreviewPublicationIsBounded() async throws {
+        let redactor = PreviewCountingRedactor()
+        let value = try state(privacy: .init(redactor: redactor))
+        var ids: [UUID] = []
+        var previewID: UUID?
+        for window in 0..<100 {
+            let words = (window * 40..<window * 40 + 40).map { word($0) }
+            let emission = try await value.observe(observation(words,
+                accepted: Double((window + 1) * 20), asr: Double((window + 1) * 20)))
+            ids.append(contentsOf: emission.safeBatch.segments.map(\.id))
+            let held = emission.safeBatch.livePreview
+            check(held?.text.split(separator: " ").count == 32,
+                "Preview retained already canonical history instead of the bounded lexical tail")
+            check(held?.start == words[8].start.seconds && held?.end == words.last?.end.seconds)
+            if let previewID { check(held?.id == previewID) }
+            previewID = held?.id
+            check(held?.text == words.suffix(32).map(\.text).joined(separator: " "))
+        }
+        check(await redactor.calls == 100, "A canonical window performed duplicate preview inference")
+        check(await redactor.maximumUTF16 < 2_000, "Privacy preview input grew with the whole meeting")
+        let final = try await value.finish(observation(accepted: 2_000, asr: 2_000, final: true))
+        ids.append(contentsOf: final.safeBatch.segments.map(\.id))
+        check(ids == (0..<4_000).map { word($0).id } && Set(ids).count == 4_000)
+        check(final.safeBatch.livePreview == nil)
     }
 
     static func privacyAcrossWindows() async throws {

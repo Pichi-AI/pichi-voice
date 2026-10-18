@@ -38,6 +38,7 @@ actor MeetingStreamingTranscriptState {
     struct Emission: Sendable {
         let safeBatch: MeetingPCMTranscriptBatch
         let hasSpeakerIdentityChanges: Bool
+        let hasPreviewChanges: Bool
         /// Call the runtime eviction operation after its observation callback has returned.
         let retainActivityFromSample: Int
         let diagnostics: Diagnostics
@@ -77,6 +78,7 @@ actor MeetingStreamingTranscriptState {
     private var privacySafeThroughTime: TimeInterval = 0
     private var acknowledgedThroughSample = 0
     private var isComplete = true
+    private var preview: MeetingLivePartial?
     private(set) var metadataDiagnostics: Diagnostics?
     var retainActivityFromSample: Int { self.acknowledgedThroughSample }
 
@@ -119,6 +121,7 @@ actor MeetingStreamingTranscriptState {
         self.phase = .cancelled
         self.pending.removeAll(keepingCapacity: false)
         self.speakers.removeAll(keepingCapacity: false)
+        self.preview = nil
         self.tail.cancel()
     }
 
@@ -130,6 +133,7 @@ actor MeetingStreamingTranscriptState {
         do {
             try self.validate(observation, final: final)
             let priorIdentities = self.speakers
+            let priorPreview = self.preview
             var privacyMilliseconds = 0.0
             let oldASRCursor = self.asrStableThroughSample
             if let asrCursor = observation.asrStableThroughSample { self.asrStableThroughSample = asrCursor }
@@ -183,6 +187,7 @@ actor MeetingStreamingTranscriptState {
             }
             try self.checkActive()
             let heldStart = await self.privacyContext?.earliestHeldWordStart
+            let pendingPreview = await self.privacyContext?.pendingPreview
             try self.checkActive()
             try self.validatePending(checkTime: false)
 
@@ -268,8 +273,11 @@ actor MeetingStreamingTranscriptState {
             var batch = MeetingPCMTranscriptBatch(segments: updated.inserted, speakers: updated.speakers,
                 isComplete: self.isComplete)
             batch.speakerRevisions = updated.revisions
-            // Never copy a raw source label or a provisional privacy preview into canonical
-            // publication. Only the redacted batch's words and lightweight identities leave.
+            // Only the privacy actor's already approved lexical-tail display can leave
+            // separately from canonical words. It is in-memory UI metadata, not a word,
+            // checkpoint transcript or permission to advance the privacy-safe cursor.
+            self.preview = final ? nil : pendingPreview
+            batch.livePreview = self.preview
             let retain = Self.floorSample(min(updated.retainActivityFrom,
                 heldStart ?? updated.retainActivityFrom, pendingStart ?? updated.retainActivityFrom))
             guard retain >= self.acknowledgedThroughSample else { throw Failure.regressedCursor }
@@ -289,6 +297,7 @@ actor MeetingStreamingTranscriptState {
                     privacyMilliseconds: privacyMilliseconds, attributionMilliseconds: attributionMilliseconds, isFinal: final)
             self.metadataDiagnostics = diagnostics
             return .init(safeBatch: batch, hasSpeakerIdentityChanges: hasSpeakerIdentityChanges,
+                hasPreviewChanges: self.preview != priorPreview,
                 retainActivityFromSample: retain, diagnostics: diagnostics)
         } catch {
             // Privacy may have consumed an admitted lexical tail before a later check fails.
@@ -297,6 +306,7 @@ actor MeetingStreamingTranscriptState {
             if case .cancelled = self.phase {} else { self.phase = .failed }
             self.pending.removeAll(keepingCapacity: false)
             self.speakers.removeAll(keepingCapacity: false)
+            self.preview = nil
             self.tail.cancel()
             throw error
         }

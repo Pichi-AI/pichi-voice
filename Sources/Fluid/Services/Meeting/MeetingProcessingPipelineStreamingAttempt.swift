@@ -13,6 +13,15 @@ extension MeetingProcessingPipeline {
         let attemptID = attempt.request.attemptID
         let runtime = attempt.runtime
         let checkpoint = attempt.checkpoint
+        let preview = attempt.preview
+        let publishPreview: @Sendable (MeetingStreamingTranscriptState.Emission) async throws -> Void = { emission in
+            guard emission.hasPreviewChanges, let preview else { return }
+            // A canonical checkpoint publishes history and its remaining preview atomically.
+            // Replacing that display earlier would hide words during persistence awaits.
+            guard emission.safeBatch.segments.isEmpty, emission.safeBatch.speakerRevisions.isEmpty else { return }
+            try Task.checkCancellation()
+            try await preview(emission.safeBatch.livePreview)
+        }
         let state = try MeetingStreamingTranscriptState(attemptID: attemptID, track: track,
             configuration: configuration, privacyContext: attempt.privacyContext,
             priorSpeakers: attempt.request.session.speakers)
@@ -22,6 +31,7 @@ extension MeetingProcessingPipeline {
             if !batch.segments.isEmpty || !batch.speakerRevisions.isEmpty || emission.hasSpeakerIdentityChanges {
                 try await checkpoint(batch)
             }
+            try await publishPreview(emission)
             Self.logStreamingEmission(emission, attemptID: attemptID, phase: phase)
         }
         let sessionID = attempt.request.session.id
@@ -58,6 +68,7 @@ extension MeetingProcessingPipeline {
                     let observation = try await controller.recognize(window: window, offset: offset,
                         preview: observeSpeech)
                     let emission = try await state.observe(observation)
+                    try await publishPreview(emission)
                     Self.logStreamingEmission(emission, attemptID: attemptID, phase: "window")
                     return emission.safeBatch
                 }, checkpoint: { batch in
@@ -74,6 +85,7 @@ extension MeetingProcessingPipeline {
                     }
                     let final = try await controller.finishStreaming()
                     let emission = try await state.finish(final)
+                    try await publishPreview(emission)
                     Self.logStreamingEmission(emission, attemptID: attemptID, phase: "finish")
                     return emission.safeBatch
                 }, diagnostic: { message in

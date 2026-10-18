@@ -788,6 +788,9 @@ actor MeetingTranscriptPrivacyContext {
     private var isProcessing = false
     private let provisionalPreviewID = UUID()
     private var lastSafePreview: MeetingLivePartial?
+    /// The sealed lexical tail has its own approved display. A new, empty ASR
+    /// window may replace hypothesis stability, but cannot erase this owned tail.
+    private(set) var pendingPreview: MeetingLivePartial?
     private var lastSafePreviewIdentity: MeetingPCMTranscriptBatch.SpeechObservationIdentity?
     private struct SpeechObservation {
         let trackID: MeetingAudioTrackID
@@ -818,7 +821,8 @@ actor MeetingTranscriptPrivacyContext {
 
     /// Speech can be displayed before expensive attribution, but cannot enter the durable
     /// tail or checkpoint until that window completes. Use the same frozen redactor/guards.
-    func previewSpeech(_ batch: MeetingPCMTranscriptBatch) async throws -> MeetingLivePartial? {
+    func previewSpeech(_ batch: MeetingPCMTranscriptBatch,
+                       preservingPendingPreview: Bool = false) async throws -> MeetingLivePartial? {
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         isProcessing = true
         var completed = false
@@ -844,6 +848,8 @@ actor MeetingTranscriptPrivacyContext {
         // An empty native observation has no segment or fabricated track record.
         // Its typed physical-window provenance still identifies the source clock.
         let currentTrack = segmentTrack ?? declaredTrack ?? batch.speechObservationIdentity?.epochID.trackID
+        let preservedPreview = preservingPendingPreview && (currentTrack == nil || currentTrack == trackID)
+            ? pendingPreview : nil
         if let identity = batch.speechObservationIdentity {
             guard identity.epochID.trackID == currentTrack,
                   identity.epochID.ordinal >= 0, identity.epochID.generation >= 0 else {
@@ -864,8 +870,9 @@ actor MeetingTranscriptPrivacyContext {
                 if previousSpeechObservation?.identity != identity { previousSpeechObservation = nil }
                 preview = lastSafePreviewIdentity == identity ? lastSafePreview : nil
             } else { preview = currentTrack == nil || continues ? lastSafePreview : nil }
-            diagnosticPreviewUTF16 = preview?.text.utf16.count ?? 0
-            return preview
+            let visible = preview ?? preservedPreview
+            diagnosticPreviewUTF16 = visible?.text.utf16.count ?? 0
+            return visible
         }
         var combined = batch
         combined.segments = pending + batch.segments
@@ -895,8 +902,9 @@ actor MeetingTranscriptPrivacyContext {
         guard stableCount > 0 else {
             completed = true
             let preview = continues ? lastSafePreview : nil
-            diagnosticPreviewUTF16 = preview?.text.utf16.count ?? 0
-            return preview
+            let visible = preview ?? preservedPreview
+            diagnosticPreviewUTF16 = visible?.text.utf16.count ?? 0
+            return visible
         }
         _ = try MeetingTranscriptPrivacyPolicy.stablePrefix(in: rawText, utf16Count: stableCount)
         var admitted: [MeetingTranscriptSegment] = []
@@ -938,11 +946,12 @@ actor MeetingTranscriptPrivacyContext {
         // placeholder. Until that physical window seals, its sampled end is not
         // evidence that the displayed words cover newly captured audio.
         if !batch.permitsSpeechPreviewCoverage { preview?.end = nil }
-        diagnosticPreviewUTF16 = preview?.text.utf16.count ?? 0
+        let visible = preview ?? preservedPreview
+        diagnosticPreviewUTF16 = visible?.text.utf16.count ?? 0
         lastSafePreview = preview
         lastSafePreviewIdentity = preview == nil ? nil : batch.speechObservationIdentity
         completed = true
-        return preview
+        return visible
     }
 
     func redact(_ batch: MeetingPCMTranscriptBatch) async throws -> MeetingPCMTranscriptBatch {
@@ -1004,6 +1013,7 @@ actor MeetingTranscriptPrivacyContext {
         trackID = currentTrack; lastEnd = last.end
         if safe.livePreview != lastSafePreview { lastSafePreviewIdentity = nil }
         lastSafePreview = safe.livePreview
+        pendingPreview = safe.livePreview
         completed = true
         return safe
     }
@@ -1011,6 +1021,7 @@ actor MeetingTranscriptPrivacyContext {
     func finish() async throws -> MeetingPCMTranscriptBatch? {
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         lastSafePreview = nil
+        pendingPreview = nil
         lastSafePreviewIdentity = nil
         previousSpeechObservation = nil
         try Task.checkCancellation()

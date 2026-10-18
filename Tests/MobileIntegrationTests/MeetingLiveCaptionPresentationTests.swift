@@ -398,6 +398,69 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    /// Synthetic native-word input exercises the real privacy/state/composer path.
+    /// No microphone, speech model, durable store or speaker identity is fabricated.
+    func testProtectedShortSpeechRemainsVisibleAcrossSilenceUntilStop() async throws {
+        for scheme in [ColorScheme.light, .dark] {
+            let attempt = UUID(), trackID = UUID()
+            let track = MeetingAudioTrack(id: trackID, kind: .microphone,
+                sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic", format: nil,
+                timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1,
+                    machTimebaseDenominator: 1, firstPresentationTime: nil), health: .waiting, chunks: [])
+            let state = try MeetingStreamingTranscriptState(attemptID: attempt, track: track,
+                configuration: .init(speakerProcessingMode: .streaming),
+                privacyContext: .init(redactor: CaptionPreviewFixtureRedactor()))
+            let words = ["Сегодня", "обсуждаем", "план.", "private@example.test", "Проверим", "результат."].enumerated().map { index, text in
+                MeetingTranscriptSegment(id: UUID(), start: .init(value: Int64(index * 500), timescale: 1_000),
+                    end: .init(value: Int64(index * 500 + 400), timescale: 1_000), sourceTrackID: trackID,
+                    speakerID: nil, text: text, originalText: nil, revision: 0, status: .final,
+                    overlap: .none, completeness: .complete, attributionState: .unassigned,
+                    nativePrecision: .word, nativeUnitID: "synthetic-\(index)", nativeSpeakerAssignment: .unassigned,
+                    nativeTiming: .init(start: Double(index) * 0.5, end: Double(index) * 0.5 + 0.4))
+            }
+            func observation(_ segments: [MeetingTranscriptSegment] = [], seconds: Int,
+                             final: Bool = false) -> MeetingStreamingPCMObservation {
+                .init(batch: .init(segments: segments), activity: [], acceptedThroughSample: seconds * 16_000,
+                    processedThroughSample: seconds * 16_000, retainedFromSample: 0,
+                    isFinal: final, asrStableThroughSample: seconds * 16_000)
+            }
+            let first = try await state.observe(observation(words, seconds: 20))
+            let preview = try XCTUnwrap(first.safeBatch.livePreview)
+            XCTAssertTrue(first.safeBatch.segments.isEmpty)
+            XCTAssertFalse(preview.text.contains("private@example.test"))
+            var snapshot = MeetingLiveTranscriptSnapshot.empty.settingPartial(preview, for: .you)
+            let host = try CaptionNativeHost(rows: MeetingLiveBubbleComposer.rows(for: snapshot), scheme: scheme)
+            defer { host.close() }
+            func approvedTextIsVisible() -> Bool {
+                self.descendants(in: host.controller.view).compactMap { $0 as? UITextView }.contains {
+                    $0.attributedText.string.contains("[EMAIL]") && $0.bounds.height > 0
+                        && !$0.attributedText.string.contains("private@example.test")
+                }
+            }
+            try await settle(host, "Short protected speech is visible before Stop", predicate: approvedTextIsVisible)
+            capture(host, step: "protected-short-01-before-stop", scheme: scheme)
+            let silence = try await state.observe(observation(seconds: 620))
+            XCTAssertEqual(silence.safeBatch.livePreview, preview)
+            XCTAssertEqual(silence.diagnostics.privacySafeThroughSample, 0)
+            snapshot = snapshot.settingPartial(silence.safeBatch.livePreview, for: .you)
+            host.model.rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+            try await settle(host, "Silence retains the approved display", predicate: approvedTextIsVisible)
+            capture(host, step: "protected-short-02-after-silence", scheme: scheme)
+            let final = try await state.finish(observation(seconds: 620, final: true))
+            XCTAssertNil(final.safeBatch.livePreview)
+            XCTAssertEqual(final.safeBatch.segments.map(\.id), words.map(\.id))
+            XCTAssertEqual(final.safeBatch.segments.map(\.nativeTiming), words.map(\.nativeTiming))
+            snapshot = snapshot.settingPartial(nil, for: .you)
+            snapshot.utterances = final.safeBatch.segments.map {
+                .init(id: $0.id, speaker: .you, text: $0.text, start: $0.start.seconds, end: $0.end.seconds)
+            }
+            host.model.rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+            XCTAssertEqual(host.model.rows.count, words.count)
+            try await settle(host, "Stop replaces the preview without duplicate words", predicate: approvedTextIsVisible)
+            capture(host, step: "protected-short-03-after-stop", scheme: scheme)
+        }
+    }
+
     func testStreamingParticipantsRenderAsSeparateNativeTurns() async throws {
         let first = MeetingSpeakerPresentation.Name(displayName: "Анна", isLocalUser: false)
         let second = MeetingSpeakerPresentation.Name(displayName: "Борис", isLocalUser: false)
@@ -895,6 +958,17 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         return image
+    }
+}
+
+private struct CaptionPreviewFixtureRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let source = text as NSString
+        let range = source.range(of: "private@example.test")
+        let spans: [TranscriptRedactedSpan] = range.location == NSNotFound ? []
+            : [.init(range: range, replacement: "[EMAIL]")]
+        return .init(text: spans.isEmpty ? text : source.replacingCharacters(in: range, with: "[EMAIL]"),
+            spans: spans, provisionalSafeUTF16: source.length)
     }
 }
 

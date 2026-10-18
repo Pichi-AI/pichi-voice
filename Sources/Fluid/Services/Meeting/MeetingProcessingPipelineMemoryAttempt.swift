@@ -208,7 +208,8 @@ extension MeetingProcessingPipeline {
                 let partial: MeetingLivePartial?
                 let admission: String
                 if let privacyContext {
-                    partial = try await privacyContext.previewSpeech(speech)
+                    partial = try await privacyContext.previewSpeech(speech,
+                        preservingPendingPreview: configuration.effectiveSpeakerProcessingMode == .streaming)
                     admission = await privacyContext.speechAdmissionDiagnosticFields
                 } else {
                     admission = "privacy=false"
