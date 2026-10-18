@@ -6,12 +6,232 @@ final class MobileNavigationUITests: XCTestCase {
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
+        let productionSmoke = name.contains("testPhysicalProductionMeetingAndProtectedExport")
+        if productionSmoke {
+            #if targetEnvironment(simulator)
+            throw XCTSkip("Production smoke requires an explicitly authorized physical device")
+            #else
+            guard ProcessInfo.processInfo.environment["PICHI_PHYSICAL_PRODUCTION_SMOKE"] == "1" else {
+                throw XCTSkip("Set PICHI_PHYSICAL_PRODUCTION_SMOKE=1 to create one real meeting")
+            }
+            #endif
+        }
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
         app = XCUIApplication()
         app.launchArguments += ["-PichiInterfaceLanguage", "en"]
-        app.launch()
+        if productionSmoke {
+            // Attach without restarting a running AUT, including an unowned recording.
+            // The body checks idle state before it can claim a new recording.
+            switch app.state {
+            case .notRunning: app.launch()
+            case .runningForeground, .runningBackground, .runningBackgroundSuspended: app.activate()
+            case .unknown:
+                throw NSError(domain: "ProductionUISmoke", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Cannot safely determine the existing AUT state"])
+            @unknown default:
+                throw NSError(domain: "ProductionUISmoke", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Cannot safely attach to the existing AUT state"])
+            }
+        } else { app.launch() }
         waitForOrientation(portrait: true)
+    }
+
+    /// The parent owns approved external speech playback and before/after storage inspection.
+    /// This selector creates one real meeting using the ordinary AUT's existing settings.
+    @MainActor
+    func testPhysicalProductionMeetingAndProtectedExport() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Production smoke requires an explicitly authorized physical device")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_PRODUCTION_SMOKE"] == "1" else {
+            throw XCTSkip("Set PICHI_PHYSICAL_PRODUCTION_SMOKE=1 to create one real meeting")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        guard !revision.isEmpty, revision != "working-tree" else {
+            throw NSError(domain: "ProductionUISmoke", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "A concrete frozen Release AUT revision is required"])
+        }
+        let began = ProcessInfo.processInfo.systemUptime
+        var events: [[String: Any]] = []
+        var ownsRecording = false
+        var outcome = "failed"
+        func mark(_ event: String) {
+            let uptime = ProcessInfo.processInfo.systemUptime
+            events.append(["event": event, "uptimeSeconds": uptime, "elapsedSeconds": uptime - began,
+                           "wallClockUnixSeconds": Date().timeIntervalSince1970])
+        }
+        func require(_ condition: Bool, _ message: String) throws {
+            guard condition else {
+                throw NSError(domain: "ProductionUISmoke", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
+        func recordingVisible() -> Bool {
+            app.state == .runningForeground
+                && app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                && app.buttons["meeting.stop"].exists && app.buttons["meeting.stop"].isEnabled
+                && app.descendants(matching: .any)["meeting.timer"].firstMatch.exists
+                && app.alerts.count == 0 && !app.buttons["meeting.retry"].exists
+        }
+        func completed() -> Bool {
+            app.buttons["transcript.more"].exists
+                && !app.buttons["meeting.stop"].exists
+                && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
+        }
+        func waitForCompletion(timeout: TimeInterval) async throws {
+            let deadline = ProcessInfo.processInfo.systemUptime + timeout
+            while ProcessInfo.processInfo.systemUptime < deadline {
+                if completed() { return }
+                try require(app.alerts.count == 0 && !app.buttons["meeting.retry"].exists,
+                            "The owned meeting must complete without an error or recovery prompt")
+                try await Task.sleep(nanoseconds: 250_000_000)
+            }
+            try require(false, "Stop did not expose a completed transcript within the deadline")
+        }
+        // XCTest action failures can bypass Swift catch. Always register owned
+        // cleanup before Start, and retain its evidence even when the body aborts.
+        addTeardownBlock { @MainActor in
+            if ownsRecording {
+                let cleanup = Task { @MainActor in
+                    self.continueAfterFailure = true
+                    self.capture("production-failure-owned-state")
+                    let stopDeadline = ProcessInfo.processInfo.systemUptime + 15
+                    while !completed() && ProcessInfo.processInfo.systemUptime < stopDeadline {
+                        let stop = self.app.buttons["meeting.stop"]
+                        if stop.exists, stop.isEnabled, stop.isHittable {
+                            mark("cleanup_stop_tap_requested")
+                            stop.tap()
+                            mark("cleanup_stop_tap_returned")
+                            self.capture("production-failure-owned-stop")
+                            break
+                        }
+                        if self.app.alerts.count > 0 || self.app.buttons["meeting.retry"].exists { break }
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                    }
+                    do {
+                        try await waitForCompletion(timeout: 90)
+                        mark("cleanup_completed_transcript_visible")
+                    } catch {
+                        mark("cleanup_requires_parent_inspection")
+                        print("[PRODUCTION_UI_SMOKE] cleanup_requires_parent_inspection")
+                    }
+                    self.capture("production-failure-owned-terminal")
+                }
+                await cleanup.value
+            }
+            let report: [String: Any] = [
+                "test": "testPhysicalProductionMeetingAndProtectedExport", "revision": revision,
+                "outcome": outcome, "events": events, "plannedRecordingObservationSeconds": 45,
+                "speechPlaybackOwner": "parent_external_player",
+                "measurementScope": "XCTest action returns and accessibility observations, including synchronization and polling; not touch latency or recognition accuracy"
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+                attachment.name = "production-ui-smoke-timing-\(revision).json"
+                attachment.lifetime = .keepAlways
+                self.add(attachment)
+            }
+        }
+        mark("test_body_entered")
+        do {
+            try require(app.state == .runningForeground, "The ordinary signed Release AUT must be foreground")
+            openNavigation("meetings", title: "Meetings")
+            capture("production-01-existing-idle")
+            try require(!app.buttons["meeting.stop"].exists
+                        && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                        && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                        "An existing recording or processing attempt is not owned by this selector")
+            let start = app.buttons["meeting.start"]
+            try require(start.waitForExistence(timeout: 15) && start.isEnabled && start.isHittable
+                        && app.alerts.count == 0,
+                        "The existing meeting state must already be idle and ready; this selector never resets it")
+            let startDeadline = ProcessInfo.processInfo.systemUptime + 15
+            mark("start_tap_requested")
+            // Ownership starts immediately before the only Start tap so a failed
+            // accessibility response still leaves cleanup responsible for this attempt.
+            ownsRecording = true
+            start.tap()
+            mark("start_tap_returned")
+            print("[PRODUCTION_UI_SMOKE] start_tap_returned")
+            capture("production-02-start-tap-returned")
+            while !recordingVisible() && ProcessInfo.processInfo.systemUptime < startDeadline {
+                try require(app.alerts.count == 0 && !app.buttons["meeting.retry"].exists,
+                            "The real Start action must not require a prompt or enter recovery")
+                try await Task.sleep(nanoseconds: 250_000_000)
+            }
+            try require(recordingVisible() && ProcessInfo.processInfo.systemUptime <= startDeadline,
+                        "Start must expose real recording controls within 15 seconds of the XCTest tap request")
+            mark("recording_visible")
+            print("[PRODUCTION_UI_SMOKE] recording_visible")
+            capture("production-03-recording-visible")
+            mark("recording_observation_began")
+            let speechDeadline = ProcessInfo.processInfo.systemUptime + 45
+            while ProcessInfo.processInfo.systemUptime < speechDeadline {
+                try require(recordingVisible(), "The owned recording must remain visibly active during external speech")
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            mark("recording_observation_ended")
+            capture("production-04-before-stop")
+            try require(recordingVisible(), "The owned recording must still expose an enabled Stop action")
+            let stopDeadline = ProcessInfo.processInfo.systemUptime + 90
+            mark("stop_tap_requested")
+            app.buttons["meeting.stop"].tap()
+            mark("stop_tap_returned")
+            capture("production-05-stop-tap-returned")
+            try await waitForCompletion(timeout: max(0, stopDeadline - ProcessInfo.processInfo.systemUptime))
+            try require(ProcessInfo.processInfo.systemUptime <= stopDeadline,
+                        "Stop must expose a completed transcript within 90 seconds of the XCTest tap request")
+            ownsRecording = false
+            mark("completed_transcript_visible")
+            capture("production-06-completed-transcript")
+            let paragraphs = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.paragraph."))
+            let transcript = app.scrollViews["meeting.transcript"]
+            for step in 0..<4 where !paragraphs.firstMatch.exists {
+                try require(transcript.exists, "The completed transcript must expose its native scroll view")
+                transcript.swipeUp()
+                capture("production-07-reveal-paragraph-\(step)")
+            }
+            try require(paragraphs.firstMatch.waitForExistence(timeout: 10),
+                        "The saved real meeting must contain actual readable transcript paragraphs")
+            mark("transcript_paragraph_observed")
+            capture("production-08-saved-paragraph")
+            let more = app.buttons["transcript.more"]
+            for step in 0..<4 where !more.isHittable {
+                transcript.swipeDown()
+                capture("production-09-return-to-actions-\(step)")
+            }
+            try require(more.isHittable && more.isEnabled, "The completed transcript actions must be available")
+            more.tap()
+            capture("production-10-export-menu")
+            let export = app.buttons["transcript.exportProtected"]
+            try require(export.waitForExistence(timeout: 5) && export.isEnabled && export.isHittable,
+                        "The saved real meeting must enable protected transcript export")
+            mark("protected_export_tap_requested")
+            export.tap()
+            let activityList = app.otherElements["ActivityListView"]
+            try require(activityList.waitForExistence(timeout: 15),
+                        "Protected export must reload the saved session and present the native activity UI")
+            mark("native_activity_visible")
+            capture("production-11-native-protected-export")
+            let close = app.buttons["header.closeButton"]
+            try require(close.waitForExistence(timeout: 5) && close.isHittable,
+                        "The native share sheet must expose its Cancel/Close action")
+            close.tap()
+            try require(activityList.waitForNonExistence(timeout: 10) && more.isHittable,
+                        "Cancelling protected export must return to the same completed transcript")
+            mark("native_activity_cancelled")
+            capture("production-12-export-cancelled")
+            outcome = "completed"
+            print("[PRODUCTION_UI_SMOKE] complete")
+        } catch {
+            capture("production-failure-current-state")
+            throw error
+        }
+        #endif
     }
 
     func testMVPSettingsAndOrientation() throws {
