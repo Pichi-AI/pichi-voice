@@ -196,7 +196,7 @@ private struct MobileSpeakerResourcesSettings: View {
             isPreparing = true
             Task { @MainActor in
                 defer { isPreparing = false }
-                do { _ = try await store.ensureInstalled(includingVoiceEncoder: processingMode == .afterRecording) }
+                do { _ = try await store.ensureInstalled(includingVoiceEncoder: store.supportsOwnerVoiceVerification) }
                 catch { self.error = error.localizedDescription }
             }
         }.disabled(isPreparing || isBusy).accessibilityIdentifier("recording.downloadSpeakerModel")

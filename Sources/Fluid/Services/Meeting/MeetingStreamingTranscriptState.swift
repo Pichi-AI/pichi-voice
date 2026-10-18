@@ -37,6 +37,7 @@ actor MeetingStreamingTranscriptState {
 
     struct Emission: Sendable {
         let safeBatch: MeetingPCMTranscriptBatch
+        let hasSpeakerIdentityChanges: Bool
         /// Call the runtime eviction operation after its observation callback has returned.
         let retainActivityFromSample: Int
         let diagnostics: Diagnostics
@@ -128,6 +129,7 @@ actor MeetingStreamingTranscriptState {
         defer { self.isProcessing = false }
         do {
             try self.validate(observation, final: final)
+            let priorIdentities = self.speakers
             var privacyMilliseconds = 0.0
             let oldASRCursor = self.asrStableThroughSample
             if let asrCursor = observation.asrStableThroughSample { self.asrStableThroughSample = asrCursor }
@@ -135,6 +137,23 @@ actor MeetingStreamingTranscriptState {
             self.processedThroughSample = observation.processedThroughSample
             self.isComplete = self.isComplete && observation.batch.isComplete
 
+            // The optional owner encoder publishes existing identities after native model
+            // scopes close. Identity-only revisions must survive even without a new word.
+            if observation.batch.segments.isEmpty, !observation.batch.speakers.isEmpty {
+                let existingIDs = Set(self.speakers.map(\.id))
+                guard observation.batch.speakers.allSatisfy({ existingIDs.contains($0.id) }),
+                      Set(observation.batch.speakers.map(\.id)).count == observation.batch.speakers.count else {
+                    throw Failure.invalidObservation
+                }
+                // This additive path can change owner flags on existing IDs only. New speaker
+                // metadata still enters through the ordinary speech privacy gate below.
+                var identity = MeetingPCMTranscriptBatch(segments: [], speakers: observation.batch.speakers)
+                for index in identity.speakers.indices {
+                    identity.speakers[index].diarizationEmbedding = nil
+                    identity.speakers[index].identityCandidates = []
+                }
+                try self.mergeSpeakers(identity, updatesOwnerIdentity: true)
+            }
             if !observation.batch.segments.isEmpty {
                 try self.validateRawWords(observation.batch, previousASRCursor: oldASRCursor)
                 var source = observation.batch
@@ -256,6 +275,7 @@ actor MeetingStreamingTranscriptState {
             guard retain >= self.acknowledgedThroughSample else { throw Failure.regressedCursor }
             self.acknowledgedThroughSample = retain
             try self.mergeSpeakers(batch)
+            let hasSpeakerIdentityChanges = self.speakers != priorIdentities
             if final { self.phase = .finished; self.speakers.removeAll(keepingCapacity: false) }
             try Task.checkCancellation()
             let diagnostics = Diagnostics(acceptedThroughSample: self.acceptedThroughSample,
@@ -268,7 +288,8 @@ actor MeetingStreamingTranscriptState {
                     insertedWords: updated.inserted.count, revisedWords: updated.revisions.count,
                     privacyMilliseconds: privacyMilliseconds, attributionMilliseconds: attributionMilliseconds, isFinal: final)
             self.metadataDiagnostics = diagnostics
-            return .init(safeBatch: batch, retainActivityFromSample: retain, diagnostics: diagnostics)
+            return .init(safeBatch: batch, hasSpeakerIdentityChanges: hasSpeakerIdentityChanges,
+                retainActivityFromSample: retain, diagnostics: diagnostics)
         } catch {
             // Privacy may have consumed an admitted lexical tail before a later check fails.
             // Retrying it could duplicate words or weaken the safe prefix. Fail this attempt
@@ -368,11 +389,22 @@ actor MeetingStreamingTranscriptState {
         }
     }
 
-    private func mergeSpeakers(_ batch: MeetingPCMTranscriptBatch) throws {
+    private func mergeSpeakers(_ batch: MeetingPCMTranscriptBatch, updatesOwnerIdentity: Bool = false) throws {
         guard Set(self.speakers.map(\.id)).union(batch.speakers.map(\.id)).count <= self.limits.tail.maximumSpeakers else {
             throw Failure.speakerLimit
         }
-        self.speakers = Self.identityOnly(batch.mergingSpeakers(into: self.speakers))
+        var identities = batch
+        if !updatesOwnerIdentity {
+            // Raw ASR and a delayed privacy lexical tail carry the earlier anonymous flags.
+            // Only the separate verified-identity publication can promote/revoke an owner.
+            let ownerFlags = Dictionary(uniqueKeysWithValues: self.speakers.map { ($0.id, $0.isLocalUser) })
+            for index in identities.speakers.indices {
+                if let isLocalUser = ownerFlags[identities.speakers[index].id] {
+                    identities.speakers[index].isLocalUser = isLocalUser
+                }
+            }
+        }
+        self.speakers = Self.identityOnly(identities.mergingSpeakers(into: self.speakers))
     }
 
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {

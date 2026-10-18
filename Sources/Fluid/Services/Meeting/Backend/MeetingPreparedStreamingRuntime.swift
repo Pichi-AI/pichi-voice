@@ -20,10 +20,18 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     private var update = MeetingIncrementalDiarizationUpdate(activity: [], acceptedThroughSample: 0,
         processedThroughSample: 0, retainedFromSample: 0, isFinal: false)
     private var speakers: [MeetingSessionSpeaker] = []
+    private var ownerSamples: MeetingStreamingOwnerVoiceSamples?
+
+    struct OwnerEvidence: Sendable {
+        let samples: [MeetingSpeakerVoiceSamples]
+        let speakers: [MeetingSessionSpeaker]
+        let observation: MeetingStreamingPCMObservation
+    }
 
     init(runtime: MeetingParakeetNemotronRuntime, asr: any MeetingParakeetASRSession,
          diarizer: any MeetingIncrementalNemotronDiarizerSession, trackID: MeetingAudioTrackID,
          attemptID: UUID, configuration: MeetingFinalProcessingConfiguration, speakerNameFormat: String,
+         collectOwnerEvidence: Bool = false,
          onProgress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void) {
         self.runtime = runtime
         self.asr = asr
@@ -33,6 +41,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         self.configuration = configuration
         self.speakerNameFormat = speakerNameFormat
         self.onProgress = onProgress
+        self.ownerSamples = collectOwnerEvidence ? .init(epoch: .init(trackID: trackID, ordinal: 0)) : nil
     }
 
     func recognize(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
@@ -51,6 +60,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
             permitsIntermediateObservations: self.pacing.permitsIntermediateObservations, preview: preview,
             consumePCM: { samples, start in
                 try Task.checkCancellation()
+                self.ownerSamples?.append(samples, sourceStartSample: start)
                 let next = try await self.diarizer.appendStreaming(samples, sourceStartSample: start)
                 try Task.checkCancellation()
                 try self.accept(next, expectedAccepted: start + samples.count, final: false)
@@ -132,8 +142,21 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         self.lock.withLock { self.closed = true }
         await self.diarizer.cleanupStreaming()
         self.speakers.removeAll()
+        self.ownerSamples = nil
         self.update = .init(activity: [], acceptedThroughSample: 0, processedThroughSample: 0,
                             retainedFromSample: 0, isFinal: false)
+    }
+
+    /// Copy only bounded clips and lightweight identities before releasing the prepared pair.
+    /// No ASR, diarizer or model reference escapes into the subsequent voice-encoder phase.
+    func ownerEvidence() throws -> OwnerEvidence? {
+        try self.requireFinished()
+        guard let samples = self.ownerSamples?.excerpts, !samples.isEmpty else { return nil }
+        return .init(samples: samples, speakers: self.speakers,
+            observation: .init(batch: .init(segments: []), activity: self.activity(),
+                acceptedThroughSample: self.update.acceptedThroughSample,
+                processedThroughSample: self.update.processedThroughSample,
+                retainedFromSample: self.update.retainedFromSample, isFinal: false))
     }
 
     private var globalEpoch: MeetingAnalysisEpochID { .init(trackID: self.trackID, ordinal: 0) }
@@ -166,6 +189,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
             throw MeetingIncrementalDiarizationError.invalidWatermark
         }
         self.update = next
+        self.ownerSamples?.collect(activity: next.activity, processedThroughSample: next.processedThroughSample)
     }
 
     private func begin() throws {
@@ -178,4 +202,120 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         }
     }
     private func end() { self.lock.withLock { self.busy = false } }
+}
+
+/// Optional identity evidence for the continuous global slots. Keeps two disjoint three-second
+/// clips per slot and only a twenty-second acoustic lookback. It never retains a recording,
+/// fills silence, trusts an overlapping voice, or changes the diarizer's native attribution.
+/// The controller's one worker owns this value; cancellation drops it with the prepared scope.
+nonisolated struct MeetingStreamingOwnerVoiceSamples: Sendable {
+    static let sampleRate = 16_000
+    static let clipFrames = 3 * sampleRate
+    static let maximumPCMFrames = 20 * sampleRate
+    static let maximumVoiceFrames = 8 * 2 * clipFrames
+    private let epoch: MeetingAnalysisEpochID
+    private var pcm: [Float] = []
+    private var pcmStart = 0
+    private var accepted = 0
+    private var consumedThrough = 0
+    private var clips = [[[Float]]](repeating: [], count: 8)
+    private var pending = [[Float]](repeating: [], count: 8)
+    private var enabled = true
+
+    init(epoch: MeetingAnalysisEpochID) { self.epoch = epoch }
+    var retainedPCMFrames: Int { self.pcm.count }
+    var retainedVoiceFrames: Int { self.clips.flatMap { $0 }.reduce(0) { $0 + $1.count } + self.pending.reduce(0) { $0 + $1.count } }
+    var excerpts: [MeetingSpeakerVoiceSamples] {
+        self.clips.enumerated().compactMap { slot, clips in
+            clips.count == 2 ? .init(token: .init(analysisEpochID: self.epoch, label: "slot-\(slot)"), clips: clips) : nil
+        }
+    }
+
+    mutating func append(_ samples: [Float], sourceStartSample: Int) {
+        guard self.enabled else { return }
+        guard sourceStartSample == self.accepted, samples.count <= Self.maximumPCMFrames,
+              samples.allSatisfy(\.isFinite) else { self.disable(); return }
+        self.accepted += samples.count
+        let overflow = max(0, self.pcm.count + samples.count - Self.maximumPCMFrames)
+        if overflow > 0 { self.pcm.removeFirst(overflow); self.pcmStart += overflow }
+        self.pcm.append(contentsOf: samples)
+    }
+
+    mutating func collect(activity: [MeetingNemotronSpeakerSegment], processedThroughSample: Int) {
+        guard self.enabled, processedThroughSample >= self.consumedThrough,
+              processedThroughSample <= self.accepted else { return }
+        // Future frames are not scored yet. Retain the trailing edge until a later update,
+        // while excluding every actual voice turn's leading/trailing 160 milliseconds.
+        let edge = 2_560
+        let through = max(self.consumedThrough, processedThroughSample - edge)
+        let lower = max(self.consumedThrough, self.pcmStart)
+        guard through > lower else { return }
+        let valid = activity.filter { (0..<8).contains($0.slotIndex) && $0.start.isFinite && $0.end.isFinite
+            && $0.start >= 0 && $0.end > $0.start && $0.end <= Double(processedThroughSample) / 16_000 + 0.000_001
+            && $0.end * 16_000 > Double(lower - edge) && $0.start * 16_000 < Double(through + edge) }
+        func union(_ ranges: [Range<Int>]) -> [Range<Int>] {
+            var result: [Range<Int>] = []
+            for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+                if let last = result.last, range.lowerBound <= last.upperBound {
+                    result[result.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+                } else { result.append(range) }
+            }
+            return result
+        }
+        for slot in 0..<8 where self.clips[slot].count < 2 {
+            let own = union(valid.filter { $0.slotIndex == slot }.compactMap { segment in
+                let start = max(lower, Int((segment.start * 16_000).rounded(.up)) + edge)
+                let end = min(through, Int((segment.end * 16_000).rounded(.down)) - edge)
+                return start < end ? start..<end : nil
+            })
+            let blocked = union(valid.filter { $0.slotIndex != slot }.map { segment in
+                max(0, Int((segment.start * 16_000).rounded(.down)) - edge)..<(Int((segment.end * 16_000).rounded(.up)) + edge)
+            })
+            var ranges: [Range<Int>] = []
+            var blockedIndex = 0
+            for range in own {
+                var cursor = range.lowerBound
+                while blockedIndex < blocked.count, blocked[blockedIndex].upperBound <= cursor { blockedIndex += 1 }
+                var index = blockedIndex
+                while index < blocked.count, blocked[index].lowerBound < range.upperBound {
+                    if blocked[index].lowerBound > cursor { ranges.append(cursor..<min(range.upperBound, blocked[index].lowerBound)) }
+                    cursor = max(cursor, blocked[index].upperBound)
+                    if cursor >= range.upperBound { break }
+                    index += 1
+                }
+                if cursor < range.upperBound { ranges.append(cursor..<range.upperBound) }
+            }
+            var usedThrough = lower
+            for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+                var start = max(usedThrough, range.lowerBound)
+                let end = min(range.upperBound, self.pcmStart + self.pcm.count)
+                guard start < end else { continue }
+                while start < end, self.clips[slot].count < 2 {
+                    let finish = min(end, start + Self.clipFrames - self.pending[slot].count)
+                    self.pending[slot].append(contentsOf: self.pcm[(start - self.pcmStart)..<(finish - self.pcmStart)])
+                    start = finish
+                    if self.pending[slot].count == Self.clipFrames {
+                        let clip = self.pending[slot]
+                        self.pending[slot].removeAll(keepingCapacity: false)
+                        let mean = clip.reduce(Double.zero) { $0 + Double($1) } / Double(clip.count)
+                        let variance = clip.reduce(Double.zero) { $0 + pow(Double($1) - mean, 2) } / Double(clip.count)
+                        if variance >= 0.0042 * 0.0042 && clip.filter({ abs($0) >= 0.99 }).count < clip.count / 20 {
+                            self.clips[slot].append(clip)
+                        }
+                    }
+                }
+                usedThrough = max(usedThrough, end)
+            }
+        }
+        self.consumedThrough = through
+        let remove = min(self.pcm.count, max(0, through - self.pcmStart))
+        if remove > 0 { self.pcm.removeFirst(remove); self.pcmStart += remove }
+    }
+
+    private mutating func disable() {
+        self.enabled = false
+        self.pcm.removeAll(keepingCapacity: false)
+        self.pending.removeAll(keepingCapacity: false)
+        self.clips.removeAll(keepingCapacity: false)
+    }
 }

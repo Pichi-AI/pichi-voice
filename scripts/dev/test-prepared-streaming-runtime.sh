@@ -45,14 +45,53 @@ assembly = '''
     private func batch(_ output: MeetingParakeetEpochOutput, epoch: MeetingAnalysisEpochID, offset: Double) -> MeetingPCMTranscriptBatch {
         .init(segments: output.words.enumerated().map { index, word in
             .init(id: "\\(epoch.ordinal):\\(index)", text: word.word, start: offset + word.start, end: offset + word.end)
-        })
+        }, speakers: output.words.isEmpty ? [] : [.init(id: "synthetic-speaker")])
     }
 '''
+start_scope = runtime.index('    private final nonisolated class StreamingOwnerEvidenceBox:')
+start_prepared = runtime.index('    func withPreparedStreamingPCM(', start_scope)
+end_prepared = runtime.index('    /// The strict privacy capture', start_prepared)
+end_box = runtime.index('    /// Retain one prepared ASR', start_scope)
 start_validation = runtime.index('    static func validateStreamingSelection(')
-end_validation = runtime.index('    /// Retain one prepared ASR', start_validation)
-Path(sys.argv[2]).write_text('import Foundation\n' + runtime[start:end] +
-    '\nfinal nonisolated class MeetingParakeetNemotronRuntime: Sendable {\n' + runtime[start_loop:end_loop] +
-    runtime[start_validation:end_validation] + assembly + '\n}\n')
+end_validation = runtime.index('    private final nonisolated class StreamingOwnerEvidenceBox:', start_validation)
+factory = Path('Sources/Fluid/Services/Meeting/PichiMeetingProviderFactory.swift').read_text()
+start_preflight = factory.index('    static func prepareSpeakerResources(')
+end_preflight = factory.index('    static func registerBackends', start_preflight)
+preflight = '@MainActor enum PichiMeetingProviderFactory {\n' + factory[start_preflight:end_preflight] + '''
+    static func modelLocator(for configuration: MeetingFinalProcessingConfiguration) throws -> StreamingSpeakerLocatorWitness {
+        .init()
+    }
+}
+'''
+streamingWitnesses = r'''
+    var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { self.scope == nil ? nil : .init() }
+    var pcmIdentityState: StreamingPinWitness { .init() }
+    var pcmSpeakerNameFormat: String { "Speaker %lld" }
+    func withPreparedASR(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+        body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult) async throws -> MeetingParakeetPhaseResult {
+        self.scope?.event("asr-scope-open")
+        defer { self.scope?.event("asr-scope-closed") }
+        return try await body(StreamingASRWitness())
+    }
+    func withNemotronDiarization(artifact: MeetingNemotronModelArtifact,
+        _ body: @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult) async throws -> MeetingNemotronPhaseResult {
+        self.scope?.event("speaker-scope-open")
+        defer { self.scope?.event("speaker-scope-closed") }
+        return try await body(StreamingFactoryWitness())
+    }
+    func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
+        self.scope?.event("voice-encode")
+        guard let scope = self.scope else { return [] }
+        if scope.failEncoder { throw StreamingScopeFailure.encoder }
+        await scope.waitForEncoderRelease()
+        return [.init()]
+    }
+'''
+Path(sys.argv[2]).write_text('import Foundation\n' + runtime[start:end] + preflight +
+    '\nfinal nonisolated class MeetingParakeetNemotronRuntime: Sendable {\n' +
+    '    let scope: StreamingScopeFixture?\n    init(scope: StreamingScopeFixture? = nil) { self.scope = scope }\n' +
+    runtime[start_loop:end_loop] + runtime[start_scope:end_box] + runtime[start_prepared:end_prepared] +
+    runtime[start_validation:end_validation] + assembly + streamingWitnesses + '\n}\n')
 PY
 swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
     -module-cache-path "$pichi_build/ModuleCache" \

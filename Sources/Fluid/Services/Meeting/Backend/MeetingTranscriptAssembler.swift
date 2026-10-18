@@ -884,6 +884,18 @@ nonisolated struct MeetingTranscriptAssembler {
         return batch
     }
 
+    /// Identity-only verification reuses the assembler's stable token mapping. It never mints
+    /// another participant, edits aliases or reattributes already protected words.
+    static func applyingLocalUserTokens(to speakers: [MeetingSessionSpeaker], attemptID: UUID,
+                                       tokens: Set<MeetingBackendSpeakerToken>) -> [MeetingSessionSpeaker] {
+        let IDs = Set(tokens.map { Self.speakerID(attemptID: attemptID, token: $0) })
+        return speakers.map { source in
+            var speaker = source
+            speaker.isLocalUser = IDs.contains(speaker.id)
+            return speaker
+        }
+    }
+
     private static func scopedClusterID(for token: MeetingBackendSpeakerToken) -> String {
         "\(token.analysisEpochID):\(token.label.precomposedStringWithCanonicalMapping)"
     }

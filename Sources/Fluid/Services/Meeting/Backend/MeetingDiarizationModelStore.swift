@@ -54,6 +54,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var voiceMatchingReady = false
+    nonisolated let supportsOwnerVoiceVerification: Bool
     private var attempt: Task<MeetingNemotronModelArtifact, Error>?
     private var voiceAttempt: Task<Void, Error>?
     private let validateVoice: @Sendable () throws -> Void
@@ -63,6 +64,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
     private let install: Install
 
     init(
+        supportsOwnerVoiceVerification: Bool = true,
         canDownload: @escaping @Sendable () -> Bool = MeetingDiarizationModelStore.usesDefaultLocation,
         validate: @escaping Validate = {
             let package = MeetingNemotronModelLocator().resolvedPackageURL()
@@ -75,6 +77,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
         validateVoice: @escaping @Sendable () throws -> Void = MeetingSpeakerVoiceModelArtifacts.validate,
         installVoice: @escaping @Sendable (@escaping @Sendable (Double) -> Void) async throws -> Void = MeetingSpeakerVoiceModelArtifacts.ensureInstalled
     ) {
+        self.supportsOwnerVoiceVerification = supportsOwnerVoiceVerification
         self.canDownload = canDownload
         self.validate = validate
         self.install = install
@@ -86,6 +89,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
     /// with production setup. No user preference or default store is changed by creating one.
     convenience init(profile: MeetingNemotronModelProfile) {
         self.init(
+            supportsOwnerVoiceVerification: profile.supportsOwnerVoiceVerification,
             canDownload: { MeetingNemotronModelLocator(profile: profile).resolvedPackageURL().standardizedFileURL
                 == MeetingNemotronModelLocator.defaultPackageURL(profile: profile).standardizedFileURL },
             validate: {

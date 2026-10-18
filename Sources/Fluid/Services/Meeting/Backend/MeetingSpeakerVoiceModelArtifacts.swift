@@ -84,3 +84,12 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
         try? FileManager.default.removeItem(at: stage)
     }
 }
+
+// The composite identity includes the optional encoder and bounded streaming evidence policy.
+// Base diarizer artifacts/checkpoints retain their original identity.
+extension MeetingNemotronModelProfile {
+    nonisolated var streamingImplementationFingerprint: String {
+        self.implementationFingerprint + (self.supportsOwnerVoiceVerification
+            ? ";voice=wespeaker@" + MeetingSpeakerVoiceModelArtifacts.revision + ";owner-stream=bounded-two-3s-v1" : "")
+    }
+}

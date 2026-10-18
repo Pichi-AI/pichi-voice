@@ -112,6 +112,7 @@ struct MeetingStreamingTranscriptStateTests {
         try await privacyAcrossLongPause()
         try await privacyCueAcrossWindowAndLongPause()
         try await identityRefinementWithoutTextRollback()
+        try await ownerIdentityWithoutNewSpeech()
         try await longBoundedStream()
         try await guardsAndLimits()
         try await cancellationAndReentry()
@@ -421,6 +422,40 @@ struct MeetingStreamingTranscriptStateTests {
         check(await value.metadataDiagnostics?.revisedWords == second.diagnostics.revisedWords)
         await value.cancel()
         await expect(.cancelled) { _ = try await value.observe(observation(accepted: 2, asr: 2)) }
+    }
+
+    static func ownerIdentityWithoutNewSpeech() async throws {
+        let privacy = MeetingTranscriptPrivacyContext(redactor: SyntheticMaskingRedactor())
+        let value = try state(privacy: privacy)
+        let source = (0..<40).map { word($0, text: $0 == 2 ? "private@example.test" : nil) }
+        let first = try await value.observe(observation(source, accepted: 20, asr: 20))
+        check(first.safeBatch.segments.count == 8)
+        var owner = MeetingTranscriptAssembler.applyingLocalUserTokens(to: first.safeBatch.speakers,
+            attemptID: attempt, tokens: [.init(analysisEpochID: epoch, label: "a")])[0]
+        check(owner.isLocalUser)
+        check(!MeetingTranscriptAssembler.applyingLocalUserTokens(to: [owner], attemptID: attempt, tokens: [])[0].isLocalUser)
+        owner.displayName = "Explicit alias"
+        let identity = MeetingStreamingPCMObservation(batch: .init(segments: [], speakers: [owner]),
+            activity: [.init(token: .init(analysisEpochID: epoch, label: "a"), start: 0, end: 20)],
+            acceptedThroughSample: 320_000, processedThroughSample: 320_000, retainedFromSample: 0,
+            isFinal: false, asrStableThroughSample: nil)
+        let promoted = try await value.observe(identity)
+        check(promoted.safeBatch.segments.isEmpty)
+        check(promoted.safeBatch.speakers.first?.isLocalUser == true)
+        check(promoted.hasSpeakerIdentityChanges)
+        let unchanged = try await value.observe(identity)
+        check(!unchanged.hasSpeakerIdentityChanges, "Unchanged acoustic progress must not trigger another identity-only durable write")
+        check(promoted.safeBatch.speakers.first?.id == owner.id)
+        check(promoted.safeBatch.speakers.first?.displayName == first.safeBatch.speakers.first?.displayName)
+        let final = try await value.finish(observation(accepted: 20, asr: 20, final: true))
+        check(final.safeBatch.speakers.first?.isLocalUser == true,
+              "The delayed privacy tail's old anonymous metadata must not revoke verified owner identity")
+        check(final.safeBatch.segments.count == 32)
+        let all = first.safeBatch.segments + final.safeBatch.segments
+        check(all.map(\.id) == source.map(\.id))
+        check(all.map(\.nativeTiming) == source.map(\.nativeTiming))
+        check(all[2].text == "<EMAIL>")
+        check(all.allSatisfy { $0.originalText == nil })
     }
 
     static func longBoundedStream() async throws {

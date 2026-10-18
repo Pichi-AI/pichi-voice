@@ -21,7 +21,7 @@ import FluidAudio
 //   after Stop, followed by optional owner encoding in its own phase.
 // - The explicit streaming capability holds one prepared ASR and one incremental Nemotron
 //   state under the same outer attempt grant. Their native calls remain serial, and Stop
-//   flushes only the unscored tail. It uses anonymous continuous slots, without voice encoding.
+//   flushes only the unscored tail. Optional owner encoding follows after both scopes retire.
 //
 // Parakeet does ASR only; Nemotron does diarization only. Neither capability sees anything beyond
 // the request the host froze.
@@ -319,9 +319,17 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             if configuration.effectiveSpeakerProcessingMode == .streaming {
                 try Self.validateStreamingSelection(artifact: located, configuration: configuration)
             }
-            if self.ownerVoiceVerificationEnabled {
-                if self.usesDefaultVoiceModelDirectory { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
-                try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
+            if self.ownerVoiceVerificationEnabled,
+               configuration.effectiveSpeakerProcessingMode != .streaming || self.ownerVoiceProfileSnapshot != nil {
+                do {
+                    if self.usesDefaultVoiceModelDirectory { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
+                    try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
+                } catch {
+                    if configuration.effectiveSpeakerProcessingMode != .streaming { throw error }
+                    // Explicit owner identity is optional. A missing encoder cannot discard
+                    // a valid anonymous streaming meeting; encode revalidates the pinned files.
+                    DebugLogger.shared.info("mode=streaming owner_verification_resources=unavailable", source: "MeetingPCMRuntime")
+                }
             }
             // Freeze validated selection only. Compile/open weights inside the owned model
             // scope: the offline speaker phase or the explicitly prepared streaming pair.
@@ -343,8 +351,17 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         guard configuration.speakerLabelsEnabled, configuration.effectiveSpeakerProcessingMode == .streaming,
               artifact.compiledModelURL != nil, artifact.profile.isExperimental,
               artifact.profile.computePreference == .cpuOnly,
-              configuration.diarizationFingerprint == artifact.implementationFingerprint else {
+              configuration.diarizationFingerprint == artifact.profile.streamingImplementationFingerprint else {
             throw MeetingModelResidencyError.staleGrant
+        }
+    }
+
+    private final nonisolated class StreamingOwnerEvidenceBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: MeetingPreparedStreamingRuntime.OwnerEvidence?
+        func set(_ value: MeetingPreparedStreamingRuntime.OwnerEvidence?) { self.lock.withLock { self.value = value } }
+        func take() -> MeetingPreparedStreamingRuntime.OwnerEvidence? {
+            self.lock.withLock { let value = self.value; self.value = nil; return value }
         }
     }
 
@@ -366,6 +383,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         try Self.validateStreamingSelection(artifact: artifact, configuration: configuration)
         _ = try self.pcmIdentityState.begin(attemptID: attemptID)
         defer { self.pcmIdentityState.end() }
+        let ownerEvidence = StreamingOwnerEvidenceBox()
+        let collectOwnerEvidence = self.ownerVoiceProfileSnapshot != nil
         _ = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration) { asr in
             _ = try await self.withNemotronDiarization(artifact: artifact) { factory in
                 let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: 0)
@@ -375,11 +394,13 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 }
                 let session = MeetingPreparedStreamingRuntime(runtime: self, asr: asr, diarizer: diarizer,
                     trackID: trackID, attemptID: attemptID, configuration: configuration,
-                    speakerNameFormat: self.pcmSpeakerNameFormat, onProgress: onProgress)
+                    speakerNameFormat: self.pcmSpeakerNameFormat, collectOwnerEvidence: collectOwnerEvidence,
+                    onProgress: onProgress)
                 do {
                     try await body(session)
                     try Task.checkCancellation()
                     try session.requireFinished()
+                    ownerEvidence.set(try session.ownerEvidence())
                     await session.cleanup()
                 } catch {
                     await session.cleanup()
@@ -388,6 +409,28 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 return MeetingNemotronPhaseResult()
             }
             return MeetingParakeetPhaseResult()
+        }
+        // Both inference scopes and their native cleanup have joined. The box retains only
+        // bounded admitted clips, so the additional encoder never co-resides with either model.
+        try Task.checkCancellation()
+        if let evidence = ownerEvidence.take() {
+            let profiles: [MeetingSpeakerVoiceProfile]
+            do { profiles = try await self.speakerVoiceProfiles(samples: evidence.samples) }
+            catch {
+                try Task.checkCancellation()
+                DebugLogger.shared.info("mode=streaming owner_verification=unavailable preservedAnonymousSpeech=true", source: "MeetingPCMRuntime")
+                return
+            }
+            try Task.checkCancellation()
+            let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles)
+            DebugLogger.shared.info("mode=streaming owner_verification=completed profileCount=\(profiles.count) confirmedCount=\(confirmed.count)", source: "MeetingPCMRuntime")
+            let identities = MeetingTranscriptAssembler.applyingLocalUserTokens(to: evidence.speakers,
+                attemptID: attemptID, tokens: confirmed)
+            let value = evidence.observation
+            try await onProgress(.init(batch: .init(segments: [], speakers: identities), activity: value.activity,
+                acceptedThroughSample: value.acceptedThroughSample, processedThroughSample: value.processedThroughSample,
+                retainedFromSample: value.retainedFromSample, isFinal: false))
+            try Task.checkCancellation()
         }
     }
 

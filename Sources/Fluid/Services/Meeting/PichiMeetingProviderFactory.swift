@@ -206,7 +206,7 @@ enum PichiMeetingProviderFactory {
         if configuration.effectiveSpeakerProcessingMode == .streaming {
             guard let registration = self.registrations[configuration.asrModel],
                   let expected = registration.speakerProcessingProfiles[.streaming], matched == expected,
-                  configuration.diarizationFingerprint == expected.implementationFingerprint else {
+                  configuration.diarizationFingerprint == expected.streamingImplementationFingerprint else {
                 throw MeetingBackendError.unsupportedSpeakerProcessingMode(
                     backend: self.registrations[configuration.asrModel]?.descriptor.id ?? .productionDefault, mode: .streaming)
             }
@@ -224,8 +224,13 @@ enum PichiMeetingProviderFactory {
     static func prepareSpeakerResources(for configuration: MeetingFinalProcessingConfiguration) async throws {
         guard configuration.speakerLabelsEnabled else { return }
         let locator = try self.modelLocator(for: configuration)
+        // Streaming capture needs only the continuous speaker graph. Enrollment and the
+        // explicit Settings download own optional voice-encoder installation; losing that
+        // optional resource must not block capture or trigger a network wait before the mic.
+        // The frozen runtime validates it locally and verifies the owner after model cleanup.
         let dependencies: Set<MeetingDiarizationDependency> = configuration.effectiveSpeakerProcessingMode == .streaming
-            ? [.speakerSeparation] : [.speakerSeparation, .voiceMatching]
+            ? [.speakerSeparation] : (locator.supportsOwnerVoiceVerification
+                ? [.speakerSeparation, .voiceMatching] : [.speakerSeparation])
         try await MeetingDiarizationModelStore.shared(for: locator.profile).prepare(dependencies: dependencies)
     }
 
@@ -274,7 +279,7 @@ enum PichiMeetingProviderFactory {
                                         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording) -> MeetingFinalProcessingConfiguration {
         if let (modelID, registration) = self.registrations.first(where: { $0.value.descriptor.id == backendID }) {
             let diarizationFingerprint = diarizationEnabled && speakerProcessingMode == .streaming
-                ? registration.speakerProcessingProfiles[.streaming]?.implementationFingerprint ?? "unavailable:unsupported-mode"
+                ? registration.speakerProcessingProfiles[.streaming]?.streamingImplementationFingerprint ?? "unavailable:unsupported-mode"
                 : "unavailable:input-admission"
             return MeetingFinalProcessingConfiguration(asrModel: modelID,
                 asrArtifactFingerprint: artifactFingerprintOverride ?? registration.admissionArtifactFingerprint(), languageCode: languageCode,
@@ -347,7 +352,7 @@ enum PichiMeetingProviderFactory {
         guard enabled else { return self.transcriptOnlyDiarizationFingerprint }
         // Streaming requires preparation of this exact profile before capture. A missing
         // candidate must not silently turn the requested processing mode into transcript-only.
-        if speakerProcessingMode == .streaming { return profile.implementationFingerprint }
+        if speakerProcessingMode == .streaming { return profile.streamingImplementationFingerprint }
         #if arch(arm64)
         guard let artifact = try? MeetingNemotronModelLocator(profile: profile).locate(),
               (try? MeetingSpeakerVoiceModelArtifacts.validate()) != nil else { return self.transcriptOnlyDiarizationFingerprint }

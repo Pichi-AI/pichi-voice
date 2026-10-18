@@ -1040,7 +1040,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         let locator = StubModelLocator()
         let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou"))
         let configuration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "ru",
-            diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint,
+            diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.streamingImplementationFingerprint,
             speakerProcessingMode: .streaming)
         let request = self.makeRequest(session: session, directory: try self.makeTempSessionDirectory(), configuration: configuration)
         let backend = MeetingProviderBackedBackend(descriptor: descriptor, providerModelID: "gigaam-v3-eou",

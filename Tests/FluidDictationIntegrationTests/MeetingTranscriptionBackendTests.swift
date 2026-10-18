@@ -1423,7 +1423,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             languageCode: "ru", artifactFingerprintOverride: "synthetic-export", speakerProcessingMode: .streaming)
         XCTAssertEqual(selected.asrModel, PichiMeetingProviderFactory.gigaamModelID)
         XCTAssertEqual(selected.effectiveSpeakerProcessingMode, .streaming)
-        XCTAssertEqual(selected.diarizationFingerprint, MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint)
+        XCTAssertEqual(selected.diarizationFingerprint, MeetingNemotronModelProfile.experimentalFast128FP16CPU.streamingImplementationFingerprint)
         XCTAssertEqual(try PichiMeetingProviderFactory.modelLocator(for: selected).profile, .experimentalFast128FP16CPU)
         let admission = PichiMeetingProviderFactory.validationConfiguration(backendID: .gigaam,
             languageCode: "ru", diarizationEnabled: true, artifactFingerprintOverride: "synthetic-export",
@@ -1445,6 +1445,12 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         let store = try XCTUnwrap(PichiMeetingProviderFactory.speakerModelStore(
             for: selected.asrModel, speakerProcessingMode: .streaming))
         XCTAssertTrue(store === MeetingDiarizationModelStore.shared(for: .experimentalFast128FP16CPU))
+        XCTAssertTrue(store.supportsOwnerVoiceVerification)
+        XCTAssertTrue(selected.diarizationFingerprint.contains(";owner-stream=bounded-two-3s-v1"))
+        let oldAnonymous = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
+            diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint,
+            speakerProcessingMode: .streaming)
+        XCTAssertThrowsError(try PichiMeetingProviderFactory.modelLocator(for: oldAnonymous))
     }
 
     func testSpeakerProcessingPreferenceUsesRegisteredTopologyAndDoesNotChangePrivacy() throws {

@@ -9,13 +9,14 @@ nonisolated struct ASRTranscriptionResult: Sendable { let text: String; var segm
 nonisolated struct MeetingAnalysisEpochID: Hashable, Sendable { let trackID: UUID; let ordinal: Int }
 nonisolated struct MeetingBackendSpeakerToken: Hashable, Sendable { let analysisEpochID: MeetingAnalysisEpochID; let label: String }
 nonisolated struct MeetingBackendSpeakerActivity: Sendable { let token: MeetingBackendSpeakerToken; let start: Double; let end: Double }
-nonisolated struct MeetingSpeakerVoiceSamples: Sendable {}
+nonisolated struct MeetingSpeakerVoiceSamples: Sendable { let token: MeetingBackendSpeakerToken; let clips: [[Float]] }
 nonisolated struct MeetingSpeakerVoiceProfile: Sendable {}
 nonisolated struct MeetingOwnerVoiceProfileSnapshot: Sendable {}
 nonisolated struct MeetingMaterializedSpanSamples: Sendable {}
 nonisolated struct MeetingNemotronModelArtifact: Sendable {
     struct Profile: Sendable {
         enum Preference { case cpuOnly, devicePreferred }
+        var streamingImplementationFingerprint = "synthetic-pinned-profile"
         var isExperimental = true
         var computePreference = Preference.cpuOnly
     }
@@ -29,8 +30,9 @@ nonisolated struct MeetingFinalProcessingConfiguration: Sendable {
     var speakerAttributionPolicy: Int? = 1
     var effectiveSpeakerProcessingMode = Mode.streaming
     var diarizationFingerprint = "synthetic-pinned-profile"
+    var identityFingerprint: String { self.diarizationFingerprint }
 }
-nonisolated struct MeetingSessionSpeaker: Sendable { let id: String }
+nonisolated struct MeetingSessionSpeaker: Sendable { let id: String; var isLocalUser = false }
 nonisolated struct MeetingTranscriptSegment: Sendable {
     enum Completeness { case complete, incompleteTrack }
     let id: String; let text: String; let start: Double; let end: Double
@@ -53,12 +55,84 @@ nonisolated enum MeetingPCMRecordingAttribution {
     }
 }
 typealias MeetingAudioTrackID = UUID
+nonisolated enum MeetingProviderOptions {
+    static func resolve(_ configuration: MeetingFinalProcessingConfiguration) throws -> Int { 0 }
+}
 nonisolated enum MeetingModelResidencyError: Error { case unsupportedProvider, staleGrant }
 nonisolated enum MeetingParakeetNemotronRuntimeError: Error { case invalidPCMWindow, concurrentPCMWindow }
 nonisolated enum PichiLocalization { static func text(_ key: String) -> String { key } }
 nonisolated final class DebugLogger: Sendable {
     static let shared = DebugLogger()
     func info(_ text: String, source: String) {}
+}
+nonisolated enum MeetingTranscriptAssembler {
+    static func applyingLocalUserTokens(to speakers: [MeetingSessionSpeaker], attemptID: UUID,
+                                       tokens: Set<MeetingBackendSpeakerToken>) -> [MeetingSessionSpeaker] {
+        speakers.map { source in var result = source; result.isLocalUser = !tokens.isEmpty; return result }
+    }
+}
+nonisolated enum MeetingOwnerVoiceVerifier {
+    static func confirmedTokens(owner: MeetingOwnerVoiceProfileSnapshot?, profiles: [MeetingSpeakerVoiceProfile]) -> Set<MeetingBackendSpeakerToken> {
+        profiles.isEmpty ? [] : [.init(analysisEpochID: .init(trackID: UUID(), ordinal: 0), label: "slot-0")]
+    }
+}
+nonisolated enum StreamingScopeFailure: Error { case encoder }
+nonisolated final class StreamingScopeFixture: @unchecked Sendable {
+    let failEncoder: Bool
+    let blockEncoder: Bool
+    private var encoderReleased = false
+    private var encoderWaiter: CheckedContinuation<Void, Never>?
+    private let lock = NSLock()
+    private var events: [String] = []
+    init(failEncoder: Bool = false, blockEncoder: Bool = false) {
+        self.failEncoder = failEncoder; self.blockEncoder = blockEncoder
+    }
+    func waitForEncoderRelease() async {
+        guard self.blockEncoder else { return }
+        await withCheckedContinuation { continuation in
+            let ready = self.lock.withLock {
+                if self.encoderReleased { return true }
+                self.encoderWaiter = continuation
+                return false
+            }
+            if ready { continuation.resume() }
+        }
+    }
+    func releaseEncoder() {
+        let waiter = self.lock.withLock {
+            self.encoderReleased = true
+            let value = self.encoderWaiter; self.encoderWaiter = nil; return value
+        }
+        waiter?.resume()
+    }
+    func event(_ value: String) { self.lock.withLock { self.events.append(value) } }
+    var snapshot: [String] { self.lock.withLock { self.events } }
+}
+nonisolated enum MeetingDiarizationDependency: Hashable { case speakerSeparation, voiceMatching }
+nonisolated struct StreamingSpeakerLocatorWitness { let profile = 0; let supportsOwnerVoiceVerification = true }
+@MainActor final class MeetingDiarizationModelStore {
+    static let witness = MeetingDiarizationModelStore()
+    var requests: [Set<MeetingDiarizationDependency>] = []
+    static func shared(for profile: Int) -> MeetingDiarizationModelStore { self.witness }
+    func prepare(dependencies: Set<MeetingDiarizationDependency>) async throws {
+        self.requests.append(dependencies)
+        if dependencies.contains(.voiceMatching) { throw StreamingScopeFailure.encoder }
+    }
+}
+nonisolated struct StreamingPinWitness: Sendable {
+    func pinnedArtifact(attemptID: UUID, configuration: String) throws -> MeetingNemotronModelArtifact? { .init() }
+    func begin(attemptID: UUID) throws {}
+    func end() {}
+}
+nonisolated struct StreamingASRWitness: MeetingParakeetASRSession {
+    func transcribeWithTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        (.init(text: "synthetic"), [.init(word: "synthetic", start: 0, end: Double(samples.count) / 16_000)])
+    }
+}
+nonisolated struct StreamingFactoryWitness: MeetingNemotronDiarizerFactory {
+    func makeDiarizer(epoch: MeetingAnalysisEpochID) async throws -> any MeetingNemotronDiarizerSession {
+        SyntheticDiarizer(Recorder())
+    }
 }
 private nonisolated enum FixtureFailure: Error { case assembly, observer, inference, invalid }
 private nonisolated func require(_ condition: Bool, _ detail: String) throws {
@@ -250,6 +324,149 @@ private actor SyntheticDiarizer: MeetingIncrementalNemotronDiarizerSession {
             } catch MeetingModelResidencyError.staleGrant {}
         }
         print("PASS pinned streaming profile admission refuses mismatched artifacts, policies and modes")
-        print("9 prepared streaming runtime contract groups passed")
+        try ownerEvidenceBoundsAndQuality()
+        try await ownerScopeRetiresModelsBeforeEncoder()
+        try await optionalOwnerPreflightAndCancellation()
+        print("12 prepared streaming runtime contract groups passed")
     }
+    private nonisolated static func ownerScopeRetiresModelsBeforeEncoder() async throws {
+        for failEncoder in [false, true] {
+            let scope = StreamingScopeFixture(failEncoder: failEncoder)
+            let runtime = MeetingParakeetNemotronRuntime(scope: scope)
+            let controller = MeetingStreamingPCMController.deferred { body in
+                try await runtime.withPreparedStreamingPCM(trackID: UUID(), attemptID: UUID(), configuration: .init(),
+                    onProgress: { value in
+                        if !value.batch.speakers.isEmpty {
+                            try require(value.batch.segments.isEmpty, "Owner publication must never replace protected words")
+                            try require(value.batch.speakers.allSatisfy(\.isLocalUser), "Only verified owner identities are promoted")
+                            scope.event("identity-published")
+                        }
+                    }, body: body)
+            }
+            let audio = (0..<128_000).map { 0.1 * sin(Float($0) * 0.031) }
+            _ = try await controller.recognize(window: .fixture(samples: audio, final: true), offset: 0)
+            let finished = try await controller.finishStreaming()
+            try require(finished.isFinal, "An unavailable optional encoder cannot fail completed anonymous speech")
+            let events = scope.snapshot
+            try require(events.prefix(4) == ["asr-scope-open", "speaker-scope-open", "speaker-scope-closed", "asr-scope-closed"],
+                        "Both native inference scopes must retire before owner encoding")
+            try require(events.dropFirst(4).first == "voice-encode", "The voice encoder runs only after both model scopes close")
+            try require(events.contains("identity-published") == !failEncoder,
+                        "An encoder failure preserves the meeting and cannot claim owner identity")
+        }
+        print("PASS actual production streaming scope releases both model owners before optional encoder and identity publication")
+    }
+
+    private static func optionalOwnerPreflightAndCancellation() async throws {
+        let store = MeetingDiarizationModelStore.witness
+        store.requests = []
+        try await PichiMeetingProviderFactory.prepareSpeakerResources(for: .init())
+        try require(store.requests == [[.speakerSeparation]],
+                    "Missing optional owner resources cannot block an installed streaming speaker model")
+        var offline = MeetingFinalProcessingConfiguration()
+        offline.effectiveSpeakerProcessingMode = .afterRecording
+        do { try await PichiMeetingProviderFactory.prepareSpeakerResources(for: offline); throw FixtureFailure.invalid }
+        catch StreamingScopeFailure.encoder {}
+        try require(store.requests.last == [.speakerSeparation, .voiceMatching],
+                    "Existing offline resource preparation stays strict")
+
+        let scope = StreamingScopeFixture(blockEncoder: true)
+        let runtime = MeetingParakeetNemotronRuntime(scope: scope)
+        let controller = MeetingStreamingPCMController.deferred { body in
+            try await runtime.withPreparedStreamingPCM(trackID: UUID(), attemptID: UUID(), configuration: .init(),
+                onProgress: { value in
+                    if value.batch.speakers.contains(where: \.isLocalUser) { scope.event("unexpected-owner") }
+                }, body: body)
+        }
+        let audio = (0..<128_000).map { 0.1 * sin(Float($0) * 0.031) }
+        _ = try await controller.recognize(window: .fixture(samples: audio, final: true), offset: 0)
+        let finish = Task { try await controller.finishStreaming() }
+        for _ in 0..<10_000 {
+            if scope.snapshot.contains("voice-encode") { break }
+            await Task.yield()
+        }
+        try require(scope.snapshot.contains("voice-encode"), "The synthetic owner encoder must start")
+        let joined = Task { await controller.cancelAndWait(); scope.event("cancel-joined") }
+        for _ in 0..<20 { await Task.yield() }
+        try require(!scope.snapshot.contains("cancel-joined"), "Cancellation must wait for noncooperative native encoding")
+        scope.releaseEncoder()
+        await joined.value
+        do { _ = try await finish.value; throw FixtureFailure.invalid } catch is CancellationError {}
+        try require(!scope.snapshot.contains("unexpected-owner"), "Cancelled evidence cannot publish a local-user identity")
+        print("PASS optional streaming owner preflight and cancellation joins native encoding without false identity")
+    }
+
+    private nonisolated static func ownerEvidenceBoundsAndQuality() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        func voice(_ count: Int, offset: Int = 0) -> [Float] {
+            (0..<count).map { 0.1 * sin(Float($0 + offset) * 0.031) }
+        }
+        var short = MeetingStreamingOwnerVoiceSamples(epoch: epoch)
+        short.append(voice(5 * 16_000), sourceStartSample: 0)
+        short.collect(activity: [.init(slotIndex: 0, start: 0, end: 5)], processedThroughSample: 80_000)
+        try require(short.excerpts.isEmpty, "Short evidence cannot force owner identification")
+
+        var complete = MeetingStreamingOwnerVoiceSamples(epoch: epoch)
+        complete.append(voice(8 * 16_000), sourceStartSample: 0)
+        complete.collect(activity: [.init(slotIndex: 0, start: 0, end: 8)], processedThroughSample: 128_000)
+        try require(complete.excerpts.count == 1 && complete.excerpts[0].clips.map(\.count) == [48_000, 48_000],
+                    "Two independent three-second clips suffice for an existing global slot")
+        try require(complete.excerpts[0].token.analysisEpochID == epoch, "Evidence retains the continuous epoch")
+        let preserved = complete.excerpts[0].clips
+        for ordinal in 0..<180 {
+            let start = (8 + ordinal * 20) * 16_000
+            complete.append([Float](repeating: 0, count: 320_000), sourceStartSample: start)
+            complete.collect(activity: [], processedThroughSample: start + 320_000)
+            try require(complete.retainedPCMFrames <= MeetingStreamingOwnerVoiceSamples.maximumPCMFrames,
+                        "An hour of silence must not grow retained PCM")
+            try require(complete.retainedVoiceFrames <= MeetingStreamingOwnerVoiceSamples.maximumVoiceFrames,
+                        "Voice excerpt storage is bounded independently of meeting duration")
+        }
+        try require(complete.excerpts[0].clips == preserved, "Long silence does not overwrite accepted clean evidence")
+
+        var overlap = MeetingStreamingOwnerVoiceSamples(epoch: epoch)
+        var audio = voice(12 * 16_000)
+        for index in (3 * 16_000)..<(5 * 16_000) { audio[index] = 0.9 }
+        overlap.append(audio, sourceStartSample: 0)
+        overlap.collect(activity: [.init(slotIndex: 0, start: 0, end: 12),
+            .init(slotIndex: 1, start: 3, end: 5)], processedThroughSample: audio.count)
+        try require(overlap.excerpts.count == 1 && overlap.excerpts[0].token.label == "slot-0",
+                    "Only enough single-speaker evidence can establish a candidate")
+        try require(overlap.excerpts[0].clips.flatMap { $0 }.allSatisfy { abs($0) < 0.5 },
+                    "Overlapping samples and their padded edges never enter owner clips")
+
+        for bad in [Float.zero, 1, Float.nan] {
+            var silent = MeetingStreamingOwnerVoiceSamples(epoch: epoch)
+            silent.append([Float](repeating: bad, count: 160_000), sourceStartSample: 0)
+            silent.collect(activity: [.init(slotIndex: 0, start: 0, end: 10)], processedThroughSample: 160_000)
+            try require(silent.excerpts.isEmpty, "Silence, clipped DC and invalid PCM cannot confirm the owner")
+        }
+        var incremental = MeetingStreamingOwnerVoiceSamples(epoch: epoch)
+        let equivalent = voice(8 * 16_000)
+        for start in stride(from: 0, to: equivalent.count, by: 1_600) {
+            incremental.append(Array(equivalent[start..<(start + 1_600)]), sourceStartSample: start)
+            incremental.collect(activity: [.init(slotIndex: 0, start: 0, end: Double(start + 1_600) / 16_000)],
+                processedThroughSample: start + 1_600)
+        }
+        try require(incremental.excerpts.first?.clips == preserved,
+                    "The same stable voice yields identical evidence with 100ms or bulk acoustic callbacks")
+        var dense = MeetingStreamingOwnerVoiceSamples(epoch: epoch)
+        dense.append(voice(160_000), sourceStartSample: 0)
+        let overlapRows = (0..<8_192).map { index -> MeetingNemotronSpeakerSegment in
+            .init(slotIndex: index % 8, start: Double(index / 8) / 128, end: min(10, Double(index / 8) / 128 + 2))
+        }
+        dense.collect(activity: overlapRows, processedThroughSample: 160_000)
+        try require(dense.excerpts.isEmpty, "Dense simultaneous voices cannot manufacture clean owner clips")
+        var delayed = MeetingStreamingOwnerVoiceSamples(epoch: epoch)
+        delayed.append(voice(160_000), sourceStartSample: 0)
+        delayed.collect(activity: [], processedThroughSample: 0)
+        try require(delayed.excerpts.isEmpty, "Unscored audio is never treated as clean owner evidence")
+        delayed.collect(activity: [.init(slotIndex: 0, start: 0, end: 10)], processedThroughSample: 160_000)
+        try require(delayed.excerpts.count == 1, "A later scored watermark admits retained evidence")
+        delayed.append([0.1], sourceStartSample: 180_000)
+        try require(delayed.excerpts.isEmpty && delayed.retainedPCMFrames == 0,
+                    "A discontinuity discards optional identity evidence rather than relabeling voices")
+        print("PASS bounded streaming owner clips, short speech, long silence, overlap, quality and delayed scoring")
+    }
+
 }
