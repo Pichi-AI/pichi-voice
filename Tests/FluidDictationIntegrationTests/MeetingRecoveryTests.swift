@@ -6465,7 +6465,7 @@ private actor SingleUseDrainingCaptureController: MeetingCaptureControlling {
     func releaseModelDrain() async { await modelReleased.open() }
     func waitForStopWaiterCancellation() async throws { try await waitUntilOpen(waiterCancelled) }
     private func waitUntilOpen(_ gate: PermissionPreflightGate) async throws {
-        for _ in 0..<1_000 {
+        for _ in 0..<5_000 {
             if await gate.hasOpened() { return }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
