@@ -332,9 +332,9 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testGeneralizedSpeakerAttributionLabelsInBothLanguagesAndThemes() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9016"
-        for (language, appearance, historyTitle, interruptionLabel, participantLabel) in [
-            ("en", "light", "History", "Борис", "Борис"),
-            ("ru", "dark", "История", "Борис", "Борис")
+        for (language, appearance, historyTitle, mainLabel, participantLabel) in [
+            ("en", "light", "History", "Анна", "Борис"),
+            ("ru", "dark", "История", "Анна", "Борис")
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -351,10 +351,13 @@ final class MobileNavigationUITests: XCTestCase {
             meeting.tap()
             XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
             capture("attribution-\(language)-opened")
-            let label = app.staticTexts[interruptionLabel].firstMatch
-            XCTAssertTrue(label.waitForExistence(timeout: 5), "The foreground label must retain the background speaker")
-            let mixedText = app.staticTexts["Да, уточню."].firstMatch
+            let label = app.staticTexts[mainLabel].firstMatch
+            XCTAssertTrue(label.waitForExistence(timeout: 5), "The continuing participant uses its plain name")
+            let mixedText = app.staticTexts["Обсудим план встречи. Да, уточню. Продолжим обсуждение."].firstMatch
             XCTAssertTrue(mixedText.waitForExistence(timeout: 5))
+            XCTAssertFalse(app.staticTexts["Да, уточню."].exists, "The short interruption must not remain a separate paragraph")
+            XCTAssertFalse(app.staticTexts["Several speakers"].exists)
+            XCTAssertFalse(app.staticTexts["Несколько говорящих"].exists)
             try revealParagraphAboveNavigation(mixedText, step: "attribution-\(language)-portrait")
             capture("attribution-\(language)-portrait-foreground")
             let inferred = app.staticTexts[participantLabel].firstMatch
