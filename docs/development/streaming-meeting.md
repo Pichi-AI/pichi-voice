@@ -79,6 +79,28 @@ The optional mode decodes old sessions as `afterRecording`. Legacy configuration
 remain unchanged; streaming identities include the mode and exact model profile. An
 unsupported backend or two-source capture is rejected before permissions and preparation.
 
+## Continuing participant reading convention
+
+The displayed transcript assigns a short mixed insertion to the continuing main participant.
+For `A / mixed / B / mixed / A`, the complete bounded insertion reads as A. The closest clean
+participant before the interruption owns the pending bout; an older participant cannot claim
+it merely by appearing inside the insertion. A clean `A / B / A` exchange remains three turns.
+At a genuine change of participant, an unresolved short prefix can still follow the incoming
+participant under the existing neighbor rule. Missing audio, manual corrections, incompatible
+tracks or speaker epochs, temporal conflicts and long insertions block inference.
+
+This is a reading convention, not source separation or proof of who spoke each recognized word.
+Labels show plain participant names. They do not show multiple-speaker, interrupting or
+estimated annotations. An unresolved passage without defensible context retains the ordinary
+unknown-participant label. Word times, raw candidate voices and overlap evidence remain intact
+in the canonical JSON. A shared batch projection supplies history, live captions, desktop,
+text export, CLI labels and summary citations. Reading an archive never rewrites its manifest.
+
+New attempts freeze `enableMainSpeakerContinuation` in their attribution policy. Missing keys
+decode to false, preserving old checkpoint identities and processing on resume. The current
+reading projection can apply the convention to old archives independently of their raw evidence.
+Legacy inferred identities cannot act as independent anchors for another contextual guess.
+
 ## Verification boundaries
 
 Model-free contract tests cover PCM continuity, explicit stability cursors, privacy boundary
@@ -89,5 +111,5 @@ Detailed profiling is explicitly gated and records scalar timing/resource metada
 
 Automatic Fathom annotations are a weak comparison reference, not manually verified DER
 ground truth. One ASR stream also cannot reliably recover both word sequences in overlapping
-speech. Short-interrupter attribution remains an evidence-gated heuristic rather than source
+speech. Contextual reading ownership remains an evidence-gated heuristic rather than source
 separation or proof of the words spoken by each voice.

@@ -368,6 +368,12 @@ struct FluidServeGroundedSummaryTests {
         var manual = session; manual.transcriptSegments[2].revision = 1
         check(MeetingTranscriptExporter.speakerPresentations(in: manual)[rows[2].id]?.participantID == b,
               "An explicit correction is not absorbed by surrounding reading context")
+        var inferred = session
+        inferred.transcriptSegments[0].speakerAttributionInference = .init(rule: .surroundingSpeaker,
+            originalState: .unassigned, originalOverlap: .none,
+            precedingSegmentID: UUID(), followingSegmentID: rows[4].id)
+        check(MeetingTranscriptExporter.speakerPresentations(in: inferred)[rows[2].id]?.participantID == b,
+              "A legacy inferred identity cannot anchor a new contextual ownership guess")
         var missing = session
         missing.transcriptCoverageGaps = [.init(trackID: track, start: 0.55, end: 0.58, reason: .missingOrUnreadableAudio)]
         check(MeetingTranscriptExporter.speakerPresentations(in: missing)[rows[2].id]?.participantID == b,
@@ -407,9 +413,9 @@ struct FluidServeGroundedSummaryTests {
         let after = try MeetingTranscriptExporter.json(for: session)
         check(try JSONSerialization.jsonObject(with: before) as! NSDictionary == JSONSerialization.jsonObject(with: after) as! NSDictionary,
               "Reading projection never changes JSON evidence semantics")
-        func staysSplit(_ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil) {
+        func staysSplit(_ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil, line: UInt = #line) {
             check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed ?? session).count == rows.count,
-                  "Unsafe, manual or nonlegacy evidence must remain a boundary")
+                  "Unsafe, manual or nonlegacy evidence must remain a boundary at line \(line)")
         }
         for index in 0..<3 {
             var rows = originals; rows[index].revision = 1; staysSplit(rows)
@@ -495,7 +501,8 @@ struct FluidServeGroundedSummaryTests {
         check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed).count == 1,
               "Per-word heuristic names and suppressed candidate sets do not invent speaker changes")
         rows = [originals[0], provenance(originals[1], rule: .briefInterruption, backgroundTokens: [background]), originals[2]]
-        staysSplit(rows, in: changed)
+        check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed).count == 1,
+              "A bounded mixed insertion is read with its continuing main participant")
     }
 
     /// Genuine production codec payload, not whitespace padding: long word-level transcripts

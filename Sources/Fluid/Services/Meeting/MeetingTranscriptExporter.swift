@@ -289,6 +289,7 @@ nonisolated enum MeetingTranscriptExporter {
         let anchors: [SessionSpeakerID?] = segments.enumerated().map { index, value in
             guard safe(value), !interruptions[index],
                   value.attributionState == nil || value.attributionState == .assigned,
+                  value.speakerAttributionInference == nil,
                   value.speakerAttribution?.rule.isHeuristic != true else { return nil }
             return self.resolvedSpeakerID(value.speakerID, in: session, activeSpeakerIDs: active)
         }
