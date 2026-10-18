@@ -4345,6 +4345,188 @@ final class MeetingRecoveryTests: XCTestCase {
 
     // MARK: - Batched speaker rename (Assign speakers sheet)
 
+    private nonisolated final class CorrectionPrivacyIdentity: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = "synthetic-correction-privacy-v1"
+        var current: String { self.lock.withLock { self.value } }
+        func change() { self.lock.withLock { self.value = "synthetic-correction-privacy-v2" } }
+    }
+
+    @MainActor
+    private final class ColdCorrectionRedactor: TranscriptTextRedacting {
+        enum Behavior: CaseIterable {
+            case ready, preparationFailure, suspendedPreparation, changedPreparationIdentity
+            case changedRedactionIdentity, cancelledRedaction
+        }
+        enum Failure: Error { case preparation, notPrepared }
+        private nonisolated let identity = CorrectionPrivacyIdentity()
+        nonisolated var checkpointIdentity: String? { self.identity.current }
+        var behavior = Behavior.ready
+        var isReady = false
+        var started: AsyncStream<Void>.Continuation?
+        private var waiter: CheckedContinuation<Void, Never>?
+        private(set) var preparations = 0
+        private(set) var inputs: [String] = []
+        func prepareForMeeting() async throws {
+            self.preparations += 1
+            switch self.behavior {
+            case .preparationFailure: throw Failure.preparation
+            case .suspendedPreparation:
+                self.started?.yield(())
+                // Native preparation can ignore cancellation until it has drained.
+                await withCheckedContinuation { self.waiter = $0 }
+            case .changedPreparationIdentity: self.identity.change()
+            default: break
+            }
+            self.isReady = true
+        }
+        func release() { self.waiter?.resume(); self.waiter = nil }
+        func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+            guard self.isReady else { throw Failure.notPrepared }
+            self.inputs.append(text)
+            if self.behavior == .changedRedactionIdentity { self.identity.change() }
+            if self.behavior == .cancelledRedaction { withUnsafeCurrentTask { $0?.cancel() } }
+            let source = text as NSString
+            let range = source.range(of: "synthetic-secret")
+            guard range.location != NSNotFound else { return .init(text: text, spans: []) }
+            return .init(text: source.replacingCharacters(in: range, with: "[PRIVATE]"),
+                spans: [.init(range: range, replacement: "[PRIVATE]")])
+        }
+    }
+
+    func testColdTranscriptCorrectionAndUndoPreparePrivacyBeforePublication() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let fixture = self.makeCorrectionSession(state: .completed)
+        var session = fixture.session
+        session.piiRedactionEnabled = true
+        try await store.create(session)
+        let redactor = ColdCorrectionRedactor()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), redactorProvider: { redactor })
+        let edited = try await coordinator.editTranscriptText(sessionID: session.id, segmentID: fixture.segmentID,
+            text: "New synthetic-secret speech", expectedRevision: session.transcriptSegments[0].revision)
+        XCTAssertEqual(redactor.preparations, 1)
+        XCTAssertEqual(edited.transcriptSegments[0].text, "New [PRIVATE] speech")
+        XCTAssertNil(edited.transcriptSegments[0].originalText)
+        XCTAssertEqual(edited.transcriptSegments[0].start, session.transcriptSegments[0].start)
+        XCTAssertEqual(edited.transcriptSegments[0].end, session.transcriptSegments[0].end)
+        redactor.isReady = false
+        let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        XCTAssertEqual(redactor.preparations, 2, "Undo after model eviction is another privacy publication")
+        XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
+        let persisted = try await store.load(id: session.id)
+        XCTAssertEqual(persisted?.transcriptSegments, session.transcriptSegments)
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
+    func testColdTranscriptCorrectionFailureCancellationAndIdentityChangesAreAtomic() async throws {
+        for undo in [false, true] {
+            for behavior in ColdCorrectionRedactor.Behavior.allCases where behavior != .ready {
+                let dir = self.makeTempDirectory()
+                defer { try? FileManager.default.removeItem(at: dir) }
+                let store = MeetingSessionStore(rootDirectory: dir)
+                let fixture = self.makeCorrectionSession(state: .completed)
+                var session = fixture.session
+                session.piiRedactionEnabled = true
+                try await store.create(session)
+                let redactor = ColdCorrectionRedactor()
+                let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                    processing: StubProcessingController(), audioArbiter: StubArbiter(), redactorProvider: { redactor })
+                if undo {
+                    _ = try await coordinator.editTranscriptText(sessionID: session.id, segmentID: fixture.segmentID,
+                        text: "New synthetic-secret speech", expectedRevision: session.transcriptSegments[0].revision)
+                }
+                let before = try await store.load(id: session.id)
+                let inputsBefore = redactor.inputs.count
+                redactor.isReady = false
+                redactor.behavior = behavior
+                let readiness = AsyncStream<Void>.makeStream()
+                redactor.started = readiness.continuation
+                let operation = Task { @MainActor in
+                    if undo { return try await coordinator.undoTranscriptCorrection(sessionID: session.id) }
+                    return try await coordinator.editTranscriptText(sessionID: session.id, segmentID: fixture.segmentID,
+                        text: "New synthetic-secret speech", expectedRevision: session.transcriptSegments[0].revision)
+                }
+                if behavior == .suspendedPreparation {
+                    var iterator = readiness.stream.makeAsyncIterator()
+                    await iterator.next()
+                    operation.cancel()
+                    redactor.release()
+                }
+                do { _ = try await operation.value; XCTFail("Invalid privacy preparation/publication must fail") }
+                catch {
+                    if behavior == .suspendedPreparation || behavior == .cancelledRedaction {
+                        XCTAssertTrue(error is CancellationError)
+                    } else if behavior == .changedPreparationIdentity || behavior == .changedRedactionIdentity {
+                        guard case .changedConfiguration? = error as? MeetingRetainedProcessingCheckpoint.Failure else {
+                            return XCTFail("Expected changedConfiguration, got \(error)")
+                        }
+                    } else { XCTAssertTrue(error is ColdCorrectionRedactor.Failure) }
+                }
+                readiness.continuation.finish()
+                let persisted = try await store.load(id: session.id)
+                XCTAssertEqual(persisted, before, "Failed edits/undo must preserve every durable source field")
+                XCTAssertEqual(coordinator.canUndoCorrection(sessionID: session.id), undo)
+                if behavior == .preparationFailure || behavior == .suspendedPreparation || behavior == .changedPreparationIdentity {
+                    XCTAssertEqual(redactor.inputs.count, inputsBefore, "Unprepared or stale resources cannot see transcript text")
+                }
+                if undo {
+                    redactor.behavior = .ready
+                    redactor.isReady = false
+                    let restored = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+                    XCTAssertEqual(restored.transcriptSegments, session.transcriptSegments)
+                    XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id), "Failed undo cannot consume or duplicate its inverse")
+                }
+            }
+        }
+    }
+
+    func testSpeakerAttributionCorrectionsAndUndoNeverRequireTranscriptPrivacyModel() async throws {
+        for operation in ["reassign", "nameUnknown", "merge"] {
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let store = MeetingSessionStore(rootDirectory: dir)
+            let fixture = self.makeCorrectionSession(state: .completed)
+            var session = fixture.session
+            session.piiRedactionEnabled = true
+            session.transcriptSegments[0].originalText = "Protected original"
+            session.transcriptSegments[0].nativeUnitID = "synthetic-native-word"
+            session.transcriptSegments[0].nativePrecision = .word
+            session.transcriptSegments[0].nativeTiming = .init(start: 0.1234, end: 0.9876)
+            if operation == "nameUnknown" { session.transcriptSegments[0].speakerID = nil }
+            try await store.create(session)
+            let redactor = ColdCorrectionRedactor()
+            redactor.behavior = .preparationFailure
+            let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                processing: StubProcessingController(), audioArbiter: StubArbiter(), redactorProvider: { redactor })
+            let corrected: MeetingSession
+            switch operation {
+            case "reassign": corrected = try await coordinator.reassignSegment(sessionID: session.id,
+                segmentID: fixture.segmentID, to: fixture.speakerB)
+            case "nameUnknown": corrected = try await coordinator.nameUnknownSegment(sessionID: session.id,
+                segmentID: fixture.segmentID, displayName: "Иван Тестов")
+            default: corrected = try await coordinator.mergeSpeakers(sessionID: session.id,
+                source: fixture.speakerA, into: fixture.speakerB)
+            }
+            for (original, changed) in zip(session.transcriptSegments, corrected.transcriptSegments) {
+                XCTAssertEqual(changed.id, original.id)
+                XCTAssertEqual(changed.text, original.text)
+                XCTAssertEqual(changed.originalText, original.originalText)
+                XCTAssertEqual(changed.start, original.start)
+                XCTAssertEqual(changed.end, original.end)
+                XCTAssertEqual(changed.nativeTiming, original.nativeTiming)
+                XCTAssertEqual(changed.sourceTrackID, original.sourceTrackID)
+            }
+            let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+            XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
+            XCTAssertEqual(undone.speakers, session.speakers)
+            XCTAssertEqual(redactor.preparations, 0)
+            XCTAssertTrue(redactor.inputs.isEmpty)
+        }
+    }
+
     @MainActor
     private final class SpeakerAliasRedactor: TranscriptTextRedacting {
         private(set) var inputs: [String] = []

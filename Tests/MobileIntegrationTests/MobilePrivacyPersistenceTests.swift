@@ -16,6 +16,92 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 /// Synthetic text isolates data handling from probabilistic model accuracy.
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
+    func testNativeColdTranscriptEditAndUndoPreparePrivacyWithoutAudio() async throws {
+        guard ProcessInfo.processInfo.environment["PICHI_MOBILE_PRIVACY_EDIT_E2E"] == "1" else {
+            throw XCTSkip("Explicitly enable actual A1 cold transcript correction inference")
+        }
+        let assets = try MobileInferenceTestAssets.resolve()
+        let modelStore = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
+        guard await modelStore.isInstalled() else { throw XCTSkip("Stage the pinned public privacy artifact") }
+        let name = "ColdTranscriptEdit.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer { defaults.removePersistentDomain(forName: name); try? FileManager.default.removeItem(at: root) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.meetingAudioRetentionPolicy = .never
+        let store = MeetingSessionStore(rootDirectory: root)
+        var source = fixture()
+        let participant = MeetingSessionSpeaker(id: UUID(), displayName: "Иван Тестов", diarizationClusterID: "synthetic",
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        source.speakers = [participant]
+        source.speakerLabelsEnabled = true
+        source.transcriptSegments[0].speakerID = participant.id
+        source.transcriptSegments[0].text = "Сведения защищены."
+        source.transcriptSegments[0].originalText = nil
+        source.transcriptSegments[0].nativePrecision = .utterance
+        source.transcriptSegments[0].nativeUnitID = "synthetic-native-turn"
+        source.transcriptSegments[0].nativeTiming = .init(start: 0, end: 3)
+        try await store.create(source)
+        let privacy = PichiTranscriptPrivacyService(modelStore: modelStore)
+        let identity = privacy.checkpointIdentity
+        let services = AppServices(store: store, settings: settings, privacy: privacy)
+        let coordinator = services.meetingSessionCoordinator
+        do {
+            let readyBeforeEdit = await privacy.isReady
+            XCTAssertFalse(readyBeforeEdit, "The production correction entry point must prepare the cold model")
+            let editedAt = ProcessInfo.processInfo.systemUptime
+            let edited = try await coordinator.editTranscriptText(sessionID: source.id,
+                segmentID: source.transcriptSegments[0].id, text: "Телефон +7 999 123-45-67.",
+                expectedRevision: source.transcriptSegments[0].revision)
+            let editSeconds = ProcessInfo.processInfo.systemUptime - editedAt
+            let readyAfterEdit = await privacy.isReady
+            XCTAssertTrue(readyAfterEdit)
+            XCTAssertTrue(edited.transcriptSegments[0].text.contains("[ТЕЛЕФОН]"))
+            XCTAssertFalse(edited.transcriptSegments[0].text.contains("999"))
+            XCTAssertFalse(edited.transcriptSegments[0].text.contains("123-45-67"))
+            XCTAssertNil(edited.transcriptSegments[0].originalText)
+            XCTAssertEqual(edited.speakers, source.speakers, "An explicit participant name is outside speech redaction")
+            XCTAssertEqual(privacy.checkpointIdentity, identity)
+            try await privacy.unload()
+            let readyBeforeUndo = await privacy.isReady
+            XCTAssertFalse(readyBeforeUndo)
+            let undoneAt = ProcessInfo.processInfo.systemUptime
+            let undone = try await coordinator.undoTranscriptCorrection(sessionID: source.id)
+            let undoSeconds = ProcessInfo.processInfo.systemUptime - undoneAt
+            let readyAfterUndo = await privacy.isReady
+            XCTAssertTrue(readyAfterUndo)
+            XCTAssertEqual(undone.transcriptSegments, source.transcriptSegments,
+                           "Undo must preserve native IDs, exact timing and the protected voice text")
+            XCTAssertEqual(undone.speakers, source.speakers)
+            XCTAssertEqual(privacy.checkpointIdentity, identity)
+            let saved = try await store.load(id: source.id)
+            XCTAssertEqual(saved?.transcriptSegments, source.transcriptSegments)
+            XCTAssertEqual(saved?.speakers, source.speakers)
+            let paths = try FileManager.default.subpathsOfDirectory(atPath: root.path)
+            let audioPaths = paths.filter { ["wav", "caf", "m4a", "mp3", "aac"].contains(URL(fileURLWithPath: $0).pathExtension) }
+            XCTAssertTrue(audioPaths.isEmpty)
+            let report: [String: Any] = ["coldEditSeconds": editSeconds, "coldUndoSeconds": undoSeconds,
+                "privacyReadyBeforeEdit": readyBeforeEdit, "privacyReadyBeforeUndo": readyBeforeUndo,
+                "privacyReadyAfterEdit": readyAfterEdit, "privacyReadyAfterUndo": readyAfterUndo,
+                "nativeSourceRestored": undone.transcriptSegments == source.transcriptSegments,
+                "participantAliasPreserved": undone.speakers == source.speakers, "audioFileCount": audioPaths.count,
+                "scope": "Synthetic text correction and undo through the production coordinator using the actual pinned A1 model; isolated test store and preferences; no microphone or ASR."]
+            let evidence = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys, .prettyPrinted])
+            XCTContext.runActivity(named: "Actual A1 cold transcript correction") { activity in
+                let attachment = XCTAttachment(data: evidence, uniformTypeIdentifier: "public.json")
+                attachment.name = "cold-transcript-edit-privacy.json"
+                attachment.lifetime = .keepAlways
+                activity.add(attachment)
+            }
+            await coordinator.shutdownForTermination()
+            try await privacy.unload()
+        } catch {
+            await coordinator.shutdownForTermination()
+            try? await privacy.unload()
+            throw error
+        }
+    }
+
     func testExplicitParticipantAliasSurvivesPrivacyPublicationAndCheckpointRoundTrip() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
