@@ -213,9 +213,20 @@ final class MobileNavigationUITests: XCTestCase {
                         && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
                         "An existing recording or processing attempt is not owned by this selector")
             let start = app.buttons["meeting.start"]
+            if !start.exists, let priorTitle = environment["PICHI_PHYSICAL_PRODUCTION_OWNED_COMPLETED_TITLE"] {
+                try require(completed() && !app.buttons["meeting.retry"].exists
+                            && !app.buttons["meeting.restartProcessing"].exists && app.staticTexts[priorTitle].exists,
+                            "Only the parent's verified prior completed test meeting may be left through New Meeting")
+                let newMeeting = app.buttons["meeting.new"]
+                try require(newMeeting.exists && newMeeting.isEnabled && newMeeting.isHittable,
+                            "The prior completed meeting must expose normal New Meeting")
+                newMeeting.tap()
+                mark("prior_owned_completed_meeting_left_without_storage_edit")
+                capture("production-01-prior-owned-completed-left")
+            }
             try require(start.waitForExistence(timeout: 15) && start.isEnabled && start.isHittable
                         && app.alerts.count == 0,
-                        "The existing meeting state must already be idle and ready; this selector never resets it")
+                        "The meeting must be idle; active, interrupted and failed meetings are never reset")
             let startDeadline = ProcessInfo.processInfo.systemUptime + 15
             mark("start_tap_requested")
             // Ownership starts immediately before the only Start tap so a failed
