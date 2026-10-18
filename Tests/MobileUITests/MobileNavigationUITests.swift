@@ -370,6 +370,42 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
+    func testProtectedTranscriptExportOpensNativeShareSheetInBothLanguages() throws {
+        let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9016"
+        for (language, appearance, historyTitle) in [("en", "light", "History"), ("ru", "dark", "История")] {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launch()
+            waitForOrientation(portrait: true)
+            capture("protected-export-\(language)-ready")
+            openNavigation("history", title: historyTitle)
+            capture("protected-export-\(language)-history")
+            let meeting = app.buttons["history.session.\(fixtureID)"]
+            XCTAssertTrue(meeting.waitForExistence(timeout: 5), "Stage the approved protected synthetic fixture")
+            meeting.tap()
+            let more = app.buttons["transcript.more"]
+            XCTAssertTrue(more.waitForExistence(timeout: 5))
+            capture("protected-export-\(language)-transcript")
+            more.tap()
+            let export = app.buttons["transcript.exportProtected"]
+            XCTAssertTrue(export.waitForExistence(timeout: 5))
+            XCTAssertTrue(export.isEnabled)
+            capture("protected-export-\(language)-menu")
+            export.tap()
+            let activityList = app.otherElements["ActivityListView"]
+            let presented = activityList.waitForExistence(timeout: 10)
+            capture("protected-export-\(language)-native-share")
+            let description = XCTAttachment(string: app.debugDescription)
+            description.name = "protected-export-\(language)-native-share-accessibility"
+            description.lifetime = .keepAlways
+            add(description)
+            XCTAssertTrue(presented || app.buttons["Save to Files"].exists || app.buttons["Сохранить в Файлы"].exists,
+                          "The protected JSON must reach the native share sheet")
+        }
+        app.terminate()
+    }
+
     func testLegacyOrphanWordReadsInsideOneParticipantParagraphInBothLanguagesAndThemes() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9021"
         let firstID = "00000000-0000-0000-0000-202610170001"
