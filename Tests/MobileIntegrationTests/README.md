@@ -1,5 +1,17 @@
 # Opt-in combined Russian meeting probe
 
+Physical runtime tests retain one native screen frame per second with
+`scripts/dev/capture-mobile-frames.py --device <UDID> --revision <tested-SHA> --test-case <name> --output <ignored-directory>`.
+The helper keeps every frame and separate changed/unique decoded-pixel indexes, reports missed
+seconds and never invokes a camera or microphone. A `STOP` file in the output directory ends it.
+Use `--platform simulator` for simulator UI tests. Frame capture is part of measurement overhead.
+
+For private detailed streaming E2E, `PICHI_MEETING_RENDER_LIVE_E2E=1` mounts the production
+meeting root with the exact isolated inference coordinator in a test-owned foreground window.
+It restores the former key window on exit. Without this opt-in, an idle shared app interface
+does not measure the test pipeline's live rendering load. One-second images and MainActor
+queue samples do not by themselves measure physical touch/scroll latency or rendered FPS.
+
 Run `MobileMeetingEndToEndTests/testCombinedRussianMeetingPrivacySpeakersAndFootprint`
 only after building the integrated mobile test host. The parent testing session owns
 simulator and physical-device execution, installation, signing, and user review.

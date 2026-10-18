@@ -4,8 +4,40 @@ import CryptoKit
 import Foundation
 import Darwin
 import UIKit
+import SwiftUI
 @testable import PichiVoiceMobile
 import XCTest
+
+/// Opt-in real rendering load for the isolated native inference probe. The ordinary host
+/// otherwise displays its unrelated shared services, which cannot validate live layout cost.
+@MainActor
+private final class CombinedVisibleMeetingUI {
+    private let window: UIWindow
+    private weak var previous: UIWindow?
+
+    init(services: AppServices) throws {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }) else {
+            throw NSError(domain: "VisibleMeetingProbeRequiresForegroundScene", code: 1)
+        }
+        self.previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
+        window.rootViewController = UIHostingController(rootView: MobileMeetingRoot(
+            coordinator: services.meetingSessionCoordinator, asr: services.asr,
+            store: services.meetingStore, privacy: services.transcriptPrivacy,
+            microphones: { .init(identities: [], defaultCoreAudioUID: nil) }))
+        self.window = window
+        window.makeKeyAndVisible()
+    }
+
+    func close() {
+        let restore = self.window.isKeyWindow && self.window.windowScene?.activationState == .foregroundActive
+        self.window.isHidden = true
+        self.window.rootViewController = nil
+        if restore { self.previous?.makeKeyAndVisible() }
+    }
+}
 
 /// Explicitly enabled synthetic replay evidence belongs only to a private XCTest
 /// attachment. Support logs, the app store and export paths never receive it.
@@ -1092,6 +1124,15 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let startRequested = ProcessInfo.processInfo.systemUptime
             let recording = try await coordinator.startRecording(configuration: configuration)
             let startCommandSeconds = ProcessInfo.processInfo.systemUptime - startRequested
+            let visibleUI: CombinedVisibleMeetingUI?
+            if environment["PICHI_MEETING_RENDER_LIVE_E2E"] == "1" {
+                guard streaming, detailedProfiling,
+                      environment["PICHI_COMBINED_MEETING_PRIVATE_EVALUATION"] == "1" else {
+                    throw NSError(domain: "VisibleMeetingProbeRequiresPrivateStreamingProfile", code: 1)
+                }
+                visibleUI = try CombinedVisibleMeetingUI(services: services)
+            } else { visibleUI = nil }
+            defer { visibleUI?.close() }
             XCTAssertEqual(recording.audioStorageMode, saveAudio ? .retainedFiles : .memoryOnly)
             XCTAssertEqual(recording.piiRedactionEnabled, true)
             if streaming { XCTAssertEqual(recording.effectiveSpeakerProcessingMode, .streaming) }
@@ -1428,6 +1469,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "privacyReadyAfterConfiguration": privacyReady,
                 "startCommandSeconds": startCommandSeconds,
                 "startCommandScope": "Coordinator admission to synthetic capture start return; not physical microphone activation or touch latency.",
+                "liveProductionUIRendered": visibleUI != nil,
+                "liveProductionUIScope": "When enabled, the production root renders this exact isolated coordinator in a test-owned foreground window. Native external one-second screenshots are indexed separately. No automated touch or scrolling latency is claimed.",
                 "mainActorResponsiveness": mainActorSamples.json(interval: mainActorInterval),
                 "explicitAliasSaveSeconds": explicitAliasSaveSeconds as Any? ?? NSNull(),
                 "explicitAliasMaintenanceWaitSeconds": explicitAliasMaintenanceWaitSeconds as Any? ?? NSNull(),
