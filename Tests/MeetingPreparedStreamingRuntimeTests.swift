@@ -18,9 +18,12 @@ nonisolated struct MeetingNemotronModelArtifact: Sendable {
         enum Preference { case cpuOnly, devicePreferred }
         var streamingImplementationFingerprint = "synthetic-pinned-profile"
         func acceptsStreamingImplementationFingerprint(_ value: String) -> Bool {
-            value == self.streamingImplementationFingerprint || value == "synthetic-legacy-anonymous"
+            value == self.streamingImplementationFingerprint || value == "synthetic-legacy-anonymous" || value == "synthetic-owner-v1"
         }
         func verifiesStreamingOwner(implementationFingerprint value: String) -> Bool {
+            value == self.streamingImplementationFingerprint || value == "synthetic-owner-v1"
+        }
+        func usesAdaptiveStreamingOwnerEvidence(implementationFingerprint value: String) -> Bool {
             value == self.streamingImplementationFingerprint
         }
         var isExperimental = true
@@ -78,7 +81,8 @@ nonisolated enum MeetingTranscriptAssembler {
     }
 }
 nonisolated enum MeetingOwnerVoiceVerifier {
-    static func confirmedTokens(owner: MeetingOwnerVoiceProfileSnapshot?, profiles: [MeetingSpeakerVoiceProfile]) -> Set<MeetingBackendSpeakerToken> {
+    enum Policy: Sendable { case legacy, streamingV2 }
+    static func confirmedTokens(owner: MeetingOwnerVoiceProfileSnapshot?, profiles: [MeetingSpeakerVoiceProfile], policy: Policy = .legacy) -> Set<MeetingBackendSpeakerToken> {
         profiles.isEmpty ? [] : [.init(analysisEpochID: .init(trackID: UUID(), ordinal: 0), label: "slot-0")]
     }
 }
@@ -90,6 +94,9 @@ nonisolated final class StreamingScopeFixture: @unchecked Sendable {
     private var encoderWaiter: CheckedContinuation<Void, Never>?
     private let lock = NSLock()
     private var events: [String] = []
+    private var encoded: [[Int]] = []
+    func recordClipFrames(_ frames: [[Int]]) { self.lock.withLock { self.encoded = frames } }
+    var encodedClipFrames: [[Int]] { self.lock.withLock { self.encoded } }
     init(failEncoder: Bool = false, blockEncoder: Bool = false) {
         self.failEncoder = failEncoder; self.blockEncoder = blockEncoder
     }
@@ -190,6 +197,101 @@ private actor SyntheticDiarizer: MeetingIncrementalNemotronDiarizerSession {
             ? [.init(slotIndex: 0, start: Double(self.retained) / 16_000, end: Double(self.accepted) / 16_000)] : []
         return .init(activity: intervals, acceptedThroughSample: self.accepted, processedThroughSample: processed,
                      retainedFromSample: self.retained, isFinal: final)
+    }
+}
+
+private nonisolated final class OwnerReplayFixture: MeetingPCMReplaySource, @unchecked Sendable {
+    let totalSampleCount: Int
+    let ranges: [Range<Int>]
+    let changesAt: Int?
+    let clipped: [Range<Int>]
+    let overlaps: [Range<Int>]
+    let failAfterReads: Int?
+    let cancelRead: Bool
+    private let lock = NSLock()
+    private var reads: [Range<Int>] = []
+    init(frames: Int, ranges: [Range<Int>] = [], changesAt: Int? = nil, clipped: [Range<Int>] = [],
+         overlaps: [Range<Int>] = [], failAfterReads: Int? = nil, cancelRead: Bool = false) {
+        self.totalSampleCount = frames; self.ranges = ranges; self.changesAt = changesAt; self.clipped = clipped
+        self.overlaps = overlaps; self.failAfterReads = failAfterReads; self.cancelRead = cancelRead
+    }
+    func signal(_ range: Range<Int>) -> [Float] {
+        range.map { index in
+            if self.clipped.contains(where: { $0.contains(index) }) { return 1 }
+            if self.overlaps.contains(where: { $0.contains(index) }) { return 0.9 }
+            if !self.ranges.isEmpty, !self.ranges.contains(where: { $0.contains(index) }) { return 0 }
+            let offset: Float = self.changesAt.map { index < $0 ? 0.2 : -0.2 } ?? 0
+            return offset + 0.1 * Float(sin(Double(index) * 0.031))
+        }
+    }
+    func readSamples(in range: Range<Int>) async throws -> [Float] {
+        guard range.lowerBound >= 0, range.upperBound <= self.totalSampleCount else { throw FixtureFailure.invalid }
+        let count = self.lock.withLock { self.reads.append(range); return self.reads.count }
+        if self.cancelRead { throw CancellationError() }
+        if let failAfterReads, count > failAfterReads { throw FixtureFailure.invalid }
+        return self.signal(range)
+    }
+    var requests: [Range<Int>] { self.lock.withLock { self.reads } }
+}
+
+private actor NativeBoundaryOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
+    private var accepted = 0
+    private var scoredFrames = 0
+    private var retained = 0
+    private var intervals = MeetingFast32SpeakerIntervals(speakerCount: 8)
+    func appendStreaming(_ samples: [Float], sourceStartSample: Int) async throws -> MeetingIncrementalDiarizationUpdate {
+        guard sourceStartSample == accepted else { throw FixtureFailure.invalid }
+        accepted += samples.count
+        return try update(final: false)
+    }
+    func finishStreaming(totalSamples: Int) async throws -> MeetingIncrementalDiarizationUpdate {
+        guard totalSamples == accepted else { throw FixtureFailure.invalid }
+        return try update(final: true)
+    }
+    func discardActivity(beforeSample: Int) async throws {
+        guard beforeSample >= retained else { throw FixtureFailure.invalid }
+        retained = beforeSample
+        intervals.discard(beforeFrame: beforeSample / 160)
+    }
+    func cleanupStreaming() async {}
+    func diarize(samples: [Float]) async throws -> [MeetingNemotronSpeakerSegment] { throw FixtureFailure.invalid }
+    private func update(final: Bool) throws -> MeetingIncrementalDiarizationUpdate {
+        let frames = final ? accepted / 160 : accepted / 163_840 * 1_024
+        let probabilities = (scoredFrames..<frames).flatMap { frame in (0..<8).map { slot -> Float in
+            slot == 0 || (slot == 1 && (1_005..<1_060).contains(frame)) ? 0.9 : 0.1
+        } }
+        try intervals.append(probabilities: probabilities, frameCount: frames - scoredFrames)
+        scoredFrames = frames
+        let duration = Double(frames) / 100
+        if final { _ = intervals.finish(duration: duration) }
+        return .init(activity: intervals.snapshot(duration: duration, startingAt: Double(retained) / 16_000),
+            acceptedThroughSample: accepted, processedThroughSample: frames * 160,
+            retainedFromSample: retained, isFinal: final)
+    }
+}
+
+private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
+    private var accepted = 0
+    let voice = 12.0..<19.0
+    func appendStreaming(_ samples: [Float], sourceStartSample: Int) async throws -> MeetingIncrementalDiarizationUpdate {
+        guard sourceStartSample == accepted, samples.count <= 16_000 else { throw FixtureFailure.invalid }
+        accepted += samples.count
+        return update(final: false)
+    }
+    func finishStreaming(totalSamples: Int) async throws -> MeetingIncrementalDiarizationUpdate {
+        guard totalSamples == accepted else { throw FixtureFailure.invalid }
+        return update(final: true)
+    }
+    func discardActivity(beforeSample: Int) async throws {}
+    func cleanupStreaming() async {}
+    func diarize(samples: [Float]) async throws -> [MeetingNemotronSpeakerSegment] { throw FixtureFailure.invalid }
+    private func update(final: Bool) -> MeetingIncrementalDiarizationUpdate {
+        let processed = final ? accepted : accepted / 163_840 * 163_840
+        let end = min(voice.upperBound, Double(processed) / 16_000)
+        let rows: [MeetingNemotronSpeakerSegment] = end > voice.lowerBound
+            ? [.init(slotIndex: 0, start: voice.lowerBound, end: end)] : []
+        return .init(activity: rows, acceptedThroughSample: accepted, processedThroughSample: processed,
+            retainedFromSample: 0, isFinal: final)
     }
 }
 
@@ -331,15 +433,181 @@ private actor SyntheticDiarizer: MeetingIncrementalNemotronDiarizerSession {
         }
         print("PASS pinned streaming profile admission refuses mismatched artifacts, policies and modes")
         try ownerEvidenceBoundsAndQuality()
+        try await adaptiveOwnerEvidence()
         try await ownerScopeRetiresModelsBeforeEncoder()
         try await optionalOwnerPreflightAndCancellation()
-        print("12 prepared streaming runtime contract groups passed")
+        print("13 prepared streaming runtime contract groups passed")
     }
+    private nonisolated static func adaptiveOwnerEvidence() async throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        for frames in [95_999, 96_000, 101_119, 101_120, 128_000, 192_000, 320_000] {
+            let source = OwnerReplayFixture(frames: frames)
+            let activity = [MeetingNemotronSpeakerSegment(slotIndex: 0, start: 0, end: Double(frames) / 16_000)]
+            var collector = MeetingStreamingOwnerVoiceSamples(epoch: epoch, useAdaptiveOwnerEvidence: true)
+            for start in stride(from: 0, to: frames, by: 16_000) {
+                let end = min(frames, start + 16_000)
+                collector.append(source.signal(start..<end), sourceStartSample: start)
+                collector.collect(activity: [.init(slotIndex: 0, start: 0, end: Double(end) / 16_000)], processedThroughSample: end)
+                try require(collector.retainedPCMFrames <= MeetingStreamingOwnerVoiceSamples.maximumAdaptivePCMFrames, "V2 acoustic lookback is fixed")
+                try require(collector.retainedVoiceFrames <= MeetingStreamingOwnerVoiceSamples.maximumAdaptiveVoiceFrames, "V2 per-slot evidence and pending quality blocks are bounded")
+            }
+            collector.collect(activity: activity, processedThroughSample: frames, final: true)
+            let live = collector.takeExcerpts()
+            let retained = try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(epoch: epoch, source: source, segments: activity)
+            try require(live.map(\.clips) == retained.map(\.clips), "Live and retained V2 select byte-identical bounded evidence")
+            if frames < 101_120 { try require(live.isEmpty, "Fewer than six usable seconds cannot establish owner identity") }
+            else {
+                try require(live.count == 1 && live[0].clips.count == 2, "Six usable seconds provide two disjoint excerpts")
+                try require(live[0].clips.allSatisfy { (48_000...80_000).contains($0.count) }, "V2 adapts clip length from3s through5s")
+            }
+            try require(source.requests.allSatisfy { $0.count <= 16_000 }, "Retained verification reads only bounded buffers")
+        }
+        let changed = OwnerReplayFixture(frames: 320_000, changesAt: 160_000)
+        var reuse = MeetingStreamingOwnerVoiceSamples(epoch: epoch, useAdaptiveOwnerEvidence: true)
+        for start in stride(from: 0, to: 320_000, by: 16_000) {
+            reuse.append(changed.signal(start..<(start + 16_000)), sourceStartSample: start)
+            reuse.collect(activity: [.init(slotIndex: 0, start: 0, end: Double(start + 16_000) / 16_000)], processedThroughSample: start + 16_000)
+        }
+        reuse.collect(activity: [.init(slotIndex: 0, start: 0, end: 20)], processedThroughSample: 320_000, final: true)
+        let reuseClips = reuse.takeExcerpts()[0].clips
+        try require(reuseClips[0].allSatisfy { $0 > 0 } && reuseClips[1].allSatisfy { $0 < 0 },
+                    "Later voice evidence replaces the old second clip, exposing slot reuse to the identity verifier")
+
+        let qualitySource = OwnerReplayFixture(frames: 30 * 16_000,
+            clipped: [0..<6 * 16_000, 24 * 16_000..<30 * 16_000])
+        var quality = MeetingStreamingOwnerVoiceSamples(epoch: epoch, useAdaptiveOwnerEvidence: true)
+        for start in stride(from: 0, to: 30 * 16_000, by: 16_000) {
+            quality.append(qualitySource.signal(start..<(start + 16_000)), sourceStartSample: start)
+            quality.collect(activity: [.init(slotIndex: 0, start: 0, end: Double(start + 16_000) / 16_000)], processedThroughSample: start + 16_000)
+        }
+        quality.collect(activity: [.init(slotIndex: 0, start: 0, end: 30)], processedThroughSample: 480_000, final: true)
+        let usable = quality.takeExcerpts()
+        let restoredQuality = try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(epoch: epoch, source: qualitySource,
+            segments: [.init(slotIndex: 0, start: 0, end: 30)])
+        try require(usable.count == 1 && usable[0].clips.flatMap { $0 }.allSatisfy { abs($0) < 0.99 },
+                    "Clipped early/trailing native voice cannot poison usable first/latest evidence")
+        try require(usable.map(\.clips) == restoredQuality.map(\.clips), "Retained V2 applies the same signal quality recovery")
+
+        var overlap = MeetingStreamingOwnerVoiceSamples(epoch: epoch, useAdaptiveOwnerEvidence: true)
+        for start in stride(from: 0, to: 12 * 16_000, by: 16_000) {
+            var audio = changed.signal(start..<(start + 16_000))
+            for index in audio.indices where (3 * 16_000..<5 * 16_000).contains(start + index) { audio[index] = 0.9 }
+            overlap.append(audio, sourceStartSample: start)
+            let through = Double(start + 16_000) / 16_000
+            var intervals = [MeetingNemotronSpeakerSegment(slotIndex: 0, start: 0, end: through)]
+            if through > 3 { intervals.append(.init(slotIndex: 1, start: 3, end: min(5, through))) }
+            overlap.collect(activity: intervals, processedThroughSample: start + 16_000)
+        }
+        overlap.collect(activity: [.init(slotIndex: 0, start: 0, end: 12), .init(slotIndex: 1, start: 3, end: 5)],
+            processedThroughSample: 192_000, final: true)
+        let overlapSamples = overlap.takeExcerpts()
+        try require(overlapSamples.count == 1 && overlapSamples[0].clips.flatMap { $0 }.allSatisfy { abs($0) < 0.5 },
+                    "V2 excludes simultaneous voices and padded overlap edges before query admission")
+
+        // Actual native interval admission with a second voice only190ms old at the
+        // fast128 boundary. It is absent from the first snapshot, then backdates its start.
+        let boundarySource = OwnerReplayFixture(frames: 192_000, overlaps: [160_800..<169_600])
+        var native = MeetingFast32SpeakerIntervals(speakerCount: 8)
+        func probabilities(_ frames: Range<Int>) -> [Float] {
+            frames.flatMap { frame in (0..<8).map { slot -> Float in
+                slot == 0 || (slot == 1 && (1_005..<1_060).contains(frame)) ? 0.9 : 0.1
+            } }
+        }
+        var boundary = MeetingStreamingOwnerVoiceSamples(epoch: epoch, useAdaptiveOwnerEvidence: true)
+        boundary.append(boundarySource.signal(0..<163_840), sourceStartSample: 0)
+        try native.append(probabilities: probabilities(0..<1_024), frameCount: 1_024)
+        let early = native.snapshot(duration: 10.24)
+        try require(early.count == 1, "The actual native builder withholds the secondary voice until200ms")
+        boundary.collect(activity: early, processedThroughSample: 163_840)
+        boundary.append(boundarySource.signal(163_840..<192_000), sourceStartSample: 163_840)
+        try native.append(probabilities: probabilities(1_024..<1_200), frameCount: 176)
+        let finishedActivity = native.finish(duration: 12)
+        boundary.collect(activity: finishedActivity, processedThroughSample: 192_000, final: true)
+        let boundaryLive = boundary.takeExcerpts()
+        let boundaryRetained = try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(epoch: epoch,
+            source: boundarySource, segments: finishedActivity)
+        try require(boundaryLive.count == 1 && boundaryLive.map(\.clips) == boundaryRetained.map(\.clips),
+                    "Late native admission cannot contaminate or change final live versus retained evidence")
+        try require(boundaryLive[0].clips.flatMap { $0 }.allSatisfy { abs($0) < 0.5 },
+                    "A secondary voice crossing the scoring boundary is excluded with its padded edges")
+
+        // A no-text policy can acknowledge the complete acoustic cursor. The actual
+        // adapter must retain owner-required activity even without transcript preroll.
+        let admissionSession = MeetingPreparedStreamingRuntime(runtime: .init(), asr: SyntheticASR(Recorder()),
+            diarizer: NativeBoundaryOwnerDiarizer(), trackID: epoch.trackID, attemptID: UUID(),
+            configuration: .init(), speakerNameFormat: "Speaker %lld", collectOwnerEvidence: true,
+            useAdaptiveOwnerEvidence: true, onProgress: { _ in })
+        _ = try await admissionSession.recognize(window: .fixture(samples: boundarySource.signal(0..<176_000), final: true),
+            offset: 0, preview: nil)
+        try await admissionSession.discardActivity(beforeSample: 163_840)
+        _ = try await admissionSession.recognize(window: .fixture(samples: boundarySource.signal(176_000..<192_000), final: true),
+            offset: 11, preview: nil)
+        _ = try await admissionSession.finishStreaming()
+        let admissionLive = try admissionSession.ownerEvidence()?.samples ?? []
+        try require(admissionLive.map(\.clips) == boundaryRetained.map(\.clips),
+                    "Discard through the processed cursor cannot evict provisional owner activity or shift turn edges")
+        await admissionSession.cleanup()
+
+        for after in [0, 7] {
+            let failedSource = OwnerReplayFixture(frames: 192_000, failAfterReads: after)
+            let result = try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(epoch: epoch, source: failedSource,
+                segments: [.init(slotIndex: 0, start: 0, end: 12)])
+            try require(result.isEmpty, "An optional owner reread failure discards all identity evidence without failing the transcript")
+        }
+        do {
+            _ = try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(epoch: epoch,
+                source: OwnerReplayFixture(frames: 192_000, cancelRead: true),
+                segments: [.init(slotIndex: 0, start: 0, end: 12)])
+            throw FixtureFailure.invalid
+        } catch is CancellationError {}
+
+        var allSlots = MeetingStreamingOwnerVoiceSamples(epoch: epoch, useAdaptiveOwnerEvidence: true)
+        let rows = (0..<8).map { MeetingNemotronSpeakerSegment(slotIndex: $0, start: Double($0 * 12), end: Double(($0 + 1) * 12)) }
+        var maximumStored = 0
+        for start in stride(from: 0, to: 96 * 16_000, by: 16_000) {
+            allSlots.append(changed.signal(start..<(start + 16_000)), sourceStartSample: start)
+            let through = Double(start + 16_000) / 16_000
+            allSlots.collect(activity: rows.compactMap { row in
+                let end = min(row.end, through)
+                return end > row.start ? .init(slotIndex: row.slotIndex, start: row.start, end: end) : nil
+            }, processedThroughSample: start + 16_000)
+            maximumStored = max(maximumStored, allSlots.retainedVoiceFrames + allSlots.retainedPCMFrames)
+        }
+        let beforeSilence = allSlots.excerpts.map(\.clips)
+        for second in 96..<(96 + 3_600) {
+            let start = second * 16_000
+            allSlots.append([Float](repeating: 0, count: 16_000), sourceStartSample: start)
+            allSlots.collect(activity: [], processedThroughSample: start + 16_000)
+            maximumStored = max(maximumStored, allSlots.retainedVoiceFrames + allSlots.retainedPCMFrames)
+        }
+        try require(allSlots.excerpts.map(\.clips) == beforeSilence && beforeSilence.count == 8,
+                    "An hour of silence preserves all eight voices without replacing usable evidence")
+        try require(maximumStored <= 1_600_000, "V2 retains at most6.4MB of sample elements across all eight slots")
+        _ = allSlots.takeExcerpts()
+
+        let lag = LaggedOwnerDiarizer()
+        let session = MeetingPreparedStreamingRuntime(runtime: .init(), asr: SyntheticASR(Recorder()), diarizer: lag,
+            trackID: epoch.trackID, attemptID: UUID(), configuration: .init(), speakerNameFormat: "Speaker %lld",
+            collectOwnerEvidence: true, useAdaptiveOwnerEvidence: true, onProgress: { _ in })
+        let source = OwnerReplayFixture(frames: 40 * 16_000, ranges: [12 * 16_000..<19 * 16_000])
+        _ = try await session.recognize(window: .fixture(samples: source.signal(0..<320_000), final: true), offset: 0, preview: nil)
+        _ = try await session.recognize(window: .fixture(samples: source.signal(320_000..<640_000), final: true), offset: 20, preview: nil)
+        _ = try await session.finishStreaming()
+        let live = try session.ownerEvidence()?.samples ?? []
+        let retained = try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(epoch: epoch, source: source,
+            segments: [.init(slotIndex: 0, start: 12, end: 19)])
+        try require(live.count == 1 && live.map(\.clips) == retained.map(\.clips),
+                    "Twenty-second coalescing plus10.24s scoring lag cannot lose a later seven-second voice before silence")
+        await session.cleanup()
+        print("PASS V2 balanced first/latest evidence, retained/live parity, quality recovery, reuse and real acoustic lag")
+    }
+
     private nonisolated static func ownerScopeRetiresModelsBeforeEncoder() async throws {
-        for (failEncoder, legacyAnonymous) in [(false, false), (true, false), (false, true)] {
+        for (failEncoder, legacyAnonymous, ownerV1) in [(false, false, false), (true, false, false), (false, true, false), (false, false, true)] {
             let scope = StreamingScopeFixture(failEncoder: failEncoder)
             var configuration = MeetingFinalProcessingConfiguration()
             if legacyAnonymous { configuration.diarizationFingerprint = "synthetic-legacy-anonymous" }
+            if ownerV1 { configuration.diarizationFingerprint = "synthetic-owner-v1" }
             let frozenConfiguration = configuration
             let runtime = MeetingParakeetNemotronRuntime(scope: scope)
             let controller = MeetingStreamingPCMController.deferred { body in
@@ -366,6 +634,11 @@ private actor SyntheticDiarizer: MeetingIncrementalNemotronDiarizerSession {
             }
             try require(events.contains("identity-published") == (!failEncoder && !legacyAnonymous),
                         "An unavailable encoder or legacy recipe preserves anonymous speech without claiming owner identity")
+            if !legacyAnonymous {
+                let expected = ownerV1 ? 48_000 : 61_440
+                try require(scope.encodedClipFrames == [[expected, expected]],
+                            "Exact ownerV1 keeps two3s clips while V2 uses balanced first/latest evidence")
+            }
         }
         print("PASS actual production streaming scope releases both model owners before optional encoder and identity publication")
     }

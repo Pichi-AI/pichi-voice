@@ -54,6 +54,12 @@ end_prepared = runtime.index('    /// The strict privacy capture', start_prepare
 end_box = runtime.index('    /// Retain one prepared ASR', start_scope)
 start_validation = runtime.index('    static func validateStreamingSelection(')
 end_validation = runtime.index('    private final nonisolated class StreamingOwnerEvidenceBox:', start_validation)
+matcher = Path('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift').read_text()
+first_latest = matcher[matcher.rindex('extension MeetingSpeakerVoiceSamples {'):]
+native_source = Path('Sources/Fluid/Services/Meeting/Backend/MeetingFast32NemotronDiarizer.swift').read_text()
+native_intervals = native_source[native_source.index('nonisolated struct MeetingFast32SpeakerIntervals:'):]
+checkpoint = Path('Sources/Fluid/Services/Meeting/Backend/MeetingResumableNemotronDiarizerSession.swift').read_text()
+checkpoint_decoding = checkpoint[checkpoint.index('nonisolated enum MeetingDiarizerCheckpointDecoding {'):]
 factory = Path('Sources/Fluid/Services/Meeting/PichiMeetingProviderFactory.swift').read_text()
 start_preflight = factory.index('    static func prepareSpeakerResources(')
 end_preflight = factory.index('    static func registerBackends', start_preflight)
@@ -81,6 +87,7 @@ streamingWitnesses = r'''
     }
     func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
         self.scope?.event("voice-encode")
+        self.scope?.recordClipFrames(samples.map { $0.clips.map(\.count) })
         guard let scope = self.scope else { return [] }
         if scope.failEncoder { throw StreamingScopeFailure.encoder }
         await scope.waitForEncoderRelease()
@@ -91,7 +98,7 @@ Path(sys.argv[2]).write_text('import Foundation\n' + runtime[start:end] + prefli
     '\nfinal nonisolated class MeetingParakeetNemotronRuntime: Sendable {\n' +
     '    let scope: StreamingScopeFixture?\n    init(scope: StreamingScopeFixture? = nil) { self.scope = scope }\n' +
     runtime[start_loop:end_loop] + runtime[start_scope:end_box] + runtime[start_prepared:end_prepared] +
-    runtime[start_validation:end_validation] + assembly + streamingWitnesses + '\n}\n')
+    runtime[start_validation:end_validation] + assembly + streamingWitnesses + '\n}\n' + first_latest + native_intervals + checkpoint_decoding)
 PY
 swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
     -module-cache-path "$pichi_build/ModuleCache" \

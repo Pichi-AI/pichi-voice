@@ -1446,7 +1446,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             for: selected.asrModel, speakerProcessingMode: .streaming))
         XCTAssertTrue(store === MeetingDiarizationModelStore.shared(for: .experimentalFast128FP16CPU))
         XCTAssertTrue(store.supportsOwnerVoiceVerification)
-        XCTAssertTrue(selected.diarizationFingerprint.contains(";owner-stream=bounded-two-3s-v1"))
+        XCTAssertTrue(selected.diarizationFingerprint.contains(";owner-stream=first-latest-3to5s-v2;owner-ref=0.65;owner-self=0.45;owner-margin=0.10"))
         let oldAnonymous = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
             diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint,
             speakerProcessingMode: .streaming)
@@ -1460,6 +1460,17 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(oldAnonymous.identityFingerprint, frozenIdentity)
         XCTAssertEqual(try JSONDecoder().decode(MeetingFinalProcessingConfiguration.self, from: frozenBytes), oldAnonymous)
         XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(oldAnonymous, isAppleSilicon: true))
+        let ownerV1 = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
+            diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.legacyOwnerStreamingImplementationFingerprint,
+            speakerProcessingMode: .streaming)
+        let ownerV1Identity = ownerV1.identityFingerprint
+        XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(ownerV1, isAppleSilicon: true))
+        XCTAssertTrue(try PichiMeetingProviderFactory.modelLocator(for: ownerV1).supportsOwnerVoiceVerification)
+        XCTAssertFalse(MeetingNemotronModelProfile.experimentalFast128FP16CPU.usesAdaptiveStreamingOwnerEvidence(
+            implementationFingerprint: ownerV1.diarizationFingerprint))
+        XCTAssertEqual(ownerV1.identityFingerprint, ownerV1Identity)
+        XCTAssertEqual(ownerV1.diarizationFingerprint, MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint
+            + ";voice=wespeaker@" + MeetingSpeakerVoiceModelArtifacts.revision + ";owner-stream=bounded-two-3s-v1")
         for invalid in [oldAnonymous.diarizationFingerprint + ";voice=unknown",
                         selected.diarizationFingerprint + ";changed=true"] {
             let unregistered = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",

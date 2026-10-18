@@ -23,14 +23,28 @@ nonisolated enum MeetingOwnerVoiceProfileError: Error {
     case invalidAudio, insufficientSpeech, inconsistentVoice, invalidProfile, staleDraft, busy
 }
 
-/// Conservative verification against an explicitly enrolled reference. Existing attempt-local
-/// clustering thresholds are reused unchanged; two voices proposing the owner stay unknown.
+/// Explicit owner identity is a cross-recording decision, separate from anonymous within-
+/// meeting clustering. Saved recipes retain their original strict policy; two plausible
+/// owner identities still remain unconfirmed under either policy.
 nonisolated enum MeetingOwnerVoiceVerifier {
+    nonisolated enum Policy: Equatable, Sendable {
+        case legacy
+        case streamingV2
+        var maximumReferenceDistance: Float { self == .legacy ? 0.25 : 0.65 }
+        var maximumQuerySelfDistance: Float { self == .legacy ? 0.25 : 0.45 }
+        var ambiguityMargin: Float { 0.10 }
+    }
+
     static func confirmedTokens(
         owner: MeetingOwnerVoiceProfileSnapshot?, profiles: [MeetingSpeakerVoiceProfile],
-        identityLinks: [MeetingSpeakerIdentityLink] = []
+        identityLinks: [MeetingSpeakerIdentityLink] = [], policy: Policy = .legacy
     ) -> Set<MeetingBackendSpeakerToken> {
         guard let owner, MeetingOwnerVoiceProfileStore.isValid(owner) else { return [] }
+        if policy == .streamingV2 {
+            let tokens = Set(profiles.map(\.token))
+            guard tokens.count == profiles.count,
+                  MeetingSpeakerVoiceMatcher.validLinks(identityLinks, allowedTokens: tokens) else { return [] }
+        }
         let canonicalByToken = Dictionary(identityLinks.map { ($0.token, $0.canonicalToken) }, uniquingKeysWith: { a, _ in a })
         let groups = Dictionary(grouping: profiles) { canonicalByToken[$0.token] ?? $0.token }
         var measures: [(MeetingBackendSpeakerToken, Float)] = []
@@ -39,7 +53,7 @@ nonisolated enum MeetingOwnerVoiceVerifier {
             var valid = true
             for observation in observations {
                 guard let consistency = MeetingSpeakerVoiceMatcher.distance(observation, observation),
-                      consistency <= MeetingSpeakerVoiceMatcher.maximumDistance,
+                      consistency <= policy.maximumQuerySelfDistance,
                       let distance = MeetingSpeakerVoiceMatcher.distance(
                         observation, MeetingSpeakerVoiceProfile(token: observation.token, embeddings: owner.embeddings)
                       ) else { valid = false; break }
@@ -48,8 +62,8 @@ nonisolated enum MeetingOwnerVoiceVerifier {
             if valid { measures.append((canonical, worst)) }
         }
         measures.sort { $0.1 < $1.1 }
-        guard let winner = measures.first, winner.1 <= MeetingSpeakerVoiceMatcher.maximumDistance,
-              measures.count == 1 || measures[1].1 - winner.1 >= MeetingSpeakerVoiceMatcher.ambiguityMargin else { return [] }
+        guard let winner = measures.first, winner.1 <= policy.maximumReferenceDistance,
+              measures.count == 1 || measures[1].1 - winner.1 >= policy.ambiguityMargin else { return [] }
         return Set(profiles.filter { (canonicalByToken[$0.token] ?? $0.token) == winner.0 }.map(\.token))
     }
 }

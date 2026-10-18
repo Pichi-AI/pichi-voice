@@ -88,18 +88,30 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
 // The composite identity includes the optional encoder and bounded streaming evidence policy.
 // Base diarizer artifacts/checkpoints retain their original identity.
 extension MeetingNemotronModelProfile {
-    nonisolated var streamingImplementationFingerprint: String {
+    nonisolated var legacyOwnerStreamingImplementationFingerprint: String {
         self.implementationFingerprint + (self.supportsOwnerVoiceVerification
             ? ";voice=wespeaker@" + MeetingSpeakerVoiceModelArtifacts.revision + ";owner-stream=bounded-two-3s-v1" : "")
     }
 
-    /// Exact persisted anonymous recipes remain resumable. The new owner stage is additive
-    /// only for its own composite identity; arbitrary suffixes and changed policies stay invalid.
+    nonisolated var streamingImplementationFingerprint: String {
+        self.implementationFingerprint + (self.supportsOwnerVoiceVerification
+            ? ";voice=wespeaker@" + MeetingSpeakerVoiceModelArtifacts.revision
+                + ";owner-stream=first-latest-3to5s-v2;owner-ref=0.65;owner-self=0.45;owner-margin=0.10;owner-quality-block=0.5s;owner-lookback=16s;owner-horizon=0.36s" : "")
+    }
+
+    /// Only exact compiled recipes are admitted. Anonymous and owner-v1 checkpoints keep
+    /// their original evidence selection and decision; no arbitrary suffix can change either.
     nonisolated func acceptsStreamingImplementationFingerprint(_ value: String) -> Bool {
-        value == self.implementationFingerprint || value == self.streamingImplementationFingerprint
+        value == self.implementationFingerprint || value == self.legacyOwnerStreamingImplementationFingerprint
+            || value == self.streamingImplementationFingerprint
     }
 
     nonisolated func verifiesStreamingOwner(implementationFingerprint value: String) -> Bool {
+        self.supportsOwnerVoiceVerification
+            && (value == self.legacyOwnerStreamingImplementationFingerprint || value == self.streamingImplementationFingerprint)
+    }
+
+    nonisolated func usesAdaptiveStreamingOwnerEvidence(implementationFingerprint value: String) -> Bool {
         self.supportsOwnerVoiceVerification && value == self.streamingImplementationFingerprint
     }
 }

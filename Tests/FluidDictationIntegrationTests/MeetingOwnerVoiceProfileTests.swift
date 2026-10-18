@@ -106,6 +106,24 @@ final class MeetingOwnerVoiceProfileTests: XCTestCase {
         XCTAssertNotEqual(current.identityFingerprint, originalIdentity)
     }
 
+    func testStreamingOwnerV2PolicyIsSeparateFromLegacyClusteringAndRejectsAmbiguity() {
+        let track = UUID()
+        let reference = self.snapshot()
+        let crossRecording = self.profile(track: track, slot: 0, angle: 1)
+        XCTAssertTrue(MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: [crossRecording]).isEmpty)
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: [crossRecording], policy: .streamingV2), [crossRecording.token])
+        XCTAssertEqual(MeetingSpeakerVoiceMatcher.maximumDistance, 0.25)
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.Policy.legacy.maximumReferenceDistance, 0.25)
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.Policy.legacy.maximumQuerySelfDistance, 0.25)
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.Policy.streamingV2.maximumReferenceDistance, 0.65)
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.Policy.streamingV2.maximumQuerySelfDistance, 0.45)
+        let competitor = self.profile(track: track, slot: 1, angle: 1.05)
+        XCTAssertTrue(MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: [crossRecording, competitor], policy: .streamingV2).isEmpty)
+        XCTAssertTrue(MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: [crossRecording, crossRecording], policy: .streamingV2).isEmpty)
+        let reused = MeetingSpeakerVoiceProfile(token: crossRecording.token, embeddings: [self.vector(0), self.vector(.pi / 2)])
+        XCTAssertTrue(MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: [reused], policy: .streamingV2).isEmpty)
+    }
+
     func testLocalStoreRoundTripPersistsOnlyBoundedEmbeddingsAndDeletionKeepsFrozenSnapshot() throws {
         let store = try self.privateStore()
         XCTAssertNil(try store.load())

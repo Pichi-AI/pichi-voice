@@ -384,6 +384,9 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         _ = try self.pcmIdentityState.begin(attemptID: attemptID)
         defer { self.pcmIdentityState.end() }
         let ownerEvidence = StreamingOwnerEvidenceBox()
+        let adaptiveOwnerEvidence = artifact.profile.usesAdaptiveStreamingOwnerEvidence(
+            implementationFingerprint: configuration.diarizationFingerprint)
+        let ownerPolicy: MeetingOwnerVoiceVerifier.Policy = adaptiveOwnerEvidence ? .streamingV2 : .legacy
         let collectOwnerEvidence = self.ownerVoiceProfileSnapshot != nil
             && artifact.profile.verifiesStreamingOwner(implementationFingerprint: configuration.diarizationFingerprint)
         _ = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration) { asr in
@@ -396,7 +399,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 let session = MeetingPreparedStreamingRuntime(runtime: self, asr: asr, diarizer: diarizer,
                     trackID: trackID, attemptID: attemptID, configuration: configuration,
                     speakerNameFormat: self.pcmSpeakerNameFormat, collectOwnerEvidence: collectOwnerEvidence,
-                    onProgress: onProgress)
+                    useAdaptiveOwnerEvidence: adaptiveOwnerEvidence, onProgress: onProgress)
                 do {
                     try await body(session)
                     try Task.checkCancellation()
@@ -423,7 +426,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 return
             }
             try Task.checkCancellation()
-            let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles)
+            let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot,
+                profiles: profiles, policy: ownerPolicy)
             DebugLogger.shared.info("mode=streaming owner_verification=completed profileCount=\(profiles.count) confirmedCount=\(confirmed.count)", source: "MeetingPCMRuntime")
             let identities = MeetingTranscriptAssembler.applyingLocalUserTokens(to: evidence.speakers,
                 attemptID: attemptID, tokens: confirmed)
