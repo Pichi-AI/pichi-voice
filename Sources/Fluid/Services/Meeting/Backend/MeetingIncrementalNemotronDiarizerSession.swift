@@ -81,10 +81,13 @@ nonisolated struct MeetingIncrementalDiarizationClock {
     }
 
     private static func outputSample(_ frameCount: Int, accepted: Int) throws -> Int {
-        // Centered STFT can emit one final 10 ms frame beyond physical samples. Never expose
-        // padding as acoustic coverage; reject implausible output rather than inventing time.
+        // The native frontend centers a 400-sample window in a 512-sample FFT. Its final
+        // frame count is 1 + floor((N + 112) / 160), so an arbitrary Stop can emit TWO
+        // extra frames when N % 160 >= 48. Integer decomposition avoids N + 112 overflow.
+        // Keep the same exact frontend bound and clip padding out of acoustic coverage.
+        let maximumFrames = accepted / 160 + 1 + (accepted % 160 + 112) / 160
         guard frameCount >= 0, frameCount <= Int.max / 160,
-              frameCount <= accepted / 160 + 1 else { throw MeetingIncrementalDiarizationError.invalidWatermark }
+              frameCount <= maximumFrames else { throw MeetingIncrementalDiarizationError.invalidWatermark }
         return min(accepted, frameCount * 160)
     }
 }
