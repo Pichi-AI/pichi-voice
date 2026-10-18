@@ -4367,7 +4367,7 @@ final class MeetingRecoveryTests: XCTestCase {
         private var waiter: CheckedContinuation<Void, Never>?
         private(set) var preparations = 0
         private(set) var inputs: [String] = []
-        func prepareForMeeting() async throws {
+        @MainActor func prepareForMeeting() async throws {
             self.preparations += 1
             switch self.behavior {
             case .preparationFailure: throw Failure.preparation
@@ -4381,7 +4381,7 @@ final class MeetingRecoveryTests: XCTestCase {
             self.isReady = true
         }
         func release() { self.waiter?.resume(); self.waiter = nil }
-        func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        @MainActor func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
             guard self.isReady else { throw Failure.notPrepared }
             self.inputs.append(text)
             if self.behavior == .changedRedactionIdentity { self.identity.change() }
