@@ -53,8 +53,15 @@ final class MobileNavigationUITests: XCTestCase {
             throw NSError(domain: "ProductionUISmoke", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "A concrete frozen Release AUT revision is required"])
         }
+        let backgroundSmoke = environment["PICHI_PHYSICAL_PRODUCTION_BACKGROUND_SMOKE"] == "1"
+        guard let observationSeconds = Int(environment["PICHI_PHYSICAL_PRODUCTION_SMOKE_SECONDS"] ?? "45"),
+              [45, 180].contains(observationSeconds), !backgroundSmoke || observationSeconds == 180 else {
+            throw NSError(domain: "ProductionUISmoke", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Smoke duration must be 45 or 180 seconds; background mode requires 180"])
+        }
         let began = ProcessInfo.processInfo.systemUptime
         var events: [[String: Any]] = []
+        var backgroundObservedSeconds: TimeInterval = 0
         var ownsRecording = false
         var outcome = "failed"
         func mark(_ event: String) {
@@ -76,7 +83,7 @@ final class MobileNavigationUITests: XCTestCase {
                 && app.alerts.count == 0 && !app.buttons["meeting.retry"].exists
         }
         func completed() -> Bool {
-            app.buttons["transcript.more"].exists
+            app.state == .runningForeground && app.buttons["transcript.more"].exists
                 && !app.buttons["meeting.stop"].exists
                 && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
                 && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
@@ -84,6 +91,8 @@ final class MobileNavigationUITests: XCTestCase {
         func waitForCompletion(timeout: TimeInterval) async throws {
             let deadline = ProcessInfo.processInfo.systemUptime + timeout
             while ProcessInfo.processInfo.systemUptime < deadline {
+                try require(app.state == .runningForeground,
+                            "Completion inspection requires the still-running foreground AUT")
                 if completed() { return }
                 try require(app.alerts.count == 0 && !app.buttons["meeting.retry"].exists,
                             "The owned meeting must complete without an error or recovery prompt")
@@ -99,7 +108,25 @@ final class MobileNavigationUITests: XCTestCase {
                     self.continueAfterFailure = true
                     self.capture("production-failure-owned-state")
                     let stopDeadline = ProcessInfo.processInfo.systemUptime + 15
-                    while !completed() && ProcessInfo.processInfo.systemUptime < stopDeadline {
+                    var foregroundReady = false
+                    while ProcessInfo.processInfo.systemUptime < stopDeadline {
+                        // State inspection never activates or launches the AUT. Do not
+                        // query controls while it is backgrounded, suspended or dead.
+                        switch self.app.state {
+                        case .notRunning, .unknown:
+                            mark("cleanup_requires_parent_inspection")
+                            print("[PRODUCTION_UI_SMOKE] cleanup_requires_parent_inspection")
+                            return
+                        case .runningBackground, .runningBackgroundSuspended:
+                            try? await Task.sleep(nanoseconds: 250_000_000)
+                            continue
+                        case .runningForeground: foregroundReady = true
+                        @unknown default:
+                            mark("cleanup_requires_parent_inspection")
+                            print("[PRODUCTION_UI_SMOKE] cleanup_requires_parent_inspection")
+                            return
+                        }
+                        if completed() { break }
                         let stop = self.app.buttons["meeting.stop"]
                         if stop.exists, stop.isEnabled, stop.isHittable {
                             mark("cleanup_stop_tap_requested")
@@ -110,6 +137,11 @@ final class MobileNavigationUITests: XCTestCase {
                         }
                         if self.app.alerts.count > 0 || self.app.buttons["meeting.retry"].exists { break }
                         try? await Task.sleep(nanoseconds: 250_000_000)
+                    }
+                    guard foregroundReady, self.app.state == .runningForeground else {
+                        mark("cleanup_requires_parent_inspection")
+                        print("[PRODUCTION_UI_SMOKE] cleanup_requires_parent_inspection")
+                        return
                     }
                     do {
                         try await waitForCompletion(timeout: 90)
@@ -124,7 +156,9 @@ final class MobileNavigationUITests: XCTestCase {
             }
             let report: [String: Any] = [
                 "test": "testPhysicalProductionMeetingAndProtectedExport", "revision": revision,
-                "outcome": outcome, "events": events, "plannedRecordingObservationSeconds": 45,
+                "outcome": outcome, "events": events, "plannedRecordingObservationSeconds": observationSeconds,
+                "backgroundSmoke": backgroundSmoke, "backgroundObservedSeconds": backgroundObservedSeconds,
+                "backgroundObservationScope": "Sum of intervals between consecutive runningBackground samples; app state alone does not prove audio capture, text or speaker progress",
                 "speechPlaybackOwner": "parent_external_player",
                 "measurementScope": "XCTest action returns and accessibility observations, including synchronization and polling; not touch latency or recognition accuracy"
             ]
@@ -168,14 +202,38 @@ final class MobileNavigationUITests: XCTestCase {
             print("[PRODUCTION_UI_SMOKE] recording_visible")
             capture("production-03-recording-visible")
             mark("recording_observation_began")
-            let speechDeadline = ProcessInfo.processInfo.systemUptime + 45
+            let speechDeadline = ProcessInfo.processInfo.systemUptime + Double(observationSeconds)
+            var previousState: XCUIApplication.State?
+            var previousObservation: TimeInterval?
             while ProcessInfo.processInfo.systemUptime < speechDeadline {
-                try require(recordingVisible(), "The owned recording must remain visibly active during external speech")
+                let state = app.state
+                let observedAt = ProcessInfo.processInfo.systemUptime
+                if state != previousState { mark("observation_app_state_\(state.rawValue)") }
+                if state == .runningBackground, previousState == .runningBackground, let previousObservation {
+                    backgroundObservedSeconds += observedAt - previousObservation
+                }
+                switch state {
+                case .runningForeground:
+                    try require(recordingVisible(), "The owned foreground recording must remain visibly active")
+                case .runningBackground:
+                    try require(backgroundSmoke, "Background observation requires its explicit opt-in flag")
+                    // The parent owns Safari switching and separately reads the saved
+                    // protected checkpoint. Never query a background AUT's controls.
+                case .runningBackgroundSuspended, .notRunning, .unknown:
+                    try require(false, "The owned AUT became suspended, stopped or unknown during recording")
+                @unknown default:
+                    try require(false, "The owned AUT entered an unsupported recording state")
+                }
+                previousState = state
+                previousObservation = observedAt
                 try await Task.sleep(nanoseconds: 1_000_000_000)
             }
             mark("recording_observation_ended")
             capture("production-04-before-stop")
-            try require(recordingVisible(), "The owned recording must still expose an enabled Stop action")
+            try require(recordingVisible(), "The parent must return the still-recording AUT to foreground before Stop")
+            try require(!backgroundSmoke || backgroundObservedSeconds > 0,
+                        "Background smoke must observe runningBackground before returning to the recording UI")
+            mark("returned_foreground_recording_visible")
             let stopDeadline = ProcessInfo.processInfo.systemUptime + 90
             mark("stop_tap_requested")
             app.buttons["meeting.stop"].tap()
