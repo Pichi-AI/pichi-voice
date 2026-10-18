@@ -1039,7 +1039,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 progress?.emit(force: true)
                 streamingEvidence["retainedRecovery"] = try await retainedStreamingRecovery(completed: completed,
                     store: store, settings: settings, privacyModelDirectory: assets.appendingPathComponent("models/privacy"), reference: reference,
-                    root: root, sourceFrames: Int(input.length), expectedProfile: expectedProfile)
+                    root: root, sourceFrames: offset, expectedProfile: expectedProfile)
                 progress?.update(phase: "retainedRecoveryEnd", deliveredFrames: Int(input.length), protectedUtterances: 0,
                     protectedPartials: 0, protectedFinalSegments: completed.transcriptSegments.count)
                 progress?.emit(force: true)
