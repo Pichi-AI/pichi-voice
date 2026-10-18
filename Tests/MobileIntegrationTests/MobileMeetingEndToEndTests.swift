@@ -1042,6 +1042,21 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             try await privacy.unload()
             let privacyStillReady = await privacy.isReady
             XCTAssertFalse(privacyStillReady)
+            var explicitAliasSaveSeconds: Double?
+            if detailedProfiling, let participant = completed.activeSpeakers.first {
+                let beforeAlias = ProcessInfo.processInfo.systemUptime
+                let renamed = try await coordinator.renameSpeaker(sessionID: completed.id,
+                    speakerID: participant.id, to: "Explicit participant alias")
+                explicitAliasSaveSeconds = ProcessInfo.processInfo.systemUptime - beforeAlias
+                XCTAssertEqual(renamed.activeSpeakers.first(where: { $0.id == participant.id })?.displayName,
+                               "Explicit participant alias")
+                XCTAssertEqual(renamed.transcriptSegments, completed.transcriptSegments)
+                let restored = try await coordinator.undoTranscriptCorrection(sessionID: completed.id)
+                XCTAssertEqual(restored.activeSpeakers, completed.activeSpeakers)
+                XCTAssertEqual(restored.transcriptSegments, completed.transcriptSegments)
+                let privacyReadyAfterAlias = await privacy.isReady
+                XCTAssertFalse(privacyReadyAfterAlias, "Renaming must not prepare the speech privacy model again")
+            }
             phase = "cleanup"
             resourceSamples.setPhase(phase)
             try await Task.sleep(nanoseconds: 500_000_000)
@@ -1103,6 +1118,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "startCommandSeconds": startCommandSeconds,
                 "startCommandScope": "Coordinator admission to synthetic capture start return; not physical microphone activation or touch latency.",
                 "mainActorResponsiveness": mainActorSamples.json(interval: mainActorInterval),
+                "explicitAliasSaveSeconds": explicitAliasSaveSeconds as Any? ?? NSNull(),
+                "explicitAliasSaveScope": "Coordinator load, metadata correction and durable save on the actual protected fixture output; excludes touch and layout. Alias restored afterward.",
                 "postStopToAudioRatio": stopSeconds / duration,
                 "processCPUMilliseconds": cpuMilliseconds as Any? ?? NSNull(),
                 "firstProtectedTextSeconds": firstProtectedTextSeconds as Any? ?? NSNull(),
