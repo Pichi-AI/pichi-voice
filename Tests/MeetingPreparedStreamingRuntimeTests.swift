@@ -171,6 +171,26 @@ private nonisolated final class SyntheticASR: MeetingParakeetASRSession, Sendabl
         return (.init(text: self.silence ? "" : "synthetic"), self.silence ? [] : [ASRWordTiming(word: "synthetic", start: 0, end: Double(samples.count) / 16_000)])
     }
 }
+
+private actor LifecycleASR: MeetingParakeetASRSession {
+    let recorder: Recorder
+    let decisions: [Bool]
+    let gate: StreamingScopeFixture?
+    private(set) var capabilityChecks = 0
+    init(_ recorder: Recorder, decisions: [Bool], gate: StreamingScopeFixture? = nil) {
+        self.recorder = recorder; self.decisions = decisions; self.gate = gate
+    }
+    func allowsIntermediatePCMObservations() async -> Bool {
+        let index = min(self.capabilityChecks, self.decisions.count - 1)
+        self.capabilityChecks += 1
+        return self.decisions[index]
+    }
+    func transcribeWithTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        self.recorder.event("asr:\(samples.count)")
+        if let gate { await gate.waitForEncoderRelease() }
+        return (.init(text: "synthetic"), [.init(word: "synthetic", start: 0, end: Double(samples.count) / 16_000)])
+    }
+}
 private actor SyntheticDiarizer: MeetingIncrementalNemotronDiarizerSession {
     let recorder: Recorder
     private(set) var accepted = 0
@@ -338,6 +358,7 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
 
     static func main() async throws {
         try await shortAndEmptyFinalizationMatrix()
+        try await lifecyclePreviewAdmission()
         let r = Recorder(); let s = make(r)
         let w = MeetingPCMProgressiveWindow.fixture()
         let task = Task { try await s.recognize(window: w, offset: 0, preview: nil) }
@@ -436,7 +457,82 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
         try await adaptiveOwnerEvidence()
         try await ownerScopeRetiresModelsBeforeEncoder()
         try await optionalOwnerPreflightAndCancellation()
-        print("13 prepared streaming runtime contract groups passed")
+        print("14 prepared streaming runtime contract groups passed")
+    }
+
+    private static func lifecyclePreviewAdmission() async throws {
+        // The production loop sees each boundary separately, including a no-PCM final seal.
+        for (decisions, emptyFinal, expected) in [
+            ([false], false, [320_000]),
+            ([true], false, [48_000, 208_000, 320_000]),
+            ([false, false, false, true], true, [320_000]),
+            ([true, true, false, true], true, [48_000, 208_000, 320_000]),
+            ([true], true, [48_000, 208_000, 320_000])
+        ] {
+            let recorder = Recorder(), asr = LifecycleASR(recorder, decisions: decisions)
+            let window = MeetingPCMProgressiveWindow.fixture()
+            let operation = Task {
+                try await MeetingParakeetNemotronRuntime().recognizeProgressivePCMPhase(
+                    session: asr, window: window, offset: 0,
+                    epoch: .init(trackID: UUID(), ordinal: 0), attemptID: UUID(),
+                    timing: .init(), permitsIntermediateObservations: true,
+                    preview: { batch in recorder.event("preview:\(batch.segments.first?.end ?? -1)") },
+                    consumePCM: { samples, start in
+                        let expectedValue: Float = start == 0 ? 0.1 : start == 48_000 ? 0.2 : 0.3
+                        try require(samples.allSatisfy { $0 == expectedValue }, "PCM deltas preserve distinct source values")
+                        recorder.event("pcm:\(start):\(samples.count)")
+                    })
+            }
+            for (index, delta) in [48_000, 160_000, 112_000].enumerated() {
+                window.fixtureAppend(Array(repeating: Float(index + 1) / 10, count: delta),
+                                     final: index == 2 && !emptyFinal)
+                for _ in 0..<10_000 {
+                    if await asr.capabilityChecks >= index + 1 { break }
+                    await Task.yield()
+                }
+                try require(await asr.capabilityChecks >= index + 1, "Each PCM boundary must reach the dynamic capability")
+            }
+            if emptyFinal { window.fixtureAppend([], final: true) }
+            let result = try await operation.value
+            let calls = recorder.snapshot.filter { $0.hasPrefix("asr:") }
+            try require(calls == expected.map { "asr:\($0)" }, "Optional prefixes and full-window final inference must follow lifecycle capability: \(calls)")
+            let previews = recorder.snapshot.filter { $0.hasPrefix("preview:") }
+            if decisions.first == true {
+                try require(previews.prefix(2) == ["preview:3.0", "preview:13.0"],
+                            "Foreground capability must retain growing-prefix observations")
+            } else {
+                try require(previews == ["preview:20.0"], "Suppressed prefixes publish only the canonical whole window")
+            }
+            try require(result.outputs.first?.sampleCount == 320_000 && result.boundedPCMSourceSampleCount == 320_000,
+                        "A lifecycle transition cannot accept a stale 13-second prefix as the complete 20-second window")
+            try require(recorder.snapshot.filter { $0.hasPrefix("pcm:") } ==
+                ["pcm:0:48000", "pcm:48000:160000", "pcm:208000:112000"],
+                "Every delta reaches the speaker consumer exactly once despite skipped preview inference")
+        }
+
+        let recorder = Recorder(), gate = StreamingScopeFixture(blockEncoder: true)
+        let asr = LifecycleASR(recorder, decisions: [false], gate: gate)
+        let operation = Task {
+            defer { recorder.event("scope-closed") }
+            return try await MeetingParakeetNemotronRuntime().recognizeProgressivePCMPhase(
+                session: asr, window: .fixture(samples: [0.1], final: true), offset: 0,
+                epoch: .init(trackID: UUID(), ordinal: 0), attemptID: UUID(),
+                timing: .init(), permitsIntermediateObservations: true,
+                preview: { _ in recorder.event("unexpected-preview") })
+        }
+        for _ in 0..<10_000 {
+            if recorder.snapshot.contains("asr:1") { break }
+            await Task.yield()
+        }
+        try require(recorder.snapshot.contains("asr:1"), "The noncooperative synthetic native inference must start")
+        operation.cancel()
+        for _ in 0..<20 { await Task.yield() }
+        try require(!recorder.snapshot.contains("scope-closed"), "Cancellation cannot retire an in-flight ASR session")
+        gate.releaseEncoder()
+        do { _ = try await operation.value; throw FixtureFailure.invalid } catch is CancellationError {}
+        try require(recorder.snapshot.contains("scope-closed") && !recorder.snapshot.contains("unexpected-preview"),
+                    "Joined cancellation must prevent speculative publication")
+        print("PASS lifecycle preview admission, exact PCM deltas, full-window final seals and joined native cancellation")
     }
     private nonisolated static func adaptiveOwnerEvidence() async throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)

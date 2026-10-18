@@ -81,9 +81,15 @@ nonisolated protocol MeetingNemotronDiarizerFactory: Sendable {
 
 /// The attempt's prepared Parakeet ASR session, valid only inside the meeting preparation scope.
 nonisolated protocol MeetingParakeetASRSession: Sendable {
+    /// Optional growing-prefix work may be suppressed without deferring the sealed window.
+    func allowsIntermediatePCMObservations() async -> Bool
     func transcribeWithTimings(
         _ samples: [Float]
     ) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming])
+}
+
+extension MeetingParakeetASRSession {
+    nonisolated func allowsIntermediatePCMObservations() async -> Bool { true }
 }
 
 nonisolated struct MeetingNemotronPhaseResult: Sendable {

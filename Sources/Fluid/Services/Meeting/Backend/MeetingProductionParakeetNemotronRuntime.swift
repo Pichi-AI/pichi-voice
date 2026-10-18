@@ -1,4 +1,7 @@
 import Foundation
+#if os(iOS)
+import UIKit
+#endif
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -258,6 +261,16 @@ private nonisolated struct NemotronDiarizerSession: MeetingNemotronDiarizerSessi
 private nonisolated struct PreparedParakeetASRSession: MeetingParakeetASRSession, @unchecked Sendable {
     let asrService: any MeetingASRServicing
     let provider: any TranscriptionProvider
+
+    func allowsIntermediatePCMObservations() async -> Bool {
+        #if os(iOS)
+        // Background audio capture still requires canonical recognition. Avoid decoding
+        // speculative prefixes for an interface that cannot display their updates.
+        await MainActor.run { UIApplication.shared.applicationState != .background }
+        #else
+        true
+        #endif
+    }
 
     func transcribeWithTimings(
         _ samples: [Float]
@@ -545,6 +558,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     ) async throws -> MeetingParakeetPhaseResult {
         var samples: [Float] = []
         var output: MeetingParakeetEpochOutput?
+        var inferredSampleCount = 0
         var sealed = false
         while true {
             let waitStarted = timing.beginExclusion()
@@ -574,12 +588,17 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             if samples.isEmpty { samples = update.samples }
             else { samples.append(contentsOf: update.samples) }
             update.samples = []
-            // Under pressure, consume every delta but decode only the sealed
-            // whole window. The final inference and speaker phases always run.
-            let shouldInfer = MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM,
-                isFinal: update.isFinal, permitsIntermediateObservations: permitsIntermediateObservations)
+            let sessionAllowsObservations = await session.allowsIntermediatePCMObservations()
+            try Task.checkCancellation()
+            // Consume every delta regardless of optional observations. Lifecycle changes
+            // cannot let an empty final marker reuse an older, shorter inferred prefix.
+            let shouldInfer = update.isFinal ? inferredSampleCount != samples.count
+                : MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM, isFinal: false,
+                    permitsIntermediateObservations: permitsIntermediateObservations && sessionAllowsObservations)
             if shouldInfer {
                 let recognized = try await session.transcribeWithTimings(samples)
+                try Task.checkCancellation()
+                inferredSampleCount = samples.count
                 let observed = MeetingParakeetEpochOutput(epochID: epoch, text: recognized.result.text,
                     words: recognized.words, segmentTimings: recognized.result.segmentTimings,
                     sampleRate: 16_000, sampleCount: samples.count, spanSamples: [])
