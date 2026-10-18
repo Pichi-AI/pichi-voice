@@ -512,12 +512,13 @@ final class MeetingSessionCoordinator: ObservableObject {
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
         // This callback belongs to the ambient selected-ASR lifecycle. Explicit requests
         // are prepared by the existing requested-backend pipeline/runtime owners below.
-        // An installed PCM provider is prepared by its immutable pipeline attempt. Warming
-        // the ambient selected provider here would load it twice and delay microphone start.
+        // Installed registered providers already have an owned preparation scope: the PCM
+        // attempt or the optional live-caption worker, followed by frozen final processing.
+        // Warming the ambient provider here would load it twice and delay microphone start.
+        // Retained capture writes independently while optional live captions are preparing.
         // A missing installation still uses the existing download owner before admission.
         if configuration.transcriptionBackendID == nil,
-           !Self.usesPCMProcessing(configuration)
-            || PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) != true {
+           PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) != true {
             try await self.validateRecordingModels()
         }
         try Task.checkCancellation()
