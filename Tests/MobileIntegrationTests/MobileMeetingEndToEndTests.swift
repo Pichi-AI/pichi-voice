@@ -2745,7 +2745,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             ? SyntheticPrivacyReplayDiagnostics(wrapping: privacy) : nil
         let services = AppServices(store: store, settings: settings, privacy: privacy, privacyRedactor: diagnostics)
         let coordinator = services.meetingSessionCoordinator
-        let visibleUI = externalStreamingSpeech ? try CombinedVisibleMeetingUI(services: services) : nil
+        var visibleUI: CombinedVisibleMeetingUI?
         defer { visibleUI?.close() }
         let twoVoiceFixture = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_TWO_VOICES"] == "1"
         let fixture = twoVoiceFixture ? "audio/mixed-two-voices.wav" : "audio/ru.wav"
@@ -2782,6 +2782,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(recording.piiRedactionEnabled, true)
             if externalStreamingSpeech {
                 XCTAssertEqual(recording.effectiveSpeakerProcessingMode, .streaming)
+                // Match the existing combined probe: attach rendering after admission.
+                // Presenting a new root first starts its asynchronous retention sweep,
+                // racing this programmatic Start outside the UI's isQuiescent gate.
+                visibleUI = try CombinedVisibleMeetingUI(services: services)
             } else {
                 try AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
                 XCTAssertTrue(player?.play() == true)
