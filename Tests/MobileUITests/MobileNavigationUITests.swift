@@ -1073,7 +1073,38 @@ final class MobileNavigationUITests: XCTestCase {
         let stem = (filename as NSString).deletingPathExtension
         let file = app.staticTexts.matching(NSPredicate(format: "label IN %@", [filename, stem])).firstMatch
         if !file.waitForExistence(timeout: 5) {
+            let environment = ProcessInfo.processInfo.environment
+            let locationNames = environment["PICHI_PRESENTATION_FIXTURE_LOCATION"].map { [$0] }
+                ?? ["On My iPad", "On My iPhone", "На iPad", "На iPhone"]
+            let location = app.cells.matching(NSPredicate(format: "label IN %@", locationNames)).firstMatch
+            // Files can start in Recents or a compact folder. Choose the known
+            // parent location; injected files are not automatically in Recents.
+            for step in 0..<3 where !location.isHittable {
+                let browse = app.buttons.matching(NSPredicate(format: "label IN %@", ["Browse", "Обзор"])).firstMatch
+                let back = app.buttons["BackButton"]
+                if browse.exists && browse.isHittable { browse.tap() }
+                else if back.exists && back.isHittable { back.tap() }
+                else { break }
+                capture("presentation-files-location-\(step)")
+            }
+            if location.exists && location.isHittable {
+                location.tap()
+                capture("presentation-files-known-location")
+                if let folderName = environment["PICHI_PRESENTATION_FIXTURE_FOLDER"] {
+                    let folder = app.staticTexts[folderName].firstMatch
+                    try require(folder.waitForExistence(timeout: 15) && folder.isHittable,
+                                "The owned synthetic PDF folder must exist in the selected Files location")
+                    folder.tap()
+                    capture("presentation-files-owned-folder")
+                }
+            }
+        }
+        if !file.waitForExistence(timeout: 5) {
             let search = app.searchFields.firstMatch
+            if !search.exists {
+                let searchButton = app.buttons.matching(NSPredicate(format: "label IN %@", ["Search", "Поиск"])).firstMatch
+                if searchButton.exists && searchButton.isHittable { searchButton.tap() }
+            }
             try require(search.waitForExistence(timeout: 5) && search.isHittable,
                         "Stage the approved synthetic PDF in native Files before this test")
             search.tap()
