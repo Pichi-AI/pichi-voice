@@ -817,7 +817,7 @@ nonisolated enum MeetingSpeakerAttribution {
         guard intervals.count >= 3, policy.enableNeighborResolution,
               intervals.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start }),
               self.admitsNeighborSpan(before: intervals[0], first: intervals[1],
-                  last: intervals[intervals.count - 2], after: intervals[intervals.count - 1],
+                  last: intervals[intervals.count - 2], afterStart: intervals[intervals.count - 1].start,
                   policy: policy, sameSpeaker: sameSpeaker)
         else { return false }
         let sharesPauseBudget = sameSpeaker && policy.enableSameSpeakerPauseResolution
@@ -833,12 +833,12 @@ nonisolated enum MeetingSpeakerAttribution {
     /// Constant-time envelope bounds shared by direct admission and indexed continuation.
     /// Callers separately validate every row and the gaps within the proposed cue window.
     private static func admitsNeighborSpan(
-        before: Interval, first: Interval, last: Interval, after: Interval,
+        before: Interval, first: Interval, last: Interval, afterStart: Double,
         policy: MeetingSpeakerAttributionPolicy, sameSpeaker: Bool
     ) -> Bool {
         guard last.end - first.start <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance else { return false }
         return !(sameSpeaker && policy.enableSameSpeakerPauseResolution)
-            || after.start - before.end <= policy.maximumUnknownRunSeconds + 2 * policy.maximumNeighborGapSeconds
+            || afterStart - before.end <= policy.maximumUnknownRunSeconds + 2 * policy.maximumNeighborGapSeconds
                 + policy.comparisonTolerance
     }
 
@@ -855,10 +855,11 @@ nonisolated enum MeetingSpeakerAttribution {
     /// independent original speaker. Callers establish native precision, evidence eligibility,
     /// source/epoch scope, manual-edit protection and contextual barriers. Unknown words may
     /// accompany a mixed word, and clean words may be enclosed by the same validated bout.
-    /// An unknown-only run or a clean reply cannot activate this rule. Prefix counts and the
-    /// latest original anchor per identity keep admission linear, including rejected windows.
-    /// Accepted windows retire their interior anchors so later claims cannot overlap or chain
-    /// through words whose reading ownership has changed. Original evidence remains untouched.
+    /// An unknown-only run or a clean reply cannot activate this rule. The latest original
+    /// clean anchor before the first interruption owns the pending bout; an older matching
+    /// speaker cannot claim a newer speaker's interruption. Prefix counts keep admission linear.
+    /// Accepted windows retire their interior anchors. Barriers or an expired window reset the
+    /// pending owner before later bouts can begin. Original evidence remains untouched.
     static func continuingSpeakerRuns<Identity: Hashable & Sendable>(
         intervals: [MeetingSpeakerAttributionInterval], candidates: [Bool], interruptions: [Bool],
         anchorIdentities: [Identity?], policy: MeetingSpeakerAttributionPolicy
@@ -891,20 +892,39 @@ nonisolated enum MeetingSpeakerAttribution {
             }
             invalidGapPrefix.append(invalidGapPrefix[position] + (invalidGap ? 1 : 0))
         }
-        var result: [ContinuationRun] = [], lastAnchor: [Identity: Int] = [:], anchorFloor = 0
+        func canAwaitReturn(before: Int, through last: Int) -> Bool {
+            invalidPrefix[last + 1] == invalidPrefix[before + 1]
+                && (policy.enableSameSpeakerPauseResolution || invalidGapPrefix[last + 1] == invalidGapPrefix[before + 1])
+                && self.admitsNeighborSpan(before: intervals[before], first: intervals[before + 1],
+                    last: intervals[last], afterStart: intervals[last].end, policy: policy, sameSpeaker: true)
+        }
+        var result: [ContinuationRun] = [], latestAnchor: Int?, pendingBefore: Int?
         for after in intervals.indices {
             try self.checkCancellation(at: after)
-            guard let identity = anchorIdentities[after], !blocked.contains(after) else { continue }
-            if let before = lastAnchor[identity], before >= anchorFloor, after > before + 1,
-               invalidPrefix[after] == invalidPrefix[before + 1],
-               interruptionPrefix[after] > interruptionPrefix[before + 1],
-               self.admitsNeighborSpan(before: intervals[before], first: intervals[before + 1],
-                   last: intervals[after - 1], after: intervals[after], policy: policy, sameSpeaker: true),
-               policy.enableSameSpeakerPauseResolution || invalidGapPrefix[after + 1] == invalidGapPrefix[before + 1] {
-                result.append(.init(first: before + 1, last: after - 1, before: before, after: after))
-                anchorFloor = after
+            let isAnchor = anchorIdentities[after] != nil && !blocked.contains(after)
+            if let before = pendingBefore {
+                if isAnchor, anchorIdentities[after] == anchorIdentities[before] {
+                    if after > before + 1, invalidPrefix[after] == invalidPrefix[before + 1],
+                       interruptionPrefix[after] > interruptionPrefix[before + 1],
+                       self.admitsNeighborSpan(before: intervals[before], first: intervals[before + 1],
+                           last: intervals[after - 1], afterStart: intervals[after].start, policy: policy, sameSpeaker: true),
+                       policy.enableSameSpeakerPauseResolution || invalidGapPrefix[after + 1] == invalidGapPrefix[before + 1] {
+                        result.append(.init(first: before + 1, last: after - 1, before: before, after: after))
+                    }
+                    pendingBefore = nil
+                    latestAnchor = after
+                    continue
+                }
+                if !canAwaitReturn(before: before, through: after) { pendingBefore = nil }
             }
-            lastAnchor[identity] = after
+            guard candidates[after], !blocked.contains(after) else {
+                pendingBefore = nil
+                latestAnchor = isAnchor ? after : nil
+                continue
+            }
+            if isAnchor { latestAnchor = after }
+            if pendingBefore == nil, interruptions[after], let before = latestAnchor, before < after,
+               canAwaitReturn(before: before, through: after) { pendingBefore = before }
         }
         try Task.checkCancellation()
         return result

@@ -531,6 +531,27 @@ struct MeetingSpeakerAttributionTests {
             self.check(boutOutput[2].rawAssignment == .assigned(b) && boutOutput[2].relation == .single)
             self.check(boutOutput[2].candidates.map(\.token) == [b] && boutOutput[2].candidates[0].supportSeconds > 0)
             self.check(try self.resolve(wholeBout.reversed(), boutActivity.reversed()) == boutOutput)
+            let nearestOwner = [self.unit("older-a", offset + 3.5, offset + 3.7, .assigned(a)),
+                                self.unit("main-b", offset + 4.6, offset + 4.8, .assigned(b)),
+                                self.unit("mixed-before", offset + 4.9, offset + 5.1, .ambiguous([a, b])),
+                                self.unit("interior-a", offset + 5.2, offset + 5.4, .assigned(a)),
+                                self.unit("mixed-after", offset + 5.5, offset + 5.7, .ambiguous([a, b])),
+                                self.unit("return-b", offset + 6, offset + 6.2, .assigned(b))]
+            let nearestActivity = [self.activity("a", offset + 3.5, offset + 3.7),
+                                   self.activity("b", offset + 4.6, offset + 5.1),
+                                   self.activity("a", offset + 4.9, offset + 5.7),
+                                   self.activity("b", offset + 5.5, offset + 6.2)]
+            let nearest = try self.resolve(nearestOwner, nearestActivity)
+            self.check(nearest[0].selectedToken == a && nearest[0].rule == .singleAcousticSupport,
+                       "An earlier independent A word changed ownership")
+            self.check(nearest[1].selectedToken == b && nearest[1].rule == .singleAcousticSupport)
+            for position in 2...4 {
+                self.check(nearest[position].selectedToken == b && nearest[position].rule == .mainSpeakerContinuation,
+                           "An older matching A anchor hijacked B's interruption bout")
+                self.check(nearest[position].cueUnitIDs == ["main-b", "return-b"])
+            }
+            self.check(nearest[3].rawAssignment == .assigned(a) && nearest[3].candidates.map(\.token) == [a])
+            self.check(try self.resolve(nearestOwner.reversed(), nearestActivity.reversed()) == nearest)
             let old = try self.resolve([left, adjacent[2], right], sparse, policy: .init(enableMainSpeakerContinuation: false))
             self.check(old[1].selectedToken == b && old[1].rule == .briefInterruption && old[1].backgroundTokens == [a])
             for target in [MeetingAnalysisEpochID(trackID: Self.epoch.trackID, ordinal: 1),
@@ -591,8 +612,8 @@ struct MeetingSpeakerAttributionTests {
         self.check(try runs(values, candidates: [false, false, false, true, true, false],
                             interruptions: [false, false, false, false, true, false],
                             anchors: [true, true, true, false, false, true]) == [.init(first: 3, last: 4, before: 2, after: 5)])
-        // The first closing matching anchor wins. Its interior anchors cannot start a later
-        // overlapping claim, while the closing anchor can begin an adjacent independent bout.
+        // The nearest clean speaker before the first interruption owns the pending bout.
+        // Interior speakers cannot close it or start a later overlapping claim.
         let alternating = (0..<9).map { Interval(start: Double($0) * 0.3, end: Double($0) * 0.3 + 0.2) }
         let identities: [String?] = ["a", nil, "b", nil, "a", nil, "b", nil, "a"]
         let expected: [MeetingSpeakerAttribution.ContinuationRun] = [.init(first: 1, last: 3, before: 0, after: 4),
@@ -608,6 +629,23 @@ struct MeetingSpeakerAttributionTests {
             candidates: Array(repeating: true, count: 9), interruptions: [false, true, false, true, false, true, false, true, false],
             anchorIdentities: identities.map { $0.map { $0 == "a" ? uuidA : uuidB } }, policy: .standard) == expected,
                    "Saved UUID identities changed generic continuation admission")
+        let antiHijack = (0..<6).map { Interval(start: Double($0) * 0.3, end: Double($0) * 0.3 + 0.2) }
+        self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: antiHijack,
+            candidates: Array(repeating: true, count: 6), interruptions: [false, false, true, false, true, false],
+            anchorIdentities: ["a", "b", nil, "a", nil, "b"], policy: .standard)
+            == [.init(first: 2, last: 4, before: 1, after: 5)])
+        let expired = [Interval(start: 0, end: 0.2), .init(start: 0.3, end: 0.5), .init(start: 1, end: 1.2),
+                       .init(start: 5, end: 5.2), .init(start: 5.3, end: 5.5)]
+        self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: expired,
+            candidates: Array(repeating: true, count: 5), interruptions: [false, true, false, true, false],
+            anchorIdentities: ["a", nil, "b", nil, "b"], policy: .standard)
+            == [.init(first: 3, last: 3, before: 2, after: 4)],
+                   "An expired bout did not yield to the nearest later clean speaker")
+        let barrierReset = (0..<6).map { Interval(start: Double($0) * 0.3, end: Double($0) * 0.3 + 0.2) }
+        self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: barrierReset,
+            candidates: [true, true, false, true, true, true], interruptions: [false, true, false, false, true, false],
+            anchorIdentities: ["a", nil, nil, "b", nil, "b"], policy: .standard)
+            == [.init(first: 4, last: 4, before: 3, after: 5)])
         let largeCount = 100_000
         let dense = (0..<largeCount).map { Interval(start: Double($0) * 0.001, end: Double($0) * 0.001 + 0.0005) }
         let manyAnchors: [Int?] = (0..<largeCount).map { $0.isMultiple(of: 2) ? $0 % 100 : nil }
