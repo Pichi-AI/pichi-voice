@@ -43,6 +43,13 @@ import Foundation
         try require(clipped.status.truncated == 1 && clipped.status.dropped >= 1, "truncation-and-file-overflow-accounted")
         let clippedData = try Data(contentsOf: clipped.fileURL)
         try require(clippedData.count <= 4_096, "hard-file-cap")
+        let scoped = MeetingTimelineTrace(directory: root.appendingPathComponent("single-meeting"))
+        await scoped.claimSession("first")
+        scoped.record("first-hypothesis", text: "first-only")
+        await scoped.claimSession("second")
+        scoped.record("later-hypothesis", text: "must-not-leak")
+        let scopedData = try String(contentsOf: scoped.fileURL, encoding: .utf8)
+        try require(scoped.status.closed && !scopedData.contains("must-not-leak"), "first-meeting-only")
         print("MeetingTimelineTrace: default-disabled/private-format/event-byte-queue-limits passed")
     }
 }

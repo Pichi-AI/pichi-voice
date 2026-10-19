@@ -53,6 +53,7 @@ final nonisolated class MeetingTimelineTrace: @unchecked Sendable {
     private var truncated = 0
     private var writeFailed = false
     private var closed = false
+    private var claimedSession: String?
     private var flushTimedOut = false
     // Writer queue owns the file and byte count. Capacity reserves a final status marker.
     private var file: FileHandle?
@@ -109,6 +110,19 @@ final nonisolated class MeetingTimelineTrace: @unchecked Sendable {
             return true
         }
         if start { queue.async { [self] in drain() } }
+    }
+
+    /// A process can investigate only its first admitted meeting. This also protects a later
+    /// user recording if an unusual terminal path failed to reach its explicit finish hook.
+    func claimSession(_ sessionID: String) async {
+        let admitted = lock.withLock { () -> Bool in
+            guard !closed else { return false }
+            if let claimedSession { return claimedSession == sessionID }
+            claimedSession = sessionID
+            return true
+        }
+        if !admitted { await finish() }
+        else { record("meeting_scope", fields: ["sessionID": sessionID]) }
     }
 
     private final class Reply: @unchecked Sendable {

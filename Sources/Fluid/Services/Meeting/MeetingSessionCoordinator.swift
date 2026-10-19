@@ -677,6 +677,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 }
             }
         } else { pendingDiagnostics = nil }
+        await MeetingTimelineTrace.shared?.claimSession(session.id.uuidString)
         let pendingSpeechCapture = MeetingPendingSpeechCapture(originBox: captureOrigin,
             activityModel: self.speechActivityModel, diagnostics: pendingDiagnostics) { [weak self] snapshot in
             MainActor.assumeIsolated {
@@ -1841,6 +1842,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             await self.capture.shutdownForTermination()
             await self.tearDownLiveTranscription()
             await self.releaseActivityLease()
+            await MeetingTimelineTrace.shared?.finish()
             return
         }
 
@@ -1898,6 +1900,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.trackHealth = [:]
             self.state = .idle
             await self.releaseActivityLease()
+            await MeetingTimelineTrace.shared?.finish()
             return
         } catch {
             // Preserve today's behavior: reinstall as interrupted despite the save failure.
@@ -1905,6 +1908,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         self.state = .interrupted(session.id)
         await self.releaseActivityLease()
+        await MeetingTimelineTrace.shared?.finish()
     }
 
     private func performStopAndTranscribe(generation: UUID) async throws -> MeetingSession {
@@ -2631,6 +2635,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         self.state = .interrupted(session.id)
         await self.releaseActivityLease()
+        MeetingTimelineTrace.shared?.record("meeting_capture_interrupted", fields: ["sessionID": session.id.uuidString])
+        await MeetingTimelineTrace.shared?.finish()
         self.interruptionTask = nil
     }
 
@@ -2673,6 +2679,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         self.state = .interrupted(session.id)
         await self.releaseActivityLease()
+        MeetingTimelineTrace.shared?.record("meeting_stop_failed", fields: ["sessionID": session.id.uuidString])
+        await MeetingTimelineTrace.shared?.finish()
     }
 
     private func enqueuePersistence(_ session: MeetingSession) {
