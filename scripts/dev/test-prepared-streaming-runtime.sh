@@ -106,6 +106,7 @@ PY
 swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
     -module-cache-path "$pichi_build/ModuleCache" \
     "$pichi_build/ActualPCMWindow.swift" "$pichi_build/ActualASRLoop.swift" \
+    Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingParakeetNemotronRuntime.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingIncrementalNemotronDiarizerSession.swift \
     Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift \

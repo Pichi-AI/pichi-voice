@@ -13,6 +13,7 @@ PY
 xcrun swiftc -swift-version 6 -default-isolation MainActor -parse-as-library \
     -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/ActivityDetector.swift" \
+    Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift \

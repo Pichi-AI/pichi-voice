@@ -733,11 +733,14 @@ nonisolated struct MeetingPendingSpeechProjection {
     private func emit(_ kind: DiagnosticEvent.Kind, source: MeetingLiveSpeaker? = nil,
                       tokens: [MeetingPendingSpeechToken] = [], transcriptRevision: UInt64? = nil,
                       captionID: UUID? = nil, visibleUTF16: Int = 0, start: TimeInterval? = nil, end: TimeInterval? = nil) {
-        guard let onDiagnostic else { return }
-        onDiagnostic(DiagnosticEvent(kind: kind, uptime: ProcessInfo.processInfo.systemUptime,
+        guard onDiagnostic != nil || MeetingTimelineTrace.enabled else { return }
+        let event = DiagnosticEvent(kind: kind, uptime: ProcessInfo.processInfo.systemUptime,
             source: source, tokens: tokens, remainingIDs: self.snapshot.tokens.map(\.id),
             pendingRevision: self.snapshot.revision, transcriptRevision: transcriptRevision,
-            captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end))
+            captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end)
+        onDiagnostic?(event)
+        MeetingTimelineTrace.shared?.record("wave_" + kind.rawValue, fields: ["metadata": event.logFields],
+            words: tokens.map { .init(text: String($0.id), start: $0.start, end: $0.end) })
     }
 
     mutating func stop() {
@@ -803,6 +806,8 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     func stopAndWait() async {
         self.stop()
         await self.activityWorker?.join()
+        MeetingTimelineTrace.shared?.record("capture_joined")
+        await MeetingTimelineTrace.shared?.flush()
     }
 
     func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
@@ -810,6 +815,9 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             guard pts.isNumeric else { return }
             let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: self.originBox.establish(pts))
+            MeetingTimelineTrace.shared?.record("capture_pcm", fields: ["source": String(describing: kind),
+                "sourceStartSeconds": String(start), "sampleCount": String(CMSampleBufferGetNumSamples(sampleBuffer)),
+                "vadState": "worker-present"])
             activityWorker.offer(sampleBuffer, start: start)
             return
         }
@@ -826,6 +834,9 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         guard count > 0, count <= 65_536, pts.isNumeric else { return }
         let origin = self.originBox.establish(pts)
         let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: origin)
+        MeetingTimelineTrace.shared?.record("capture_pcm", fields: ["source": String(describing: kind),
+            "sourceStartSeconds": String(start), "sampleCount": String(count),
+            "vadState": self.activityWorker == nil ? "not-configured" : "capture-fallback-see-vad-events"])
         var needed = 0
         guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer,
             bufferListSizeNeededOut: &needed, bufferListOut: nil, bufferListSize: 0,
@@ -890,7 +901,9 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
 
     func acknowledgeProtectedSource(source: MeetingLiveSpeaker, throughSample: Int,
                                     transcriptRevision: UInt64) -> MeetingPendingSpeechSnapshot {
-        self.lock.withLock {
+        MeetingTimelineTrace.shared?.record("wave_source_ack_request", fields: ["source": String(describing: source),
+            "throughSample": String(throughSample), "transcriptRevision": String(transcriptRevision)])
+        return self.lock.withLock {
             self.projection.acknowledgeProtectedSource(source: source, throughSample: throughSample,
                 transcriptRevision: transcriptRevision)
             return self.projection.snapshot
@@ -973,7 +986,18 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             guard !lock.withLock({ closed }) else { return }
             // A missing or invalid model leaves the whole attempt unknown. Capture and
             // recognition continue. The next explicit recording can try again.
-            detector = (try? factory()).map { MeetingSpeechActivityDetector(model: Model(value: $0)) }
+            let began = ProcessInfo.processInfo.systemUptime
+            MeetingTimelineTrace.shared?.record("vad_model_load_begin", fields: ["captureID": session.uuidString])
+            do {
+                detector = MeetingSpeechActivityDetector(model: Model(value: try factory()))
+                MeetingTimelineTrace.shared?.record("vad_model_load_end", fields: ["captureID": session.uuidString,
+                    "outcome": "loaded", "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000)])
+            } catch {
+                detector = nil
+                MeetingTimelineTrace.shared?.record("vad_model_load_end", fields: ["captureID": session.uuidString,
+                    "outcome": "unavailable", "errorType": String(reflecting: type(of: error)),
+                    "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000)])
+            }
             lock.withLock { unavailable = detector == nil }
         }
     }
@@ -990,12 +1014,18 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
               let format = try? MeetingPCMFormatContract(formatDescription: description),
               format.sampleRate == 16_000, format.channelCount == 1,
               let block = CMSampleBufferGetDataBuffer(buffer),
-              CMBlockBufferGetDataLength(block) <= count * MemoryLayout<Float>.stride else { return }
+              CMBlockBufferGetDataLength(block) <= count * MemoryLayout<Float>.stride else {
+            MeetingTimelineTrace.shared?.record("vad_input_rejected", fields: ["captureID": session.uuidString,
+                "reason": "normalized-pcm-contract", "sampleCount": String(count)])
+            return
+        }
         let shouldSchedule = lock.withLock { () -> Bool in
             guard !closed else { return false }
             // At most two seconds of admitted PCM and sixteen retained buffers. Overflow
             // invalidates evidence immediately; recognition never waits for this worker.
             if inputs.count >= 16 || pendingSamples + count > 32_000 {
+                MeetingTimelineTrace.shared?.record("vad_queue_overflow", fields: ["captureID": session.uuidString,
+                    "discardedBuffers": String(inputs.count), "discardedSamples": String(pendingSamples), "epoch": String(epoch)])
                 inputs.removeAll(); pendingSamples = 0; epoch &+= 1; evidence.removeAll()
             }
             inputs.append(Input(buffer: buffer, start: start, count: count, epoch: epoch))
@@ -1009,15 +1039,22 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
 
     func confidentlyNonSpeech(start: Double, end: Double) -> Bool {
         guard start.isFinite, end.isFinite, start >= 0, end > start else { return false }
-        return lock.withLock {
-            guard !closed, !unavailable else { return false }
+        let query = lock.withLock { () -> (Bool, String, Double) in
+            let scoredThrough = evidence.last?.end ?? 0
+            guard !closed, !unavailable else { return (false, closed ? "closed" : "unavailable", scoredThrough) }
             var cursor = start
             for item in evidence where item.end > start && item.start < end {
-                guard item.start <= cursor + 0.000_001, item.activity == .nonSpeech else { return false }
+                guard item.start <= cursor + 0.000_001, item.activity == .nonSpeech else {
+                    return (false, item.start > cursor + 0.000_001 ? "unscored-gap" : "speech-or-unknown", scoredThrough)
+                }
                 cursor = max(cursor, item.end)
             }
-            return cursor >= end - 0.000_001
+            return (cursor >= end - 0.000_001, cursor >= end - 0.000_001 ? "complete-nonspeech" : "unscored-tail", scoredThrough)
         }
+        MeetingTimelineTrace.shared?.record("vad_policy_query", fields: ["captureID": session.uuidString,
+            "sourceStartSeconds": String(start), "sourceEndSeconds": String(end), "result": String(query.0),
+            "reason": query.1, "scoredThroughSeconds": String(query.2)])
+        return query.0
     }
 
     func stop() {
@@ -1048,6 +1085,8 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
         let expectedEnd = input.start + Double(input.count) / 16_000
         let changed = previousEpoch != input.epoch || previousEnd.map { abs($0 - input.start) > 1.0 / 32_000 } != false
         if changed {
+            MeetingTimelineTrace.shared?.record("vad_reset", fields: ["captureID": session.uuidString,
+                "epoch": String(input.epoch), "sourceStartSeconds": String(input.start)])
             samples.removeAll(keepingCapacity: true); sampleStart = input.start
             lock.withLock { evidence.removeAll() }
         }
@@ -1066,9 +1105,16 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             let frame = Array(samples.prefix(4096))
             samples.removeFirst(4096)
             let start = sampleStart; sampleStart += 0.256
+            let began = ProcessInfo.processInfo.systemUptime
             let result = detector?.process(samples: frame, valid: [Bool](repeating: true, count: 4096),
                 start: start, session: session, epoch: input.epoch, route: "normalized-microphone-16k",
                 cancelled: { self.lock.withLock { self.closed || self.epoch != input.epoch } })
+            MeetingTimelineTrace.shared?.record("vad_frame", fields: ["captureID": session.uuidString,
+                "epoch": String(input.epoch), "sourceStartSeconds": String(start), "sourceEndSeconds": String(start + 0.256),
+                "probability": result?.probability.map { String($0) } ?? "unavailable",
+                "unknownReason": result?.unknown?.rawValue ?? (result == nil ? "no-detector" : "none"),
+                "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000),
+                "probabilityScope": "OR-aggregate-8x32ms" ])
             if result?.unknown == .disabled {
                 lock.withLock {
                     unavailable = true; evidence.removeAll(); inputs.removeAll(); pendingSamples = 0

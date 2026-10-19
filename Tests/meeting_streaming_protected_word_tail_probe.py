@@ -114,6 +114,7 @@ subprocess.run([
     str(ROOT / "Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift"),
     str(meeting / "MeetingTranscriptPrivacyPolicy.swift"),
     str(BUILD / "PCMAssembly.swift"), str(meeting / "Backend/MeetingStreamingProtectedWordTail.swift"),
+    str(meeting / "MeetingTimelineTrace.swift"),
     str(meeting / "MeetingStreamingTranscriptState.swift"),
     str(ROOT / "Tests/MeetingStreamingTranscriptStateTests.swift"), "-o", str(BUILD / "state-tests")
 ], cwd=ROOT, check=True)

@@ -83,13 +83,21 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
                         let end = min(samples.count, local + 16_000)
                         let portion = Array(samples[local..<end])
                         self.ownerSamples?.append(portion, sourceStartSample: start + local)
+                        let began = ProcessInfo.processInfo.systemUptime
+                        MeetingTimelineTrace.shared?.record("diarizer_append_begin", fields: ["attemptID": self.attemptID.uuidString,
+                            "sourceOffsetSample": String(start + local), "sampleCount": String(portion.count)])
                         let next = try await self.diarizer.appendStreaming(portion, sourceStartSample: start + local)
+                        self.traceDiarizer(next, since: began)
                         try Task.checkCancellation()
                         try self.accept(next, expectedAccepted: start + end, final: false)
                     }
                 } else {
                     self.ownerSamples?.append(samples, sourceStartSample: start)
+                    let began = ProcessInfo.processInfo.systemUptime
+                    MeetingTimelineTrace.shared?.record("diarizer_append_begin", fields: ["attemptID": self.attemptID.uuidString,
+                        "sourceOffsetSample": String(start), "sampleCount": String(samples.count)])
                     let next = try await self.diarizer.appendStreaming(samples, sourceStartSample: start)
+                    self.traceDiarizer(next, since: began)
                     try Task.checkCancellation()
                     try self.accept(next, expectedAccepted: start + samples.count, final: false)
                 }
@@ -135,7 +143,11 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     func finishStreaming() async throws -> MeetingStreamingPCMObservation {
         try self.begin()
         defer { self.end() }
+        let began = ProcessInfo.processInfo.systemUptime
+        MeetingTimelineTrace.shared?.record("diarizer_finish_begin", fields: ["attemptID": self.attemptID.uuidString,
+            "totalSamples": String(self.update.acceptedThroughSample)])
         let next = try await self.diarizer.finishStreaming(totalSamples: self.update.acceptedThroughSample)
+        self.traceDiarizer(next, since: began)
         try Task.checkCancellation()
         try self.accept(next, expectedAccepted: self.update.acceptedThroughSample, final: true)
         self.lock.withLock { self.finished = true }
@@ -206,6 +218,16 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
             processedThroughSample: self.update.processedThroughSample, retainedFromSample: self.update.retainedFromSample,
             isFinal: self.update.isFinal, asrStableThroughSample: asrStableThroughSample,
             sealedEmptyASRRange: sealedEmptyASRRange)
+    }
+
+    private func traceDiarizer(_ next: MeetingIncrementalDiarizationUpdate, since began: Double) {
+        MeetingTimelineTrace.shared?.record("diarizer_append_end", fields: ["attemptID": self.attemptID.uuidString,
+            "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000),
+            "acceptedThroughSample": String(next.acceptedThroughSample), "processedThroughSample": String(next.processedThroughSample),
+            "retainedFromSample": String(next.retainedFromSample), "isFinal": String(next.isFinal),
+            "activityCount": String(next.activity.count)], words: next.activity.map {
+                .init(text: "slot-\($0.slotIndex)", start: $0.start, end: $0.end)
+            })
     }
 
     private func accept(_ next: MeetingIncrementalDiarizationUpdate, expectedAccepted: Int, final: Bool) throws {

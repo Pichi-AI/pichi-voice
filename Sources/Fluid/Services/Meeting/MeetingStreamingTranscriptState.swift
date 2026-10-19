@@ -169,7 +169,12 @@ actor MeetingStreamingTranscriptState {
                 let safe: MeetingPCMTranscriptBatch
                 if let privacyContext = self.privacyContext {
                     let started = ContinuousClock.now
+                    MeetingTimelineTrace.shared?.record("privacy_begin", fields: ["attemptID": self.attemptID.uuidString,
+                        "operation": "canonical-redact", "inputWords": String(source.segments.count)])
                     safe = try await privacyContext.redact(source)
+                    MeetingTimelineTrace.shared?.record("privacy_end", fields: ["attemptID": self.attemptID.uuidString,
+                        "operation": "canonical-redact", "outputWords": String(safe.segments.count),
+                        "wallMilliseconds": String(Self.milliseconds(since: started))])
                     privacyMilliseconds += Self.milliseconds(since: started)
                 } else { safe = source }
                 try self.checkActive()
@@ -186,7 +191,12 @@ actor MeetingStreamingTranscriptState {
                self.processedThroughSample >= self.lastRawWordEndSample,
                let privacyContext = self.privacyContext {
                 let started = ContinuousClock.now
+                MeetingTimelineTrace.shared?.record("privacy_begin", fields: ["attemptID": self.attemptID.uuidString,
+                    "operation": "speech-boundary"])
                 let settled = try await privacyContext.admitSpeechBoundary()
+                MeetingTimelineTrace.shared?.record("privacy_end", fields: ["attemptID": self.attemptID.uuidString,
+                    "operation": "speech-boundary", "outputWords": String(settled?.segments.count ?? 0),
+                    "wallMilliseconds": String(Self.milliseconds(since: started))])
                 privacyMilliseconds += Self.milliseconds(since: started)
                 try self.checkActive()
                 if let settled {
@@ -196,7 +206,12 @@ actor MeetingStreamingTranscriptState {
             }
             if final, let privacyContext = self.privacyContext {
                 let started = ContinuousClock.now
+                MeetingTimelineTrace.shared?.record("privacy_begin", fields: ["attemptID": self.attemptID.uuidString,
+                    "operation": "finish"])
                 let remainder = try await privacyContext.finish()
+                MeetingTimelineTrace.shared?.record("privacy_end", fields: ["attemptID": self.attemptID.uuidString,
+                    "operation": "finish", "outputWords": String(remainder?.segments.count ?? 0),
+                    "wallMilliseconds": String(Self.milliseconds(since: started))])
                 privacyMilliseconds += Self.milliseconds(since: started)
                 try self.checkActive()
                 if let remainder {
@@ -324,6 +339,22 @@ actor MeetingStreamingTranscriptState {
                     retainedAttributionWords: updated.retainedWordCount,
                     insertedWords: updated.inserted.count, revisedWords: updated.revisions.count,
                     privacyMilliseconds: privacyMilliseconds, attributionMilliseconds: attributionMilliseconds, isFinal: final)
+            MeetingTimelineTrace.shared?.record("protected_admission", fields: ["attemptID": self.attemptID.uuidString,
+                "acceptedThroughSample": String(self.acceptedThroughSample), "asrStableThroughSample": String(self.asrStableThroughSample),
+                "diarizationProcessedThroughSample": String(self.processedThroughSample), "privacySafeThroughSample": String(safeSample),
+                "protectedThroughSample": String(protectedThrough), "pendingProtectedWords": String(self.pending.count),
+                "insertedWords": String(updated.inserted.count), "speakerRevisedWords": String(updated.revisions.count),
+                "privacyMilliseconds": String(privacyMilliseconds), "attributionMilliseconds": String(attributionMilliseconds),
+                "isFinal": String(final)], text: batch.segments.map(\.text).joined(separator: " "),
+                words: batch.segments.map { .init(text: $0.text, start: $0.start.seconds, end: $0.end.seconds,
+                    wordID: String(describing: $0.id), speakerID: $0.speakerID.map { String(describing: $0) }) })
+            if let trace = MeetingTimelineTrace.shared {
+                for revision in batch.speakerRevisions {
+                    trace.record("speaker_revision", fields: ["attemptID": self.attemptID.uuidString,
+                        "wordID": String(describing: revision.segmentID),
+                        "speakerID": revision.speakerID.map { String(describing: $0) } ?? "unassigned"])
+                }
+            }
             self.metadataDiagnostics = diagnostics
             return .init(safeBatch: batch, hasSpeakerIdentityChanges: hasSpeakerIdentityChanges,
                 hasPreviewChanges: self.preview != priorPreview,

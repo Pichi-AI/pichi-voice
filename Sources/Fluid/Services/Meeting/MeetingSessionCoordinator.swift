@@ -692,6 +692,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                 self.logPendingSpeechState("capture_snapshot_published", incomingRevision: snapshot.revision)
             }
         }
+        MeetingTimelineTrace.shared?.record("capture_started", fields: ["sessionID": session.id.uuidString,
+            "captureID": pendingDiagnosticID.uuidString, "vadConfigured": String(self.speechActivityModel != nil)])
         self.pendingSpeechCapture = pendingSpeechCapture
         self.pendingSpeech = MeetingPendingSpeechSnapshot(isCapturing: true)
         self.logPendingSpeechState("capture_started")
@@ -835,6 +837,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
             return session
         } catch {
+            MeetingTimelineTrace.shared?.record("meeting_start_failed", fields: ["sessionID": session.id.uuidString])
+            await MeetingTimelineTrace.shared?.finish()
             await self.tearDownLiveTranscription()
             if self.operationGeneration != generation {
                 if captureStarted {
@@ -2123,6 +2127,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         snapshot.revision = self.liveTranscript.revision + 1
         self.liveTranscript = snapshot
         self.reconcilePendingSpeech()
+        MeetingTimelineTrace.shared?.record("protected_publication", fields: ["sessionID": sessionID.uuidString,
+            "transcriptRevision": String(snapshot.revision), "insertedWords": String(batch.segments.count),
+            "revisedWords": String(batch.speakerRevisions.count),
+            "protectedThroughSample": batch.protectedSourceThroughSample.map(String.init) ?? "unavailable"])
         // The strict runtime acknowledges a physical source prefix only after ASR,
         // attribution and privacy have admitted it. Publish that protected history
         // first; acoustic progress or a provisional preview cannot retire waves.
@@ -2322,6 +2330,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.operationGeneration = nil
             await self.releaseActivityLease()
             MeetingPCMRuntimeDiagnostics.completedDetailed(.resultPublish, since: publishBegan)
+            MeetingTimelineTrace.shared?.record("meeting_processing_completed", fields: ["sessionID": session.id.uuidString,
+                "isComplete": String(result.isComplete)])
+            await MeetingTimelineTrace.shared?.finish()
             diagnosticOutcome = "completed"
             diagnosticStage = .completed
             // afterTranscription policy deletes here; sweep failures are logged, never affect this result.
@@ -2331,6 +2342,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             #endif
             return session
         } catch {
+            MeetingTimelineTrace.shared?.record("meeting_processing_failed", fields: ["sessionID": session.id.uuidString,
+                "cancelled": String(error is CancellationError)])
+            await MeetingTimelineTrace.shared?.finish()
             if error is CancellationError { diagnosticOutcome = "cancelled" }
             guard self.operationGeneration == generation else {
                 diagnosticOutcome = "superseded"

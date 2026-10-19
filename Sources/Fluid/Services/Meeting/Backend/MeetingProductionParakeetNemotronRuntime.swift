@@ -597,6 +597,13 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 : MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM, isFinal: false,
                     permitsIntermediateObservations: permitsIntermediateObservations && sessionAllowsObservations)
             if shouldInfer {
+                let inferenceStarted = ProcessInfo.processInfo.systemUptime
+                let inferenceID = UUID().uuidString
+                var skippedNonSpeech = false
+                MeetingTimelineTrace.shared?.record("asr_request", fields: ["attemptID": attemptID.uuidString,
+                    "windowOrdinal": String(epoch.ordinal), "inferenceID": inferenceID,
+                    "sourceOffsetSample": String(Int((offset * 16_000).rounded())),
+                    "sampleCount": String(samples.count), "sealed": String(update.isFinal)])
                 let recognized: (result: ASRTranscriptionResult, words: [ASRWordTiming])
                 let alreadyAcceptedSpeech = output?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                 if !alreadyAcceptedSpeech,
@@ -604,6 +611,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     // The same capture-owned VAD scores this complete physical interval.
                     // Speaker input above remains contiguous, and an empty result advances
                     // ASR coverage without inventing words or discarding an accepted prefix.
+                    skippedNonSpeech = true
                     recognized = (ASRTranscriptionResult(text: "", confidence: 0), [])
                     DebugLogger.shared.info("progressive_nonspeech_skip offset=\(offset) frames=\(samples.count) sealed=\(update.isFinal)", source: "MeetingPCMRuntime")
                 } else {
@@ -614,6 +622,15 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 let observed = MeetingParakeetEpochOutput(epochID: epoch, text: recognized.result.text,
                     words: recognized.words, segmentTimings: recognized.result.segmentTimings,
                     sampleRate: 16_000, sampleCount: samples.count, spanSamples: [])
+                MeetingTimelineTrace.shared?.record("asr_hypothesis", fields: ["attemptID": attemptID.uuidString,
+                    "windowOrdinal": String(epoch.ordinal), "inferenceID": inferenceID,
+                    "sourceOffsetSample": String(Int((offset * 16_000).rounded())), "sampleCount": String(samples.count),
+                    "sealed": String(update.isFinal), "skippedConfidentNonSpeech": String(skippedNonSpeech),
+                    "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - inferenceStarted) * 1_000),
+                    "confidence": String(recognized.result.confidence),
+                    "acceptedByPrefixPolicy": String(!observed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || output == nil || output?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true)],
+                    text: observed.text, words: observed.words.map { .init(text: $0.word, start: $0.start, end: $0.end) })
                 // An empty observation can be silence or a provider's rejected
                 // hypothesis. Neither invalidates speech already accepted for
                 // a shorter prefix. Keep its original coverage and timings.
@@ -649,6 +666,10 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         // Native inference has joined. Transfer only the same array's covered
         // prefix to attribution; the scalar records the consumed physical tail.
         samples.removeSubrange(output.sampleCount..<samples.count)
+        MeetingTimelineTrace.shared?.record("asr_window_finalized", fields: ["attemptID": attemptID.uuidString,
+            "windowOrdinal": String(epoch.ordinal), "sourceOffsetSample": String(Int((offset * 16_000).rounded())),
+            "physicalSampleCount": String(physicalSampleCount), "acceptedSampleCount": String(output.sampleCount)],
+            text: output.text, words: output.words.map { .init(text: $0.word, start: $0.start, end: $0.end) })
         return MeetingParakeetPhaseResult(outputs: [output], boundedPCMSamples: samples,
             boundedPCMSourceSampleCount: physicalSampleCount)
     }
@@ -954,7 +975,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
 /// error payloads, paths, identity metadata or audio samples. Opt-in owner rows add only
 /// bounded anonymous scalar matching evidence.
 nonisolated enum MeetingPCMRuntimeDiagnostics {
-    static let detailedProfilingEnabled = ProcessInfo.processInfo.environment["PICHI_MEETING_DETAILED_PROFILE"] == "1"
+    static let detailedProfilingEnabled = ProcessInfo.processInfo.environment["PICHI_MEETING_DETAILED_PROFILE"] == "1" || MeetingTimelineTrace.enabled
     /// Reuses the existing explicit local profiling opt-in in ordinary signed Release builds.
     /// Capture scalar lengths before enqueueing; neither this closure nor the log retains PCM.
     static func ownerVerificationObserver(
@@ -1010,6 +1031,9 @@ nonisolated enum MeetingPCMRuntimeDiagnostics {
         DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
             "[meeting/pcm] phase=\(phase.rawValue) event=begin spanID=\(started.id) uptimeMs=\(uptime) processCpuTotalMs=\(cpuTotal) cpuScope=process physicalFootprintBytes=\(footprint) thermalState=\(thermal)"
         }
+        MeetingTimelineTrace.shared?.record("phase_begin", fields: ["phase": phase.rawValue,
+            "spanID": started.id.uuidString, "processCpuTotalMs": cpuTotal,
+            "physicalFootprintBytes": footprint, "thermalState": String(thermal)])
         return started
     }
     static func completed(_ phase: Phase, since began: Started, samples: Int = 0, sourceBytes: Int64 = 0,
@@ -1029,6 +1053,10 @@ nonisolated enum MeetingPCMRuntimeDiagnostics {
         DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
             "[meeting/pcm] phase=\(phase.rawValue) elapsedMs=\(milliseconds) count=\(count) sourceBytes=\(bytes) event=end spanID=\(began.id) outcome=\(outcome) sourceOffset=\(offset) uptimeMs=\(uptime) processCpuMs=\(cpu) processCpuTotalMs=\(cpuTotal) cpuScope=process physicalFootprintBytes=\(footprint) thermalState=\(thermal)"
         }
+        MeetingTimelineTrace.shared?.record("phase_end", fields: ["phase": phase.rawValue,
+            "spanID": began.id.uuidString, "elapsedMs": String(milliseconds), "sourceOffset": offset,
+            "sampleCount": String(count), "outcome": outcome, "processCpuMs": cpu,
+            "processCpuTotalMs": cpuTotal, "physicalFootprintBytes": footprint, "thermalState": String(thermal)])
     }
 
     static func beginDetailed(_ phase: Phase) -> Started? { detailedProfilingEnabled ? begin(phase) : nil }
