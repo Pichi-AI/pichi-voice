@@ -78,8 +78,13 @@ streamingWitnesses = r'''
     var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { self.scope == nil ? nil : .init() }
     var pcmIdentityState: StreamingPinWitness { .init() }
     var pcmSpeakerNameFormat: String { "Speaker %lld" }
+    func takeIdleResources() -> MeetingIdleParakeetNemotronResources? {
+        self.idleResources
+    }
     func withPreparedASR(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+        preparedProvider: MeetingASRPreparedProvider? = nil,
         body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult) async throws -> MeetingParakeetPhaseResult {
+        if preparedProvider != nil { self.scope?.event("asr-provider-adopted") }
         self.scope?.event("asr-scope-open")
         defer { self.scope?.event("asr-scope-closed") }
         return try await body(StreamingASRWitness())
@@ -102,9 +107,12 @@ streamingWitnesses = r'''
 provider = Path('Sources/Fluid/Services/TranscriptionProvider.swift').read_text()
 word_start = provider.index('nonisolated struct ASRWordTiming:')
 word_end = provider.index('/// A provider', word_start)
-Path(sys.argv[2]).write_text('import Foundation\n' + provider[word_start:word_end] + runtime[start:end] + preflight +
+scopeHelpers = runtime[start:end].replace('private final nonisolated class MeetingIdleParakeetNemotronResources',
+    'final nonisolated class MeetingIdleParakeetNemotronResources')
+Path(sys.argv[2]).write_text('import Foundation\n' + provider[word_start:word_end] + scopeHelpers + preflight +
     '\nfinal nonisolated class MeetingParakeetNemotronRuntime: Sendable {\n' +
-    '    let scope: StreamingScopeFixture?\n    init(scope: StreamingScopeFixture? = nil) { self.scope = scope }\n' +
+    '    let scope: StreamingScopeFixture?\n    let idleResources: MeetingIdleParakeetNemotronResources?\n' +
+    '    init(scope: StreamingScopeFixture? = nil, idleResources: MeetingIdleParakeetNemotronResources? = nil) { self.scope = scope; self.idleResources = idleResources }\n' +
     runtime[start_loop:end_loop] + runtime[start_scope:end_box] + runtime[start_prepared:end_prepared] +
     runtime[start_validation:end_validation] + assembly + streamingWitnesses + '\n}\n' + first_latest + native_intervals + checkpoint_decoding)
 PY

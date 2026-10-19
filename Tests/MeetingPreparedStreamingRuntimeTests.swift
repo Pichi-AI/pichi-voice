@@ -12,9 +12,9 @@ nonisolated struct MeetingSpeakerVoiceSamples: Sendable { let token: MeetingBack
 nonisolated struct MeetingSpeakerVoiceProfile: Sendable {}
 nonisolated struct MeetingOwnerVoiceProfileSnapshot: Sendable {}
 nonisolated struct MeetingMaterializedSpanSamples: Sendable {}
-nonisolated struct MeetingNemotronModelArtifact: Sendable {
-    struct Profile: Sendable {
-        enum Preference { case cpuOnly, devicePreferred }
+nonisolated struct MeetingNemotronModelArtifact: Equatable, Sendable {
+    struct Profile: Equatable, Sendable {
+        enum Preference: Equatable { case cpuOnly, devicePreferred }
         var streamingImplementationFingerprint = "synthetic-pinned-profile"
         func acceptsStreamingImplementationFingerprint(_ value: String) -> Bool {
             value == self.streamingImplementationFingerprint || value == "synthetic-legacy-anonymous" || value == "synthetic-owner-v1"
@@ -32,13 +32,20 @@ nonisolated struct MeetingNemotronModelArtifact: Sendable {
     var profile = Profile()
     var implementationFingerprint = "synthetic-pinned-profile"
 }
-nonisolated struct MeetingFinalProcessingConfiguration: Sendable {
-    enum Mode { case afterRecording, streaming }
+nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
+    enum Mode: Equatable { case afterRecording, streaming }
     var speakerLabelsEnabled = true
     var speakerAttributionPolicy: Int? = 1
     var effectiveSpeakerProcessingMode = Mode.streaming
     var diarizationFingerprint = "synthetic-pinned-profile"
     var identityFingerprint: String { self.diarizationFingerprint }
+}
+nonisolated protocol MeetingIdlePreparedResource: Sendable {
+    var configurationIdentity: String { get }
+    func cleanup() async
+}
+@MainActor final class MeetingASRPreparedProvider {
+    func cleanup() async {}
 }
 nonisolated struct MeetingSessionSpeaker: Sendable { let id: String; var isLocalUser = false }
 nonisolated struct MeetingTranscriptSegment: Sendable {
@@ -67,7 +74,7 @@ typealias MeetingAudioTrackID = UUID
 nonisolated enum MeetingProviderOptions {
     static func resolve(_ configuration: MeetingFinalProcessingConfiguration) throws -> Int { 0 }
 }
-nonisolated enum MeetingModelResidencyError: Error { case unsupportedProvider, staleGrant }
+nonisolated enum MeetingModelResidencyError: Error { case unsupportedProvider, staleGrant, busy }
 nonisolated enum MeetingParakeetNemotronRuntimeError: Error { case invalidPCMWindow, concurrentPCMWindow }
 nonisolated enum PichiLocalization { static func text(_ key: String) -> String { key } }
 nonisolated final class DebugLogger: Sendable {
@@ -470,6 +477,7 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
         try ownerEvidenceBoundsAndQuality()
         try await adaptiveOwnerEvidence()
         try await ownerScopeRetiresModelsBeforeEncoder()
+        try await adoptedPairRetiresModelsBeforeEncoder()
         try await optionalOwnerPreflightAndCancellation()
         print("18 prepared streaming runtime contract groups passed")
     }
@@ -961,6 +969,37 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
             }
         }
         print("PASS actual production streaming scope releases both model owners before optional encoder and identity publication")
+    }
+
+    private static func adoptedPairRetiresModelsBeforeEncoder() async throws {
+        let events = StreamingScopeFixture()
+        let parked = MeetingRetainedDiarizationScope { body in
+            events.event("idle-speaker-scope-open")
+            defer { events.event("idle-speaker-scope-closed") }
+            try await body(StreamingFactoryWitness())
+        }
+        try await parked.waitUntilReady()
+        let configuration = MeetingFinalProcessingConfiguration()
+        let pair = MeetingIdleParakeetNemotronResources(configuration: configuration, artifact: .init(),
+            asr: MeetingASRPreparedProvider(), speakerScope: parked)
+        try pair.adopt(configuration: configuration, artifact: .init())
+        let runtime = MeetingParakeetNemotronRuntime(scope: events, idleResources: pair)
+        let controller = MeetingStreamingPCMController.deferred { body in
+            try await runtime.withPreparedStreamingPCM(trackID: UUID(), attemptID: UUID(), configuration: configuration,
+                onProgress: { _ in }, body: body)
+        }
+        let audio = (0..<128_000).map { 0.1 * sin(Float($0) * 0.031) }
+        _ = try await controller.recognize(window: .fixture(samples: audio, final: true), offset: 0)
+        let final = try await controller.finishStreaming()
+        let trace = events.snapshot
+        try require(final.isFinal && trace.contains("asr-provider-adopted"), "The prepared pair reaches the actual streaming body")
+        try require(!trace.contains("speaker-scope-open"), "An adopted factory must not enter another native load scope")
+        try require(trace == ["idle-speaker-scope-open", "asr-provider-adopted", "asr-scope-open",
+            "idle-speaker-scope-closed", "asr-scope-closed", "voice-encode"],
+            "The adopted lexical scope and ASR scope both join before optional owner encoding")
+        await pair.cleanup()
+        try require(events.snapshot == trace, "Parent cleanup cannot repeat native release or inference")
+        print("PASS actual production streaming scope adopts the retained pair without a second speaker load and joins both owners")
     }
 
     private static func optionalOwnerPreflightAndCancellation() async throws {

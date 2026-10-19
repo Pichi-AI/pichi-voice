@@ -97,6 +97,227 @@ final nonisolated class MeetingPCMWindowComputeTiming: @unchecked Sendable {
     }
 }
 
+/// Holds the existing native loading scope open without running inference in its idle task.
+/// A later consumer borrows the ready factory once in its own TaskLocal context. Cleanup
+/// cancels and joins that consumer before releasing and joining the parked loading scope.
+final nonisolated class MeetingRetainedDiarizationScope: Sendable {
+    private actor State {
+        private var factory: (any MeetingNemotronDiarizerFactory)?
+        private var readyWaiters: [CheckedContinuation<Void, Error>] = []
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+        private var borrowWaiters: [CheckedContinuation<Void, Never>] = []
+        private var borrowID: UUID?
+        private var cancelBorrow: (@Sendable () -> Void)?
+        private var claimed = false
+        private var closed = false
+        private var finished = false
+        private var failure: (any Error)?
+
+        func publish(_ factory: any MeetingNemotronDiarizerFactory) throws {
+            guard !self.closed, !self.finished, self.factory == nil else { throw CancellationError() }
+            self.factory = factory
+            let waiters = self.readyWaiters
+            self.readyWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+
+        func ready() async throws {
+            guard !self.closed else { throw CancellationError() }
+            if self.factory != nil { return }
+            if self.finished { throw self.failure ?? CancellationError() }
+            try await withCheckedThrowingContinuation { self.readyWaiters.append($0) }
+        }
+
+        func waitForRelease() async {
+            guard !self.closed else { return }
+            await withCheckedContinuation { self.releaseWaiter = $0 }
+        }
+
+        func claim() throws -> (UUID, any MeetingNemotronDiarizerFactory) {
+            guard !self.closed, !self.finished, !self.claimed, let factory = self.factory else {
+                throw CancellationError()
+            }
+            self.claimed = true
+            let id = UUID()
+            self.borrowID = id
+            return (id, factory)
+        }
+
+        func registerBorrow(id: UUID, cancel: @escaping @Sendable () -> Void) {
+            guard self.borrowID == id else { cancel(); return }
+            self.cancelBorrow = cancel
+            if self.closed { cancel() }
+        }
+
+        func finishBorrow(id: UUID) {
+            guard self.borrowID == id else { return }
+            self.borrowID = nil
+            self.cancelBorrow = nil
+            let waiters = self.borrowWaiters
+            self.borrowWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+
+        func close() async {
+            self.closed = true
+            self.cancelBorrow?()
+            let waiters = self.readyWaiters
+            self.readyWaiters.removeAll()
+            for waiter in waiters { waiter.resume(throwing: CancellationError()) }
+            if self.borrowID != nil {
+                await withCheckedContinuation { self.borrowWaiters.append($0) }
+            }
+            self.releaseWaiter?.resume()
+            self.releaseWaiter = nil
+        }
+
+        func finish(_ failure: (any Error)?) {
+            self.finished = true
+            self.failure = failure
+            self.factory = nil
+            let waiters = self.readyWaiters
+            self.readyWaiters.removeAll()
+            for waiter in waiters { waiter.resume(throwing: failure ?? CancellationError()) }
+        }
+    }
+
+    private let state: State
+    private let work: Task<Void, Error>
+
+    init(open: @escaping @Sendable (
+        @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> Void
+    ) async throws -> Void) {
+        let state = State()
+        self.state = state
+        self.work = Task.detached(priority: .utility) {
+            do {
+                try await open { factory in
+                    try await state.publish(factory)
+                    await state.waitForRelease()
+                }
+                await state.finish(nil)
+            } catch {
+                await state.finish(error)
+                throw error
+            }
+        }
+    }
+
+    func waitUntilReady() async throws {
+        do {
+            try await withTaskCancellationHandler {
+                try await self.state.ready()
+                try Task.checkCancellation()
+            } onCancel: {
+                self.work.cancel()
+                Task { await self.state.close() }
+            }
+        } catch {
+            await self.cleanup()
+            throw error
+        }
+    }
+
+    func withFactory<Result: Sendable>(
+        _ body: @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> Result
+    ) async throws -> Result {
+        let (id, factory) = try await self.state.claim()
+        // This task inherits the actual meeting caller's context, never the parked idle
+        // scope's grant or pipeline correlation. Native work remains serial in the body.
+        let consumer = Task { try await body(factory) }
+        await self.state.registerBorrow(id: id, cancel: { consumer.cancel() })
+        do {
+            let result = try await withTaskCancellationHandler {
+                try await consumer.value
+            } onCancel: { consumer.cancel() }
+            try Task.checkCancellation()
+            await self.state.finishBorrow(id: id)
+            await self.cleanup()
+            return result
+        } catch {
+            await self.state.finishBorrow(id: id)
+            await self.cleanup()
+            throw error
+        }
+    }
+
+    func cleanup() async {
+        self.work.cancel()
+        await self.state.close()
+        _ = await self.work.result
+    }
+}
+
+/// Adapter-owned prepared weights only. No audio lease, attempt, track, diarizer state or
+/// transcript exists until the normal meeting controller consumes this exact pair.
+private final nonisolated class MeetingIdleParakeetNemotronResources: MeetingIdlePreparedResource, @unchecked Sendable {
+    let configuration: MeetingFinalProcessingConfiguration
+    let artifact: MeetingNemotronModelArtifact
+    let asr: MeetingASRPreparedProvider
+    let speakerScope: MeetingRetainedDiarizationScope
+    var configurationIdentity: String { self.configuration.identityFingerprint }
+    private let lock = NSLock()
+    private var adopted = false
+    private var claimed = false
+    private var closed = false
+
+    init(configuration: MeetingFinalProcessingConfiguration, artifact: MeetingNemotronModelArtifact,
+         asr: MeetingASRPreparedProvider, speakerScope: MeetingRetainedDiarizationScope) {
+        self.configuration = configuration
+        self.artifact = artifact
+        self.asr = asr
+        self.speakerScope = speakerScope
+    }
+
+    func adopt(configuration: MeetingFinalProcessingConfiguration, artifact: MeetingNemotronModelArtifact) throws {
+        try self.lock.withLock {
+            guard !self.closed, !self.adopted, !self.claimed,
+                  self.configuration == configuration, self.artifact == artifact else {
+                throw MeetingModelResidencyError.staleGrant
+            }
+            self.adopted = true
+        }
+    }
+
+    func claim(configuration: MeetingFinalProcessingConfiguration, artifact: MeetingNemotronModelArtifact) throws {
+        try self.lock.withLock {
+            guard !self.closed, self.adopted, !self.claimed,
+                  self.configuration == configuration, self.artifact == artifact else {
+                throw MeetingModelResidencyError.staleGrant
+            }
+            self.claimed = true
+        }
+    }
+
+    func cleanup() async {
+        self.lock.withLock { self.closed = true }
+        await self.speakerScope.cleanup()
+        await self.asr.cleanup()
+    }
+}
+
+private final nonisolated class MeetingIdleNativeResourceSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var resource: MeetingIdleParakeetNemotronResources?
+
+    func adopt(_ resource: MeetingIdleParakeetNemotronResources, configuration: MeetingFinalProcessingConfiguration,
+               artifact: MeetingNemotronModelArtifact) throws {
+        try self.lock.withLock {
+            guard self.resource == nil else { throw MeetingModelResidencyError.busy }
+            try resource.adopt(configuration: configuration, artifact: artifact)
+            self.resource = resource
+        }
+    }
+
+    func take() -> MeetingIdleParakeetNemotronResources? {
+        self.lock.withLock {
+            let resource = self.resource
+            self.resource = nil
+            return resource
+        }
+    }
+}
+
 /// Small attempt-local identity evidence, protected separately from model residency.
 /// No PCM or audio files are retained here. The existing matcher receives a bounded
 /// complete-link reference set; uncertain/new voices beyond that limit stay unassigned.
@@ -293,6 +514,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     private let usesDefaultVoiceModelDirectory: Bool
     private let ownerVoiceVerificationEnabled: Bool
     private let pcmIdentityState = MeetingPCMIdentityState()
+    private let idleResources = MeetingIdleNativeResourceSlot()
     let ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot?
     private let compiledNemotron = MeetingNemotronCompiledModelOwner { source, target in
         #if arch(arm64)
@@ -364,6 +586,76 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         #endif
     }
 
+    /// The registered installed-provider capability rejects unsupported or missing ASR
+    /// selections before preparation. Existing native open scopes retain the actual weights.
+    func prepareIdleResources(configuration: MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)? {
+        #if arch(arm64)
+        try Task.checkCancellation()
+        guard configuration.speakerLabelsEnabled, configuration.effectiveSpeakerProcessingMode == .streaming,
+              await self.asrServiceProvider().supportsPreparedProviderAdoption else { return nil }
+        _ = try MeetingProviderOptions.resolve(configuration)
+        let artifact = try self.modelLocator.locate()
+        try Self.validateStreamingSelection(artifact: artifact, configuration: configuration)
+        guard let asr = try await Self.prepareIdleASR(configuration: configuration) else { return nil }
+        let speakerScope = MeetingRetainedDiarizationScope { body in
+            _ = try await self.withNemotronDiarization(artifact: artifact) { factory in
+                try await body(factory)
+                return MeetingNemotronPhaseResult()
+            }
+        }
+        let resources = MeetingIdleParakeetNemotronResources(configuration: configuration, artifact: artifact,
+            asr: asr, speakerScope: speakerScope)
+        do {
+            try await speakerScope.waitUntilReady()
+            try Task.checkCancellation()
+            guard try self.modelLocator.recheck(artifact) == artifact else {
+                throw MeetingNemotronModelReadinessError.artifactChanged(path: artifact.packageURL.path)
+            }
+            return resources
+        } catch {
+            await resources.cleanup()
+            throw error
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    @MainActor
+    private static func prepareIdleASR(configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingASRPreparedProvider? {
+        guard let provider = try PichiMeetingProviderFactory.makeInstalledProviderForIdle(configuration) else { return nil }
+        let prepared = MeetingASRPreparedProvider(configuration: configuration, provider: provider)
+        do {
+            try await provider.prepare(progressHandler: nil)
+            try Task.checkCancellation()
+            guard provider.isReady else { throw MeetingModelResidencyError.unsupportedProvider }
+            return prepared
+        } catch {
+            await prepared.cleanup()
+            throw error
+        }
+    }
+
+    func adoptIdleResources(_ resource: any MeetingIdlePreparedResource,
+                            configuration: MeetingFinalProcessingConfiguration) async throws {
+        try Task.checkCancellation()
+        guard let resources = resource as? MeetingIdleParakeetNemotronResources else {
+            throw MeetingModelResidencyError.unsupportedProvider
+        }
+        let artifact = try self.modelLocator.locate()
+        try Self.validateStreamingSelection(artifact: artifact, configuration: configuration)
+        guard try self.modelLocator.recheck(artifact) == artifact else {
+            throw MeetingNemotronModelReadinessError.artifactChanged(path: artifact.packageURL.path)
+        }
+        try await resources.speakerScope.waitUntilReady()
+        try Task.checkCancellation()
+        try self.idleResources.adopt(resources, configuration: configuration, artifact: artifact)
+    }
+
+    private func takeIdleResources() -> MeetingIdleParakeetNemotronResources? {
+        self.idleResources.take()
+    }
+
     static func validateStreamingSelection(artifact: MeetingNemotronModelArtifact,
                                           configuration: MeetingFinalProcessingConfiguration) throws {
         guard configuration.speakerLabelsEnabled, configuration.effectiveSpeakerProcessingMode == .streaming,
@@ -407,30 +699,44 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let ownerPolicy: MeetingOwnerVoiceVerifier.Policy = adaptiveOwnerEvidence ? .streamingV2 : .legacy
         let collectOwnerEvidence = self.ownerVoiceProfileSnapshot != nil
             && artifact.profile.verifiesStreamingOwner(implementationFingerprint: configuration.diarizationFingerprint)
-        _ = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration) { asr in
-            _ = try await self.withNemotronDiarization(artifact: artifact) { factory in
-                let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: 0)
-                guard let diarizer = try await factory.makeDiarizer(epoch: epoch)
-                    as? any MeetingIncrementalNemotronDiarizerSession else {
-                    throw MeetingPCMInputError.unsupportedRuntime
+        let idleResources = self.takeIdleResources()
+        do {
+            try idleResources?.claim(configuration: configuration, artifact: artifact)
+            _ = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration,
+                preparedProvider: idleResources?.asr) { asr in
+                let consume: @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult = { factory in
+                    let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: 0)
+                    guard let diarizer = try await factory.makeDiarizer(epoch: epoch)
+                        as? any MeetingIncrementalNemotronDiarizerSession else {
+                        throw MeetingPCMInputError.unsupportedRuntime
+                    }
+                    let session = MeetingPreparedStreamingRuntime(runtime: self, asr: asr, diarizer: diarizer,
+                        trackID: trackID, attemptID: attemptID, configuration: configuration,
+                        speakerNameFormat: self.pcmSpeakerNameFormat, collectOwnerEvidence: collectOwnerEvidence,
+                        useAdaptiveOwnerEvidence: adaptiveOwnerEvidence, onProgress: onProgress)
+                    do {
+                        try await body(session)
+                        try Task.checkCancellation()
+                        try session.requireFinished()
+                        ownerEvidence.set(try session.ownerEvidence())
+                        await session.cleanup()
+                    } catch {
+                        await session.cleanup()
+                        throw error
+                    }
+                    return MeetingNemotronPhaseResult()
                 }
-                let session = MeetingPreparedStreamingRuntime(runtime: self, asr: asr, diarizer: diarizer,
-                    trackID: trackID, attemptID: attemptID, configuration: configuration,
-                    speakerNameFormat: self.pcmSpeakerNameFormat, collectOwnerEvidence: collectOwnerEvidence,
-                    useAdaptiveOwnerEvidence: adaptiveOwnerEvidence, onProgress: onProgress)
-                do {
-                    try await body(session)
-                    try Task.checkCancellation()
-                    try session.requireFinished()
-                    ownerEvidence.set(try session.ownerEvidence())
-                    await session.cleanup()
-                } catch {
-                    await session.cleanup()
-                    throw error
+                if let idleResources {
+                    _ = try await idleResources.speakerScope.withFactory(consume)
+                } else {
+                    _ = try await self.withNemotronDiarization(artifact: artifact, consume)
                 }
-                return MeetingNemotronPhaseResult()
+                return MeetingParakeetPhaseResult()
             }
-            return MeetingParakeetPhaseResult()
+            await idleResources?.cleanup()
+        } catch {
+            await idleResources?.cleanup()
+            throw error
         }
         // Both inference scopes and their native cleanup have joined. The box retains only
         // bounded admitted clips, so the additional encoder never co-resides with either model.
@@ -955,11 +1261,22 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         configuration: MeetingFinalProcessingConfiguration,
         body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult
     ) async throws -> MeetingParakeetPhaseResult {
+        try await self.withPreparedASR(attemptID: attemptID, configuration: configuration,
+            preparedProvider: nil, body: body)
+    }
+
+    private func withPreparedASR(
+        attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration,
+        preparedProvider: MeetingASRPreparedProvider?,
+        body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult
+    ) async throws -> MeetingParakeetPhaseResult {
         let asrService = await self.asrServiceProvider()
         let began = MeetingPCMRuntimeDiagnostics.begin(.asrPrepare)
         return try await asrService.withPreparedMeetingASR(
             attemptID: attemptID,
-            configuration: configuration
+            configuration: configuration,
+            preparedProvider: preparedProvider
         ) { provider in
             MeetingPCMRuntimeDiagnostics.completed(.asrPrepare, since: began)
             let session = PreparedParakeetASRSession(asrService: asrService, provider: provider)
