@@ -361,12 +361,18 @@ struct MeetingLiveBubbleScrollList: View {
     private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
         #if os(iOS)
         if let scroll = self.nativeScroll.view, scroll.window != nil, scroll.bounds.height > 0 {
-            scroll.layoutIfNeeded()
-            let bottom = max(-scroll.adjustedContentInset.top,
-                scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
-            if abs(scroll.contentOffset.y - bottom) > 0.5 {
-                scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: bottom),
-                    animated: animated && !self.reduceMotion)
+            // First realize the lazy tail by identity. Its estimated content extent can
+            // change during that realization, so correct against UIKit after that layout.
+            proxy.scrollTo(self.bottomAnchor, anchor: .bottom)
+            DispatchQueue.main.async {
+                guard self.isPinnedToBottom, scroll.window != nil else { return }
+                scroll.layoutIfNeeded()
+                let bottom = max(-scroll.adjustedContentInset.top,
+                    scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+                if abs(scroll.contentOffset.y - bottom) > 0.5 {
+                    scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: bottom),
+                        animated: animated && !self.reduceMotion)
+                }
             }
             return
         }
