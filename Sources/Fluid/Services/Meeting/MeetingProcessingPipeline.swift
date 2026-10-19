@@ -11,6 +11,10 @@ protocol MeetingProcessingControlling: AnyObject {
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
                             preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void) async throws
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws
     func cancelMemoryAudio(sessionID: MeetingSessionID) async
     func process(
         session: MeetingSession,
@@ -20,6 +24,13 @@ protocol MeetingProcessingControlling: AnyObject {
 }
 
 extension MeetingProcessingControlling {
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudio(session: session, sessionDirectory: sessionDirectory,
+            checkpoint: checkpoint, preview: preview)
+    }
     func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor? {
         configuration.audioStorageMode == .memoryOnly
             ? try self.validateMemoryAudioInput(configuration: configuration, backendID: backendID) : nil

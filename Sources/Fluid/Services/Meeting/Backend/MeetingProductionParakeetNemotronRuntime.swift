@@ -597,7 +597,18 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 : MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM, isFinal: false,
                     permitsIntermediateObservations: permitsIntermediateObservations && sessionAllowsObservations)
             if shouldInfer {
-                let recognized = try await session.transcribeWithTimings(samples)
+                let recognized: (result: ASRTranscriptionResult, words: [ASRWordTiming])
+                let alreadyAcceptedSpeech = output?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                if !alreadyAcceptedSpeech,
+                   window.confidentlyNonSpeech(start: offset, end: offset + Double(samples.count) / 16_000) {
+                    // The same capture-owned VAD scores this complete physical interval.
+                    // Speaker input above remains contiguous, and an empty result advances
+                    // ASR coverage without inventing words or discarding an accepted prefix.
+                    recognized = (ASRTranscriptionResult(text: "", confidence: 0), [])
+                    DebugLogger.shared.info("progressive_nonspeech_skip offset=\(offset) frames=\(samples.count) sealed=\(update.isFinal)", source: "MeetingPCMRuntime")
+                } else {
+                    recognized = try await session.transcribeWithTimings(samples)
+                }
                 try Task.checkCancellation()
                 inferredSampleCount = samples.count
                 let observed = MeetingParakeetEpochOutput(epochID: epoch, text: recognized.result.text,

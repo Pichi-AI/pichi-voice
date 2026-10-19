@@ -2,6 +2,10 @@
 import CoreMedia
 import Foundation
 
+/// True requires complete, measured non-speech coverage on the original capture clock.
+/// Missing, stale or uncertain activity evidence must return false and preserve recognition.
+typealias MeetingConfidentNonSpeechQuery = @Sendable (TimeInterval, TimeInterval) -> Bool
+
 extension MeetingProcessingPipeline {
     /// PCM input is another input capability of the existing pipeline, not another meeting
     /// coordinator or model installer. Selection, residency, canonical assembly and storage are
@@ -31,6 +35,7 @@ extension MeetingProcessingPipeline {
         maximumPendingSeconds: Double = 60,
         initialPreviewSeconds: Double = 3,
         previewIntervalSeconds: Double = 3,
+        confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
         recognize: @escaping @Sendable (MeetingPCMProgressiveWindow, TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
         finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)? = nil,
@@ -40,6 +45,7 @@ extension MeetingProcessingPipeline {
         try MeetingPipelineMemoryAudioConsumer(chunkSeconds: chunkSeconds,
                                               maximumPendingSeconds: maximumPendingSeconds,
                                               initialChunkSeconds: initialPreviewSeconds,
+                                              confidentlyNonSpeech: confidentlyNonSpeech,
                                               recognition: .progressive(intervalSeconds: previewIntervalSeconds, recognize),
                                               checkpoint: checkpoint, finalize: finalize, diagnostic: diagnostic, failure: failure)
     }
@@ -79,6 +85,7 @@ nonisolated final class MeetingPCMProgressiveWindow: @unchecked Sendable {
     private let lock = NSLock()
     private let initialFrames: Int
     private let intervalFrames: Int
+    private let nonSpeechQuery: MeetingConfidentNonSpeechQuery?
     private var pending: [Float] = []
     private var acceptedFrames = 0
     private var deliveredAny = false
@@ -87,9 +94,16 @@ nonisolated final class MeetingPCMProgressiveWindow: @unchecked Sendable {
     private var terminalError: Error?
     private var waiter: CheckedContinuation<MeetingPCMWindowUpdate?, Error>?
 
-    fileprivate init(initialFrames: Int, intervalFrames: Int) {
+    fileprivate init(initialFrames: Int, intervalFrames: Int,
+                     confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil) {
         self.initialFrames = initialFrames
         self.intervalFrames = intervalFrames
+        self.nonSpeechQuery = confidentlyNonSpeech
+    }
+
+    func confidentlyNonSpeech(start: TimeInterval, end: TimeInterval) -> Bool {
+        guard start.isFinite, end.isFinite, start >= 0, end > start else { return false }
+        return self.nonSpeechQuery?(start, end) == true
     }
 
     /// Call sequentially, after the prior inference has joined. Cancellation closes this window
@@ -201,6 +215,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private let maximumPendingFrames: Int
     private let recognition: Recognition
     private let previewIntervalFrames: Int?
+    private let nonSpeechQuery: MeetingConfidentNonSpeechQuery?
     private var openProgressiveWindow: MeetingPCMProgressiveWindow?
     private var openProgressiveStart: TimeInterval = 0
     private var openProgressiveScheduled = false
@@ -226,6 +241,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     }
 
     init(chunkSeconds: Double, maximumPendingSeconds: Double, initialChunkSeconds: Double?,
+         confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
          recognition: Recognition,
          checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
          finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)?,
@@ -244,6 +260,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         self.initialChunkFrames = Int((initial * 16_000).rounded())
         self.maximumPendingFrames = Int((maximumPendingSeconds * 16_000).rounded())
         self.recognition = recognition
+        self.nonSpeechQuery = confidentlyNonSpeech
         switch recognition {
         case .sealed: self.previewIntervalFrames = nil
         case .progressive(let interval, _):
@@ -301,7 +318,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                 if let intervalFrames = self.previewIntervalFrames {
                     if self.openProgressiveWindow == nil {
                         self.openProgressiveWindow = MeetingPCMProgressiveWindow(initialFrames: self.initialChunkFrames,
-                                                                                 intervalFrames: intervalFrames)
+                            intervalFrames: intervalFrames, confidentlyNonSpeech: self.nonSpeechQuery)
                         self.openProgressiveStart = start + Double(position) / 16_000
                         self.openProgressiveScheduled = false
                     }

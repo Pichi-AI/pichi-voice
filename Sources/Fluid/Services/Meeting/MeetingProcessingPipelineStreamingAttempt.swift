@@ -64,6 +64,7 @@ extension MeetingProcessingPipeline {
             let consumer = try Self.makeProgressiveMemoryAudioConsumer(
                 chunkSeconds: 20, maximumPendingSeconds: 60,
                 initialPreviewSeconds: 3, previewIntervalSeconds: 10,
+                confidentlyNonSpeech: attempt.confidentlyNonSpeech,
                 recognize: { window, offset in
                     let observation = try await controller.recognize(window: window, offset: offset,
                         preview: observeSpeech)

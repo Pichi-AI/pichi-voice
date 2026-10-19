@@ -11,6 +11,7 @@ final class MeetingMemoryProcessingAttempt {
     let privacyContext: MeetingTranscriptPrivacyContext?
     let checkpoint: @MainActor (MeetingPCMTranscriptBatch) async throws -> Void
     let preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?
+    let confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?
     let speechPreviewID = UUID()
     let archive: MeetingMemoryAudioArchive
     var consumer: (any MeetingMemoryAudioConsuming)?
@@ -22,12 +23,14 @@ final class MeetingMemoryProcessingAttempt {
          archive: MeetingMemoryAudioArchive,
          redactor: (any TranscriptTextRedacting)?,
          checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
-         preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?) {
+         preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?,
+         confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil) {
         self.request = request; self.descriptor = descriptor; self.runtime = runtime; self.archive = archive
         self.redactor = redactor; self.checkpoint = checkpoint
         self.redactorIdentity = redactor?.checkpointIdentity
         self.privacyContext = redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) }
         self.preview = preview
+        self.confidentlyNonSpeech = confidentlyNonSpeech
     }
 
     /// Only recognized text needs NER readiness. The single PCM worker owns this joined
@@ -103,7 +106,8 @@ extension MeetingProcessingPipeline {
 
     private func prepareMemoryAudioAttempt(session: MeetingSession, sessionDirectory: URL,
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
-                            preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?) async throws {
+                            preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil) async throws {
         guard session.audioStorageMode == .memoryOnly || session.effectiveSpeakerProcessingMode == .streaming,
               self.memoryAttempts[session.id] == nil else { throw MeetingMemoryAudioError.invalidBudget }
         let backendID = session.recordingBackendID.map(MeetingBackendID.init(rawValue:)) ?? .productionDefault
@@ -182,7 +186,15 @@ extension MeetingProcessingPipeline {
         try Task.checkCancellation()
         self.memoryAttempts[session.id] = MeetingMemoryProcessingAttempt(request: request, descriptor: descriptor,
             runtime: runtime, archive: try MeetingMemoryAudioArchive(), redactor: redactor,
-            checkpoint: checkpoint, preview: preview)
+            checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech)
+    }
+
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory,
+            checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech)
     }
 
     func memoryConsumer(for sessionID: UUID, track: MeetingAudioTrack,
