@@ -24,7 +24,8 @@ extension MeetingPCMProgressiveWindow {
     }
 }
 '''
-Path(sys.argv[1]).write_text('import Foundation\n' + source[start:end] + helper)
+query = next(line for line in source.splitlines() if line.startswith('typealias MeetingConfidentNonSpeechQuery'))
+Path(sys.argv[1]).write_text('import Foundation\n' + query + '\n' + source[start:end] + helper)
 runtime = Path('Sources/Fluid/Services/Meeting/Backend/MeetingProductionParakeetNemotronRuntime.swift').read_text()
 start = runtime.index('nonisolated struct MeetingPCMPreviewPacing')
 end = runtime.index('/// Small attempt-local identity evidence')

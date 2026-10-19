@@ -8,7 +8,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
     static let defaultLanguageCode = "en"
     /// Mirrors `MeetingProcessingPipeline.pipelineVersion`; that class is `@MainActor`, so a
     /// MainActor test guards this literal against drift instead of referencing it here.
-    static let defaultPipelineVersion = 15
+    static let defaultPipelineVersion = 16
 
     let asrModel: String
     let asrArtifactFingerprint: String?

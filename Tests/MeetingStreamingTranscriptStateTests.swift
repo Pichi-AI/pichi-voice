@@ -1,6 +1,10 @@
 import Foundation
 
 private struct SyntheticMaskingRedactor: TranscriptTextRedacting {
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { true }
+    func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        try await self.redactWithSpans(text)
+    }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         let source = text as NSString
         let pattern = NSRegularExpression.escapedPattern(for: "private@example.test")
@@ -56,6 +60,23 @@ private actor PreviewCountingRedactor: TranscriptTextRedacting {
     }
 }
 
+private actor BoundaryGateRedactor: TranscriptTextRedacting {
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { true }
+    let started: AsyncStream<Void>.Continuation
+    var waiter: CheckedContinuation<Void, Never>?
+    init(_ started: AsyncStream<Void>.Continuation) { self.started = started }
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        .init(text: text, spans: [], provisionalSafeUTF16: text.utf16.count)
+    }
+    func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        self.started.yield(())
+        await withCheckedContinuation { self.waiter = $0 }
+        try Task.checkCancellation()
+        return .init(text: text, spans: [])
+    }
+    func release() { self.waiter?.resume(); self.waiter = nil }
+}
+
 private struct RejectedRedactor: TranscriptTextRedacting {
     enum Failure: Error { case rejected }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction { throw Failure.rejected }
@@ -97,13 +118,14 @@ struct MeetingStreamingTranscriptStateTests {
     static func observation(_ words: [MeetingTranscriptSegment] = [], accepted: Double,
                             processed: Double? = nil, asr: Double? = nil,
                             final: Bool = false, activity: [MeetingBackendSpeakerActivity]? = nil,
-                            retained: Int = 0) -> MeetingStreamingPCMObservation {
+                            retained: Int = 0, emptyASR: Range<Int>? = nil) -> MeetingStreamingPCMObservation {
         let processed = processed ?? accepted
         return .init(batch: .init(segments: words), activity: activity ?? (processed > 0 ? [
             .init(token: .init(analysisEpochID: epoch, label: "a"), start: 0, end: processed)] : []),
             acceptedThroughSample: Int((accepted * 16_000).rounded()),
             processedThroughSample: Int((processed * 16_000).rounded()), retainedFromSample: retained,
-            isFinal: final, asrStableThroughSample: asr.map { Int(($0 * 16_000).rounded()) })
+            isFinal: final, asrStableThroughSample: asr.map { Int(($0 * 16_000).rounded()) },
+            sealedEmptyASRRange: emptyASR)
     }
     static func expect(_ error: State.Failure, _ work: () async throws -> Void) async {
         do { try await work(); check(false, "Expected \(error)") }
@@ -111,6 +133,8 @@ struct MeetingStreamingTranscriptStateTests {
         catch { check(false, "Expected \(error), got \(error)") }
     }
     static func main() async throws {
+        try await speechBoundaryCancellationAndProofGuards()
+        try await speechThenSealedEmptyWindowDrainsWhileCapturing()
         try await shortRecordingAndSilenceMatrix()
         try await longSilenceSpeakerMatrix()
         try await sparseEightHourStream()
@@ -129,6 +153,60 @@ struct MeetingStreamingTranscriptStateTests {
         try await guardsAndLimits()
         try await cancellationAndReentry()
         print("Streaming transcript state: \(checks) checks passed")
+    }
+
+    static func speechBoundaryCancellationAndProofGuards() async throws {
+        let (events, continuation) = AsyncStream<Void>.makeStream()
+        let redactor = BoundaryGateRedactor(continuation)
+        let value = try state(privacy: .init(redactor: redactor))
+        _ = try await value.observe(observation((0..<40).map { word($0) }, accepted: 20, asr: 20))
+        let admission = Task { try await value.observe(observation(accepted: 40, asr: 40,
+            emptyASR: 320_000..<640_000)) }
+        var iterator = events.makeAsyncIterator()
+        _ = await iterator.next()
+        await value.cancel()
+        await redactor.release()
+        await expect(.cancelled) { _ = try await admission.value }
+        await expect(.cancelled) { _ = try await value.observe(observation(accepted: 40)) }
+        let invalid = try state(privacy: .init(redactor: SyntheticMaskingRedactor()))
+        _ = try await invalid.observe(observation([word(0)], accepted: 20, asr: 20))
+        await expect(.invalidObservation) {
+            _ = try await invalid.observe(observation(accepted: 40, asr: 40, emptyASR: 0..<640_000))
+        }
+        let incomplete = try state(privacy: .init(redactor: SyntheticMaskingRedactor()))
+        var input = observation(accepted: 20, asr: 20, emptyASR: 0..<320_000)
+        input.batch.isComplete = false
+        await expect(.invalidObservation) { _ = try await incomplete.observe(input) }
+    }
+
+    static func speechThenSealedEmptyWindowDrainsWhileCapturing() async throws {
+        let privacy = MeetingTranscriptPrivacyContext(redactor: SyntheticMaskingRedactor())
+        let value = try state(privacy: privacy)
+        let words = (0..<40).map { word($0, text: $0 == 38 ? "private@example.test" : nil) }
+        let speech = try await value.observe(observation(words, accepted: 20, asr: 20))
+        check(speech.safeBatch.segments.count == 8)
+        check(speech.safeBatch.protectedSourceThroughSample == 64_000)
+        let acousticOnly = try await value.observe(observation(accepted: 30, processed: 30))
+        check(acousticOnly.safeBatch.segments.isEmpty && acousticOnly.safeBatch.protectedSourceThroughSample == nil,
+            "Acoustic progress cannot release a privacy tail")
+        let settled = try await value.observe(observation(accepted: 40, asr: 40, emptyASR: 320_000..<640_000))
+        let all = speech.safeBatch.segments + settled.safeBatch.segments
+        check(all.map(\.id) == words.map(\.id) && all.map(\.nativeTiming) == words.map(\.nativeTiming))
+        check(all[38].text == "<EMAIL>" && all.allSatisfy { $0.originalText == nil })
+        check(settled.safeBatch.protectedSourceThroughSample == 640_000,
+            "Protected coverage must reach the actual processed source prefix")
+        check(settled.diagnostics.privacySafeThroughSample == 640_000 && settled.diagnostics.pendingProtectedWords == 0)
+        check(await privacy.earliestHeldWordStart == nil && settled.safeBatch.livePreview == nil)
+        let repeated = try await value.observe(observation(accepted: 40))
+        check(repeated.safeBatch.segments.isEmpty && repeated.safeBatch.protectedSourceThroughSample == nil)
+        let resumedWords = [word(40, start: 40, end: 40.4), word(41, start: 41, end: 41.4)]
+        let resumed = try await value.observe(observation(resumedWords, accepted: 60, asr: 60))
+        check(resumed.safeBatch.segments.isEmpty, "New speech must have a new privacy admission")
+        let nextQuiet = try await value.observe(observation(accepted: 80, asr: 80, emptyASR: 960_000..<1_280_000))
+        check(nextQuiet.safeBatch.segments.map(\.id) == resumedWords.map(\.id))
+        check(nextQuiet.safeBatch.protectedSourceThroughSample == 1_280_000)
+        let stopped = try await value.finish(observation(accepted: 80, asr: 80, final: true))
+        check(stopped.safeBatch.segments.isEmpty, "Stop duplicated the nonterminal admitted tail")
     }
 
     /// Short captures can end before any acoustic activity is admitted. They still

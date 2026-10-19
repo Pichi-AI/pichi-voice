@@ -117,7 +117,7 @@ enum TextPrivacyResourceError: Error { case operationInProgress }
 /// silently to regex-only or raw publication. Public results have no recovery map.
 actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
     nonisolated var checkpointIdentity: String? {
-        PIIModelDescriptor.russianA1.fingerprint + "/contact-credentials-rules-v3"
+        PIIModelDescriptor.russianA1.fingerprint + "/contact-credentials-rules-v3/speech-boundary-v1"
     }
     let modelStore: PichiTranscriptPrivacyModelStore
     private let runtime: PIINERRuntime
@@ -157,13 +157,28 @@ actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
         }
     }
 
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { true }
+
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        try await self.evaluate(text, atSpeechBoundary: false)
+    }
+
+    func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        try await self.evaluate(text, atSpeechBoundary: true)
+    }
+
+    private func evaluate(_ text: String, atSpeechBoundary: Bool) async throws -> TranscriptTextRedaction {
         try Task.checkCancellation()
         guard !preparing else { throw TextPrivacyError.notPrepared }
         inferenceCount += 1
         defer { inferenceCount -= 1 }
         let spans = try await runtime.tag(text)
         try Task.checkCancellation()
+        if atSpeechBoundary {
+            let result = try PIIRedactor.redactSpeechBoundary(text, ner: spans)
+            return .init(text: result.text,
+                spans: result.spans.map { .init(range: $0.range, replacement: $0.replacement) })
+        }
         let result = try PIIRedactor.redact(text, ner: spans)
         return .init(text: result.text, spans: result.spans.map { .init(range: $0.range, replacement: $0.replacement) },
                      provisionalSafeUTF16: try PIIRedactor.provisionalSafePrefix(in: text, ner: spans,

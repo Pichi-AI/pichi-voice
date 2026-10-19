@@ -76,7 +76,9 @@ actor MeetingStreamingTranscriptState {
     private var asrStableThroughSample = 0
     private var privacySafeThroughSample = 0
     private var privacySafeThroughTime: TimeInterval = 0
+    private var lastRawWordEndSample = 0
     private var acknowledgedThroughSample = 0
+    private var emittedProtectedSourceThroughSample = 0
     private var isComplete = true
     private var preview: MeetingLivePartial?
     private(set) var metadataDiagnostics: Diagnostics?
@@ -173,6 +175,24 @@ actor MeetingStreamingTranscriptState {
                 try self.checkActive()
                 try self.mergeSpeakers(safe)
                 self.pending.append(contentsOf: safe.segments)
+                self.lastRawWordEndSample = max(self.lastRawWordEndSample,
+                    source.segments.compactMap { $0.nativeTiming?.end }.map(Self.ceilingSample).max() ?? 0)
+            }
+            // An actual sealed empty decoder result is a nonterminal speech boundary.
+            // Acoustic-only progress and incomplete/rejected prefixes cannot authorize it.
+            if !final, let range = observation.sealedEmptyASRRange,
+               observation.batch.isComplete, self.isComplete,
+               range.lowerBound >= self.lastRawWordEndSample,
+               self.processedThroughSample >= self.lastRawWordEndSample,
+               let privacyContext = self.privacyContext {
+                let started = ContinuousClock.now
+                let settled = try await privacyContext.admitSpeechBoundary()
+                privacyMilliseconds += Self.milliseconds(since: started)
+                try self.checkActive()
+                if let settled {
+                    try self.mergeSpeakers(settled)
+                    self.pending.append(contentsOf: settled.segments)
+                }
             }
             if final, let privacyContext = self.privacyContext {
                 let started = ContinuousClock.now
@@ -273,6 +293,15 @@ actor MeetingStreamingTranscriptState {
             var batch = MeetingPCMTranscriptBatch(segments: updated.inserted, speakers: updated.speakers,
                 isComplete: self.isComplete)
             batch.speakerRevisions = updated.revisions
+            batch.sourceTrack = self.track
+            // Physical coverage can retire estimates spanning native word gaps, but only
+            // after the protected checkpoint joins. It never derives from a preview end.
+            let protectedThrough = min(self.asrStableThroughSample,
+                self.processedThroughSample, self.privacySafeThroughSample)
+            if self.isComplete, protectedThrough > self.emittedProtectedSourceThroughSample {
+                batch.protectedSourceThroughSample = protectedThrough
+                self.emittedProtectedSourceThroughSample = protectedThrough
+            }
             // Only the privacy actor's already approved lexical-tail display can leave
             // separately from canonical words. It is in-memory UI metadata, not a word,
             // checkpoint transcript or permission to advance the privacy-safe cursor.
@@ -331,6 +360,14 @@ actor MeetingStreamingTranscriptState {
             guard cursor <= observation.acceptedThroughSample else { throw Failure.invalidObservation }
         } else {
             guard observation.batch.segments.isEmpty, !final else { throw Failure.invalidObservation }
+        }
+        if let range = observation.sealedEmptyASRRange {
+            guard !final, observation.batch.segments.isEmpty, observation.batch.isComplete,
+                  let cursor = observation.asrStableThroughSample,
+                  range.lowerBound == self.asrStableThroughSample,
+                  range.upperBound == cursor, range.upperBound > range.lowerBound else {
+                throw Failure.invalidObservation
+            }
         }
         if let identity = observation.batch.speechObservationIdentity {
             guard identity.attemptID == self.attemptID, identity.epochID.trackID == self.track.id else {
@@ -428,6 +465,10 @@ actor MeetingStreamingTranscriptState {
             speaker.diarizationEmbedding = nil
             return speaker
         }
+    }
+
+    private static func ceilingSample(_ seconds: TimeInterval) -> Int {
+        Int((seconds * 16_000 - 1e-7).rounded(.up))
     }
 
     private static func floorSample(_ seconds: TimeInterval) -> Int {

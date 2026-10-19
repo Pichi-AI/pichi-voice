@@ -43,10 +43,12 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
     static func redactedBatch(_ batch: MeetingPCMTranscriptBatch, using redactor: any TranscriptTextRedacting,
                               contextPrefixes: [MeetingAudioTrackID: String] = [:],
                               provisionalPreviewID: UUID? = nil,
-                              provisionalSegmentIDs: Set<UUID> = []) async throws -> MeetingPCMTranscriptBatch {
+                              provisionalSegmentIDs: Set<UUID> = [],
+                              atSpeechBoundary: Bool = false) async throws -> MeetingPCMTranscriptBatch {
         var copy = batch
         let projection = try await self.redactedSegments(copy.segments, using: redactor, contextPrefixes: contextPrefixes,
-                                                        provisionalSegmentIDs: provisionalSegmentIDs)
+                                                        provisionalSegmentIDs: provisionalSegmentIDs,
+                                                        atSpeechBoundary: atSpeechBoundary)
         copy.segments = projection.segments
         copy.livePreview = nil
         if let id = provisionalPreviewID, let text = projection.provisionalText, !text.isEmpty,
@@ -182,7 +184,8 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
 
     private static func redactedSegments(_ segments: [MeetingTranscriptSegment], using redactor: any TranscriptTextRedacting,
                                          contextPrefixes: [MeetingAudioTrackID: String] = [:],
-                                         provisionalSegmentIDs: Set<UUID> = []) async throws -> SegmentProjection {
+                                         provisionalSegmentIDs: Set<UUID> = [],
+                                         atSpeechBoundary: Bool = false) async throws -> SegmentProjection {
         var copy = segments
         let groups = Dictionary(grouping: segments.indices) { segments[$0].sourceTrackID }
         var provisionalText: String?
@@ -192,7 +195,8 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 segments[a].start == segments[b].start ? a < b : segments[a].start < segments[b].start
             }
             let fragments = ordered.map { TextFragment(key: $0, text: segments[$0].text) }
-            let projected = try await self.projectedTexts(fragments, prefix: contextPrefixes[trackID] ?? "", using: redactor)
+            let projected = try await self.projectedTexts(fragments, prefix: contextPrefixes[trackID] ?? "",
+                atSpeechBoundary: atSpeechBoundary, using: redactor)
             for index in ordered {
                 copy[index].text = projected.canonical[index] ?? segments[index].text
                 copy[index].originalText = nil
@@ -230,6 +234,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
     private static func projectedTexts(_ fragments: [TextFragment], prefix: String, separator: String = " ",
                                        preserving prior: [Int: [TranscriptRedactedSpan]] = [:],
                                        atomicProtection: Bool = false,
+                                       atSpeechBoundary: Bool = false,
                                        using redactor: any TranscriptTextRedacting) async throws -> TextProjection {
         guard prefix.utf16.count <= MeetingTranscriptPrivacyContext.maximumContextUTF16 else {
             throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
@@ -254,7 +259,8 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 ranges.append((fragment.key, range)); end += 1
             }
             guard end > cursor else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
-            let output = try await redactor.redactWithSpans(text)
+            let output = try await atSpeechBoundary
+                ? redactor.redactSpeechBoundaryWithSpans(text) : redactor.redactWithSpans(text)
             try Task.checkCancellation()
             try self.validate(output, for: text)
             let evaluatedSpans = atomicProtection ? try self.atomicMasks(in: text, spans: output.spans) : output.spans
@@ -1015,6 +1021,28 @@ actor MeetingTranscriptPrivacyContext {
         lastSafePreview = safe.livePreview
         pendingPreview = safe.livePreview
         completed = true
+        return safe
+    }
+
+    /// A complete sealed empty ASR window can close already recognized speech without
+    /// ending the meeting. The adapter must explicitly protect incomplete entity values.
+    /// Preserve bounded raw context so a number/name continued later is still evaluated.
+    func admitSpeechBoundary() async throws -> MeetingPCMTranscriptBatch? {
+        guard redactor.supportsSpeechBoundaryAdmission else { return nil }
+        guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+        try Task.checkCancellation()
+        guard !pending.isEmpty else { return nil }
+        isProcessing = true
+        defer { isProcessing = false }
+        let source = pending
+        let batch = MeetingPCMTranscriptBatch(segments: source, isComplete: pendingIsComplete)
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor,
+            contextPrefixes: trackID.map { [$0: prefix] } ?? [:], atSpeechBoundary: true)
+        try Task.checkCancellation()
+        prefix = Self.suffix(([prefix] + source.map(\.text)).filter { !$0.isEmpty }.joined(separator: " "))
+        pending.removeAll(keepingCapacity: false)
+        pendingPreview = nil; lastSafePreview = nil; lastSafePreviewIdentity = nil
+        previousSpeechObservation = nil
         return safe
     }
 

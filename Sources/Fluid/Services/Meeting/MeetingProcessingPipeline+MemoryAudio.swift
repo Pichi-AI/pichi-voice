@@ -378,7 +378,8 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                 do {
                     if let finalize, var batch = try await finalize() {
                         if priorError != nil { batch.isComplete = false }
-                        if !batch.segments.isEmpty || !batch.speakers.isEmpty || !batch.speakerRevisions.isEmpty {
+                        if !batch.segments.isEmpty || !batch.speakers.isEmpty || !batch.speakerRevisions.isEmpty
+                            || batch.protectedSourceThroughSample != nil {
                             try await self.checkpoint(batch)
                         }
                     }

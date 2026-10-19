@@ -12,6 +12,10 @@ nonisolated protocol TranscriptTextRedacting: Sendable {
     /// before publication, including a retained-audio retry after a fresh application launch.
     func prepareForMeeting() async throws
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction
+    /// Optional explicit admission of a sealed speech boundary. Unsupported adapters
+    /// keep their existing lexical hold. This is not a promotion of display approval.
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { get }
+    func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction
 }
 
 nonisolated struct TranscriptRedactedSpan: Sendable, Equatable {
@@ -34,6 +38,10 @@ nonisolated struct TranscriptTextRedaction: Sendable, Equatable {
 
 extension TranscriptTextRedacting {
     nonisolated var checkpointIdentity: String? { nil }
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { false }
+    func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+    }
     /// Already-ready transformers and simple rule-only adapters have no resource lifecycle.
     func prepareForMeeting() async throws {}
     func redact(_ text: String) async throws -> String {

@@ -5,7 +5,7 @@ import Foundation
 // assembly itself is covered by its existing actual-source word-attribution contract suite.
 nonisolated struct ASRWordTiming: Sendable { let word: String; let start: Double; let end: Double }
 nonisolated struct ASRSegmentTiming: Codable, Sendable {}
-nonisolated struct ASRTranscriptionResult: Sendable { let text: String; var segmentTimings: [ASRSegmentTiming] = [] }
+nonisolated struct ASRTranscriptionResult: Sendable { let text: String; var confidence: Double = 0; var segmentTimings: [ASRSegmentTiming] = [] }
 nonisolated struct MeetingAnalysisEpochID: Hashable, Sendable { let trackID: UUID; let ordinal: Int }
 nonisolated struct MeetingBackendSpeakerToken: Hashable, Sendable { let analysisEpochID: MeetingAnalysisEpochID; let label: String }
 nonisolated struct MeetingBackendSpeakerActivity: Sendable { let token: MeetingBackendSpeakerToken; let start: Double; let end: Double }
@@ -351,6 +351,8 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
                 try require(result.acceptedThroughSample == frames && result.processedThroughSample == frames
                     && result.asrStableThroughSample == frames, "Short Stop dropped physical source samples: \(frames)")
                 try require(result.batch.segments.isEmpty == silence, "Silence cannot manufacture timed words")
+                try require(result.sealedEmptyASRRange == (silence ? 0..<frames : nil),
+                    "Only a complete sealed empty decoder result can declare the exact source interval")
                 let final = try await runtime.finishStreaming()
                 try require(final.isFinal && final.acceptedThroughSample == frames
                     && final.asrStableThroughSample == frames, "Finish must preserve exact source length: \(frames)")
@@ -379,7 +381,7 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
                     "Sealed ASR source coverage is exact, independently of speaker finalization")
         try require(first.batch.segments.first?.id == "0:0" && first.batch.segments.first?.end == 5.0 / 16_000,
                     "Native word identity and time must leave the adapter unchanged")
-        try require(r.progress.allSatisfy { $0.batch.segments.isEmpty && $0.asrStableThroughSample == nil },
+        try require(r.progress.allSatisfy { $0.batch.segments.isEmpty && $0.asrStableThroughSample == nil && $0.sealedEmptyASRRange == nil },
                     "Progress callbacks contain no transcript and cannot advance the ASR watermark")
         try await s.discardActivity(beforeSample: 3)
         let second = try await s.recognize(window: .fixture(samples: [0, 0, 0], final: true), offset: 5.0 / 16_000, preview: nil)

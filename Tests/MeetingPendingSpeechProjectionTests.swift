@@ -48,6 +48,52 @@ struct MeetingPendingSpeechProjectionTests {
                 projection.observeSpeechActivity(source: .you, start: start, end: start + 0.02, activity: .speech)
             }
         }
+        var processed = MeetingPendingSpeechProjection()
+        confirmedSpeech(&processed, from: 0, seconds: 20)
+        let queuedSpeech = processed.snapshot.tokens
+        for frame in 0..<1_000 {
+            let start = 20 + Double(frame) * 0.02
+            processed.observeSpeechActivity(source: .you, start: start, end: start + 0.02, activity: .nonSpeech)
+        }
+        try require(processed.snapshot.tokens == queuedSpeech, "Quiet cannot hide outstanding speech before processing")
+        var protected = MeetingLiveTranscriptSnapshot.empty
+        protected.revision = 1
+        processed.reconcile(visible: protected)
+        processed.acknowledgeProtectedSource(source: .them, throughSample: 640_000, transcriptRevision: 1)
+        try require(processed.snapshot.tokens == queuedSpeech, "Another source cannot retire microphone waves")
+        processed.acknowledgeProtectedSource(source: .you, throughSample: 3_200, transcriptRevision: 1)
+        try require(processed.snapshot.tokens.first?.id == queuedSpeech.first?.id
+            && processed.snapshot.tokens.first?.start == 0.2,
+            "A partial acknowledged prefix must trim its token and preserve identity")
+        processed.acknowledgeProtectedSource(source: .you, throughSample: 640_000, transcriptRevision: 0)
+        try require(!processed.snapshot.tokens.isEmpty, "A stale transcript cannot acknowledge processed audio")
+        processed.acknowledgeProtectedSource(source: .you, throughSample: 640_000, transcriptRevision: 1)
+        try require(processed.snapshot.tokens.isEmpty, "Joined protected progress must retire every processed speech estimate")
+        processed.acknowledgeProtectedSource(source: .you, throughSample: 0, transcriptRevision: 1)
+        confirmedSpeech(&processed, from: 40, seconds: 2)
+        try require(!processed.snapshot.tokens.isEmpty
+            && processed.snapshot.tokens.allSatisfy { $0.start >= 40 && !queuedSpeech.map(\.id).contains($0.id) },
+            "New speech must mint new IDs after complete quiet catch-up")
+        var delayed = MeetingPendingSpeechProjection()
+        delayed.reconcile(visible: protected)
+        delayed.acknowledgeProtectedSource(source: .you, throughSample: 640_000, transcriptRevision: 1)
+        confirmedSpeech(&delayed, from: 0, seconds: 40)
+        try require(delayed.snapshot.tokens.isEmpty, "Delayed detector output cannot recreate already processed speech")
+        var bounded = MeetingPendingSpeechProjection()
+        confirmedSpeech(&bounded, from: 0, seconds: 30)
+        let boundedIDs = bounded.snapshot.tokens.map(\.id)
+        confirmedSpeech(&bounded, from: 30, seconds: 30)
+        try require(bounded.snapshot.tokens.count == MeetingPendingSpeechProjection.maximumTokens
+            && bounded.snapshot.tokens.map(\.id) == boundedIDs
+            && bounded.snapshot.tokens.last!.end > 59,
+            "A full wave budget must extend an existing source range without dropping later queued audio")
+        bounded.reconcile(visible: protected)
+        let lastID = bounded.snapshot.tokens.last!.id
+        bounded.acknowledgeProtectedSource(source: .you, throughSample: 640_000, transcriptRevision: 1)
+        try require(bounded.snapshot.tokens.count == 1 && bounded.snapshot.tokens[0].id == lastID
+            && bounded.snapshot.tokens[0].start == 40 && bounded.snapshot.tokens[0].end > 59,
+            "Partial progress must preserve the unprocessed suffix of a coalesced range")
+        print("PASS20s speech/20s quiet protected-prefix retirement, trim, stale/source guards, delayed VAD and64-token coalescing")
         func timedProjection(spacing: Double) -> (MeetingPendingSpeechProjection, MeetingLiveTranscriptSnapshot) {
             var projection = MeetingPendingSpeechProjection()
             confirmedSpeech(&projection, from: 0, seconds: 8)

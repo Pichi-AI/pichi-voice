@@ -53,6 +53,10 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     /// Ephemeral, conservatively filtered held text. This is not a canonical
     /// segment and must never enter storage, search, summaries or exports.
     var livePreview: MeetingLivePartial? = nil
+    /// Ephemeral source-clock acknowledgement. The streaming owner sets this only
+    /// through joined ASR, acoustic and privacy admission. Apply after publishing its
+    /// protected history; never serialize it as a word or use it for speaker identity.
+    var protectedSourceThroughSample: Int? = nil
     /// Ephemeral ASR observation metadata. True only after this audio window seals.
     var speechObservationIsFinal = false
     /// Ephemeral only. Neither this identity nor unfiltered speech enters a session.

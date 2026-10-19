@@ -19,10 +19,14 @@ nonisolated struct MeetingStreamingPCMObservation: Sendable {
     /// Physical source end of a sealed ASR window, including silence. Metadata-only
     /// speaker updates leave this nil so they cannot advance the stable speech prefix.
     let asrStableThroughSample: Int?
+    /// Exact source interval of a sealed, complete ASR result with no words.
+    /// This is a decoder result, not inferred VAD confidence or elapsed time.
+    let sealedEmptyASRRange: Range<Int>?
 
     init(batch: MeetingPCMTranscriptBatch, activity: [MeetingBackendSpeakerActivity],
          acceptedThroughSample: Int, processedThroughSample: Int, retainedFromSample: Int,
-         isFinal: Bool, asrStableThroughSample: Int? = nil) {
+         isFinal: Bool, asrStableThroughSample: Int? = nil,
+         sealedEmptyASRRange: Range<Int>? = nil) {
         self.batch = batch
         self.activity = activity
         self.acceptedThroughSample = acceptedThroughSample
@@ -30,6 +34,7 @@ nonisolated struct MeetingStreamingPCMObservation: Sendable {
         self.retainedFromSample = retainedFromSample
         self.isFinal = isFinal
         self.asrStableThroughSample = asrStableThroughSample
+        self.sealedEmptyASRRange = sealedEmptyASRRange
     }
 }
 

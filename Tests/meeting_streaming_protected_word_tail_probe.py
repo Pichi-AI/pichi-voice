@@ -99,6 +99,7 @@ full += """nonisolated struct MeetingStreamingPCMObservation: Sendable {
     let retainedFromSample: Int
     let isFinal: Bool
     let asrStableThroughSample: Int?
+    var sealedEmptyASRRange: Range<Int>? = nil
 }
 """
 (BUILD / "StreamingStateContracts.swift").write_text(full)

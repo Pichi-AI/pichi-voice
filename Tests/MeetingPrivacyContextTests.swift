@@ -2,6 +2,11 @@ import Foundation
 import PichiTextPrivacy
 
 private struct StructuredPrivacyRedactor: TranscriptTextRedacting {
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { true }
+    func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let output = try PIIRedactor.redactSpeechBoundary(text, ner: [])
+        return .init(text: output.text, spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) })
+    }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         let output = try PIIRedactor.redact(text, ner: [])
         return .init(text: output.text, spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) },
@@ -188,7 +193,71 @@ struct MeetingPrivacyContextTests {
               sourceTrackID: track, speakerID: nil, text: text, originalText: "Synthetic original", revision: 1,
               status: .final, overlap: .none, completeness: .complete)
     }
+    static func speechBoundaryAdmissionSuite() async throws {
+        let track = UUID()
+        let value = MeetingTranscriptPrivacyContext(redactor: StructuredPrivacyRedactor())
+        let ordinary = [segment("обсудили", track: track, start: 0), segment("планы.", track: track, start: 1)]
+        let first = try await value.redact(.init(segments: ordinary))
+        try check(first.segments.isEmpty, "The normal lexical tail must still be held")
+        let settled = try await value.admitSpeechBoundary()!
+        try check(settled.segments.map(\.id) == ordinary.map(\.id), "Speech admission changed IDs")
+        try check(settled.segments.map(\.text) == ordinary.map(\.text), "Ordinary final words were masked or dropped")
+        try check(settled.segments.map(\.start) == ordinary.map(\.start), "Speech admission changed timing")
+        try check(settled.segments.allSatisfy { $0.originalText == nil }, "Raw sidecar escaped admission")
+        try check(await value.earliestHeldWordStart == nil, "A settled tail remained held")
+        try check(try await value.admitSpeechBoundary() == nil, "Repeated boundary duplicated text")
+        let unsupported = MeetingTranscriptPrivacyContext(redactor: UnsupportedPreviewRedactor())
+        _ = try await unsupported.redact(.init(segments: ordinary))
+        try check(try await unsupported.admitSpeechBoundary() == nil, "Unsupported adapter admitted a boundary")
+        try check(await unsupported.earliestHeldWordStart == 0, "Unsupported adapter dropped its tail")
+
+        let phone = MeetingTranscriptPrivacyContext(redactor: StructuredPrivacyRedactor())
+        let a = [segment("телефон", track: track, start: 0), segment("8", track: track, start: 1),
+                 segment("999", track: track, start: 2)]
+        _ = try await phone.redact(.init(segments: a))
+        let closedA = try await phone.admitSpeechBoundary()!
+        try check(closedA.segments.map(\.id) == a.map(\.id), "Incomplete phone lost source words")
+        try check(!closedA.segments.map(\.text).joined().contains("999"), "Partial phone leaked at silence")
+        let b = [segment("123", track: track, start: 20), segment("45", track: track, start: 21),
+                 segment("67", track: track, start: 22)]
+        _ = try await phone.redact(.init(segments: b))
+        let closedB = try await phone.admitSpeechBoundary()!
+        try check(closedB.segments.map(\.id) == b.map(\.id), "Resumed phone lost source words")
+        try check(closedB.segments.allSatisfy { $0.text == "[ТЕЛЕФОН]" }, "Retained prefix failed to protect continued phone")
+        try check(try await phone.finish() == nil, "Stop duplicated an admitted phone")
+        let splitName = MeetingTranscriptPrivacyContext(redactor: StructuredPrivacyRedactor())
+        let stem = segment("документ передали сидоро", track: track, start: 0)
+        _ = try await splitName.redact(.init(segments: [stem]))
+        let protectedStem = try await splitName.admitSpeechBoundary()!
+        try check(protectedStem.segments.first?.id == stem.id
+            && protectedStem.segments.first?.text.contains("документ передали") == true
+            && protectedStem.segments.first?.text.contains("сидоро") == false,
+            "An uncued split surname stem leaked at the closed speech edge")
+        for (index, text) in ["ву", "ивану"].enumerated() {
+            let continuation = segment(text, track: track, start: 20 + index)
+            _ = try await splitName.redact(.init(segments: [continuation]))
+            let safe = try await splitName.admitSpeechBoundary()!
+            try check(safe.segments.first?.id == continuation.id && safe.segments.first?.text.contains(text) == false,
+                "An uncued split-name continuation leaked or lost its source identity")
+            try check(await splitName.earliestHeldWordStart == nil, "A protected split-name fragment remained stuck")
+        }
+        let ordinaryOpen = try PIIRedactor.redactSpeechBoundary("обсудили планы", ner: [])
+        try check(ordinaryOpen.text.hasPrefix("обсудили ")
+            && ordinaryOpen.text.hasSuffix(PIIRedactor.speechBoundaryPlaceholder),
+            "Only one uncertain unpunctuated lexical edge should be conservatively protected")
+        let partialWord = try PIIRedactor.redactSpeechBoundary("johnson",
+            ner: [.init(range: NSRange(location: 0, length: 4), label: "PER", score: 1)])
+        try check(partialWord.text == PIIRedactor.speechBoundaryPlaceholder,
+            "A partial WordPiece person mask exempted the unprotected lexical suffix")
+        let candidateText = "коллега Ра"
+        let candidate = try PIIRedactor.redactSpeechBoundary(candidateText,
+            ner: [.init(range: (candidateText as NSString).range(of: "Ра"), label: "PER", score: 0.3)])
+        try check(!candidate.text.contains("Ра"), "Short low-confidence name escaped boundary protection")
+        print("Speech boundary privacy: ordinary words, incomplete phone/resume, candidate name, idempotence passed")
+    }
+
     static func main() async throws {
+        try await speechBoundaryAdmissionSuite()
         try await participantAliasSuite()
         let coverageTrack = UUID()
         let coverageBatch = MeetingPCMTranscriptBatch(segments: [segment("слово", track: coverageTrack, start: 0),

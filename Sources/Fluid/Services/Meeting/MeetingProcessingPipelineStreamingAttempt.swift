@@ -28,7 +28,8 @@ extension MeetingProcessingPipeline {
         let publish: @Sendable (MeetingStreamingTranscriptState.Emission, String) async throws -> Void = { emission, phase in
             try Task.checkCancellation()
             let batch = emission.safeBatch
-            if !batch.segments.isEmpty || !batch.speakerRevisions.isEmpty || emission.hasSpeakerIdentityChanges {
+            if !batch.segments.isEmpty || !batch.speakerRevisions.isEmpty || emission.hasSpeakerIdentityChanges
+                || batch.protectedSourceThroughSample != nil {
                 try await checkpoint(batch)
             }
             try await publishPreview(emission)

@@ -125,7 +125,11 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         self.speakers = attributed.mergingSpeakers(into: self.speakers)
         self.pacing.record(computeSeconds: timing.computeSeconds, audioSeconds: Double(physicalCount) / 16_000)
         try Task.checkCancellation()
-        return self.observation(batch: attributed, asrStableThroughSample: self.update.acceptedThroughSample)
+        return self.observation(batch: attributed, asrStableThroughSample: self.update.acceptedThroughSample,
+            sealedEmptyASRRange: output.sampleCount == physicalCount && attributed.isComplete
+                && output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && output.words.isEmpty && attributed.segments.isEmpty
+                ? epoch.ordinal..<self.update.acceptedThroughSample : nil)
     }
 
     func finishStreaming() async throws -> MeetingStreamingPCMObservation {
@@ -196,10 +200,12 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     }
 
     private func observation(batch: MeetingPCMTranscriptBatch = .init(segments: []),
-                             asrStableThroughSample: Int? = nil) -> MeetingStreamingPCMObservation {
+                             asrStableThroughSample: Int? = nil,
+                             sealedEmptyASRRange: Range<Int>? = nil) -> MeetingStreamingPCMObservation {
         .init(batch: batch, activity: self.activity(), acceptedThroughSample: self.update.acceptedThroughSample,
             processedThroughSample: self.update.processedThroughSample, retainedFromSample: self.update.retainedFromSample,
-            isFinal: self.update.isFinal, asrStableThroughSample: asrStableThroughSample)
+            isFinal: self.update.isFinal, asrStableThroughSample: asrStableThroughSample,
+            sealedEmptyASRRange: sealedEmptyASRRange)
     }
 
     private func accept(_ next: MeetingIncrementalDiarizationUpdate, expectedAccepted: Int, final: Bool) throws {
