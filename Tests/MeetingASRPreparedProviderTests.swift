@@ -19,6 +19,8 @@ nonisolated struct ASRWordTiming: Sendable {}
 nonisolated enum MeetingModelResidencyError: Error { case unsupportedProvider }
 @MainActor protocol ASRActivityLeasing {}
 @MainActor struct MeetingModelParticipant {}
+@MainActor final class MeetingModelResidencyCoordinator {}
+@MainActor final class MeetingIdlePreparedResourceClaim {}
 @MainActor protocol TranscriptionProvider: AnyObject {
     var isReady: Bool { get }
     func releaseResidency() async

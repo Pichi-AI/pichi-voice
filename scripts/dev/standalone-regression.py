@@ -262,6 +262,7 @@ PROBES = tuple(sorted(
     + [Probe(f"Tests/run_{name}_tests.py", "python3") for name in PYTHON_PROBES]
     + [Probe("Tests/run_clipboard_backup_reproduction.sh", "sh"),
        Probe("Tests/run_meeting_asr_prepared_provider_tests.sh", "bash"),
+       Probe("Tests/run_meeting_idle_prepared_resource_tests.sh", "bash"),
        Probe("Tests/run_meeting_privacy_context_tests.sh", "bash"),
        Probe("Tests/run_meeting_session_store_checkpoint_tests.sh", "bash"),
        Probe("Tests/run_meeting_timeline_trace_tests.sh", "sh"),

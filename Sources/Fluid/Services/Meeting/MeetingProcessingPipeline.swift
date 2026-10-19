@@ -1369,7 +1369,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Deployment/PII admission is separate from ASR identity and is frozen per strict attempt.
     let pcmAdmissionContextProvider: @MainActor (Bool) -> MeetingPCMAdmissionContext
     private let managesModelResidency: Bool
-    private let settings: SettingsStore
+    let settings: SettingsStore
     let asrServiceProvider: @MainActor () -> any MeetingASRServicing
     private let serializationGate: MeetingProcessingSerializationGate
     let backendRegistry: MeetingTranscriptionBackendRegistry
@@ -1385,6 +1385,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Canonical path only: builds the composite backend's runtime for the frozen request. Tests
     /// inject a fake here; production wires ASRService and the Nemotron model locator.
     let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
+    let idleResourcePreparation: (@MainActor @Sendable (MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)?)?
+    lazy var idlePreparedResourceOwner: MeetingIdlePreparedResourceOwner? = {
+        asrServiceProvider().idleModelResidency.map { MeetingIdlePreparedResourceOwner(residency: $0) }
+    }()
     /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
     /// requires it installed. Production downloads it here when the background download has not
     /// finished; tests inject nothing and supply the model themselves.
@@ -1407,6 +1411,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         chunkObserver: (any MeetingChunkAudioObserving)? = nil,
         echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
+        idleResourcePreparation: (@MainActor @Sendable (MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)?)? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         prepareDiarizationDependencies: (@MainActor (Set<MeetingDiarizationDependency>) async throws -> Void)? = nil,
         diarizationSupported: @escaping @MainActor () -> Bool = { CPUArchitecture.isAppleSilicon },
@@ -1428,6 +1433,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 modelLocator: try PichiMeetingProviderFactory.modelLocator(for: request.configuration)
             )
         }
+        // The existing runtime factory is request-bound. An optional, registered resource
+        // capability prepares weights without manufacturing a session or capture request.
+        self.idleResourcePreparation = idleResourcePreparation ?? (meetingRuntimeFactory == nil ? { [asrServiceProvider] configuration in
+            let service = asrServiceProvider()
+            guard service.supportsPreparedProviderAdoption, try await service.retireIdleSpeechResidency() else { return nil }
+            let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: asrServiceProvider,
+                modelLocator: try PichiMeetingProviderFactory.modelLocator(for: configuration))
+            return try await runtime.prepareIdleResources(configuration: configuration)
+        } : nil)
         self.diarizationSupported = diarizationSupported
         self.prepareDiarizationDependencies = prepareDiarizationDependencies ?? { dependencies in
             if !dependencies.isEmpty { try await prepareDiarizationModel() }

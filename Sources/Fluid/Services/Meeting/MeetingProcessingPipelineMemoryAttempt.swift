@@ -1,5 +1,21 @@
 import Foundation
 
+/// Bind the adapter's opaque resource to the registry and full immutable configuration.
+/// The ordinary runtime receives the inner resource only after both bindings still match.
+nonisolated struct MeetingBackendIdlePreparedResource: MeetingIdlePreparedResource {
+    let backendID: MeetingBackendID
+    let configuration: MeetingFinalProcessingConfiguration
+    let resource: any MeetingIdlePreparedResource
+    var releaseAdditionalResources: (@Sendable () async -> Void)? = nil
+    var configurationIdentity: String { Self.identity(backendID: backendID, configuration: configuration) }
+    static func identity(backendID: MeetingBackendID, configuration: MeetingFinalProcessingConfiguration) -> String {
+        MeetingConfigFingerprintEncoding.encode([("backend", backendID.rawValue),
+            ("configuration", configuration.identityFingerprint),
+            ("artifactDirectory", configuration.asrArtifactDirectory?.absoluteString ?? "")])
+    }
+    func cleanup() async { await resource.cleanup(); await releaseAdditionalResources?() }
+}
+
 @MainActor
 final class MeetingMemoryProcessingAttempt {
     let request: MeetingBackendRequest
@@ -65,6 +81,49 @@ final class MeetingMemoryProcessingAttempt {
 }
 
 extension MeetingProcessingPipeline {
+    /// Foreground idle preparation is metadata-only until a registered adapter explicitly
+    /// opens installed resources. It creates no session, audio lease or microphone identity.
+    func prepareSelectedIdleResources(
+        prepareFirst: @escaping @MainActor @Sendable () async throws -> (@Sendable () async -> Void)? = { nil }
+    ) async throws -> MeetingIdlePreparationToken? {
+        let modelID = settings.selectedSpeechModel.rawValue
+        guard PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: modelID) == true,
+              settings.meetingSpeakerLabelsEnabled,
+              settings.meetingSpeakerProcessingMode(for: .inRoom) == .streaming,
+              let owner = idlePreparedResourceOwner, let idleResourcePreparation else { return nil }
+        let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
+        let language = settings.meetingRecordingDefaults.languageCode.flatMap { supported.contains($0) ? $0 : nil }
+            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
+        let backendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
+            selectedModelID: modelID, savedBackendID: settings.meetingTranscriptionBackendID)
+        let configuration = PichiMeetingProviderFactory.configuration(backendID: backendID, languageCode: language,
+            diarizationEnabled: true, speakerProcessingMode: .streaming)
+        let backend = try backendRegistry.makeBackend(id: backendID, context: .init(legacyExecutor: { _, _ in
+            throw MeetingModelResidencyError.unsupportedProvider
+        }, idleResourcePreparation: idleResourcePreparation))
+        let identity = MeetingBackendIdlePreparedResource.identity(backendID: backendID, configuration: configuration)
+        return try await owner.prepare(identity: identity) {
+            let releaseFirst = try await prepareFirst()
+            do {
+                try Task.checkCancellation()
+                guard let resource = try await backend.prepareIdleResources(configuration: configuration) else {
+                    await releaseFirst?()
+                    return nil
+                }
+                guard resource.configurationIdentity == configuration.identityFingerprint else {
+                    await resource.cleanup()
+                    throw MeetingModelResidencyError.staleGrant
+                }
+                return MeetingBackendIdlePreparedResource(backendID: backendID, configuration: configuration,
+                    resource: resource, releaseAdditionalResources: releaseFirst)
+            } catch {
+                await releaseFirst?()
+                throw error
+            }
+        }
+    }
+
+    func releaseIdleResources(_ token: MeetingIdlePreparationToken) async { await idlePreparedResourceOwner?.cancel(token) }
     /// Pure capability admission can run before download owners, permission prompts and the
     /// audio lease. The actual session request is frozen and bound separately at preparation.
     func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {

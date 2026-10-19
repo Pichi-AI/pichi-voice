@@ -593,6 +593,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         try Task.checkCancellation()
         guard configuration.speakerLabelsEnabled, configuration.effectiveSpeakerProcessingMode == .streaming,
               await self.asrServiceProvider().supportsPreparedProviderAdoption else { return nil }
+        DebugLogger.shared.info("idle_preparation=started resources=streaming", source: "MeetingPCMRuntime")
         _ = try MeetingProviderOptions.resolve(configuration)
         let artifact = try self.modelLocator.locate()
         try Self.validateStreamingSelection(artifact: artifact, configuration: configuration)
@@ -611,6 +612,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             guard try self.modelLocator.recheck(artifact) == artifact else {
                 throw MeetingNemotronModelReadinessError.artifactChanged(path: artifact.packageURL.path)
             }
+            DebugLogger.shared.info("idle_preparation=ready resources=streaming", source: "MeetingPCMRuntime")
             return resources
         } catch {
             await resources.cleanup()
@@ -623,6 +625,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
 
     @MainActor
     private static func prepareIdleASR(configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingASRPreparedProvider? {
+        let began = MeetingPCMRuntimeDiagnostics.begin(.asrPrepare)
+        defer { MeetingPCMRuntimeDiagnostics.completed(.asrPrepare, since: began) }
         guard let provider = try PichiMeetingProviderFactory.makeInstalledProviderForIdle(configuration) else { return nil }
         let prepared = MeetingASRPreparedProvider(configuration: configuration, provider: provider)
         do {
@@ -650,6 +654,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         try await resources.speakerScope.waitUntilReady()
         try Task.checkCancellation()
         try self.idleResources.adopt(resources, configuration: configuration, artifact: artifact)
+        DebugLogger.shared.info("idle_preparation=adopted resources=streaming", source: "MeetingPCMRuntime")
     }
 
     private func takeIdleResources() -> MeetingIdleParakeetNemotronResources? {
@@ -734,6 +739,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 return MeetingParakeetPhaseResult()
             }
             await idleResources?.cleanup()
+            if idleResources != nil { DebugLogger.shared.info("idle_preparation=retired beforeOwnerVoice=true", source: "MeetingPCMRuntime") }
         } catch {
             await idleResources?.cleanup()
             throw error

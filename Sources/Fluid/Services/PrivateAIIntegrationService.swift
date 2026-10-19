@@ -239,7 +239,7 @@ actor PrivateAIIntegrationService {
     ) async throws -> PrivateAIModelUpdateToken {
         // Installation, verification and commit/rollback are one transaction. Do not let a
         // meeting snapshot the temporary runtime between those settings-controller callbacks.
-        let admission = try await MeetingModelResidencyCoordinator.shared.beginOperation(owner: "fluid", modelID: model.id)
+        let admission = try await MeetingModelResidencyCoordinator.shared.beginOperationRetiringIdle(owner: "fluid", modelID: model.id)
         do {
             let token = try await Self.modelActivity(modelID: model.id) { try await self.provider.updateModel(model, progressHandler: progressHandler) }
             await MainActor.run { Self.updateAdmissions[token.id] = admission }
@@ -371,7 +371,7 @@ actor PrivateAIIntegrationService {
     func unloadCachedRuntime(reason: String = "manual") async {
         let token: UUID
         do {
-            guard let admitted = try await MeetingModelResidencyCoordinator.shared.vetoOrBeginOperation(
+            guard let admitted = try await MeetingModelResidencyCoordinator.shared.vetoOrBeginOperationRetiringIdle(
                 owner: "fluid", modelID: Self.configuredModelID, vetoDuringMeeting: reason != "idle"
             ) else { return }
             token = admitted

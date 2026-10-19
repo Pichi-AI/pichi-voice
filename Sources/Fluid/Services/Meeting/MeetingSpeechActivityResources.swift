@@ -16,6 +16,8 @@ final class MeetingSpeechActivityResources: ObservableObject {
         if let operation { return try await operation.value }
         isPreparing = true
         let operation = Task {
+            let admission = try await MeetingModelResidencyCoordinator.shared.beginOperationRetiringIdle(owner: "speech-activity-resources", modelID: "installed-activity-model")
+            defer { MeetingModelResidencyCoordinator.shared.endOperation(admission) }
             try await MeetingSileroActivityArtifacts.install { value in
                 Task { @MainActor in self.progress = value }
             }

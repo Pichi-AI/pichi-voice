@@ -122,10 +122,15 @@ actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
     let modelStore: PichiTranscriptPrivacyModelStore
     private let runtime: PIINERRuntime
     private let preparation: PichiPrivacyPreparationOwner
+    private let beginOrdinaryWork: @Sendable () async throws -> UUID?
+    private let endOrdinaryWork: @Sendable (UUID) async -> Void
     private var inferenceCount = 0
 
-    init(modelStore: PichiTranscriptPrivacyModelStore = .init(), runtime: PIINERRuntime = .init()) {
+    init(modelStore: PichiTranscriptPrivacyModelStore = .init(), runtime: PIINERRuntime = .init(),
+         beginOrdinaryWork: @escaping @Sendable () async throws -> UUID? = { nil },
+         endOrdinaryWork: @escaping @Sendable (UUID) async -> Void = { _ in }) {
         self.modelStore = modelStore; self.runtime = runtime
+        self.beginOrdinaryWork = beginOrdinaryWork; self.endOrdinaryWork = endOrdinaryWork
         self.preparation = PichiPrivacyPreparationOwner(isReady: { await runtime.isReady },
             load: { installedOnly, progress in
                 let directory: URL
@@ -143,10 +148,10 @@ actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
 
     var isReady: Bool { get async { await runtime.isReady } }
 
-    func prepareForMeeting() async throws { try await self.prepare() }
+    func prepareForMeeting() async throws { try await prepare() }
 
     func prepare(progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws {
-        try await preparation.prepare(progress: progress)
+        try await withOrdinaryWork { try await self.preparation.prepare(progress: progress) }
     }
 
     /// Optional startup work only opens an already installed, checksum-verified artifact.
@@ -175,7 +180,7 @@ actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
         inferenceCount += 1
         defer { inferenceCount -= 1 }
         try await preparation.adoptForInference()
-        let spans = try await runtime.tag(text)
+        let spans = try await withOrdinaryWork { try await self.runtime.tag(text) }
         try Task.checkCancellation()
         if atSpeechBoundary {
             let result = try PIIRedactor.redactSpeechBoundary(text, ner: spans)
@@ -190,12 +195,27 @@ actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
 
     func unload() async throws {
         guard inferenceCount == 0 else { throw TextPrivacyResourceError.operationInProgress }
-        try await preparation.unload()
+        try await withOrdinaryWork { try await self.preparation.unload() }
     }
 
     func deleteModel() async throws {
-        try await unload()
-        try await modelStore.deleteInstalledModel()
+        guard inferenceCount == 0 else { throw TextPrivacyResourceError.operationInProgress }
+        try await withOrdinaryWork {
+            try await self.preparation.unload()
+            try await self.modelStore.deleteInstalledModel()
+        }
+    }
+
+    private func withOrdinaryWork<T: Sendable>(_ work: @Sendable () async throws -> T) async throws -> T {
+        let token = try await beginOrdinaryWork()
+        do {
+            let value = try await work()
+            if let token { await endOrdinaryWork(token) }
+            return value
+        } catch {
+            if let token { await endOrdinaryWork(token) }
+            throw error
+        }
     }
 }
 
@@ -396,31 +416,34 @@ actor PichiPrivacyPreparationOwner {
 /// own a recording, microphone, settings installation, or an adopted model. An active
 /// recording keeps an already-started preparation available for the normal service join.
 @MainActor
-final class PichiPrivacyIdlePreparationController {
+final class MeetingIdlePreparationController<IdleToken: Sendable> {
     struct Input: Equatable {
         let isSceneActive: Bool
         let isUIReady: Bool
-        let privacyEnabled: Bool
+        let preparationEnabled: Bool
         let configurationIdentity: String
         let hasRecordingActivity: Bool
         let hasOtherModelWork: Bool
+        var resourceRevision: UUID? = nil
     }
-    private let prepare: @Sendable () async throws -> PichiPrivacyPreparationOwner.IdleToken?
-    private let release: @Sendable (PichiPrivacyPreparationOwner.IdleToken) async -> Void
+    private let prepare: @Sendable () async throws -> IdleToken?
+    private let release: @Sendable (IdleToken) async -> Void
     private var input: Input?
     private var generation = UUID()
     private var attemptedIdentity: String?
     private var memoryPressure = false
     private var task: Task<Void, Never>?
-    private var token: PichiPrivacyPreparationOwner.IdleToken?
+    private var token: IdleToken?
     private var drain: Task<Void, Never>?
+    private var isTerminating = false
 
-    init(prepare: @escaping @Sendable () async throws -> PichiPrivacyPreparationOwner.IdleToken?,
-         release: @escaping @Sendable (PichiPrivacyPreparationOwner.IdleToken) async -> Void) {
+    init(prepare: @escaping @Sendable () async throws -> IdleToken?,
+         release: @escaping @Sendable (IdleToken) async -> Void) {
         self.prepare = prepare; self.release = release
     }
 
     func update(_ next: Input) async {
+        guard !isTerminating else { await stop(); return }
         let previous = input
         input = next
         if next.isSceneActive && previous?.isSceneActive != true {
@@ -428,13 +451,15 @@ final class PichiPrivacyIdlePreparationController {
             attemptedIdentity = nil
         }
         let configurationChanged = previous?.configurationIdentity != next.configurationIdentity
-            || previous?.privacyEnabled != next.privacyEnabled
-        if configurationChanged { attemptedIdentity = nil }
+            || previous?.preparationEnabled != next.preparationEnabled
+        let recordingFinished = previous?.hasRecordingActivity == true && !next.hasRecordingActivity
+        let resourcesChanged = previous?.resourceRevision != next.resourceRevision
+        if configurationChanged || recordingFinished || resourcesChanged { attemptedIdentity = nil }
         if next.hasOtherModelWork { attemptedIdentity = nil }
-        let eligible = next.isSceneActive && next.isUIReady && next.privacyEnabled && !memoryPressure
+        let eligible = next.isSceneActive && next.isUIReady && next.preparationEnabled && !memoryPressure
         let keepForRecording = eligible && next.hasRecordingActivity && !configurationChanged
         if keepForRecording { return }
-        if !eligible || next.hasRecordingActivity || next.hasOtherModelWork || configurationChanged {
+        if !eligible || next.hasRecordingActivity || next.hasOtherModelWork || configurationChanged || recordingFinished || resourcesChanged {
             await stop()
         }
         guard input == next, eligible, !next.hasRecordingActivity, !next.hasOtherModelWork,
@@ -463,6 +488,8 @@ final class PichiPrivacyIdlePreparationController {
         memoryPressure = true
         await stop()
     }
+
+    func shutdown() async { isTerminating = true; await stop() }
 
     private func stop() async {
         generation = UUID()

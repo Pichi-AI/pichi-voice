@@ -16,6 +16,7 @@ final class MeetingProviderBackedBackend: MeetingTranscriptionBackend {
     private let runtimeFactory: MeetingParakeetNemotronRuntimeFactory
     private let modelLocator: (any MeetingNemotronModelLocating)?
     private let materializer: any MeetingEpochAudioMaterializing
+    private let idleResourcePreparation: (@MainActor @Sendable (MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)?)?
     private var composite: MeetingParakeetNemotronBackend?
     private var frozenPlan: MeetingBackendPlan?
 
@@ -24,13 +25,22 @@ final class MeetingProviderBackedBackend: MeetingTranscriptionBackend {
         providerModelID: String,
         runtimeFactory: @escaping MeetingParakeetNemotronRuntimeFactory,
         modelLocator: (any MeetingNemotronModelLocating)? = nil,
-        materializer: any MeetingEpochAudioMaterializing = MeetingEpochAudioMaterializer()
+        materializer: any MeetingEpochAudioMaterializing = MeetingEpochAudioMaterializer(),
+        idleResourcePreparation: (@MainActor @Sendable (MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)?)? = nil
     ) {
         self.descriptor = descriptor
         self.providerModelID = providerModelID
         self.runtimeFactory = runtimeFactory
         self.modelLocator = modelLocator
         self.materializer = materializer
+        self.idleResourcePreparation = idleResourcePreparation
+    }
+
+    func prepareIdleResources(configuration: MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)? {
+        guard configuration.effectiveSpeakerProcessingMode == .streaming else { return nil }
+        try descriptor.validateSpeakerProcessingMode(configuration: configuration, mode: .inRoom)
+        try validatePCMInput(configuration: configuration, mode: .inRoom)
+        return try await idleResourcePreparation?(configuration)
     }
 
     func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {

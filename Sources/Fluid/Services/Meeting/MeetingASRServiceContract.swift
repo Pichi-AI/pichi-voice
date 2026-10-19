@@ -4,6 +4,8 @@ import Foundation
 /// inference executor and residency owners; the pipeline does not own platform capture.
 @MainActor
 protocol MeetingASRServicing: ASRActivityLeasing {
+    var idleModelResidency: MeetingModelResidencyCoordinator? { get }
+    func retireIdleSpeechResidency() async throws -> Bool
     var isRunning: Bool { get }
     var fileTranscriptionProvider: any TranscriptionProvider { get }
     var supportsPreparedProviderAdoption: Bool { get }
@@ -14,6 +16,9 @@ protocol MeetingASRServicing: ASRActivityLeasing {
         acceptsCompletedCancellation: (T) -> Bool,
         work: () async throws -> T
     ) async throws -> T
+    func withMeetingModelResidency<T>(attemptID: UUID, idleResourceIdentity: String,
+        acceptsCompletedCancellation: (T) -> Bool,
+        work: (MeetingIdlePreparedResourceClaim?) async throws -> T) async throws -> T
     func withPreparedMeetingASR<T>(
         attemptID: UUID,
         configuration: MeetingFinalProcessingConfiguration,
@@ -31,6 +36,14 @@ protocol MeetingASRServicing: ASRActivityLeasing {
 }
 
 extension MeetingASRServicing {
+    var idleModelResidency: MeetingModelResidencyCoordinator? { nil }
+    func retireIdleSpeechResidency() async throws -> Bool { false }
+    func withMeetingModelResidency<T>(attemptID: UUID, idleResourceIdentity: String,
+        acceptsCompletedCancellation: (T) -> Bool,
+        work: (MeetingIdlePreparedResourceClaim?) async throws -> T) async throws -> T {
+        try await withMeetingModelResidency(attemptID: attemptID,
+            acceptsCompletedCancellation: acceptsCompletedCancellation) { try await work(nil) }
+    }
     var supportsPreparedProviderAdoption: Bool { false }
 
     /// Older or injected services preserve their existing scope and explicitly reject a

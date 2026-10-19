@@ -37,6 +37,8 @@ extension MeetingProcessingPipeline {
         }
         let sessionID = attempt.request.session.id
         let backendID = attempt.descriptor.id.rawValue
+        let idleResourceIdentity = MeetingBackendIdlePreparedResource.identity(
+            backendID: attempt.descriptor.id, configuration: configuration)
         let controller = MeetingStreamingPCMController.deferred { body in
             try await DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
                 let started = ProcessInfo.processInfo.systemUptime
@@ -46,9 +48,24 @@ extension MeetingProcessingPipeline {
                     DebugLogger.shared.info("streaming_scope_finished elapsedMs=\(elapsed)", source: "MeetingMemoryAudio")
                 }
                 try await attempt.preparePrivacy()
-                try await service.withMeetingModelResidency(attemptID: attemptID,
-                    acceptsCompletedCancellation: { _ in false }) {
+                try await service.withMeetingModelResidency(attemptID: attemptID, idleResourceIdentity: idleResourceIdentity,
+                    acceptsCompletedCancellation: { _ in false }) { prepared in
                     try await runtime.preparePCMResources(attemptID: attemptID, configuration: configuration)
+                    if let prepared {
+                        do {
+                            guard let bound = try await prepared.resource() as? MeetingBackendIdlePreparedResource,
+                                  bound.backendID == attempt.descriptor.id, bound.configuration == configuration else {
+                                throw MeetingModelResidencyError.staleGrant
+                            }
+                            try await runtime.adoptIdleResources(bound.resource, configuration: configuration)
+                        } catch {
+                            await prepared.cleanup()
+                            try Task.checkCancellation()
+                            // Optional readiness never changes the actual recording contract.
+                            // The normal pinned runtime still owns the cold preparation path.
+                            DebugLogger.shared.info("idle_preparation=fallback captureAdmitted=true", source: "MeetingMemoryAudio")
+                        }
+                    }
                     try await runtime.withPreparedStreamingPCM(trackID: track.id, attemptID: attemptID,
                         configuration: configuration, onProgress: { observation in
                             let emission = try await state.observe(observation)

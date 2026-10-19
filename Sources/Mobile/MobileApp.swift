@@ -17,11 +17,36 @@ final class AppServices: ObservableObject {
     private static var didCleanExportStaging = false
     private let settings: SettingsStore
     private var idlePreparationObservers: Set<AnyCancellable> = []
+    private var idleResourceObservers: Set<AnyCancellable> = []
+    private var observedSpeakerStore: MeetingDiarizationModelStore?
+    private var idleResourceRevision = UUID()
+    private var idleResourceUpdateTask: Task<Void, Never>?
+    private var pendingIdleResourceEvent = false
     private var isSceneActive = false
     private var hasRestoredInitialState = false
-    private lazy var idlePrivacyPreparation = PichiPrivacyIdlePreparationController(
-        prepare: { [transcriptPrivacy] in try await transcriptPrivacy.prepareInstalledForIdle() },
-        release: { [transcriptPrivacy] token in await transcriptPrivacy.releaseIdlePreparation(token) })
+    private struct IdlePreparationToken: Sendable {
+        let privacy: PichiPrivacyPreparationOwner.IdleToken?
+        let models: MeetingIdlePreparationToken?
+    }
+    private lazy var idlePreparation = MeetingIdlePreparationController<IdlePreparationToken>(
+        prepare: { [settings, transcriptPrivacy, meetingProcessingPipeline] in
+            do {
+                let models = try await meetingProcessingPipeline.prepareSelectedIdleResources(prepareFirst: {
+                    guard await settings.meetingPIIRedactionEnabled,
+                          let token = try await transcriptPrivacy.prepareInstalledForIdle() else { return nil }
+                    return { await transcriptPrivacy.releaseIdlePreparation(token) }
+                })
+                if let models { return IdlePreparationToken(privacy: nil, models: models) }
+            } catch {
+                if Task.isCancelled { throw CancellationError() }
+            }
+            let privacy = await settings.meetingPIIRedactionEnabled
+                ? try await transcriptPrivacy.prepareInstalledForIdle() : nil
+            return privacy.map { IdlePreparationToken(privacy: $0, models: nil) }
+        }, release: { [transcriptPrivacy, meetingProcessingPipeline] token in
+            if let models = token.models { await meetingProcessingPipeline.releaseIdleResources(models) }
+            if let privacy = token.privacy { await transcriptPrivacy.releaseIdlePreparation(privacy) }
+        })
 
     init(store: (any MeetingSessionStoring)? = nil,
          capture injectedCapture: (any MeetingCaptureControlling)? = nil,
@@ -38,12 +63,18 @@ final class AppServices: ObservableObject {
         let settings = settings ?? SettingsStore.shared
         self.settings = settings
         let store = store ?? MeetingSessionStore.shared
-        let privacy = privacy ?? PichiTranscriptPrivacyService()
+        let asr = ASRService(settings: settings)
+        let privacy = privacy ?? PichiTranscriptPrivacyService(beginOrdinaryWork: {
+            let residency = await MainActor.run { MeetingModelResidencyCoordinator.shared }
+            // An admitted recording joins its matching preparation on the deferred worker.
+            // Other privacy operations retire the optional lease before native work begins.
+            if await MainActor.run(body: { asr.activeExclusiveActivity == .meeting || residency.isExclusive }) { return nil }
+            return try await residency.beginOperationRetiringIdle(owner: "text-privacy", modelID: "selected-text-privacy")
+        }, endOrdinaryWork: { token in await MeetingModelResidencyCoordinator.shared.endOperation(token) })
         // A host can decorate the prepared privacy service without replacing its
         // installation/readiness lifecycle or the shared publication contract.
         let meetingRedactor: any TranscriptTextRedacting = privacyRedactor ?? privacy
         let resolveMicrophone = microphoneResolver ?? { try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: $0) }
-        let asr = ASRService(settings: settings)
         self.asr = asr; self.meetingStore = store; self.transcriptPrivacy = privacy
         let pipeline = MeetingProcessingPipeline(asrServiceProvider: { asr }, settings: settings,
             privacyRedactorProvider: { meetingRedactor },
@@ -107,10 +138,14 @@ final class AppServices: ObservableObject {
                 Task { @MainActor in
                     // objectWillChange arrives before its new setting/activity is committed.
                     await Task.yield()
-                    await self?.updateIdlePrivacyPreparation()
+                    await self?.updateIdlePreparation()
                 }
             }.store(in: &idlePreparationObservers)
         }
+        MeetingModelResidencyCoordinator.shared.ordinaryOperationEvents.sink { [weak self] in
+            Task { @MainActor in await self?.idleResourcesChanged() }
+        }.store(in: &idlePreparationObservers)
+        observeIdleResourceStores()
     }
 
     func signalUIReady() async {
@@ -119,19 +154,26 @@ final class AppServices: ObservableObject {
         await meetingSessionCoordinator.ensureRestored()
         await meetingSessionCoordinator.sweepExpiredAudio()
         hasRestoredInitialState = true
-        await updateIdlePrivacyPreparation()
+        await updateIdlePreparation()
     }
 
     func setSceneActive(_ active: Bool) async {
         isSceneActive = active
-        await updateIdlePrivacyPreparation()
+        await updateIdlePreparation()
     }
 
     func didReceiveMemoryWarning() async {
-        await idlePrivacyPreparation.didReceiveMemoryWarning()
+        await idlePreparation.didReceiveMemoryWarning()
     }
 
-    private func updateIdlePrivacyPreparation() async {
+    func shutdownForTermination() async {
+        await idlePreparation.shutdown()
+        await meetingSessionCoordinator.shutdownForTermination()
+        await asr.shutdownForTermination()
+    }
+
+    private func updateIdlePreparation() async {
+        observeIdleResourceStores()
         let coordinator = meetingSessionCoordinator
         let meetingActivity = coordinator.hasPendingStart || coordinator.isRecording || coordinator.isProcessing
             || asr.activeExclusiveActivity == .meeting
@@ -139,12 +181,59 @@ final class AppServices: ObservableObject {
             || (asr.activeExclusiveActivity != nil && asr.activeExclusiveActivity != .meeting)
             || asr.hasActiveModelPreparation
             || (MeetingModelResidencyCoordinator.shared.isExclusive && !meetingActivity)
+            || MeetingModelResidencyCoordinator.shared.hasOrdinaryOperations
+            || isPreparingIdleResources
         let identity = [transcriptPrivacy.checkpointIdentity ?? "", settings.selectedSpeechModel.rawValue,
                         settings.meetingTranscriptionBackendID.rawValue,
-                        settings.meetingRecordingDefaults.languageCode ?? ""].joined(separator: "|")
-        await idlePrivacyPreparation.update(.init(isSceneActive: isSceneActive, isUIReady: isUIReady && hasRestoredInitialState,
-            privacyEnabled: settings.meetingPIIRedactionEnabled, configurationIdentity: identity,
-            hasRecordingActivity: meetingActivity, hasOtherModelWork: otherWork))
+                        settings.meetingRecordingDefaults.languageCode ?? "",
+                        String(settings.meetingPIIRedactionEnabled), String(settings.meetingSpeakerLabelsEnabled),
+                        settings.meetingSpeakerProcessingMode(for: .inRoom).rawValue, String(settings.meetingSaveAudio)].joined(separator: "|")
+        let enabled = settings.meetingPIIRedactionEnabled || settings.meetingSpeakerProcessingMode(for: .inRoom) == .streaming
+        await idlePreparation.update(.init(isSceneActive: isSceneActive, isUIReady: isUIReady && hasRestoredInitialState,
+            preparationEnabled: enabled, configurationIdentity: identity,
+            hasRecordingActivity: meetingActivity, hasOtherModelWork: otherWork, resourceRevision: idleResourceRevision))
+    }
+
+    private var isPreparingIdleResources: Bool {
+        if MeetingSpeechActivityResources.shared.isPreparing { return true }
+        switch observedSpeakerStore?.state {
+        case .checking?, .downloading?: return true
+        default: return false
+        }
+    }
+
+    private func observeIdleResourceStores() {
+        let store = PichiMeetingProviderFactory.speakerModelStore(for: settings.selectedSpeechModel.rawValue,
+            speakerProcessingMode: settings.meetingSpeakerProcessingMode(for: .inRoom))
+        guard idleResourceObservers.isEmpty || store !== observedSpeakerStore else { return }
+        observedSpeakerStore = store
+        idleResourceObservers.removeAll()
+        let publishers = [store?.objectWillChange, MeetingSpeechActivityResources.shared.objectWillChange].compactMap { $0 }
+        for publisher in publishers {
+            publisher.sink { [weak self] in
+                Task { @MainActor in await Task.yield(); await self?.idleResourcesChanged() }
+            }.store(in: &idleResourceObservers)
+        }
+    }
+
+    private func idleResourcesChanged() async {
+        pendingIdleResourceEvent = true
+        guard idleResourceUpdateTask == nil else { return }
+        idleResourceUpdateTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            repeat {
+                pendingIdleResourceEvent = false
+                await Task.yield()
+                // A recording's readiness checks publish store state too. Preserve its
+                // admitted claim; the normal adapter revalidates it before adoption.
+                if !meetingSessionCoordinator.hasPendingStart, !meetingSessionCoordinator.isRecording,
+                   !meetingSessionCoordinator.isProcessing, asr.activeExclusiveActivity != .meeting {
+                    idleResourceRevision = UUID()
+                }
+                await updateIdlePreparation()
+            } while pendingIdleResourceEvent
+            idleResourceUpdateTask = nil
+        }
     }
 }
 

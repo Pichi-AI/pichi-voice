@@ -87,13 +87,13 @@ struct PrivacyIdlePreparationTests {
         catch { check(error is CancellationError, "Cancellation must remain explicit") }
     }
     @MainActor
-    private static func controller(_ owner: PichiPrivacyPreparationOwner) -> PichiPrivacyIdlePreparationController {
+    private static func controller(_ owner: PichiPrivacyPreparationOwner) -> MeetingIdlePreparationController<PichiPrivacyPreparationOwner.IdleToken> {
         .init(prepare: { try await owner.prepareInstalledForIdle() }, release: { await owner.releaseIdle($0) })
     }
     @MainActor
     private static func input(active: Bool = true, identity: String = "a1/one", recording: Bool = false,
-                              otherWork: Bool = false, enabled: Bool = true) -> PichiPrivacyIdlePreparationController.Input {
-        .init(isSceneActive: active, isUIReady: true, privacyEnabled: enabled,
+                              otherWork: Bool = false, enabled: Bool = true) -> MeetingIdlePreparationController<PichiPrivacyPreparationOwner.IdleToken>.Input {
+        .init(isSceneActive: active, isUIReady: true, preparationEnabled: enabled,
               configurationIdentity: identity, hasRecordingActivity: recording, hasOtherModelWork: otherWork)
     }
 
@@ -304,6 +304,28 @@ struct PrivacyIdlePreparationTests {
             await until { await loader.counts().loads == 2 }
             await controller.update(input(active: false))
         }
-        print("Privacy idle preparation tests passed: \(assertions) assertions across 15 ownership/lifecycle scenarios")
+        // A resource operation can complete without a scene/configuration change. Retry
+        // once for that explicit event, never by polling or repeatedly observing the same input.
+        do {
+            var installed = false, attempts = 0, releases = 0
+            let controller = MeetingIdlePreparationController<UUID>(prepare: {
+                await MainActor.run { attempts += 1; return installed ? UUID() : nil }
+            }, release: { _ in await MainActor.run { releases += 1 } })
+            var state = MeetingIdlePreparationController<UUID>.Input(isSceneActive: true, isUIReady: true,
+                preparationEnabled: true, configurationIdentity: "same-exact-config",
+                hasRecordingActivity: false, hasOtherModelWork: false, resourceRevision: UUID())
+            await controller.update(state)
+            await until { await MainActor.run { attempts == 1 } }
+            await controller.update(state); await settle()
+            check(attempts == 1, "Missing assets cannot start a warmup polling loop")
+            installed = true; state.resourceRevision = UUID()
+            await controller.update(state)
+            await until { await MainActor.run { attempts == 2 } }
+            await settle(); await controller.shutdown()
+            check(attempts == 2 && releases == 1, "An installed event retries the same configuration once and shutdown joins its token")
+            await controller.update(state); await settle()
+            check(attempts == 2, "Shutdown cannot restart optional preparation")
+        }
+        print("Privacy idle preparation tests passed: \(assertions) assertions across 16 ownership/lifecycle scenarios")
     }
 }

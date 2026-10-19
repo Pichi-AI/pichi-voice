@@ -29,6 +29,9 @@ enum PichiMeetingProviderFactory {
         let liveAdmission: LiveAdmission
         /// Cheap catalog/file-presence metadata only, never model hashing or preparation.
         let admissionArtifactFingerprint: @MainActor @Sendable () -> String?
+        /// The registered adapter promises preparation of an exact installed export does
+        /// not install/repair/download resources. Unsupported providers keep their cold path.
+        let supportsInstalledIdlePreparation: Bool
     }
 
     private nonisolated static let registrations: [String: Registration] = [
@@ -69,7 +72,7 @@ enum PichiMeetingProviderFactory {
             admissionArtifactFingerprint: {
                 // A fresh install prepares the public export. Complete imports retain priority.
                 (try? PichiGigaAMModelStore.shared.installedModelFingerprint()) ?? GigaAMModelCatalog.downloadableModel.fingerprint
-            }
+            }, supportsInstalledIdlePreparation: true
         ),
         PichiMeetingProviderFactory.whisperTinyModelID: Registration(
             descriptor: MeetingBackendDescriptor(
@@ -109,7 +112,7 @@ enum PichiMeetingProviderFactory {
             speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8],
             modelsExistOnDisk: { SettingsStore.SpeechModel.whisperTiny.isInstalled },
             liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 2 * 1_073_741_824, maximumTrackCount: 2),
-            admissionArtifactFingerprint: { nil }
+            admissionArtifactFingerprint: { nil }, supportsInstalledIdlePreparation: false
         ),
         PichiMeetingProviderFactory.parakeetV3ModelID: Registration(
             descriptor: MeetingBackendDescriptor(
@@ -149,7 +152,7 @@ enum PichiMeetingProviderFactory {
             speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8],
             modelsExistOnDisk: { SettingsStore.SpeechModel.parakeetTDT.isInstalled },
             liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4 * 1_073_741_824, maximumTrackCount: 2),
-            admissionArtifactFingerprint: { nil }
+            admissionArtifactFingerprint: { nil }, supportsInstalledIdlePreparation: false
         ),
     ]
 
@@ -243,7 +246,8 @@ enum PichiMeetingProviderFactory {
                 MeetingProviderBackedBackend(
                     descriptor: registration.descriptor,
                     providerModelID: modelID,
-                    runtimeFactory: context.parakeetNemotronRuntimeFactory
+                    runtimeFactory: context.parakeetNemotronRuntimeFactory,
+                    idleResourcePreparation: context.idleResourcePreparation
                 )
             }
         }
@@ -255,6 +259,18 @@ enum PichiMeetingProviderFactory {
             return try registration.providerFactory(configuration)
         }
         return try FluidAudioProvider(meetingConfiguration: configuration)
+    }
+
+    /// Uses the same registered provider constructor and immutable artifact selection as
+    /// recording. This capability is explicit because generic prepare() may download.
+    static func makeInstalledProviderForIdle(_ configuration: MeetingFinalProcessingConfiguration) throws -> (any TranscriptionProvider)? {
+        guard let registration = registrations[configuration.asrModel], registration.supportsInstalledIdlePreparation,
+              registration.modelsExistOnDisk() else { return nil }
+        try validateRecordingConfiguration(configuration, isAppleSilicon: CPUArchitecture.isAppleSilicon,
+            requiresInstalledArtifact: true)
+        let provider = try registration.providerFactory(configuration)
+        guard provider.modelsExistOnDisk() else { return nil }
+        return provider
     }
 
     static func selectedBackendID(languageCode: String, selectedModelID: String? = nil,

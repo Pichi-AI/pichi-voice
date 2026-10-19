@@ -1072,6 +1072,7 @@ final class ASRService: ObservableObject {
 
     func shutdownForTermination() async {
         self.meetingModelResidency.beginTermination()
+        await self.meetingModelResidency.retireIdlePreparation()
         self.isTerminating = true
         // Give media restoration the same quit window as audio cleanup.
         self.mediaPlaybackService.beginShutdown()
@@ -1351,7 +1352,7 @@ final class ASRService: ObservableObject {
             throw ASRActivityError.activityInProgress(.settingsRestore)
         }
         guard !self.isOrdinaryASRBlockedByMeetingCapture else { throw MeetingModelResidencyError.busy }
-        let admission = try self.meetingModelResidency.beginOperation(owner: "speech", modelID: model.id)
+        let admission = try await self.meetingModelResidency.beginOperationRetiringIdle(owner: "speech", modelID: model.id)
         defer { self.meetingModelResidency.endOperation(admission) }
         if self.isMeetingASRPreparationClaimed {
             throw MeetingASRPreparationError.preparationInProgress
@@ -1475,7 +1476,7 @@ final class ASRService: ObservableObject {
         let lease = try self.acquireExclusiveActivity(.modelMaintenance)
         let admission: UUID
         do {
-            admission = try self.meetingModelResidency.beginOperation(owner: "speech", modelID: model.id)
+            admission = try await self.meetingModelResidency.beginOperationRetiringIdle(owner: "speech", modelID: model.id)
         } catch {
             self.releaseExclusiveActivity(lease)
             throw error
@@ -4350,6 +4351,21 @@ final class ASRService: ObservableObject {
 
     func markMeetingSummaryPhase() throws { try self.meetingModelResidency.markSummary() }
 
+    var idleModelResidency: MeetingModelResidencyCoordinator? { self.meetingModelResidency }
+    func withMeetingModelResidency<T>(attemptID: UUID, idleResourceIdentity: String,
+        acceptsCompletedCancellation: (T) -> Bool,
+        work: (MeetingIdlePreparedResourceClaim?) async throws -> T) async throws -> T {
+        let defaultParticipants = [meetingResidencyParticipant(), PrivateAIIntegrationService.meetingResidencyParticipant(),
+                                   DictionaryTrainingEndpointMonitor.shared.meetingResidencyParticipant()]
+        #if DEBUG
+        let participants = meetingModelParticipantsForTesting ?? defaultParticipants
+        #else
+        let participants = defaultParticipants
+        #endif
+        return try await meetingModelResidency.withExclusive(attemptID: attemptID, participants: participants,
+            idleResourceIdentity: idleResourceIdentity, acceptsCompletedCancellation: acceptsCompletedCancellation, work: work)
+    }
+
     // MARK: - Scoped Meeting ASR Preparation
 
     private var activeMeetingASRPreparationOwner: MeetingASRPreparationOwner? {
@@ -6618,7 +6634,7 @@ final class ASRService: ObservableObject {
         guard !self.isMeetingASRPreparationClaimed else {
             throw MeetingASRPreparationError.preparationInProgress
         }
-        let admission = try self.meetingModelResidency.beginOperation(
+        let admission = try await self.meetingModelResidency.beginOperationRetiringIdle(
             owner: "speech", modelID: SettingsStore.shared.selectedSpeechModel.id
         )
         defer { self.meetingModelResidency.endOperation(admission) }
