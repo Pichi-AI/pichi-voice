@@ -6,7 +6,8 @@ final class MobileNavigationUITests: XCTestCase {
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
-        let productionSmoke = name.contains("testPhysicalProductionMeetingAndProtectedExport")
+        let productionDownload = name.contains("testPhysicalProductionDownloadSpeechActivity")
+        let productionSmoke = name.contains("testPhysicalProductionMeetingAndProtectedExport") || productionDownload
         if productionSmoke {
             #if targetEnvironment(simulator)
             throw XCTSkip("Production smoke requires an explicitly authorized physical device")
@@ -14,17 +15,26 @@ final class MobileNavigationUITests: XCTestCase {
             guard ProcessInfo.processInfo.environment["PICHI_PHYSICAL_PRODUCTION_SMOKE"] == "1" else {
                 throw XCTSkip("Set PICHI_PHYSICAL_PRODUCTION_SMOKE=1 to create one real meeting")
             }
+            if productionDownload,
+               ProcessInfo.processInfo.environment["PICHI_PHYSICAL_PRODUCTION_DOWNLOAD_SPEECH_ACTIVITY"] != "1" {
+                throw XCTSkip("Set PICHI_PHYSICAL_PRODUCTION_DOWNLOAD_SPEECH_ACTIVITY=1 to use the production Download action")
+            }
             #endif
         }
         continueAfterFailure = false
-        XCUIDevice.shared.orientation = .portrait
+        if !productionDownload { XCUIDevice.shared.orientation = .portrait }
         app = XCUIApplication()
-        app.launchArguments += ["-PichiInterfaceLanguage", "en"]
+        if !productionDownload { app.launchArguments += ["-PichiInterfaceLanguage", "en"] }
         if productionSmoke {
             // Attach without restarting a running AUT, including an unowned recording.
             // The body checks idle state before it can claim a new recording.
             switch app.state {
-            case .notRunning: app.launch()
+            case .notRunning:
+                guard !productionDownload else {
+                    throw NSError(domain: "ProductionUISmoke", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Download smoke only attaches to an already running ordinary Release AUT"])
+                }
+                app.launch()
             case .runningForeground, .runningBackground, .runningBackgroundSuspended: app.activate()
             case .unknown:
                 throw NSError(domain: "ProductionUISmoke", code: 1,
@@ -34,7 +44,104 @@ final class MobileNavigationUITests: XCTestCase {
                               userInfo: [NSLocalizedDescriptionKey: "Cannot safely attach to the existing AUT state"])
             }
         } else { app.launch() }
-        waitForOrientation(portrait: true)
+        if !productionDownload { waitForOrientation(portrait: true) }
+    }
+
+    /// The parent preserves storage and independently verifies downloaded artifact hashes.
+    /// This attaches to the existing ordinary Release AUT and changes no preferences.
+    @MainActor
+    func testPhysicalProductionDownloadSpeechActivity() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Production download smoke requires an explicitly authorized physical device")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_PRODUCTION_SMOKE"] == "1",
+              environment["PICHI_PHYSICAL_PRODUCTION_DOWNLOAD_SPEECH_ACTIVITY"] == "1" else {
+            throw XCTSkip("Production download requires both physical smoke and speech activity download opt-ins")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        func require(_ condition: Bool, _ message: String) throws {
+            guard condition else {
+                throw NSError(domain: "ProductionUISmoke", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
+        func requireNoActiveAttempt() throws {
+            try require(app.state == .runningForeground && app.alerts.count == 0
+                        && !app.buttons["meeting.stop"].exists
+                        && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                        && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
+                        && !app.descendants(matching: .any)["meeting.preparing"].firstMatch.exists,
+                        "Download smoke refuses existing recording, preparation, processing or alerts")
+        }
+        func requireMeetingAtRest() throws {
+            try requireNoActiveAttempt()
+            let start = app.buttons["meeting.start"]
+            try require((start.exists && start.isEnabled) || app.buttons["transcript.more"].exists,
+                        "Meetings must show idle recording controls or an existing completed transcript")
+            try require(!app.buttons["meeting.retry"].exists && !app.buttons["meeting.restartProcessing"].exists,
+                        "Download smoke refuses a meeting awaiting recovery")
+        }
+        do {
+            capture("speech-download-01-attached")
+            try require(!revision.isEmpty && revision != "working-tree",
+                        "A concrete frozen Release AUT revision is required")
+            try requireNoActiveAttempt()
+            // Ordinary navigation reveals the current session before Settings is touched.
+            openNavigation("meetings", title: app.tabBars.buttons["Встречи"].exists ? "Встречи" : "Meetings")
+            try requireMeetingAtRest()
+            openNavigation("settings", title: app.tabBars.buttons["Настройки"].exists ? "Настройки" : "Settings")
+            try requireNoActiveAttempt()
+            let recording = app.buttons["settings.recording"]
+            try require(recording.waitForExistence(timeout: 5) && recording.isEnabled && recording.isHittable,
+                        "Existing Recording settings navigation must be available")
+            recording.tap()
+            capture("speech-download-02-recording-settings")
+            try require(app.descendants(matching: .any)["settings.recording.detail"].firstMatch
+                .waitForExistence(timeout: 5), "Recording settings must open normally")
+            let download = app.buttons["recording.downloadSpeechActivity"]
+            let heading = app.staticTexts.matching(NSPredicate(
+                format: "label ==[c] %@ OR label ==[c] %@", "Speech detection", "Определение речи")).firstMatch
+            let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.scrollViews.firstMatch
+            for step in 0..<8 where !download.isHittable || !heading.isHittable {
+                try requireNoActiveAttempt()
+                try require(scroll.exists && scroll.isHittable, "Recording settings must expose a native scroll container")
+                if download.isHittable { scroll.swipeDown() } else { scroll.swipeUp() }
+                capture("speech-download-03-reveal-\(step)")
+            }
+            try requireNoActiveAttempt()
+            try require(heading.isHittable && download.isHittable && download.isEnabled,
+                        "The speech detection section and its enabled production Download must be visible")
+            download.tap()
+            capture("speech-download-04-production-download-tapped")
+            let deadline = ProcessInfo.processInfo.systemUptime + 600
+            var ready = false
+            while ProcessInfo.processInfo.systemUptime < deadline {
+                try requireNoActiveAttempt()
+                // Ready labels elsewhere (speaker resources or owner voice) cannot satisfy this check.
+                let sectionTop = heading.frame.maxY
+                let sectionBottom = download.frame.minY
+                ready = heading.isHittable && download.isHittable && download.isEnabled
+                    && sectionBottom > sectionTop
+                    && app.staticTexts.matching(NSPredicate(format: "label IN %@", ["Ready", "Готово"]))
+                        .allElementsBoundByIndex.contains { label in
+                            let bounds = label.frame
+                            return !bounds.isEmpty && bounds.minY >= sectionTop && bounds.maxY <= sectionBottom
+                                && bounds.maxX > download.frame.minX && bounds.minX < download.frame.maxX
+                        }
+                if ready { break }
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            capture("speech-download-05-download-result")
+            try require(ready, "Speech detection must show its own Ready label and enabled Download within 600 seconds")
+            openNavigation("meetings", title: app.tabBars.buttons["Встречи"].exists ? "Встречи" : "Meetings")
+            try requireMeetingAtRest()
+            capture("speech-download-06-returned-to-existing-meeting")
+        } catch {
+            capture("speech-download-failure-current-state")
+            throw error
+        }
+        #endif
     }
 
     /// The parent owns approved external speech playback and before/after storage inspection.
