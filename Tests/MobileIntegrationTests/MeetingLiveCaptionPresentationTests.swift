@@ -233,6 +233,16 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
     }
 
     func testGrowthIsLayoutChangeRatherThanScrollIntent() {
+        let originalViewport = MeetingCaptionScrollTracking.Geometry(contentBottom: 320, viewportHeight: 320,
+            viewportWidth: 520, contentHeight: 1000, contentOffset: 680)
+        let realizedHistory = MeetingCaptionScrollTracking.Geometry(contentBottom: 1040, viewportHeight: 320,
+            viewportWidth: 520, contentHeight: 1040, contentOffset: 0)
+        XCTAssertTrue(realizedHistory.layoutChanged(from: originalViewport))
+        XCTAssertFalse(realizedHistory.viewportChanged(from: originalViewport),
+                       "Realizing older lazy paragraphs cannot issue a viewport-resize follow request")
+        let narrower = MeetingCaptionScrollTracking.Geometry(contentBottom: 1040, viewportHeight: 320,
+            viewportWidth: 340, contentHeight: 1040, contentOffset: 0)
+        XCTAssertTrue(narrower.viewportChanged(from: realizedHistory), "Width reflow remains a real viewport change")
         typealias Geometry = MeetingCaptionScrollTracking.Geometry
         let before = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 600, contentOffset: 300)
         let grown = Geometry(contentBottom: 900, viewportHeight: 300, contentHeight: 1200, contentOffset: 300)

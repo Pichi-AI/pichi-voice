@@ -167,7 +167,7 @@ struct MeetingLiveBubbleScrollList: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPinnedToBottom = true
     @State private var paragraphs: [MeetingLiveCaptionParagraphs.Paragraph] = []
-    @State private var followScrollScheduled = false
+    @State private var renderedParagraphRevision: UInt64 = 0
     @Namespace private var scrollViewport
     private let bottomAnchor = "meeting.liveTranscript.bottom"
 
@@ -255,6 +255,7 @@ struct MeetingLiveBubbleScrollList: View {
                         let composed = try await MeetingLiveCaptionParagraphs.composeForDisplay(self.rows)
                         try Task.checkCancellation()
                         self.paragraphs = composed
+                        self.renderedParagraphRevision &+= 1
                     } catch is CancellationError { }
                     catch { assertionFailure("Caption presentation failed: \(error)") }
                 }
@@ -265,7 +266,12 @@ struct MeetingLiveBubbleScrollList: View {
                     onLayoutChange: { self.scrollToBottomIfPinned(proxy: proxy) }
                 ))
                 .onChange(of: self.presentationKey) {
-                    self.scrollToBottomIfPinned(proxy: proxy)
+                    if !self.documentStyle { self.scrollToBottomIfPinned(proxy: proxy) }
+                }
+                .onChange(of: self.renderedParagraphRevision) {
+                    // Detached composition may finish after the source update's layout.
+                    // Follow the newly rendered paragraph IDs, not the preceding document.
+                    if self.documentStyle { self.scrollToBottomIfPinned(proxy: proxy) }
                 }
                 .onChange(of: self.pending) {
                     self.scrollToBottomIfPinned(proxy: proxy)
@@ -296,10 +302,8 @@ struct MeetingLiveBubbleScrollList: View {
     private func scrollToBottomIfPinned(proxy: ScrollViewProxy) {
         // Match the shared command workspace: wait for wrapped text's rendered height,
         // then recheck user intent instead of capturing a stale follow decision.
-        guard self.isPinnedToBottom, !self.followScrollScheduled else { return }
-        self.followScrollScheduled = true
+        guard self.isPinnedToBottom else { return }
         DispatchQueue.main.async {
-            self.followScrollScheduled = false
             guard self.isPinnedToBottom else { return }
             self.scrollToBottom(proxy: proxy, animated: false)
         }
@@ -337,6 +341,7 @@ struct MeetingCaptionScrollTracking: ViewModifier {
     nonisolated struct Geometry: Equatable, Sendable {
         var contentBottom: CGFloat? = nil
         var viewportHeight: CGFloat? = nil
+        var viewportWidth: CGFloat? = nil
         var contentHeight: CGFloat? = nil
         var contentOffset: CGFloat? = nil
 
@@ -357,7 +362,11 @@ struct MeetingCaptionScrollTracking: ViewModifier {
         }
 
         func layoutChanged(from previous: Self) -> Bool {
-            contentHeight != previous.contentHeight || viewportHeight != previous.viewportHeight
+            contentHeight != previous.contentHeight || viewportChanged(from: previous)
+        }
+
+        func viewportChanged(from previous: Self) -> Bool {
+            viewportHeight != previous.viewportHeight || viewportWidth != previous.viewportWidth
         }
 
         func fallbackFollowPreference(after previous: Self, currentlyFollowing: Bool,
@@ -429,6 +438,7 @@ struct MeetingCaptionScrollTracking: ViewModifier {
             let next = nextValue()
             if let bottom = next.contentBottom { value.contentBottom = bottom }
             if let height = next.viewportHeight { value.viewportHeight = height }
+            if let width = next.viewportWidth { value.viewportWidth = width }
             if let height = next.contentHeight { value.contentHeight = height }
             if let offset = next.contentOffset { value.contentOffset = offset }
         }
@@ -442,19 +452,25 @@ struct MeetingCaptionScrollTracking: ViewModifier {
                 }
                 .onScrollGeometryChange(for: Geometry.self) { geometry in
                     .init(contentBottom: geometry.contentSize.height - geometry.visibleRect.minY,
-                          viewportHeight: geometry.visibleRect.height, contentHeight: geometry.contentSize.height,
+                          viewportHeight: geometry.visibleRect.height, viewportWidth: geometry.visibleRect.width,
+                          contentHeight: geometry.contentSize.height,
                           contentOffset: geometry.contentOffset.y)
                 } action: { previous, current in
-                    self.isPinnedToBottom = current.followPreference(after: previous,
+                    let following = current.followPreference(after: previous,
                         currentlyFollowing: self.isPinnedToBottom, userIsScrolling: self.isUserScrolling)
-                    if current.layoutChanged(from: previous) { self.onLayoutChange() }
+                    if following != self.isPinnedToBottom { self.isPinnedToBottom = following }
+                    // Lazy realization can change estimated document height while browsing
+                    // older paragraphs. Content updates have their own rendered revision;
+                    // only a viewport resize warrants an independent layout follow request.
+                    if current.viewportChanged(from: previous) { self.onLayoutChange() }
                 }
         } else {
             content
                 .coordinateSpace(name: self.viewport)
                 .background {
                     GeometryReader { geometry in
-                        Color.clear.preference(key: GeometryKey.self, value: .init(viewportHeight: geometry.size.height))
+                        Color.clear.preference(key: GeometryKey.self,
+                            value: .init(viewportHeight: geometry.size.height, viewportWidth: geometry.size.width))
                     }
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
@@ -472,7 +488,7 @@ struct MeetingCaptionScrollTracking: ViewModifier {
                         if wasFollowing != self.isPinnedToBottom {
                             DebugLogger.shared.debug("following=\(self.isPinnedToBottom) upwardDrag=\(self.isDraggingUp) layoutChanged=\(geometry.layoutChanged(from: previous)) offset=\(geometry.contentOffset ?? 0) previousOffset=\(previous.contentOffset ?? 0) height=\(geometry.contentHeight ?? 0)", source: "MeetingCaptionScroll")
                         }
-                        if geometry.layoutChanged(from: previous) { self.onLayoutChange() }
+                        if geometry.viewportChanged(from: previous) { self.onLayoutChange() }
                     }
                 }
                 .simultaneousGesture(DragGesture(minimumDistance: 2)
