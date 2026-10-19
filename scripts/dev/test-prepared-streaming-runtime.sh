@@ -13,8 +13,10 @@ start = source.index('nonisolated enum MeetingMemoryAudioError')
 end = source.index('/// Bounded PCM transport')
 helper = '''
 extension MeetingPCMProgressiveWindow {
-    nonisolated static func fixture(samples: [Float] = [], final: Bool = false) -> MeetingPCMProgressiveWindow {
-        let window = MeetingPCMProgressiveWindow(initialFrames: 1, intervalFrames: 1)
+    nonisolated static func fixture(samples: [Float] = [], final: Bool = false,
+        confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil) -> MeetingPCMProgressiveWindow {
+        let window = MeetingPCMProgressiveWindow(initialFrames: 1, intervalFrames: 1,
+                                                 confidentlyNonSpeech: confidentlyNonSpeech)
         window.fixtureAppend(samples, final: final)
         return window
     }

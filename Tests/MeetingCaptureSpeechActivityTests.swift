@@ -86,6 +86,7 @@ struct MeetingCaptureSpeechActivityTests {
     }
     static func main() async throws {
         try await budgetRecovery()
+        try await delayedRightTail()
         let events = Events()
         let worker = MeetingCaptureSpeechActivityWorker(factory: { Fake() }, publish: events.add)
         for (i, value) in [Float(0), 0.1, 0.5, 0.99, -1, 0].enumerated() {
@@ -196,7 +197,8 @@ struct MeetingCaptureSpeechActivityTests {
         for index in 0..<3 {
             let frame = detector.process(samples: samples, valid: valid, start: Double(index) * 0.256,
                                          session: session, epoch: 0, route: "mic")
-            try require(frame.unknown == .overBudget && frame.probability == nil, "slow output is never classified")
+            try require(frame.budgetExceeded && (index == 0 ? frame.unknown == .contextWarmup : frame.probability == 0),
+                        "late valid output is measured after fresh warmup")
         }
         for index in 3..<11 {
             let frame = detector.process(samples: samples, valid: valid, start: Double(index) * 0.256,
@@ -208,8 +210,29 @@ struct MeetingCaptureSpeechActivityTests {
         let measured = detector.process(samples: samples, valid: valid, start: 12 * 0.256, session: session, epoch: 0, route: "mic")
         try require(warmup.unknown == .contextWarmup && measured.probability == 0,
                     "first fast recovery resets context before publishing the next frame")
-        try require(script.resetFlags == [true, true, true, true, false], "recovery does not reuse pre-budget recurrent state")
-        print("PASS transient budget cooldown, no inference while cooling and fresh-context recovery")
+        try require(script.resetFlags == [true, false, false, true, false], "late valid calls preserve recurrence until actual cooldown")
+        print("PASS valid late quiet telemetry, preserved recurrence, bounded cooldown and fresh-context recovery")
+
+        let speech = Script([.probability(0, seconds: 0.2), .probability(0.99, seconds: 0.2)])
+        var speechDetector = MeetingSpeechActivityDetector(model: ScriptedModel(script: speech), clock: { speech.now })
+        let lateWarmup = speechDetector.process(samples: samples, valid: valid, start: 0, session: session, epoch: 0, route: "mic")
+        let lateSpeech = speechDetector.process(samples: samples, valid: valid, start: 0.256, session: session, epoch: 0, route: "mic")
+        try require(lateWarmup.unknown == .contextWarmup && lateWarmup.budgetExceeded && lateWarmup.probability == nil,
+                    "late initial warmup remains unknown")
+        try require(lateSpeech.probability == 0.99 && lateSpeech.active == true && lateSpeech.unknown == nil && lateSpeech.budgetExceeded,
+                    "late speech remains speech and cannot suppress recognition")
+        try require(speech.resetFlags == [true, false], "wall contention does not reset valid speech recurrence")
+        var invalidClockCalls = 0
+        let clockScript = Script([])
+        var invalidClock = MeetingSpeechActivityDetector(model: ScriptedModel(script: clockScript), clock: {
+            invalidClockCalls += 1; return invalidClockCalls == 1 ? 0 : .nan
+        })
+        try require(invalidClock.process(samples: samples, valid: valid, start: 0, session: session, epoch: 0,
+                    route: "mic").unknown == .invalidClock, "invalid post-inference clock never classifies")
+        try require(invalidClock.process(samples: samples, valid: valid, start: 0.256, session: session, epoch: 0,
+                    route: "mic").unknown == .invalidClock && clockScript.resetFlags.count == 1,
+                    "invalid initial clock cannot run another prediction")
+        print("PASS late speech, late warmup and invalid monotonic clock safety")
 
         let slow = Script(Array(repeating: .probability(0, seconds: 0.2), count: 100))
         var throttled = MeetingSpeechActivityDetector(model: ScriptedModel(script: slow), clock: { slow.now })
@@ -217,7 +240,8 @@ struct MeetingCaptureSpeechActivityTests {
         for index in 0..<93 {
             let frame = throttled.process(samples: samples, valid: valid, start: Double(index) * 0.256,
                                           session: session, epoch: 0, route: "mic")
-            try require(frame.probability == nil && frame.unknown != .disabled, "persistently slow model stays fail-open")
+            try require((index == 1 || index == 2 ? frame.probability == 0 : frame.probability == nil)
+                        && frame.unknown != .disabled, "only measured frames classify; repeated slow recovery warmup stays unknown")
             if frame.unknown == .budgetCooldown { cooling += 1 }
         }
         try require(slow.resetFlags.count == 13 && cooling == 80,
@@ -238,8 +262,9 @@ struct MeetingCaptureSpeechActivityTests {
                     session: session, epoch: 1, route: "mic", cancelled: { true }).unknown == .cancelled,
                     "cancellation suppresses inference during recovery")
         try require(slow.resetFlags.count == 13, "invalid coverage and cancellation do not predict")
-        try require(throttled.process(samples: samples, valid: valid, start: 0,
-                    session: UUID(), epoch: 0, route: "mic").unknown == .overBudget,
+        let newSession = throttled.process(samples: samples, valid: valid, start: 0,
+                    session: UUID(), epoch: 0, route: "mic")
+        try require(newSession.unknown == .contextWarmup && newSession.budgetExceeded,
                     "new attempt receives its own budget allowance")
         print("PASS bounded repeated retries, replay/epoch safety, unscored input and cancellation")
 
@@ -271,11 +296,13 @@ struct MeetingCaptureSpeechActivityTests {
             try await wait(recovered, count: index + 1)
             try require(!worker.isUnavailable, "recoverable budget failure must not permanently drop worker")
         }
-        try require(recovered.values.prefix(12).allSatisfy { $0.2 == .unknown }
-                    && recovered.values.last!.2 == .nonSpeech, "worker publishes only measured recovery after unknown/warmup")
+        try require(recovered.values.enumerated().allSatisfy { index, event in
+                        event.2 == ([1, 2, 12].contains(index) ? .nonSpeech : .unknown)
+                    }, "worker publishes valid late quiet and excludes cooldown/warmup")
         try require(!worker.confidentlyNonSpeech(start: 0, end: 12 * 0.256)
                     && !worker.confidentlyNonSpeech(start: 3 * 0.256, end: 11 * 0.256),
-                    "over-budget, cooldown and warmup ranges never authorize ASR suppression")
+                    "cooldown and warmup ranges never authorize ASR suppression")
+        try require(worker.confidentlyNonSpeech(start: 0.256, end: 0.768), "valid late quiet coverage can authorize ASR suppression")
         try require(worker.confidentlyNonSpeech(start: 12 * 0.256, end: 13 * 0.256),
                     "fully measured quiet resumes after recovery")
         worker.stop(); await worker.join()
@@ -314,5 +341,85 @@ struct MeetingCaptureSpeechActivityTests {
         try require(stoppedEvents.values.isEmpty && !stopping.confidentlyNonSpeech(start: 0, end: 0.256),
                     "stop joins in-flight prediction and prevents stale publication")
         print("PASS actual worker hard disable and joined cancellation during inference")
+    }
+
+    static func delayedRightTail() async throws {
+        for tailProbability in [Float(0), 0.99, 0.5] {
+            let events = Events()
+            let worker = MeetingCaptureSpeechActivityWorker(factory: { Fake() }, publish: events.add)
+            for index in 0..<2 {
+                let start = Double(index) * 0.256
+                worker.offer(try input(0, start: start), start: start)
+                try await wait(events, count: index + 1)
+            }
+            try require(!worker.confidentlyNonSpeech(start: 0.256, end: 0.768), "sync assessment never invents the missing frame")
+            let delayed = Task {
+                try await Task.sleep(for: .milliseconds(40))
+                worker.offer(try input(tailProbability, start: 0.512), start: 0.512)
+            }
+            let began = ProcessInfo.processInfo.systemUptime
+            let accepted = await worker.awaitConfidentNonSpeech(start: 0.256, end: 0.768)
+            try await delayed.value
+            try require(accepted == (tailProbability == 0), "only a measured quiet right frame completes the negative proof")
+            try require(ProcessInfo.processInfo.systemUptime - began >= 0.03, "query waited for the actual frame")
+            worker.stop(); await worker.join()
+        }
+        print("PASS async negative proof waits for one delayed real frame and rejects speech/unknown")
+
+        let events = Events()
+        let worker = MeetingCaptureSpeechActivityWorker(factory: { Fake() }, publish: events.add)
+        for index in 0..<3 {
+            let start = Double(index) * 0.256
+            worker.offer(try input(index == 2 ? 0.5 : 0, start: start), start: start)
+            try await wait(events, count: index + 1)
+        }
+        for range in [(0.0, 0.512), (0.256, 1.024), (0.8, 1.0), (0.256, 2.0)] {
+            let began = ProcessInfo.processInfo.systemUptime
+            try require(!(await worker.awaitConfidentNonSpeech(start: range.0, end: range.1)),
+                        "warmup, unknown, empty coverage and large tail never wait into silence proof")
+            try require(ProcessInfo.processInfo.systemUptime - began < 0.2, "ineligible coverage returns before the wait budget")
+        }
+        worker.stop(); await worker.join()
+
+        let timeoutEvents = Events()
+        let timeoutWorker = MeetingCaptureSpeechActivityWorker(factory: { Fake() }, publish: timeoutEvents.add)
+        for index in 0..<2 {
+            let start = Double(index) * 0.256
+            timeoutWorker.offer(try input(0, start: start), start: start)
+            try await wait(timeoutEvents, count: index + 1)
+        }
+        let tooLarge = ProcessInfo.processInfo.systemUptime
+        try require(!(await timeoutWorker.awaitConfidentNonSpeech(start: 0.256, end: 1.024)),
+                    "an entirely quiet prefix cannot wait for more than one missing frame")
+        try require(ProcessInfo.processInfo.systemUptime - tooLarge < 0.2, "oversized quiet tail returns without polling")
+        let began = ProcessInfo.processInfo.systemUptime
+        try require(!(await timeoutWorker.awaitConfidentNonSpeech(start: 0.256, end: 0.768)), "unreceived tail times out without false skip")
+        let elapsed = ProcessInfo.processInfo.systemUptime - began
+        try require(elapsed >= 0.34 && elapsed < 1.5, "wait has a bounded 350ms budget")
+        let stopping = Task { await timeoutWorker.awaitConfidentNonSpeech(start: 0.256, end: 0.768) }
+        try await Task.sleep(for: .milliseconds(15))
+        let stopped = ProcessInfo.processInfo.systemUptime
+        timeoutWorker.stop()
+        try require(!(await stopping.value) && ProcessInfo.processInfo.systemUptime - stopped < 0.2,
+                    "Stop immediately invalidates an active negative proof wait")
+        await timeoutWorker.join()
+        print("PASS ineligible evidence returns immediately, tail timeout never skips and Stop invalidates wait")
+
+        let cancelEvents = Events()
+        let cancelWorker = MeetingCaptureSpeechActivityWorker(factory: { Fake() }, publish: cancelEvents.add)
+        for index in 0..<2 {
+            let start = Double(index) * 0.256
+            cancelWorker.offer(try input(0, start: start), start: start)
+            try await wait(cancelEvents, count: index + 1)
+        }
+        let cancelling = Task { await cancelWorker.awaitConfidentNonSpeech(start: 0.256, end: 0.768) }
+        try await Task.sleep(for: .milliseconds(15)); cancelling.cancel()
+        try require(!(await cancelling.value), "task cancellation cannot grant a pending negative proof")
+        let sourceReset = Task { await cancelWorker.awaitConfidentNonSpeech(start: 0.256, end: 0.768) }
+        try await Task.sleep(for: .milliseconds(15))
+        cancelWorker.offer(try input(0, start: 3), start: 3)
+        try require(!(await sourceReset.value), "source gap invalidates pinned evidence generation")
+        cancelWorker.stop(); await cancelWorker.join()
+        print("PASS negative proof task cancellation and source reset")
     }
 }

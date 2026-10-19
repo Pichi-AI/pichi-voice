@@ -87,13 +87,15 @@ nonisolated struct MeetingLocalSileroActivityModel: MeetingSpeechActivityFrameMo
 }
 
 nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFrameModel> {
-    static var version: String { "speech-shadow-b2-v2" }
+    static var version: String { "speech-shadow-b2-v3" }
     struct Frame: Codable, Equatable {
-        enum Unknown: String, Codable { case invalidInput, unscoredCoverage, contextWarmup, modelFailure, overBudget, budgetCooldown, cancelled, disabled }
+        enum Unknown: String, Codable { case invalidInput, invalidClock, unscoredCoverage, contextWarmup, modelFailure, budgetCooldown, cancelled, disabled }
         let start: Double
         let epoch: UInt64
         let probability: Float?
         let unknown: Unknown?
+        /// Scheduling telemetry, independent of whether a finite same-source score is valid.
+        let budgetExceeded: Bool
         /// Window-level activity only; not a voiced-duration annotation or near-end decision.
         var active: Bool? { self.probability.map { $0 >= 0.85 } }
     }
@@ -132,8 +134,9 @@ nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFra
             self.scope = nil; self.lastEnd = nil
         }
         self.sessionID = session
-        func unknown(_ reason: Frame.Unknown) -> Frame {
-            Frame(start: start.isFinite ? start : 0, epoch: epoch, probability: nil, unknown: reason)
+        func unknown(_ reason: Frame.Unknown, budgetExceeded: Bool = false) -> Frame {
+            Frame(start: start.isFinite ? start : 0, epoch: epoch, probability: nil,
+                  unknown: reason, budgetExceeded: budgetExceeded)
         }
         guard start.isFinite, start >= 0, !route.isEmpty,
               samples.count == 4096, valid.count == samples.count,
@@ -159,6 +162,7 @@ nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFra
             return unknown(.budgetCooldown)
         }
         let reset = self.needsReset, began = self.clock()
+        guard began.isFinite, began >= 0 else { self.resetUnscoredContext(); return unknown(.invalidClock) }
         do {
             let probability = try model.probability(samples: samples, reset: reset)
             guard !cancelled() else { self.resetUnscoredContext(); return unknown(.cancelled) }
@@ -168,20 +172,25 @@ nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFra
             }
             self.modelFailures = 0
             let elapsed = self.clock() - began
-            guard elapsed.isFinite, elapsed >= 0, elapsed <= 0.1 else {
-                self.consecutiveOverBudget += 1; self.needsReset = true
+            guard elapsed.isFinite, elapsed >= 0 else { self.resetUnscoredContext(); return unknown(.invalidClock) }
+            let budgetExceeded = elapsed > 0.1
+            if budgetExceeded {
+                self.consecutiveOverBudget += 1
                 if self.budgetCooldownRemainingSamples != nil || self.consecutiveOverBudget >= 3 {
                     // After the initial three slow calls, retry at most once per new
                     // two seconds of source PCM. A slow recovery call cools down again.
                     self.budgetCooldownRemainingSamples = Self.budgetCooldownSamples
                     self.consecutiveOverBudget = 0
                 }
-                return unknown(.overBudget)
+            } else {
+                self.consecutiveOverBudget = 0; self.budgetCooldownRemainingSamples = nil
             }
-            self.consecutiveOverBudget = 0; self.budgetCooldownRemainingSamples = nil
+            // Wall contention does not invalidate a completed, same-frame prediction or
+            // its recurrent state. Only subsequent cooldown frames go unscored.
             self.needsReset = false
-            if reset { return unknown(.contextWarmup) }
-            return Frame(start: start, epoch: epoch, probability: probability, unknown: nil)
+            if reset { return unknown(.contextWarmup, budgetExceeded: budgetExceeded) }
+            return Frame(start: start, epoch: epoch, probability: probability, unknown: nil,
+                         budgetExceeded: budgetExceeded)
         } catch {
             self.modelFailures += 1; self.consecutiveOverBudget = 0
             self.needsReset = true; return unknown(.modelFailure)

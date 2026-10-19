@@ -733,7 +733,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                     self.liveTranscript.availability = .available
                     self.reconcilePendingSpeech()
                 }, confidentlyNonSpeech: { [weak pendingSpeechCapture] start, end in
-                    pendingSpeechCapture?.confidentlyNonSpeech(start: start, end: end) ?? false
+                    await pendingSpeechCapture?.awaitConfidentNonSpeech(start: start, end: end) ?? false
                 })
             }
             captureStartAttempted = true

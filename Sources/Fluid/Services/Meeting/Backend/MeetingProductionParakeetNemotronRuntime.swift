@@ -611,8 +611,12 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     "sampleCount": String(samples.count), "sealed": String(update.isFinal)])
                 let recognized: (result: ASRTranscriptionResult, words: [ASRWordTiming])
                 let alreadyAcceptedSpeech = output?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                if !alreadyAcceptedSpeech,
-                   window.confidentlyNonSpeech(start: offset, end: offset + Double(samples.count) / 16_000) {
+                var confidentlyNonSpeech = false
+                if !alreadyAcceptedSpeech {
+                    confidentlyNonSpeech = await window.confidentlyNonSpeech(start: offset, end: offset + Double(samples.count) / 16_000)
+                }
+                try Task.checkCancellation()
+                if confidentlyNonSpeech {
                     // The same capture-owned VAD scores this complete physical interval.
                     // Speaker input above remains contiguous, and an empty result advances
                     // ASR coverage without inventing words or discarding an accepted prefix.

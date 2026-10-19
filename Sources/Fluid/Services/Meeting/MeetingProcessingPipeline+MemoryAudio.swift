@@ -4,7 +4,7 @@ import Foundation
 
 /// True requires complete, measured non-speech coverage on the original capture clock.
 /// Missing, stale or uncertain activity evidence must return false and preserve recognition.
-typealias MeetingConfidentNonSpeechQuery = @Sendable (TimeInterval, TimeInterval) -> Bool
+typealias MeetingConfidentNonSpeechQuery = @Sendable (TimeInterval, TimeInterval) async -> Bool
 
 extension MeetingProcessingPipeline {
     /// PCM input is another input capability of the existing pipeline, not another meeting
@@ -115,9 +115,12 @@ nonisolated final class MeetingPCMProgressiveWindow: @unchecked Sendable {
         self.nonSpeechQuery = confidentlyNonSpeech
     }
 
-    func confidentlyNonSpeech(start: TimeInterval, end: TimeInterval) -> Bool {
-        guard start.isFinite, end.isFinite, start >= 0, end > start else { return false }
-        return self.nonSpeechQuery?(start, end) == true
+    func confidentlyNonSpeech(start: TimeInterval, end: TimeInterval) async -> Bool {
+        guard !Task.isCancelled, start.isFinite, end.isFinite, start >= 0, end > start else { return false }
+        guard self.lock.withLock({ self.terminalError == nil }) else { return false }
+        guard let nonSpeechQuery else { return false }
+        let result = await nonSpeechQuery(start, end)
+        return !Task.isCancelled && self.lock.withLock({ self.terminalError == nil }) && result
     }
 
     /// Call sequentially, after the prior inference has joined. Cancellation closes this window

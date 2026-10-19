@@ -33,7 +33,7 @@ class B3EvalTests(unittest.TestCase):
                     "speechModelStatus": "local-cpu-only-silero-256ms-v6; threshold=0.85; warmup=one-frame",
                     "speechDiagnosticThreshold": 0.85, "speechFrameSamples": 4096, "speechFrameSampleRate": 16000,
                     "durationSeconds": 1, "speechFrames": [{"frame": {"start": 0, "probability": None,
-                        "unknown": "budgetCooldown" if version == "speech-shadow-b2-v2" else "disabled"},
+                        "unknown": "budgetCooldown" if version in ("speech-shadow-b2-v2", "speech-shadow-b2-v3") else "disabled"},
                         "temporalState": "unavailable"}]}))
                 annotations["sessions"].append({"sessionID": session_id, "sidecar": sidecar_name, "intervals": [{
                     "start": 0, "end": 1, "label": "noNearEndSpeech", "provenance": "synthetic fixture"}]})
@@ -43,7 +43,7 @@ class B3EvalTests(unittest.TestCase):
                 return subject.evaluate(annotation_path, sessions_root, sidecar_root)
 
     def test_legacy_and_recoverable_adapter_results_keep_distinct_provenance(self):
-        for version in ("speech-shadow-b2-v1", "speech-shadow-b2-v2"):
+        for version in ("speech-shadow-b2-v1", "speech-shadow-b2-v2", "speech-shadow-b2-v3"):
             with self.subTest(version=version):
                 result = self.evaluate_versions([version])
                 self.assertEqual(result["speechAdapterVersion"], version)
@@ -51,8 +51,11 @@ class B3EvalTests(unittest.TestCase):
                 self.assertEqual(result["baselineAcceptAllMeasuredFrames"]["negativeMeasuredFrames"], 0)
 
     def test_cannot_mix_detector_policies_in_one_aggregate(self):
-        with self.assertRaisesRegex(ValueError, "mixed speech adapter policies"):
-            self.evaluate_versions(["speech-shadow-b2-v1", "speech-shadow-b2-v2"])
+        for pair in (("speech-shadow-b2-v1", "speech-shadow-b2-v2"),
+                     ("speech-shadow-b2-v2", "speech-shadow-b2-v3"),
+                     ("speech-shadow-b2-v1", "speech-shadow-b2-v3")):
+            with self.subTest(pair=pair), self.assertRaisesRegex(ValueError, "mixed speech adapter policies"):
+                self.evaluate_versions(pair)
 
     def test_unknown_detector_version_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unexpected speech adapter"):

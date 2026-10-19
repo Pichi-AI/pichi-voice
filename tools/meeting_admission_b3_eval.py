@@ -16,7 +16,7 @@ LABELS = {"noNearEndSpeech", "coarseNearEndSpeechRegion"}
 THRESHOLDS = [0.0] + [round(i / 100, 2) for i in range(1, 11)] + [round(i / 20, 2) for i in range(3, 20)]
 REPORT_THRESHOLDS = [0.01, 0.05, 0.10, 0.50, 0.85, 0.95]
 EXPECTED_SPEECH_MODEL_FINGERPRINT = "259aec29878cbca1118f4e4fa1db126676286c90b65903266545f50e9ac4512d"
-SUPPORTED_SPEECH_ADAPTER_VERSIONS = {"speech-shadow-b2-v1", "speech-shadow-b2-v2"}
+SUPPORTED_SPEECH_ADAPTER_VERSIONS = {"speech-shadow-b2-v1", "speech-shadow-b2-v2", "speech-shadow-b2-v3"}
 
 
 def sha256(path):

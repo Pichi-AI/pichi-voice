@@ -366,6 +366,7 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
 
     static func main() async throws {
         try await shortAndEmptyFinalizationMatrix()
+        try await asyncNonSpeechAdmission()
         try await lifecyclePreviewAdmission()
         try await streamingPreviewDoesNotRepeatSealedPrivacy()
         try await completedWindowPacingFeedback()
@@ -470,7 +471,7 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
         try await adaptiveOwnerEvidence()
         try await ownerScopeRetiresModelsBeforeEncoder()
         try await optionalOwnerPreflightAndCancellation()
-        print("17 prepared streaming runtime contract groups passed")
+        print("18 prepared streaming runtime contract groups passed")
     }
 
     private static func invalidWindowCompletionFeedback() async throws {
@@ -620,6 +621,63 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
             await runtime.cleanup()
         }
         print("PASS growing protected previews, no duplicate sealed privacy, final native words and Stop coverage")
+    }
+
+    private static func asyncNonSpeechAdmission() async throws {
+        for quiet in [true, false] {
+            let recorder = Recorder(), runtime = make(recorder)
+            let window = MeetingPCMProgressiveWindow.fixture(samples: Array(repeating: 0, count: 48_000), final: true,
+                confidentlyNonSpeech: { start, end in
+                    recorder.event("query-begin")
+                    try? await Task.sleep(for: .milliseconds(20))
+                    recorder.event("query-end")
+                    return quiet && start == 0 && end == 3
+                })
+            let result = try await runtime.recognize(window: window, offset: 0, preview: nil)
+            try require(recorder.snapshot.contains("dia:0:48000") && recorder.snapshot.contains("query-end"),
+                        "Every physical delta reaches diarization and the async query joins before inference")
+            try require(recorder.snapshot.contains("asr:48000") == !quiet && result.batch.segments.isEmpty == quiet,
+                        "Only a completed async negative proof skips ASR; uncertain evidence still recognizes")
+            try require(result.acceptedThroughSample == 48_000 && result.asrStableThroughSample == 48_000,
+                        "Measured non-speech preserves exact physical source coverage")
+            _ = try await runtime.finishStreaming(); await runtime.cleanup()
+        }
+        let recorder = Recorder(), runtime = make(recorder)
+        let window = MeetingPCMProgressiveWindow.fixture(samples: Array(repeating: 0, count: 48_000), final: true,
+            confidentlyNonSpeech: { _, _ in
+                recorder.event("query-begin")
+                do { try await Task.sleep(for: .seconds(5)); return true }
+                catch { return false }
+            })
+        let operation = Task { try await runtime.recognize(window: window, offset: 0, preview: nil) }
+        for _ in 0..<10_000 {
+            if recorder.snapshot.contains("query-begin") { break }
+            await Task.yield()
+        }
+        try require(recorder.snapshot.contains("query-begin"), "Cancellation fixture reaches the actual async query seam")
+        operation.cancel()
+        do { _ = try await operation.value; throw FixtureFailure.invalid } catch is CancellationError {}
+        try require(!recorder.snapshot.contains("asr:48000"), "Cancelled negative proof cannot start fallback ASR")
+        await runtime.cleanup()
+
+        let speechRecorder = Recorder(), speechRuntime = make(speechRecorder)
+        let speechWindow = MeetingPCMProgressiveWindow.fixture(confidentlyNonSpeech: { _, _ in
+            speechRecorder.event("activity-query")
+            return speechRecorder.snapshot.contains("asr:48000")
+        })
+        let speechOperation = Task { try await speechRuntime.recognize(window: speechWindow, offset: 0, preview: nil) }
+        speechWindow.fixtureAppend(Array(repeating: 0, count: 48_000), final: false)
+        for _ in 0..<10_000 {
+            if speechRecorder.snapshot.contains("asr:48000") { break }
+            await Task.yield()
+        }
+        speechWindow.fixtureAppend(Array(repeating: 0, count: 48_000), final: true)
+        let speechResult = try await speechOperation.value
+        try require(speechRecorder.snapshot.filter { $0 == "activity-query" }.count == 1
+                    && speechRecorder.snapshot.contains("asr:96000") && !speechResult.batch.segments.isEmpty,
+                    "An accepted speech prefix never becomes a later negative-proof skip")
+        _ = try await speechRuntime.finishStreaming(); await speechRuntime.cleanup()
+        print("PASS async non-speech admission, exact coverage, cancellation before fallback ASR and accepted speech protection")
     }
 
     private static func lifecyclePreviewAdmission() async throws {

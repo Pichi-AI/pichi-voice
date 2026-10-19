@@ -803,6 +803,10 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         self.activityWorker?.confidentlyNonSpeech(start: start, end: end) ?? false
     }
 
+    func awaitConfidentNonSpeech(start: Double, end: Double) async -> Bool {
+        await self.activityWorker?.awaitConfidentNonSpeech(start: start, end: end) ?? false
+    }
+
     func stopAndWait() async {
         self.stop()
         await self.activityWorker?.join()
@@ -963,6 +967,13 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
         let end: Double
         let activity: MeetingSpeechActivity
     }
+    private struct NonSpeechAssessment {
+        let result: Bool
+        let reason: String
+        let scoredThrough: Double
+        let mayAwaitRightTail: Bool
+        let generation: UInt64
+    }
     private let queue = DispatchQueue(label: "meeting.speech-activity", qos: .utility)
     private let lock = NSLock()
     private var inputs: [Input] = []
@@ -972,6 +983,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private var unavailable = false
     private var epoch: UInt64 = 0
     private var evidence: [Evidence] = []
+    private var evidenceGeneration: UInt64 = 0
     private var detector: MeetingSpeechActivityDetector<Model>?
     private var samples: [Float] = []
     private var sampleStart = 0.0
@@ -1028,7 +1040,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             if inputs.count >= 16 || pendingSamples + count > 32_000 {
                 MeetingTimelineTrace.shared?.record("vad_queue_overflow", fields: ["captureID": session.uuidString,
                     "discardedBuffers": String(inputs.count), "discardedSamples": String(pendingSamples), "epoch": String(epoch)])
-                inputs.removeAll(); pendingSamples = 0; epoch &+= 1; evidence.removeAll()
+                inputs.removeAll(); pendingSamples = 0; epoch &+= 1; evidence.removeAll(); evidenceGeneration &+= 1
             }
             inputs.append(Input(buffer: buffer, start: start, count: count, epoch: epoch))
             pendingSamples += count
@@ -1040,27 +1052,71 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     }
 
     func confidentlyNonSpeech(start: Double, end: Double) -> Bool {
-        guard start.isFinite, end.isFinite, start >= 0, end > start else { return false }
-        let query = lock.withLock { () -> (Bool, String, Double) in
-            let scoredThrough = evidence.last?.end ?? 0
-            guard !closed, !unavailable else { return (false, closed ? "closed" : "unavailable", scoredThrough) }
-            var cursor = start
-            for item in evidence where item.end > start && item.start < end {
-                guard item.start <= cursor + 0.000_001, item.activity == .nonSpeech else {
-                    return (false, item.start > cursor + 0.000_001 ? "unscored-gap" : "speech-or-unknown", scoredThrough)
-                }
-                cursor = max(cursor, item.end)
-            }
-            return (cursor >= end - 0.000_001, cursor >= end - 0.000_001 ? "complete-nonspeech" : "unscored-tail", scoredThrough)
+        let query = self.nonSpeechAssessment(start: start, end: end)
+        self.recordNonSpeechQuery(query, start: start, end: end)
+        return query.result
+    }
+
+    /// A growing ASR window can arrive just before its last VAD frame completes.
+    /// Wait only for that one missing right-edge frame after an entirely measured quiet
+    /// prefix. Unknown, interior gaps and speech never become silence through waiting.
+    func awaitConfidentNonSpeech(start: Double, end: Double) async -> Bool {
+        let began = ProcessInfo.processInfo.systemUptime
+        var query = self.nonSpeechAssessment(start: start, end: end)
+        let generation = query.generation
+        var waited = false
+        func finish(_ result: Bool, reason: String? = nil) -> Bool {
+            self.recordNonSpeechQuery(query, start: start, end: end, result: result, reason: reason,
+                waitMilliseconds: waited ? (ProcessInfo.processInfo.systemUptime - began) * 1_000 : 0)
+            return result
         }
+        while true {
+            guard !Task.isCancelled else { return finish(false, reason: "cancelled") }
+            guard query.generation == generation else { return finish(false, reason: "source-reset") }
+            if waited, ProcessInfo.processInfo.systemUptime - began >= 0.35 {
+                return finish(false, reason: "right-tail-timeout")
+            }
+            if query.result { return finish(true) }
+            guard query.mayAwaitRightTail else { return finish(false) }
+            guard ProcessInfo.processInfo.systemUptime - began < 0.35 else { return finish(false, reason: "right-tail-timeout") }
+            waited = true
+            do { try await Task.sleep(for: .milliseconds(5)) }
+            catch { return finish(false, reason: "cancelled") }
+            query = self.nonSpeechAssessment(start: start, end: end)
+        }
+    }
+
+    private func nonSpeechAssessment(start: Double, end: Double) -> NonSpeechAssessment {
+        lock.withLock {
+            let scoredThrough = evidence.last?.end ?? 0
+            func result(_ value: Bool = false, _ reason: String, mayAwait: Bool = false) -> NonSpeechAssessment {
+                .init(result: value, reason: reason, scoredThrough: scoredThrough,
+                      mayAwaitRightTail: mayAwait, generation: evidenceGeneration)
+            }
+            guard start.isFinite, end.isFinite, start >= 0, end > start else { return result(false, "invalid-range") }
+            guard !closed, !unavailable else { return result(false, closed ? "closed" : "unavailable") }
+            var cursor = start, overlaps = 0
+            for item in evidence where item.end > start && item.start < end {
+                guard item.start <= cursor + 0.000_001 else { return result(false, "unscored-gap") }
+                guard item.activity == .nonSpeech else { return result(false, "speech-or-unknown") }
+                cursor = max(cursor, item.end); overlaps += 1
+            }
+            if cursor >= end - 0.000_001 { return result(true, "complete-nonspeech") }
+            let mayAwait = overlaps > 0 && end - cursor <= 0.256 + 0.000_001
+            return result(false, "unscored-tail", mayAwait: mayAwait)
+        }
+    }
+
+    private func recordNonSpeechQuery(_ query: NonSpeechAssessment, start: Double, end: Double,
+                                     result: Bool? = nil, reason: String? = nil, waitMilliseconds: Double = 0) {
         MeetingTimelineTrace.shared?.record("vad_policy_query", fields: ["captureID": session.uuidString,
-            "sourceStartSeconds": String(start), "sourceEndSeconds": String(end), "result": String(query.0),
-            "reason": query.1, "scoredThroughSeconds": String(query.2)])
-        return query.0
+            "sourceStartSeconds": String(start), "sourceEndSeconds": String(end), "result": String(result ?? query.result),
+            "reason": reason ?? query.reason, "scoredThroughSeconds": String(query.scoredThrough),
+            "waitMilliseconds": String(waitMilliseconds)])
     }
 
     func stop() {
-        lock.withLock { closed = true; inputs.removeAll(); pendingSamples = 0; evidence.removeAll() }
+        lock.withLock { closed = true; inputs.removeAll(); pendingSamples = 0; evidence.removeAll(); evidenceGeneration &+= 1 }
     }
 
     /// Queue barrier joins an in-flight non-preemptible CoreML prediction and releases its
@@ -1090,7 +1146,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             MeetingTimelineTrace.shared?.record("vad_reset", fields: ["captureID": session.uuidString,
                 "epoch": String(input.epoch), "sourceStartSeconds": String(input.start)])
             samples.removeAll(keepingCapacity: true); sampleStart = input.start
-            lock.withLock { evidence.removeAll() }
+            lock.withLock { evidence.removeAll(); evidenceGeneration &+= 1 }
         }
         previousEpoch = input.epoch; previousEnd = expectedEnd
         guard let copied = MeetingLiveSampleCopy.copy(input.buffer),
@@ -1115,6 +1171,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
                 "epoch": String(input.epoch), "sourceStartSeconds": String(start), "sourceEndSeconds": String(start + 0.256),
                 "probability": result?.probability.map { String($0) } ?? "unavailable",
                 "unknownReason": result?.unknown?.rawValue ?? (result == nil ? "no-detector" : "none"),
+                "budgetExceeded": String(result?.budgetExceeded ?? false),
                 "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000),
                 "detectorPolicyVersion": MeetingSpeechActivityDetector<Model>.version,
                 "probabilityScope": "OR-aggregate-8x32ms" ])
@@ -1122,7 +1179,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
                 // Only repeated actual model failures disable the attempt. Transient
                 // budget cooldown frames remain unknown and keep this worker available.
                 lock.withLock {
-                    unavailable = true; evidence.removeAll(); inputs.removeAll(); pendingSamples = 0
+                    unavailable = true; evidence.removeAll(); evidenceGeneration &+= 1; inputs.removeAll(); pendingSamples = 0
                 }
                 detector = nil; samples.removeAll(keepingCapacity: false)
                 return
