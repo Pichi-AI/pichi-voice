@@ -36,11 +36,16 @@ nonisolated struct TranscriptTextRedaction: Sendable, Equatable {
     }
 }
 
+/// A redactor can be used without meeting orchestration or optional boundary admission.
+nonisolated enum TranscriptTextRedactionError: Error {
+    case unsupportedSpeechBoundary
+}
+
 extension TranscriptTextRedacting {
     nonisolated var checkpointIdentity: String? { nil }
     nonisolated var supportsSpeechBoundaryAdmission: Bool { false }
     func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
-        throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+        throw TranscriptTextRedactionError.unsupportedSpeechBoundary
     }
     /// Already-ready transformers and simple rule-only adapters have no resource lifecycle.
     func prepareForMeeting() async throws {}
