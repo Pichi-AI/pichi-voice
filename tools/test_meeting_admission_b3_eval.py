@@ -1,12 +1,63 @@
+import hashlib
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import meeting_admission_b3_eval as subject
 
 
 class B3EvalTests(unittest.TestCase):
+    def evaluate_versions(self, versions):
+        hashes = {"synthetic-model": "0" * 64}
+        fingerprint = hashlib.sha256(json.dumps(hashes, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sessions_root, sidecar_root = root / "sessions", root / "sidecars"
+            sidecar_root.mkdir()
+            annotations = {"schemaVersion": 1, "sessions": []}
+            for index, version in enumerate(versions, 1):
+                session_id = f"00000000-0000-0000-0000-{index:012d}"
+                session = {"id": session_id, "audioTracks": [{"id": "mic", "kind": "microphone", "chunks": [{
+                    "presentationStart": {"value": 0, "timescale": 1},
+                    "presentationEnd": {"value": 1, "timescale": 1}}]}], "transcriptSegments": []}
+                session_dir = sessions_root / session_id
+                session_dir.mkdir(parents=True)
+                session_bytes = json.dumps(session).encode()
+                (session_dir / "session.json").write_bytes(session_bytes)
+                sidecar_name = f"{index}.json"
+                (sidecar_root / sidecar_name).write_text(json.dumps({
+                    "version": "temporal-shadow-b1-v1", "sessionSHA256": hashlib.sha256(session_bytes).hexdigest(),
+                    "speechAdapterVersion": version, "speechModelHashes": hashes,
+                    "speechModelStatus": "local-cpu-only-silero-256ms-v6; threshold=0.85; warmup=one-frame",
+                    "speechDiagnosticThreshold": 0.85, "speechFrameSamples": 4096, "speechFrameSampleRate": 16000,
+                    "durationSeconds": 1, "speechFrames": [{"frame": {"start": 0, "probability": None,
+                        "unknown": "budgetCooldown" if version == "speech-shadow-b2-v2" else "disabled"},
+                        "temporalState": "unavailable"}]}))
+                annotations["sessions"].append({"sessionID": session_id, "sidecar": sidecar_name, "intervals": [{
+                    "start": 0, "end": 1, "label": "noNearEndSpeech", "provenance": "synthetic fixture"}]})
+            annotation_path = root / "annotations.json"
+            annotation_path.write_text(json.dumps(annotations))
+            with patch.object(subject, "EXPECTED_SPEECH_MODEL_FINGERPRINT", fingerprint):
+                return subject.evaluate(annotation_path, sessions_root, sidecar_root)
+
+    def test_legacy_and_recoverable_adapter_results_keep_distinct_provenance(self):
+        for version in ("speech-shadow-b2-v1", "speech-shadow-b2-v2"):
+            with self.subTest(version=version):
+                result = self.evaluate_versions([version])
+                self.assertEqual(result["speechAdapterVersion"], version)
+                self.assertEqual(result["sessions"][0]["frameCoverage"]["byLabel"]["noNearEndSpeech"]["unknownFrames"], 1)
+                self.assertEqual(result["baselineAcceptAllMeasuredFrames"]["negativeMeasuredFrames"], 0)
+
+    def test_cannot_mix_detector_policies_in_one_aggregate(self):
+        with self.assertRaisesRegex(ValueError, "mixed speech adapter policies"):
+            self.evaluate_versions(["speech-shadow-b2-v1", "speech-shadow-b2-v2"])
+
+    def test_unknown_detector_version_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unexpected speech adapter"):
+            self.evaluate_versions(["speech-shadow-b2-future"])
+
     def test_label_requires_full_containment(self):
         labels = [{"start": 0, "end": 2, "label": "noNearEndSpeech"}]
         self.assertEqual(subject.label_for(0, 2, labels), "noNearEndSpeech")

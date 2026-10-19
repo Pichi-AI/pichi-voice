@@ -16,6 +16,7 @@ LABELS = {"noNearEndSpeech", "coarseNearEndSpeechRegion"}
 THRESHOLDS = [0.0] + [round(i / 100, 2) for i in range(1, 11)] + [round(i / 20, 2) for i in range(3, 20)]
 REPORT_THRESHOLDS = [0.01, 0.05, 0.10, 0.50, 0.85, 0.95]
 EXPECTED_SPEECH_MODEL_FINGERPRINT = "259aec29878cbca1118f4e4fa1db126676286c90b65903266545f50e9ac4512d"
+SUPPORTED_SPEECH_ADAPTER_VERSIONS = {"speech-shadow-b2-v1", "speech-shadow-b2-v2"}
 
 
 def sha256(path):
@@ -189,6 +190,7 @@ def evaluate(annotation_path, sessions_root, sidecar_root):
     annotations = validate_annotations(json.loads(Path(annotation_path).read_text()))
     all_rows, session_reports = [], []
     model_identity = None
+    adapter_version = None
     for item in annotations["sessions"]:
         session_path = Path(sessions_root) / item["sessionID"] / "session.json"
         sidecar_path = Path(sidecar_root) / item["sidecar"]
@@ -199,8 +201,13 @@ def evaluate(annotation_path, sessions_root, sidecar_root):
         session_hash = hashlib.sha256(session_bytes).hexdigest()
         if sidecar.get("sessionSHA256") != session_hash:
             raise ValueError("sidecar/session hash mismatch")
-        if sidecar.get("speechAdapterVersion") != "speech-shadow-b2-v1":
+        current_adapter_version = sidecar.get("speechAdapterVersion")
+        if (not isinstance(current_adapter_version, str)
+                or current_adapter_version not in SUPPORTED_SPEECH_ADAPTER_VERSIONS):
             raise ValueError("unexpected speech adapter")
+        if adapter_version is not None and current_adapter_version != adapter_version:
+            raise ValueError("mixed speech adapter policies")
+        adapter_version = current_adapter_version
         hashes = sidecar.get("speechModelHashes")
         if (sidecar.get("version") != "temporal-shadow-b1-v1"
                 or sidecar.get("speechModelStatus") != "local-cpu-only-silero-256ms-v6; threshold=0.85; warmup=one-frame"
@@ -261,6 +268,7 @@ def evaluate(annotation_path, sessions_root, sidecar_root):
         "warning": "Development recordings, correlated 256ms frames, post-hoc user reports, and coarse speech regions; not word accuracy, recall, WER, or held-out evidence.",
         "annotationSHA256": sha256(annotation_path),
         "speechModelFingerprintSHA256": EXPECTED_SPEECH_MODEL_FINGERPRINT,
+        "speechAdapterVersion": adapter_version,
         "sessionCount": len(session_reports),
         "independentlyFrameLabelledPositiveRecordingCount": 0,
         "recordingsWithCoarseScriptRegion": sum(any(i["label"] == "coarseNearEndSpeechRegion" for i in s["intervals"])
