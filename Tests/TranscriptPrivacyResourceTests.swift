@@ -49,6 +49,20 @@ struct TranscriptPrivacyResourceTests {
             try await service.prepare()
             let redacted = try await service.redact("Врач Иван Иванов, email test@example.org.")
             precondition(!redacted.contains("Иванов") && !redacted.contains("test@example.org"))
+            for phrase in [
+                "обсудили планы",
+                "обсудили планы.",
+                "обсудили номер задачи и телефон в справочнике затем продолжили обсуждение графика",
+                "Это вот они буквально недавно в апреле запустили там новую версию приложения и теперь мы обсуждаем работу интерфейса пока устройство распознаёт речь и показывает текст затем делаем паузу и ждём завершения обработки"
+            ] {
+                let completed = try await service.redactSpeechBoundaryWithSpans(phrase)
+                precondition(completed.text == phrase && completed.spans.isEmpty,
+                    "Production A1 must not replace ordinary completed words with privacy masks")
+            }
+            let closedPII = try await service.redactSpeechBoundaryWithSpans("Врач Иван Иванов, телефон +7 916 123-45-67 и продолжили обсуждение")
+            precondition(!closedPII.text.contains("Иванов") && !closedPII.text.contains("916"))
+            precondition(closedPII.text.hasSuffix("и продолжили обсуждение"),
+                "Entity cleanup must preserve surrounding ordinary completed words")
             let attemptedAgain = Task {
                 withUnsafeCurrentTask { $0?.cancel() }
                 try await service.prepare()

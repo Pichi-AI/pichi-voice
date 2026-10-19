@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 task_test_dir="$PWD/.build/pii-policy-tests"
 mkdir -p "$task_test_dir"
 if [[ "${PICHI_PII_POLICY_ONLY:-0}" == "1" ]]; then
-    if [[ -n "${PICHI_PII_TEST_MODEL_DIRECTORY:-}" ]]; then
+    if [[ -n "${PICHI_PII_TEST_MODEL_DIRECTORY:-}" || -n "${PICHI_PII_A1_TEST_MODEL_DIRECTORY:-}" ]]; then
         printf '%s\n' 'Policy-only tests cannot run an explicitly requested native model.' >&2
         exit 1
     fi

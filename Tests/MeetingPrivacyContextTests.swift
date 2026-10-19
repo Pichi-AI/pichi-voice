@@ -41,7 +41,9 @@ private struct ClinicalNERFixtureRedactor: TranscriptTextRedacting {
 private actor NativePrivacyRedactor: TranscriptTextRedacting {
     let runtime = PIINERRuntime()
     nonisolated var supportsSpeechBoundaryAdmission: Bool { true }
-    func prepare(_ directory: URL) async throws { try await runtime.load(directory: directory) }
+    func prepare(_ directory: URL, descriptor: PIIModelDescriptor = .russianTiny) async throws {
+        try await runtime.load(descriptor: descriptor, directory: directory)
+    }
     func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         let output = try PIIRedactor.redactSpeechBoundary(text, ner: await runtime.tag(text))
         return .init(text: output.text, spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) })
@@ -333,6 +335,11 @@ struct MeetingPrivacyContextTests {
             try await provisionalSuite(using: native)
             try await knownNonPersonPCMContextSuite(using: native)
             try await clinicalMedicationContextSuite(using: native)
+        }
+        if let path = ProcessInfo.processInfo.environment["PICHI_PII_A1_TEST_MODEL_DIRECTORY"] {
+            let native = NativePrivacyRedactor()
+            try await native.prepare(URL(fileURLWithPath: path, isDirectory: true), descriptor: .russianA1)
+            try await completedSpeechBoundaryContextSuite(using: native)
         }
         #endif
         try await liveDeliverySuite()
