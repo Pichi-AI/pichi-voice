@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import UIKit
 
 /// iOS host composition of the same application services. Every domain operation remains in
 /// the existing coordinator, pipeline, registry, settings, resource and storage owners.
@@ -14,6 +15,13 @@ final class AppServices: ObservableObject {
     let transcriptPrivacy: PichiTranscriptPrivacyService
     @Published private(set) var isUIReady = false
     private static var didCleanExportStaging = false
+    private let settings: SettingsStore
+    private var idlePreparationObservers: Set<AnyCancellable> = []
+    private var isSceneActive = false
+    private var hasRestoredInitialState = false
+    private lazy var idlePrivacyPreparation = PichiPrivacyIdlePreparationController(
+        prepare: { [transcriptPrivacy] in try await transcriptPrivacy.prepareInstalledForIdle() },
+        release: { [transcriptPrivacy] token in await transcriptPrivacy.releaseIdlePreparation(token) })
 
     init(store: (any MeetingSessionStoring)? = nil,
          capture injectedCapture: (any MeetingCaptureControlling)? = nil,
@@ -28,6 +36,7 @@ final class AppServices: ObservableObject {
             Self.didCleanExportStaging = true
         }
         let settings = settings ?? SettingsStore.shared
+        self.settings = settings
         let store = store ?? MeetingSessionStore.shared
         let privacy = privacy ?? PichiTranscriptPrivacyService()
         // A host can decorate the prepared privacy service without replacing its
@@ -93,6 +102,15 @@ final class AppServices: ObservableObject {
                 try PichiMeetingProviderFactory.validateRecordingConfiguration($0, isAppleSilicon: CPUArchitecture.isAppleSilicon)
             }
         )
+        for publisher in [settings.objectWillChange, asr.objectWillChange, meetingSessionCoordinator.objectWillChange] {
+            publisher.sink { [weak self] in
+                Task { @MainActor in
+                    // objectWillChange arrives before its new setting/activity is committed.
+                    await Task.yield()
+                    await self?.updateIdlePrivacyPreparation()
+                }
+            }.store(in: &idlePreparationObservers)
+        }
     }
 
     func signalUIReady() async {
@@ -100,6 +118,33 @@ final class AppServices: ObservableObject {
         isUIReady = true
         await meetingSessionCoordinator.ensureRestored()
         await meetingSessionCoordinator.sweepExpiredAudio()
+        hasRestoredInitialState = true
+        await updateIdlePrivacyPreparation()
+    }
+
+    func setSceneActive(_ active: Bool) async {
+        isSceneActive = active
+        await updateIdlePrivacyPreparation()
+    }
+
+    func didReceiveMemoryWarning() async {
+        await idlePrivacyPreparation.didReceiveMemoryWarning()
+    }
+
+    private func updateIdlePrivacyPreparation() async {
+        let coordinator = meetingSessionCoordinator
+        let meetingActivity = coordinator.hasPendingStart || coordinator.isRecording || coordinator.isProcessing
+            || asr.activeExclusiveActivity == .meeting
+        let otherWork = !coordinator.isQuiescent && !meetingActivity
+            || (asr.activeExclusiveActivity != nil && asr.activeExclusiveActivity != .meeting)
+            || asr.hasActiveModelPreparation
+            || (MeetingModelResidencyCoordinator.shared.isExclusive && !meetingActivity)
+        let identity = [transcriptPrivacy.checkpointIdentity ?? "", settings.selectedSpeechModel.rawValue,
+                        settings.meetingTranscriptionBackendID.rawValue,
+                        settings.meetingRecordingDefaults.languageCode ?? ""].joined(separator: "|")
+        await idlePrivacyPreparation.update(.init(isSceneActive: isSceneActive, isUIReady: isUIReady && hasRestoredInitialState,
+            privacyEnabled: settings.meetingPIIRedactionEnabled, configurationIdentity: identity,
+            hasRecordingActivity: meetingActivity, hasOtherModelWork: otherWork))
     }
 }
 
@@ -107,6 +152,7 @@ final class AppServices: ObservableObject {
 struct PichiVoiceMobileApp: App {
     @StateObject private var services = AppServices.shared
     @ObservedObject private var settings = SettingsStore.shared
+    @Environment(\.scenePhase) private var scenePhase
     var body: some Scene {
         WindowGroup {
             AdaptiveAppTheme(accent: settings.accentColor) {
@@ -124,6 +170,13 @@ struct PichiVoiceMobileApp: App {
                 if ProcessInfo.processInfo.environment["PICHI_UI_CAPTION_REVIEW"] == "1" { return }
                 #endif
                 await services.signalUIReady()
+                await services.setSceneActive(scenePhase == .active)
+            }
+            .onChange(of: scenePhase) { _, phase in
+                Task { await services.setSceneActive(phase == .active) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                Task { await services.didReceiveMemoryWarning() }
             }
         }
     }

@@ -57,10 +57,10 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0].interpreter, "sh")
         self.assertFalse(pending[0].requires_ui)
-        self.assertEqual(len(RUNNER.PROBES), 62)
+        self.assertEqual(len(RUNNER.PROBES), 63)
         self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 49)
         self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 8)
-        self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 5)
+        self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 6)
         activity = [probe for probe in RUNNER.PROBES if probe.name == "meeting_capture_activity"]
         self.assertEqual(len(activity), 1)
         self.assertEqual(activity[0].interpreter, "sh")

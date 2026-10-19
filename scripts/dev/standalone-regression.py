@@ -266,6 +266,7 @@ PROBES = tuple(sorted(
        Probe("Tests/run_meeting_timeline_trace_tests.sh", "sh"),
        Probe("Tests/run_process_cpu_diagnostics_tests.sh", "bash"),
        Probe("Tests/run_transcript_privacy_tests.sh", "bash"),
+       Probe("Tests/run_privacy_idle_preparation_tests.sh", "bash"),
        Probe("Tests/run_upstream_sync_tests.sh", "bash"),
        Probe("Tests/run_update_prompt_tests.sh", "sh", requires_ui=True)],
     key=lambda probe: probe.name,
