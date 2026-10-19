@@ -2123,6 +2123,16 @@ final class MeetingSessionCoordinator: ObservableObject {
         snapshot.revision = self.liveTranscript.revision + 1
         self.liveTranscript = snapshot
         self.reconcilePendingSpeech()
+        // The strict runtime acknowledges a physical source prefix only after ASR,
+        // attribution and privacy have admitted it. Publish that protected history
+        // first; acoustic progress or a provisional preview cannot retire waves.
+        if let through = batch.protectedSourceThroughSample,
+           let track = batch.sourceTrack, track.kind == .microphone,
+           self.activeSession?.audioTracks.contains(where: { $0.id == track.id }) == true,
+           let capture = self.pendingSpeechCapture {
+            self.pendingSpeech = capture.acknowledgeProtectedSource(
+                source: .you, throughSample: through, transcriptRevision: snapshot.revision)
+        }
     }
 
     private func reconcilePendingSpeech() {

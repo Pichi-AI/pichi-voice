@@ -33,6 +33,7 @@ final class MeetingInlineCaptionBoundsTests: XCTestCase {
             ("narrow", CGFloat(260), DynamicTypeSize.large, 64),
             ("wide-large-type", CGFloat(600), DynamicTypeSize.accessibility2, 64),
             ("narrow-large-type", CGFloat(280), DynamicTypeSize.accessibility2, 31),
+            ("narrow-largest-type", CGFloat(280), DynamicTypeSize.accessibility5, 31),
             ("wide-updated-text", CGFloat(560), DynamicTypeSize.large, 64)
         ] {
             host.model.width = min(width, host.window.bounds.width - 40)
