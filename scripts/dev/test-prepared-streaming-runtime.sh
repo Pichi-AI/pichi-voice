@@ -47,7 +47,7 @@ assembly = '''
     }
     private func batch(_ output: MeetingParakeetEpochOutput, epoch: MeetingAnalysisEpochID, offset: Double) -> MeetingPCMTranscriptBatch {
         .init(segments: output.words.enumerated().map { index, word in
-            .init(id: "\\(epoch.ordinal):\\(index)", text: word.word, start: offset + word.start, end: offset + word.end)
+            .init(id: "\\(epoch.ordinal):\\(index)", text: word.text, start: offset + word.start, end: offset + word.end)
         }, speakers: output.words.isEmpty ? [] : [.init(id: "synthetic-speaker")])
     }
 '''
@@ -97,7 +97,10 @@ streamingWitnesses = r'''
         return [.init()]
     }
 '''
-Path(sys.argv[2]).write_text('import Foundation\n' + runtime[start:end] + preflight +
+provider = Path('Sources/Fluid/Services/TranscriptionProvider.swift').read_text()
+word_start = provider.index('nonisolated struct ASRWordTiming:')
+word_end = provider.index('/// A provider', word_start)
+Path(sys.argv[2]).write_text('import Foundation\n' + provider[word_start:word_end] + runtime[start:end] + preflight +
     '\nfinal nonisolated class MeetingParakeetNemotronRuntime: Sendable {\n' +
     '    let scope: StreamingScopeFixture?\n    init(scope: StreamingScopeFixture? = nil) { self.scope = scope }\n' +
     runtime[start_loop:end_loop] + runtime[start_scope:end_box] + runtime[start_prepared:end_prepared] +

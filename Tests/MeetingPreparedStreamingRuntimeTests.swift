@@ -3,7 +3,6 @@ import Foundation
 // A model-free typecheck of the actual prepared adapter plus the actual progressive ASR loop.
 // ASR and speaker model witnesses record ownership and return synthetic timed words. Canonical
 // assembly itself is covered by its existing actual-source word-attribution contract suite.
-nonisolated struct ASRWordTiming: Sendable { let word: String; let start: Double; let end: Double }
 nonisolated struct ASRSegmentTiming: Codable, Sendable {}
 nonisolated struct ASRTranscriptionResult: Sendable { let text: String; var confidence: Double = 0; var segmentTimings: [ASRSegmentTiming] = [] }
 nonisolated struct MeetingAnalysisEpochID: Hashable, Sendable { let trackID: UUID; let ordinal: Int }
@@ -146,7 +145,7 @@ nonisolated struct StreamingPinWitness: Sendable {
 }
 nonisolated struct StreamingASRWitness: MeetingParakeetASRSession {
     func transcribeWithTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
-        (.init(text: "synthetic"), [.init(word: "synthetic", start: 0, end: Double(samples.count) / 16_000)])
+        (.init(text: "synthetic"), [.init(text: "synthetic", start: 0, end: Double(samples.count) / 16_000)])
     }
 }
 nonisolated struct StreamingFactoryWitness: MeetingNemotronDiarizerFactory {
@@ -175,7 +174,7 @@ private nonisolated final class SyntheticASR: MeetingParakeetASRSession, Sendabl
     func transcribeWithTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
         self.recorder.event("asr:\(samples.count)")
         if self.fail { throw FixtureFailure.inference }
-        return (.init(text: self.silence ? "" : "synthetic"), self.silence ? [] : [ASRWordTiming(word: "synthetic", start: 0, end: Double(samples.count) / 16_000)])
+        return (.init(text: self.silence ? "" : "synthetic"), self.silence ? [] : [ASRWordTiming(text: "synthetic", start: 0, end: Double(samples.count) / 16_000)])
     }
 }
 
@@ -195,7 +194,7 @@ private actor LifecycleASR: MeetingParakeetASRSession {
     func transcribeWithTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
         self.recorder.event("asr:\(samples.count)")
         if let gate { await gate.waitForEncoderRelease() }
-        return (.init(text: "synthetic"), [.init(word: "synthetic", start: 0, end: Double(samples.count) / 16_000)])
+        return (.init(text: "synthetic"), [.init(text: "synthetic", start: 0, end: Double(samples.count) / 16_000)])
     }
 }
 private actor SyntheticDiarizer: MeetingIncrementalNemotronDiarizerSession {
