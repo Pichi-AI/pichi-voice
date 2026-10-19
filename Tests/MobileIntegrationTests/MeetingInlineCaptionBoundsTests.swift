@@ -174,7 +174,6 @@ private struct InlineBoundsDocument: View {
         }
         .appTheme(theme)
         .environment(\.dynamicTypeSize, model.textSize)
-        .environment(\.accessibilityReduceMotion, true)
     }
 }
 
