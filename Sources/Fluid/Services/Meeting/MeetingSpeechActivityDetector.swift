@@ -43,30 +43,46 @@ nonisolated struct MeetingLocalSileroActivityModel: MeetingSpeechActivityFrameMo
             self.context = [Float](repeating: 0, count: 64)
             self.hidden = [Float](repeating: 0, count: 128); self.cell = self.hidden
         }
-        func array(_ values: [Float]) throws -> MLMultiArray {
-            let array = try MLMultiArray(shape: [1, NSNumber(value: values.count)], dataType: .float32)
-            for i in values.indices {
-                array[i] = NSNumber(value: values[i])
+        // CoreML feature providers bridge through Objective-C. Drain temporary arrays and
+        // providers per frame even when this adapter runs on a long-lived worker thread.
+        return try autoreleasepool {
+            func array(_ values: [Float]) throws -> MLMultiArray {
+                let array = try MLMultiArray(shape: [1, NSNumber(value: values.count)], dataType: .float32)
+                // Fresh MLMultiArray storage is contiguous; avoid one NSNumber per sample.
+                values.withUnsafeBufferPointer { source in
+                    array.dataPointer.assumingMemoryBound(to: Float.self).update(from: source.baseAddress!, count: source.count)
+                }
+                return array
             }
-            return array
+            let features = try MLDictionaryFeatureProvider(dictionary: [
+                "audio_input": array(context + samples), "hidden_state": array(self.hidden), "cell_state": array(self.cell),
+            ])
+            let output = try model.prediction(from: features)
+            func values(_ name: String, count: Int) throws -> [Float] {
+                guard let array = output.featureValue(for: name)?.multiArrayValue,
+                      array.dataType == .float32, array.count == count else { throw Failure.output }
+                var stride = 1
+                var contiguous = true
+                for (dimension, actualStride) in zip(array.shape.reversed(), array.strides.reversed()) {
+                    if dimension.intValue > 1 && actualStride.intValue != stride { contiguous = false }
+                    stride *= dimension.intValue
+                }
+                let values: [Float]
+                if contiguous {
+                    values = Array(UnsafeBufferPointer(start: array.dataPointer.assumingMemoryBound(to: Float.self), count: count))
+                } else {
+                    values = (0..<count).map { array[$0].floatValue }
+                }
+                guard values.allSatisfy(\.isFinite) else { throw Failure.output }
+                return values
+            }
+            let p = try values("vad_output", count: 1)[0]
+            guard (0...1).contains(p) else { throw Failure.output }
+            let nextHidden = try values("new_hidden_state", count: 128)
+            let nextCell = try values("new_cell_state", count: 128)
+            self.hidden = nextHidden; self.cell = nextCell; self.context = Array(samples.suffix(64))
+            return p
         }
-        let features = try MLDictionaryFeatureProvider(dictionary: [
-            "audio_input": array(context + samples), "hidden_state": array(self.hidden), "cell_state": array(self.cell),
-        ])
-        let output = try model.prediction(from: features)
-        func values(_ name: String, count: Int) throws -> [Float] {
-            guard let array = output.featureValue(for: name)?.multiArrayValue,
-                  array.dataType == .float32, array.count == count else { throw Failure.output }
-            let values = (0..<count).map { array[$0].floatValue }
-            guard values.allSatisfy(\.isFinite) else { throw Failure.output }
-            return values
-        }
-        let p = try values("vad_output", count: 1)[0]
-        guard (0...1).contains(p) else { throw Failure.output }
-        let nextHidden = try values("new_hidden_state", count: 128)
-        let nextCell = try values("new_cell_state", count: 128)
-        self.hidden = nextHidden; self.cell = nextCell; self.context = Array(samples.suffix(64))
-        return p
     }
 }
 
