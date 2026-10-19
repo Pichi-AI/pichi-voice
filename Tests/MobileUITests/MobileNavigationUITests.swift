@@ -418,6 +418,12 @@ final class MobileNavigationUITests: XCTestCase {
                             "The real Start action must not require a prompt or enter recovery")
                 try await Task.sleep(nanoseconds: 250_000_000)
             }
+            if !recordingVisible() {
+                let hierarchy = XCTAttachment(string: app.debugDescription)
+                hierarchy.name = "production-start-accessibility-\(revision)"
+                hierarchy.lifetime = .keepAlways
+                add(hierarchy)
+            }
             try require(recordingVisible() && ProcessInfo.processInfo.systemUptime <= startDeadline,
                         "Start must expose real recording controls within 15 seconds of the XCTest tap request")
             mark("recording_visible")

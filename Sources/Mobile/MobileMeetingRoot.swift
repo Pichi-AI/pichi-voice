@@ -401,6 +401,7 @@ struct MobileMeetingRoot: View {
                 }.padding(compactHeight ? 12 : 24)
                     .frame(maxWidth: 1000, maxHeight: .infinity, alignment: .topLeading)
                     .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("meeting.recording")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button { run { _ = try await coordinator.stopAndTranscribe() } } label: {
