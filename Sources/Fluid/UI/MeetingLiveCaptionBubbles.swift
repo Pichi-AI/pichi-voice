@@ -164,6 +164,7 @@ struct MeetingLiveBubbleScrollList: View {
 
     @Environment(\.theme) private var theme
     @Environment(\.locale) private var locale
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPinnedToBottom = true
     @State private var paragraphs: [MeetingLiveCaptionParagraphs.Paragraph] = []
@@ -274,6 +275,12 @@ struct MeetingLiveBubbleScrollList: View {
                     if self.documentStyle { self.scrollToBottomIfPinned(proxy: proxy) }
                 }
                 .onChange(of: self.pending) {
+                    self.scrollToBottomIfPinned(proxy: proxy)
+                }
+                .onChange(of: self.dynamicTypeSize) {
+                    self.scrollToBottomIfPinned(proxy: proxy)
+                }
+                .onChange(of: self.locale.identifier) {
                     self.scrollToBottomIfPinned(proxy: proxy)
                 }
                 .onAppear { self.scrollToBottomIfPinned(proxy: proxy) }

@@ -408,6 +408,19 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testDynamicTypeReflowKeepsTheLatestProtectedTextVisible() async throws {
+        let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: .light)
+        defer { host.close() }
+        let scroll = try await captionScroll(in: host)
+        try await settle(host, "Initial captions follow before text-size changes") { self.nearBottom(scroll) }
+        let height = scroll.contentSize.height
+        host.model.textSize = .accessibility2
+        try await settle(host, "Larger native text stays visible without waiting for new speech") {
+            scroll.contentSize.height > height + 20 && self.nearBottom(scroll)
+        }
+        capture(host, step: "dynamic-type-following", scheme: .light)
+    }
+
     func testVersionedSnapshotRendersSameIDCorrectionsAcrossPendingActivity() async throws {
         let host = try CaptionNativeHost(rows: [], scheme: .light)
         defer { host.close() }
@@ -1014,6 +1027,7 @@ private struct CaptionPreviewFixtureRedactor: TranscriptTextRedacting {
 private final class CaptionNativeRows: ObservableObject {
     @Published var rows: [MeetingLiveBubbleComposer.Row]
     @Published var snapshot: MeetingLiveTranscriptSnapshot? = nil
+    @Published var textSize: DynamicTypeSize = .large
     @Published var pending: MeetingPendingSpeechSnapshot = .empty
     @Published var width: CGFloat
     let height: CGFloat
@@ -1045,6 +1059,7 @@ private struct CaptionNativeDocument: View {
         .appTheme(theme)
         .environment(\.colorScheme, scheme)
         .environment(\.locale, Locale(identifier: "ru"))
+        .environment(\.dynamicTypeSize, model.textSize)
     }
 }
 
