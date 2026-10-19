@@ -82,6 +82,24 @@ struct MeetingCaptureSpeechActivityTests {
         unavailable.stop(); await unavailable.join()
         print("PASS unavailable model does not block or infer silence")
 
+        let fallbackEvents = Events()
+        let capture = MeetingPendingSpeechCapture(originBox: MeetingLiveOriginBox(),
+            activityModel: { throw CocoaError(.fileNoSuchFile) }, onUpdate: { snapshot in
+                if !snapshot.tokens.isEmpty { fallbackEvents.add(0, 0, .speech) }
+            })
+        for frame in 0..<200 {
+            let start = Double(frame) * 0.02
+            let level = Float(0.02 + 0.012 * sin(start * 2 * .pi * 3))
+            capture.offer(kind: .microphone, sampleBuffer: try input(level, start: start, count: 320))
+            if frame % 10 == 0 { try await Task.sleep(for: .milliseconds(1)) }
+        }
+        let fallback = capture.reconcile(visible: .empty)
+        try require(!fallback.tokens.isEmpty, "Missing optional model keeps capture-only waveform feedback")
+        try require(!capture.confidentlyNonSpeech(start: 1, end: 2),
+                    "Heuristic UI activity must never authorize skipping recognition")
+        await capture.stopAndWait()
+        print("PASS missing optional VAD restores UI-only feedback while ASR stays fail-open")
+
         let gate = DispatchSemaphore(value: 0), loading = DispatchSemaphore(value: 0)
         let backlog = Events()
         let bounded = MeetingCaptureSpeechActivityWorker(factory: { loading.signal(); gate.wait(); return Fake() }, publish: backlog.add)

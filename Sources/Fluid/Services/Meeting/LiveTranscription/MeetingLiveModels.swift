@@ -724,7 +724,7 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         self.projection = MeetingPendingSpeechProjection(diagnostics: diagnostics)
         if let activityModel {
             self.activityWorker = MeetingCaptureSpeechActivityWorker(factory: activityModel) { [weak self] start, end, activity in
-                guard let self else { return }
+                guard let self, self.activityWorker?.isUnavailable != true else { return }
                 let publish = self.lock.withLock {
                     self.projection.observeSpeechActivity(source: .you, start: start, end: end, activity: activity)
                     return self.reservePublication()
@@ -744,7 +744,7 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     }
 
     func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
-        if let activityWorker, kind == .microphone {
+        if let activityWorker, kind == .microphone, !activityWorker.isUnavailable {
             let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             guard pts.isNumeric else { return }
             let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: self.originBox.establish(pts))
@@ -885,6 +885,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private var pendingSamples = 0
     private var scheduled = false
     private var closed = false
+    private var unavailable = false
     private var epoch: UInt64 = 0
     private var evidence: [Evidence] = []
     private var detector: MeetingSpeechActivityDetector<Model>?
@@ -902,8 +903,13 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             // A missing or invalid model leaves the whole attempt unknown. Capture and
             // recognition continue. The next explicit recording can try again.
             detector = (try? factory()).map { MeetingSpeechActivityDetector(model: Model(value: $0)) }
+            lock.withLock { unavailable = detector == nil }
         }
     }
+
+    /// A missing/disabled optional model restores capture-only UI feedback. Its heuristic
+    /// can never authorize ASR suppression or be treated as neural speech evidence.
+    var isUnavailable: Bool { lock.withLock { unavailable } }
 
     func offer(_ buffer: CMSampleBuffer, start: Double) {
         let count = CMSampleBufferGetNumSamples(buffer)
@@ -933,7 +939,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     func confidentlyNonSpeech(start: Double, end: Double) -> Bool {
         guard start.isFinite, end.isFinite, start >= 0, end > start else { return false }
         return lock.withLock {
-            guard !closed else { return false }
+            guard !closed, !unavailable else { return false }
             var cursor = start
             for item in evidence where item.end > start && item.start < end {
                 guard item.start <= cursor + 0.000_001, item.activity == .nonSpeech else { return false }
@@ -992,6 +998,13 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             let result = detector?.process(samples: frame, valid: [Bool](repeating: true, count: 4096),
                 start: start, session: session, epoch: input.epoch, route: "normalized-microphone-16k",
                 cancelled: { self.lock.withLock { self.closed || self.epoch != input.epoch } })
+            if result?.unknown == .disabled {
+                lock.withLock {
+                    unavailable = true; evidence.removeAll(); inputs.removeAll(); pendingSamples = 0
+                }
+                detector = nil; samples.removeAll(keepingCapacity: false)
+                return
+            }
             let activity: MeetingSpeechActivity
             // The graph OR-aggregates eight internal frames. A low aggregate bounds
             // every internal probability; intermediate activity remains explicitly unknown.
