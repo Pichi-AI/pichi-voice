@@ -157,6 +157,28 @@ private extension MeetingLiveSpeaker {
     }
 }
 
+/// Native text can finish wrapping after paragraph publication. Observe only the tail's
+/// actual size, so realizing unrelated older lazy paragraphs never requests following.
+private struct MeetingCaptionTailSizeKey: PreferenceKey {
+    static let defaultValue: CGSize? = nil
+    static func reduce(value: inout CGSize?, nextValue: () -> CGSize?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+private struct MeetingCaptionTailLayout: ViewModifier {
+    let isTail: Bool
+    func body(content: Content) -> some View {
+        content.background {
+            if self.isTail {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: MeetingCaptionTailSizeKey.self, value: geometry.size)
+                }.allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
+    }
+}
+
 /// Snapshot-to-row work changes with protected recognition, not the much more frequent
 /// capture meter and pending-waveform updates in the surrounding recording screen.
 struct MeetingLiveTranscriptScrollList: View {
@@ -324,6 +346,9 @@ struct MeetingLiveBubbleScrollList: View {
                 }
                 .onChange(of: self.locale.identifier) {
                     self.scrollToBottomIfPinned(proxy: proxy)
+                }
+                .onPreferenceChange(MeetingCaptionTailSizeKey.self) { size in
+                    if size != nil { self.scrollToBottomIfPinned(proxy: proxy) }
                 }
                 .onAppear { self.scrollToBottomIfPinned(proxy: proxy) }
 
@@ -625,6 +650,7 @@ private struct MeetingLiveParagraphRow: View, Equatable {
                 .padding(.vertical, self.theme.metrics.spacing.sm)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(MeetingCaptionTailLayout(isTail: self.isTail))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(self.paragraph.captionLabel + ", "
             + self.paragraph.text(includingPartials: !self.hidesPartialFromAccessibility)
@@ -685,6 +711,7 @@ struct MeetingLiveBubbleRow: View, Equatable {
                 .meetingBubbleStyle(self.presentationStyle)
         }
         .frame(maxWidth: .infinity, alignment: self.isMicrophone && !self.documentStyle ? .trailing : .leading)
+        .modifier(MeetingCaptionTailLayout(isTail: self.isTail))
         .padding(self.isMicrophone ? .leading : .trailing, self.documentStyle ? 0 : 32)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(self.sourceLabel + ", " + (self.hidesPartialFromAccessibility && self.row.isPartial ? "" : self.row.text)
