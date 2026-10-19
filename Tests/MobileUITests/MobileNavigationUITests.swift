@@ -114,7 +114,7 @@ final class MobileNavigationUITests: XCTestCase {
                         "The speech detection section and its enabled production Download must be visible")
             download.tap()
             capture("speech-download-04-production-download-tapped")
-            let deadline = ProcessInfo.processInfo.systemUptime + 600
+            let deadline = ProcessInfo.processInfo.systemUptime + 120
             var ready = false
             while ProcessInfo.processInfo.systemUptime < deadline {
                 try requireNoActiveAttempt()
@@ -133,7 +133,7 @@ final class MobileNavigationUITests: XCTestCase {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
             }
             capture("speech-download-05-download-result")
-            try require(ready, "Speech detection must show its own Ready label and enabled Download within 600 seconds")
+            try require(ready, "Speech detection must show its own Ready label and enabled Download within 120 seconds")
             openNavigation("meetings", title: app.tabBars.buttons["Встречи"].exists ? "Встречи" : "Meetings")
             try requireMeetingAtRest()
             capture("speech-download-06-returned-to-existing-meeting")
