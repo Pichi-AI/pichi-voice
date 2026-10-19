@@ -25,6 +25,7 @@ final class MeetingASRPreparedScope {
         attemptID: UUID,
         configuration: MeetingFinalProcessingConfiguration,
         owner: MeetingASRPreparationOwner,
+        preparedProvider: MeetingASRPreparedProvider? = nil,
         isActiveLease: @escaping (ASRActivityLease) -> Bool,
         body: @escaping (any TranscriptionProvider) async throws -> Result
     ) async throws -> Result {
@@ -33,7 +34,8 @@ final class MeetingASRPreparedScope {
         let scopeID = UUID()
         self.scope = Scope(id: scopeID, lease: lease)
         defer { if self.scope?.id == scopeID { self.scope = nil } }
-        let provider = try await owner.prepare(lease: lease, attemptID: attemptID, configuration: configuration)
+        let provider = try await owner.prepare(lease: lease, attemptID: attemptID, configuration: configuration,
+                                               preparedProvider: preparedProvider)
         guard isActiveLease(lease), let token = owner.currentClaimToken, token.lease == lease else {
             if let token = owner.currentClaimToken { await owner.release(token) }
             throw CancellationError()

@@ -5,6 +5,7 @@ nonisolated enum MeetingASRPreparationError: LocalizedError, Equatable {
     case invalidActivityLease
     case userModelDownloadInProgress
     case preparationInProgress
+    case invalidPreparedProvider
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +15,8 @@ nonisolated enum MeetingASRPreparationError: LocalizedError, Equatable {
             return "Wait for the active voice model download to finish."
         case .preparationInProgress:
             return "Meeting transcription preparation is already in progress."
+        case .invalidPreparedProvider:
+            return "The prepared transcription resource is unavailable or does not match this meeting."
         }
     }
 }
@@ -41,6 +44,7 @@ final class MeetingASRPreparationOwner {
         let attemptID: UUID
         let operationID: UUID
         let configuration: MeetingFinalProcessingConfiguration
+        let preparedProvider: MeetingASRPreparedProvider?
         var provider: (any TranscriptionProvider)?
         var task: Task<Void, Error>?
         var isReady = false
@@ -52,9 +56,11 @@ final class MeetingASRPreparationOwner {
         func matches(
             lease: ASRActivityLease,
             attemptID: UUID,
-            configuration: MeetingFinalProcessingConfiguration
+            configuration: MeetingFinalProcessingConfiguration,
+            preparedProvider: MeetingASRPreparedProvider?
         ) -> Bool {
             self.lease == lease && self.attemptID == attemptID && self.configuration == configuration
+                && self.preparedProvider === preparedProvider
         }
     }
 
@@ -111,6 +117,7 @@ final class MeetingASRPreparationOwner {
         lease: ASRActivityLease,
         attemptID: UUID,
         configuration: MeetingFinalProcessingConfiguration,
+        preparedProvider: MeetingASRPreparedProvider? = nil,
         progress: ((ModelPreparationProgress) -> Void)? = nil
     ) async throws -> any TranscriptionProvider {
         // Validation is pure: no claim, retirement, factory, or hook runs for a rejected request.
@@ -119,6 +126,9 @@ final class MeetingASRPreparationOwner {
             throw MeetingASRPreparationError.invalidActivityLease
         }
         _ = try MeetingProviderOptions.resolve(configuration)
+        guard preparedProvider == nil || preparedProvider?.configuration == configuration else {
+            throw MeetingASRPreparationError.invalidPreparedProvider
+        }
         guard !self.isUserDownloadInProgress() else {
             throw MeetingASRPreparationError.userModelDownloadInProgress
         }
@@ -126,7 +136,8 @@ final class MeetingASRPreparationOwner {
         if self.slot != nil {
             guard self.drainTask == nil,
                   self.slot?.matches(
-                      lease: lease, attemptID: attemptID, configuration: configuration
+                      lease: lease, attemptID: attemptID, configuration: configuration,
+                      preparedProvider: preparedProvider
                   ) == true
             else { throw MeetingASRPreparationError.preparationInProgress }
             guard let token = self.slot?.claimToken else {
@@ -164,6 +175,7 @@ final class MeetingASRPreparationOwner {
                 lease: lease,
                 operationID: operationID,
                 configuration: configuration,
+                preparedProvider: preparedProvider,
                 progressHandler: progressHandler
             )
         }
@@ -172,6 +184,7 @@ final class MeetingASRPreparationOwner {
             attemptID: attemptID,
             operationID: operationID,
             configuration: configuration,
+            preparedProvider: preparedProvider,
             task: task
         )
         return try await self.awaitPreparation(task, token: token)
@@ -220,14 +233,19 @@ final class MeetingASRPreparationOwner {
         lease: ASRActivityLease,
         operationID: UUID,
         configuration: MeetingFinalProcessingConfiguration,
+        preparedProvider: MeetingASRPreparedProvider?,
         progressHandler: @escaping (ModelPreparationProgress) -> Void
     ) async throws {
         try self.recheck(lease: lease, operationID: operationID)
         try await self.retireDictationResources(lease)
         try self.recheck(lease: lease, operationID: operationID)
-        let provider = try self.makeProvider(configuration)
+        // Transfer only after retirement and exact claim validation. `take` is synchronous,
+        // so there is no cancellation or actor-reentrancy gap before the slot owns cleanup.
+        let provider = try preparedProvider?.take(matching: configuration) ?? self.makeProvider(configuration)
         self.adoptProvider(provider, operationID: operationID)
-        try await self.prepareProvider(provider, configuration, progressHandler)
+        if preparedProvider == nil {
+            try await self.prepareProvider(provider, configuration, progressHandler)
+        }
         try self.recheck(lease: lease, operationID: operationID)
         guard self.slot?.operationID == operationID else { throw CancellationError() }
         self.markReady(operationID: operationID)
@@ -309,5 +327,43 @@ final class MeetingASRPreparationOwner {
         }
         self.drainTask = drainTask
         await drainTask.value
+    }
+}
+
+/// One-shot ownership transfer from installed-only idle preparation to the existing meeting
+/// scope. The creator validates artifact identity and model residency before exposing this
+/// resource. A matching take moves cleanup responsibility to MeetingASRPreparationOwner;
+/// an old idle cleanup can release only an unconsumed provider, never the adopted instance.
+@MainActor
+final class MeetingASRPreparedProvider {
+    let configuration: MeetingFinalProcessingConfiguration
+    private var provider: (any TranscriptionProvider)?
+    private var cleanupTask: Task<Void, Never>?
+
+    init(configuration: MeetingFinalProcessingConfiguration, provider: any TranscriptionProvider) {
+        self.configuration = configuration
+        self.provider = provider
+    }
+
+    func take(matching configuration: MeetingFinalProcessingConfiguration) throws -> any TranscriptionProvider {
+        try Task.checkCancellation()
+        guard self.configuration == configuration, self.cleanupTask == nil,
+              let provider = self.provider, provider.isReady else {
+            throw MeetingASRPreparationError.invalidPreparedProvider
+        }
+        self.provider = nil
+        return provider
+    }
+
+    /// Even a cancelled caller joins the single native unload. Invalidate the transferable
+    /// reference before the first suspension so a concurrent take cannot race that unload.
+    func cleanup() async {
+        if let task = self.cleanupTask { await task.value; return }
+        guard let provider = self.provider else { return }
+        self.provider = nil
+        let task = Task { @MainActor in await provider.releaseResidency() }
+        self.cleanupTask = task
+        await task.value
+        self.cleanupTask = nil
     }
 }

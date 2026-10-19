@@ -335,6 +335,15 @@ final class ASRService: ObservableObject {
     }
 
     func withPreparedMeetingASR<T>(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration, body: @escaping (any TranscriptionProvider) async throws -> T) async throws -> T {
+        try await self.withPreparedMeetingASR(attemptID: attemptID, configuration: configuration,
+                                             preparedProvider: nil, body: body)
+    }
+
+    var supportsPreparedProviderAdoption: Bool { true }
+
+    func withPreparedMeetingASR<T>(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+                                  preparedProvider: MeetingASRPreparedProvider?,
+                                  body: @escaping (any TranscriptionProvider) async throws -> T) async throws -> T {
         guard let lease = self.activityLease, lease.activity == .meeting else { throw MeetingASRPreparationError.invalidActivityLease }
         defer { if let release = self.deferredRelease { self.releaseExclusiveActivity(release) } }
         #if DEBUG
@@ -342,7 +351,8 @@ final class ASRService: ObservableObject {
         #else
         let owner = self.preparationOwner
         #endif
-        return try await self.scope.run(lease: lease, attemptID: attemptID, configuration: configuration, owner: owner, isActiveLease: { [weak self] in self?.activityLease == $0 }, body: body)
+        return try await self.scope.run(lease: lease, attemptID: attemptID, configuration: configuration, owner: owner,
+            preparedProvider: preparedProvider, isActiveLease: { [weak self] in self?.activityLease == $0 }, body: body)
     }
 
     func transcribeMeetingSamples(_ samples: [Float], provider: any TranscriptionProvider, languageCode: String) async throws -> ASRTranscriptionResult {

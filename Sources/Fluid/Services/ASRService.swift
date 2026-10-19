@@ -4467,13 +4467,26 @@ final class ASRService: ObservableObject {
         configuration: MeetingFinalProcessingConfiguration,
         body: @escaping (any TranscriptionProvider) async throws -> Result
     ) async throws -> Result {
+        try await self.withPreparedMeetingASR(attemptID: attemptID, configuration: configuration,
+                                             preparedProvider: nil, body: body)
+    }
+
+    var supportsPreparedProviderAdoption: Bool { true }
+
+    func withPreparedMeetingASR<Result>(
+        attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration,
+        preparedProvider: MeetingASRPreparedProvider?,
+        body: @escaping (any TranscriptionProvider) async throws -> Result
+    ) async throws -> Result {
         guard let lease = self.activeActivityLease, lease.activity == .meeting else {
             throw MeetingASRPreparationError.invalidActivityLease
         }
         defer { self.flushDeferredMeetingLeaseReleaseIfReady() }
         return try await self.meetingPreparedScope.run(
             lease: lease, attemptID: attemptID, configuration: configuration,
-            owner: self.meetingASROwner(), isActiveLease: { [weak self] in self?.activeActivityLease == $0 },
+            owner: self.meetingASROwner(), preparedProvider: preparedProvider,
+            isActiveLease: { [weak self] in self?.activeActivityLease == $0 },
             body: body
         )
     }
