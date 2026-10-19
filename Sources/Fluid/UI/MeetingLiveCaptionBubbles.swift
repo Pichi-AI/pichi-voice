@@ -131,15 +131,20 @@ struct MeetingLiveTranscriptScrollList: View {
     var hidesPartialFromAccessibility = true
     var documentStyle = false
     @State private var rows: [MeetingLiveBubbleComposer.Row] = []
+    @State private var rowsRevision: UInt64?
 
     var body: some View {
         MeetingLiveBubbleScrollList(rows: self.rows, pending: self.pending,
-            hidesPartialFromAccessibility: self.hidesPartialFromAccessibility, documentStyle: self.documentStyle)
-            .task(id: self.snapshot) {
+            hidesPartialFromAccessibility: self.hidesPartialFromAccessibility, documentStyle: self.documentStyle,
+            presentationRevision: self.rowsRevision)
+            // The publication owner advances this revision for text, partials and speaker
+            // refinements. Pending audio and health ticks must not compare the entire history.
+            .task(id: self.snapshot.revision) {
                 do {
                     let prepared = try await MeetingLiveBubbleComposer.rowsForDisplay(self.snapshot)
                     try Task.checkCancellation()
                     self.rows = prepared
+                    self.rowsRevision = self.snapshot.revision
                 } catch is CancellationError { }
                 catch { assertionFailure("Caption row presentation failed: \(error)") }
             }
@@ -153,14 +158,33 @@ struct MeetingLiveBubbleScrollList: View {
     var pending: MeetingPendingSpeechSnapshot = .empty
     var hidesPartialFromAccessibility = true
     var documentStyle = false
+    /// Versioned production callers avoid full-history equality on every capture update.
+    /// Unversioned preview/test callers retain value-based invalidation, including corrections.
+    var presentationRevision: UInt64? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.locale) private var locale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPinnedToBottom = true
     @State private var paragraphs: [MeetingLiveCaptionParagraphs.Paragraph] = []
+    @State private var followScrollScheduled = false
     @Namespace private var scrollViewport
     private let bottomAnchor = "meeting.liveTranscript.bottom"
+
+    private enum PresentationKey: Equatable {
+        case revision(UInt64)
+        case rows([MeetingLiveBubbleComposer.Row])
+    }
+
+    private var presentationKey: PresentationKey {
+        if let presentationRevision { return .revision(presentationRevision) }
+        return .rows(self.rows)
+    }
+
+    private struct RowInsertionKey: Equatable {
+        let count: Int
+        let lastID: UUID?
+    }
 
     private var inlinePending: MeetingPendingSpeechSnapshot {
         var snapshot = self.pending
@@ -175,7 +199,7 @@ struct MeetingLiveBubbleScrollList: View {
     }
 
     var body: some View {
-        let rowIDs = self.rows.map(\.id)
+        let insertionKey = RowInsertionKey(count: self.rows.count, lastID: self.rows.last?.id)
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
@@ -225,7 +249,7 @@ struct MeetingLiveBubbleScrollList: View {
                         }
                     }
                 }
-                .task(id: self.rows) {
+                .task(id: self.documentStyle ? self.presentationKey : nil) {
                     guard self.documentStyle else { return }
                     do {
                         let composed = try await MeetingLiveCaptionParagraphs.composeForDisplay(self.rows)
@@ -235,12 +259,12 @@ struct MeetingLiveBubbleScrollList: View {
                     catch { assertionFailure("Caption presentation failed: \(error)") }
                 }
                 .accessibilityIdentifier("meeting.liveTranscript.viewport")
-                .animation(self.documentStyle || self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: rowIDs)
+                .animation(self.documentStyle || self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: insertionKey)
                 .modifier(MeetingCaptionScrollTracking(
                     viewport: self.scrollViewport, isPinnedToBottom: self.$isPinnedToBottom,
                     onLayoutChange: { self.scrollToBottomIfPinned(proxy: proxy) }
                 ))
-                .onChange(of: self.rows) {
+                .onChange(of: self.presentationKey) {
                     self.scrollToBottomIfPinned(proxy: proxy)
                 }
                 .onChange(of: self.pending) {
@@ -272,7 +296,10 @@ struct MeetingLiveBubbleScrollList: View {
     private func scrollToBottomIfPinned(proxy: ScrollViewProxy) {
         // Match the shared command workspace: wait for wrapped text's rendered height,
         // then recheck user intent instead of capturing a stale follow decision.
+        guard self.isPinnedToBottom, !self.followScrollScheduled else { return }
+        self.followScrollScheduled = true
         DispatchQueue.main.async {
+            self.followScrollScheduled = false
             guard self.isPinnedToBottom else { return }
             self.scrollToBottom(proxy: proxy, animated: false)
         }

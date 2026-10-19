@@ -398,6 +398,34 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testVersionedSnapshotRendersSameIDCorrectionsAcrossPendingActivity() async throws {
+        let host = try CaptionNativeHost(rows: [], scheme: .light)
+        defer { host.close() }
+        let id = UUID()
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.revision = 1
+        snapshot.utterances = [.init(id: id, speaker: .you, text: "Первая версия.", start: 0, end: 1)]
+        host.model.snapshot = snapshot
+        func contains(_ text: String) -> Bool {
+            self.descendants(in: host.controller.view).compactMap { $0 as? UITextView }.contains {
+                $0.attributedText.string.contains(text)
+            }
+        }
+        try await settle(host, "Versioned transcript reaches native text") { contains("Первая версия.") }
+        host.model.pending = pending(count: 3)
+        try await settle(host, "Pending feedback retains the already rendered transcript") { contains("Первая версия.") }
+        snapshot.utterances[0].text = "Исправленная версия [PERSON]."
+        snapshot.utterances[0].participant = .init(identity: "first", label: .identified(.init(displayName: "Анна", isLocalUser: false)))
+        snapshot.revision = 2
+        host.model.snapshot = snapshot
+        try await settle(host, "A same-ID protected correction and participant revision are not skipped") {
+            contains("Исправленная версия [PERSON].") && !contains("Первая версия.")
+        }
+        host.model.pending = .empty
+        try await settle(host, "Retiring pending feedback cannot restore stale text") { contains("Исправленная версия [PERSON].") }
+        capture(host, step: "versioned-snapshot-correction", scheme: .light)
+    }
+
     /// Synthetic native-word input exercises the real privacy/state/composer path.
     /// No microphone, speech model, durable store or speaker identity is fabricated.
     func testProtectedShortSpeechRemainsVisibleAcrossSilenceUntilStop() async throws {
@@ -975,6 +1003,7 @@ private struct CaptionPreviewFixtureRedactor: TranscriptTextRedacting {
 @MainActor
 private final class CaptionNativeRows: ObservableObject {
     @Published var rows: [MeetingLiveBubbleComposer.Row]
+    @Published var snapshot: MeetingLiveTranscriptSnapshot?
     @Published var pending: MeetingPendingSpeechSnapshot = .empty
     @Published var width: CGFloat
     let height: CGFloat
@@ -993,7 +1022,13 @@ private struct CaptionNativeDocument: View {
         let theme = AppTheme.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme)
         ZStack {
             theme.palette.windowBackground
-            MeetingLiveBubbleScrollList(rows: model.rows, pending: model.pending, documentStyle: documentStyle)
+            Group {
+                if let snapshot = model.snapshot {
+                    MeetingLiveTranscriptScrollList(snapshot: snapshot, pending: model.pending, documentStyle: documentStyle)
+                } else {
+                    MeetingLiveBubbleScrollList(rows: model.rows, pending: model.pending, documentStyle: documentStyle)
+                }
+            }
                 .frame(width: model.width, height: model.height)
                 .background(theme.palette.contentBackground)
         }

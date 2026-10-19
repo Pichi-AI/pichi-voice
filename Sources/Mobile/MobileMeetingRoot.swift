@@ -351,9 +351,7 @@ struct MobileMeetingRoot: View {
     }
 
     private func recording(_ session: MeetingSession) -> some View {
-        GeometryReader { geometry in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: compactHeight ? 8 : 16) {
             HStack {
                 Label(PichiLocalization.text(coordinator.state == .stopping(session.id) ? "Stopping..." : "Recording"),
                       systemImage: coordinator.state == .stopping(session.id) ? "stop.circle" : "record.circle")
@@ -364,7 +362,9 @@ struct MobileMeetingRoot: View {
                         .monospacedDigit().accessibilityIdentifier("meeting.timer")
                 }
             }
-            Text(session.title).font(theme.typography.title)
+            if !compactHeight {
+                Text(session.title).font(theme.typography.title).lineLimit(2)
+            }
             HStack {
                 Label(PichiLocalization.text("Microphone"), systemImage: "mic")
                 AudioWaveformBars(color: theme.palette.accent, barCount: 7, barWidth: 3, barSpacing: 3,
@@ -373,8 +373,10 @@ struct MobileMeetingRoot: View {
                     isAnimating: coordinator.isRecording, isIdleWaveEnabled: false)
                     .foregroundStyle(theme.palette.accent).frame(width: 45, height: 26).accessibilityHidden(true)
             }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-            Divider()
-            Text(PichiLocalization.text("Live transcript")).font(theme.typography.sectionTitle)
+            if !compactHeight {
+                Divider()
+                Text(PichiLocalization.text("Live transcript")).font(theme.typography.sectionTitle)
+            }
             switch coordinator.liveTranscript.availability {
             case .unavailable(let reason), .degraded(let reason):
                 Text(MeetingUILocalization.captionAvailability(reason)).font(theme.typography.caption)
@@ -385,17 +387,20 @@ struct MobileMeetingRoot: View {
             MeetingLiveTranscriptScrollList(snapshot: coordinator.liveTranscript,
                                            pending: coordinator.pendingSpeech, documentStyle: true)
                 .id(session.id)
-                .frame(height: max(200, geometry.size.height - 250))
+                // This is the recording screen's only vertical scroll owner. Its viewport
+                // fills the remaining space; controls never compete for the same gesture.
+                .frame(maxHeight: .infinity)
+                .layoutPriority(1)
                 .accessibilityIdentifier("meeting.liveTranscript")
-            if session.speakerLabelsEnabled != false {
+            if !compactHeight, session.speakerLabelsEnabled != false {
                 Text(PichiLocalization.text(session.effectiveSpeakerProcessingMode == .streaming
                     ? "Speaker labels update during recording. A short delay is expected."
                     : "Speaker labels are added after recording."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
-                }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
-            }
-        }
+                }.padding(compactHeight ? 12 : 24)
+                    .frame(maxWidth: 1000, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity)
         .accessibilityIdentifier("meeting.recording")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button { run { _ = try await coordinator.stopAndTranscribe() } } label: {
