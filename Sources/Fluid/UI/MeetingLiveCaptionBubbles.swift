@@ -1,6 +1,40 @@
 import SwiftUI
 #if os(iOS)
 import UIKit
+
+/// ScrollViewReader can retain an estimated lazy anchor after native text reflows.
+/// Keep a weak reference to this viewport so following can use its actual content extent.
+@MainActor
+private final class MeetingNativeCaptionScroll {
+    weak var view: UIScrollView?
+}
+
+private struct MeetingCaptionScrollProbe: UIViewRepresentable {
+    let reference: MeetingNativeCaptionScroll
+
+    final class Probe: UIView {
+        var reference: MeetingNativeCaptionScroll?
+        override func didMoveToWindow() { super.didMoveToWindow(); locate() }
+        override func didMoveToSuperview() { super.didMoveToSuperview(); locate() }
+        override func layoutSubviews() { super.layoutSubviews(); locate() }
+        func locate() {
+            var ancestor = superview
+            while let candidate = ancestor {
+                if let scroll = candidate as? UIScrollView { reference?.view = scroll; return }
+                ancestor = candidate.superview
+            }
+        }
+    }
+
+    func makeUIView(context: Context) -> Probe {
+        let view = Probe()
+        view.reference = reference
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        return view
+    }
+    func updateUIView(_ view: Probe, context: Context) { view.reference = reference; view.locate() }
+}
 #endif
 
 /// Shared bubble look for final transcript and live captions; callers own alignment, labels, and insets.
@@ -169,6 +203,9 @@ struct MeetingLiveBubbleScrollList: View {
     @State private var isPinnedToBottom = true
     @State private var paragraphs: [MeetingLiveCaptionParagraphs.Paragraph] = []
     @State private var renderedParagraphRevision: UInt64 = 0
+    #if os(iOS)
+    @State private var nativeScroll = MeetingNativeCaptionScroll()
+    #endif
     @Namespace private var scrollViewport
     private let bottomAnchor = "meeting.liveTranscript.bottom"
 
@@ -234,6 +271,11 @@ struct MeetingLiveBubbleScrollList: View {
                         Color.clear.frame(height: 1).id(self.bottomAnchor).accessibilityHidden(true)
                     }
                     .background {
+                        #if os(iOS)
+                        MeetingCaptionScrollProbe(reference: self.nativeScroll)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                        #endif
                         if #available(iOS 18, macOS 15, *) {
                             EmptyView()
                         } else {
@@ -317,6 +359,18 @@ struct MeetingLiveBubbleScrollList: View {
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
+        #if os(iOS)
+        if let scroll = self.nativeScroll.view, scroll.window != nil, scroll.bounds.height > 0 {
+            scroll.layoutIfNeeded()
+            let bottom = max(-scroll.adjustedContentInset.top,
+                scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+            if abs(scroll.contentOffset.y - bottom) > 0.5 {
+                scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: bottom),
+                    animated: animated && !self.reduceMotion)
+            }
+            return
+        }
+        #endif
         guard animated, !self.reduceMotion else {
             proxy.scrollTo(self.bottomAnchor, anchor: .bottom)
             return
