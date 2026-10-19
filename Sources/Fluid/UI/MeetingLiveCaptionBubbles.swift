@@ -2,39 +2,6 @@ import SwiftUI
 #if os(iOS)
 import UIKit
 
-/// ScrollViewReader can retain an estimated lazy anchor after native text reflows.
-/// Keep a weak reference to this viewport so following can use its actual content extent.
-@MainActor
-private final class MeetingNativeCaptionScroll {
-    weak var view: UIScrollView?
-}
-
-private struct MeetingCaptionScrollProbe: UIViewRepresentable {
-    let reference: MeetingNativeCaptionScroll
-
-    final class Probe: UIView {
-        var reference: MeetingNativeCaptionScroll?
-        override func didMoveToWindow() { super.didMoveToWindow(); locate() }
-        override func didMoveToSuperview() { super.didMoveToSuperview(); locate() }
-        override func layoutSubviews() { super.layoutSubviews(); locate() }
-        func locate() {
-            var ancestor = superview
-            while let candidate = ancestor {
-                if let scroll = candidate as? UIScrollView { reference?.view = scroll; return }
-                ancestor = candidate.superview
-            }
-        }
-    }
-
-    func makeUIView(context: Context) -> Probe {
-        let view = Probe()
-        view.reference = reference
-        view.isUserInteractionEnabled = false
-        view.isAccessibilityElement = false
-        return view
-    }
-    func updateUIView(_ view: Probe, context: Context) { view.reference = reference; view.locate() }
-}
 #endif
 
 /// Shared bubble look for final transcript and live captions; callers own alignment, labels, and insets.
@@ -157,28 +124,6 @@ private extension MeetingLiveSpeaker {
     }
 }
 
-/// Native text can finish wrapping after paragraph publication. Observe only the tail's
-/// actual size, so realizing unrelated older lazy paragraphs never requests following.
-private struct MeetingCaptionTailSizeKey: PreferenceKey {
-    static let defaultValue: CGSize? = nil
-    static func reduce(value: inout CGSize?, nextValue: () -> CGSize?) {
-        if let next = nextValue() { value = next }
-    }
-}
-
-private struct MeetingCaptionTailLayout: ViewModifier {
-    let isTail: Bool
-    func body(content: Content) -> some View {
-        content.background {
-            if self.isTail {
-                GeometryReader { geometry in
-                    Color.clear.preference(key: MeetingCaptionTailSizeKey.self, value: geometry.size)
-                }.allowsHitTesting(false).accessibilityHidden(true)
-            }
-        }
-    }
-}
-
 /// Snapshot-to-row work changes with protected recognition, not the much more frequent
 /// capture meter and pending-waveform updates in the surrounding recording screen.
 struct MeetingLiveTranscriptScrollList: View {
@@ -225,9 +170,6 @@ struct MeetingLiveBubbleScrollList: View {
     @State private var isPinnedToBottom = true
     @State private var paragraphs: [MeetingLiveCaptionParagraphs.Paragraph] = []
     @State private var renderedParagraphRevision: UInt64 = 0
-    #if os(iOS)
-    @State private var nativeScroll = MeetingNativeCaptionScroll()
-    #endif
     @Namespace private var scrollViewport
     private let bottomAnchor = "meeting.liveTranscript.bottom"
 
@@ -259,6 +201,50 @@ struct MeetingLiveBubbleScrollList: View {
     }
 
     var body: some View {
+        #if os(iOS)
+        ZStack(alignment: .bottomTrailing) {
+            MeetingNativeCaptionTable(rows: self.rows, paragraphs: self.paragraphs,
+                revision: self.documentStyle ? self.renderedParagraphRevision : self.presentationRevision,
+                documentStyle: self.documentStyle, pending: self.inlinePending,
+                separatePending: self.separatePending,
+                hidesPartialFromAccessibility: self.hidesPartialFromAccessibility,
+                isPinned: self.$isPinnedToBottom)
+            if !self.isPinnedToBottom {
+                self.latestButton { self.isPinnedToBottom = true }
+            }
+        }
+        .task(id: self.documentStyle ? self.presentationKey : nil) {
+            guard self.documentStyle else { return }
+            do {
+                let composed = try await MeetingLiveCaptionParagraphs.composeForDisplay(self.rows)
+                try Task.checkCancellation()
+                self.paragraphs = composed
+                self.renderedParagraphRevision &+= 1
+            } catch is CancellationError { }
+            catch { assertionFailure("Caption presentation failed: \(error)") }
+        }
+        #else
+        self.legacyViewport
+        #endif
+    }
+
+    private func latestButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "chevron.down")
+                .font(.fluidSystem(size: 12, weight: .semibold))
+                .foregroundStyle(self.theme.palette.primaryText)
+                .frame(width: 44, height: 44)
+                .background(self.theme.palette.contentBackground, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .help(PichiLocalization.text("Jump to latest captions"))
+        .accessibilityLabel(PichiLocalization.text("Jump to latest captions"))
+        .accessibilityIdentifier("meeting.liveTranscript.latest")
+        .padding(6)
+    }
+
+    #if !os(iOS)
+    private var legacyViewport: some View {
         let insertionKey = RowInsertionKey(count: self.rows.count, lastID: self.rows.last?.id)
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
@@ -293,11 +279,6 @@ struct MeetingLiveBubbleScrollList: View {
                         Color.clear.frame(height: 1).id(self.bottomAnchor).accessibilityHidden(true)
                     }
                     .background {
-                        #if os(iOS)
-                        MeetingCaptionScrollProbe(reference: self.nativeScroll)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                        #endif
                         if #available(iOS 18, macOS 15, *) {
                             EmptyView()
                         } else {
@@ -347,27 +328,13 @@ struct MeetingLiveBubbleScrollList: View {
                 .onChange(of: self.locale.identifier) {
                     self.scrollToBottomIfPinned(proxy: proxy)
                 }
-                .onPreferenceChange(MeetingCaptionTailSizeKey.self) { size in
-                    if size != nil { self.scrollToBottomIfPinned(proxy: proxy) }
-                }
                 .onAppear { self.scrollToBottomIfPinned(proxy: proxy) }
 
                 if !self.isPinnedToBottom {
-                    Button {
+                    self.latestButton {
                         self.isPinnedToBottom = true
                         self.scrollToBottom(proxy: proxy, animated: true)
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.fluidSystem(size: 12, weight: .semibold))
-                            .foregroundStyle(self.theme.palette.primaryText)
-                            .frame(width: 44, height: 44)
-                            .background(self.theme.palette.contentBackground, in: Circle())
                     }
-                    .buttonStyle(.plain)
-                    .help(PichiLocalization.text("Jump to latest captions"))
-                    .accessibilityLabel(PichiLocalization.text("Jump to latest captions"))
-                    .accessibilityIdentifier("meeting.liveTranscript.latest")
-                    .padding(6)
                 }
             }
         }
@@ -384,24 +351,6 @@ struct MeetingLiveBubbleScrollList: View {
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
-        #if os(iOS)
-        if let scroll = self.nativeScroll.view, scroll.window != nil, scroll.bounds.height > 0 {
-            // First realize the lazy tail by identity. Its estimated content extent can
-            // change during that realization, so correct against UIKit after that layout.
-            proxy.scrollTo(self.bottomAnchor, anchor: .bottom)
-            DispatchQueue.main.async {
-                guard self.isPinnedToBottom, scroll.window != nil else { return }
-                scroll.layoutIfNeeded()
-                let bottom = max(-scroll.adjustedContentInset.top,
-                    scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
-                if abs(scroll.contentOffset.y - bottom) > 0.5 {
-                    scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: bottom),
-                        animated: animated && !self.reduceMotion)
-                }
-            }
-            return
-        }
-        #endif
         guard animated, !self.reduceMotion else {
             proxy.scrollTo(self.bottomAnchor, anchor: .bottom)
             return
@@ -410,7 +359,280 @@ struct MeetingLiveBubbleScrollList: View {
             proxy.scrollTo(self.bottomAnchor, anchor: .bottom)
         }
     }
+    #endif
 }
+
+#if os(iOS)
+/// UIKit owns only the viewport. Composition, protected text and the shared row views
+/// remain unchanged; stable cells give native text a measured scrolling extent.
+private struct MeetingNativeCaptionTable: UIViewRepresentable {
+    let rows: [MeetingLiveBubbleComposer.Row]
+    let paragraphs: [MeetingLiveCaptionParagraphs.Paragraph]
+    let revision: UInt64?
+    let documentStyle: Bool
+    let pending: MeetingPendingSpeechSnapshot
+    let separatePending: MeetingPendingSpeechSnapshot
+    let hidesPartialFromAccessibility: Bool
+    @Binding var isPinned: Bool
+    @Environment(\.self) private var environment
+
+    private enum Item: Equatable {
+        case paragraph(MeetingLiveCaptionParagraphs.Paragraph)
+        case bubble(MeetingLiveBubbleComposer.Row)
+        case pending
+        var id: ID {
+            switch self {
+            case .paragraph(let value): .text(value.id)
+            case .bubble(let value): .text(value.id)
+            case .pending: .pending
+            }
+        }
+    }
+    private enum ID: Hashable { case text(UUID), pending }
+
+    // Only presentation inputs used by the hosted views invalidate unchanged cells.
+    // In particular, microphone ticks do not compare the transcript or rebuild its cells.
+    private struct Appearance: Equatable {
+        let colors: [Color]
+        let fonts: [Font]
+        let brandStyle: BrandStyle?
+        let spacing: [CGFloat]
+        let locale: String
+        let typeSize: DynamicTypeSize
+        let scheme: ColorScheme
+        let direction: LayoutDirection
+        let phase: ScenePhase
+        let reduceMotion: Bool
+    }
+    private var appearance: Appearance {
+        let theme = environment.theme, palette = theme.palette
+        return Appearance(colors: [palette.primaryText, palette.secondaryText, palette.accent,
+            palette.accentText, palette.contentBackground],
+            fonts: [theme.typography.body, theme.typography.captionStrong],
+            brandStyle: theme.typography.brandStyle,
+            spacing: [theme.metrics.spacing.xs, theme.metrics.spacing.sm],
+            locale: environment.locale.identifier, typeSize: environment.dynamicTypeSize,
+            scheme: environment.colorScheme, direction: environment.layoutDirection,
+            phase: environment.scenePhase, reduceMotion: environment.accessibilityReduceMotion)
+    }
+
+    final class Table: UITableView {
+        var didLayout: ((Table) -> Void)?
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            didLayout?(self)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> Table {
+        let table = Table(frame: .zero, style: .plain)
+        table.backgroundColor = .clear
+        table.separatorStyle = .none
+        table.contentInsetAdjustmentBehavior = .never
+        table.rowHeight = UITableView.automaticDimension
+        table.estimatedRowHeight = 100
+        table.selfSizingInvalidation = .enabledIncludingConstraints
+        table.sectionHeaderTopPadding = 0
+        table.allowsSelection = false
+        table.register(UITableViewCell.self, forCellReuseIdentifier: "caption")
+        table.accessibilityIdentifier = "meeting.liveTranscript.viewport"
+        table.dataSource = context.coordinator
+        table.delegate = context.coordinator
+        table.didLayout = { [weak coordinator = context.coordinator] table in coordinator?.didLayout(table) }
+        return table
+    }
+    func updateUIView(_ table: Table, context: Context) { context.coordinator.update(self, table: table) }
+
+    final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate {
+        private var input: MeetingNativeCaptionTable?
+        private var queuedInput: MeetingNativeCaptionTable?
+        private var items: [Item] = []
+        private var following = true
+        private var publishedFollowing = true
+        private var applying = false
+        private var correctingOffset = false
+        private var needsFollow = false
+        private var lastContentSize = CGSize.zero
+        private var lastViewportSize = CGSize.zero
+        private var previousOffset: CGFloat = 0
+        private var userScroll = false
+
+        fileprivate func update(_ next: MeetingNativeCaptionTable, table: Table) {
+            guard !applying else { queuedInput = next; return }
+            let previous = input
+            let sourceChanged: Bool
+            if let previous, previous.documentStyle == next.documentStyle {
+                sourceChanged = next.revision != nil && previous.revision != nil
+                    ? next.revision != previous.revision
+                    : (next.documentStyle ? next.paragraphs != previous.paragraphs : next.rows != previous.rows)
+            } else { sourceChanged = true }
+            let appearanceChanged = previous?.appearance != next.appearance
+                || previous?.hidesPartialFromAccessibility != next.hidesPartialFromAccessibility
+            let pendingChanged = previous?.pending != next.pending || previous?.separatePending != next.separatePending
+            let jumpRequested = next.isPinned != publishedFollowing
+            if jumpRequested { following = next.isPinned; publishedFollowing = next.isPinned }
+            input = next
+            guard sourceChanged || appearanceChanged || pendingChanged else {
+                if jumpRequested && following { needsFollow = true; table.setNeedsLayout() }
+                return
+            }
+
+            let oldItems = sourceChanged ? items : []
+            let firstVisible = table.indexPathsForVisibleRows?.min()
+            let anchor = !following ? firstVisible.flatMap { path -> (ID, CGFloat)? in
+                guard items.indices.contains(path.row) else { return nil }
+                return (items[path.row].id, table.rectForRow(at: path).minY - table.contentOffset.y)
+            } : nil
+            var removals: [IndexPath] = [], insertions: [IndexPath] = [], changed: [IndexPath] = []
+            if sourceChanged {
+                items = next.documentStyle ? next.paragraphs.map(Item.paragraph) : next.rows.map(Item.bubble)
+                if !next.separatePending.tokens.isEmpty { items.append(.pending) }
+                let oldIDs = oldItems.map(\.id), newIDs = items.map(\.id)
+                for change in newIDs.difference(from: oldIDs) {
+                    switch change {
+                    case .remove(let index, _, _): removals.append(IndexPath(row: index, section: 0))
+                    case .insert(let index, _, _): insertions.append(IndexPath(row: index, section: 0))
+                    }
+                }
+                let oldByID = Dictionary(uniqueKeysWithValues: oldItems.map { ($0.id, $0) })
+                let oldTail = oldItems.last(where: { $0.id != .pending })?.id
+                let newTail = items.last(where: { $0.id != .pending })?.id
+                changed = items.enumerated().compactMap { index, item in
+                    guard let old = oldByID[item.id] else { return nil }
+                    return appearanceChanged || old != item || item.id == oldTail || item.id == newTail || item.id == .pending
+                        ? IndexPath(row: index, section: 0) : nil
+                }
+            } else {
+                // Pending updates have bounded work: only the last text cell and the
+                // optional pending cell change, retaining their hosting/attachment identity.
+                let hadPending = items.last?.id == .pending
+                let hasPending = !next.separatePending.tokens.isEmpty
+                if hadPending && !hasPending {
+                    removals = [IndexPath(row: items.count - 1, section: 0)]; items.removeLast()
+                } else if !hadPending && hasPending {
+                    insertions = [IndexPath(row: items.count, section: 0)]; items.append(.pending)
+                }
+                let first = appearanceChanged ? 0 : max(0, items.count - (hasPending ? 2 : 1))
+                changed = (first..<items.count).map { IndexPath(row: $0, section: 0) }.filter { !insertions.contains($0) }
+            }
+            applying = true
+            needsFollow = following
+            let finish: () -> Void = { [weak self, weak table] in
+                guard let self, let table else { return }
+                // Reconfigure after structural changes so paths address the final model.
+                // Unlike reloadRows, this keeps an existing hosted native text view alive.
+                table.reconfigureRows(at: changed)
+                table.layoutIfNeeded()
+                if let anchor, let index = self.items.firstIndex(where: { $0.id == anchor.0 }), !self.following {
+                    let y = table.rectForRow(at: IndexPath(row: index, section: 0)).minY - anchor.1
+                    table.setContentOffset(CGPoint(x: table.contentOffset.x, y: y), animated: false)
+                }
+                self.applying = false
+                self.didLayout(table)
+                if let queued = self.queuedInput {
+                    self.queuedInput = nil
+                    self.update(queued, table: table)
+                }
+            }
+            UIView.performWithoutAnimation {
+                if previous == nil { table.reloadData(); finish() }
+                else if removals.isEmpty && insertions.isEmpty { finish() }
+                else {
+                    table.performBatchUpdates {
+                        table.deleteRows(at: removals, with: .none)
+                        table.insertRows(at: insertions, with: .none)
+                    } completion: { _ in finish() }
+                }
+            }
+        }
+
+        func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { items.count }
+        func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+            let cell = tableView.dequeueReusableCell(withIdentifier: "caption", for: indexPath)
+            guard let input else { return cell }
+            let item = items[indexPath.row]
+            let tailIndex = items.count - (items.last?.id == .pending ? 2 : 1)
+            let isTail = indexPath.row == tailIndex
+            let pending = isTail ? input.pending : .empty
+            cell.backgroundColor = .clear
+            cell.selectionStyle = .none
+            let bottomPadding = indexPath.row == items.count - 1 ? 1 : input.environment.theme.metrics.spacing.sm
+            cell.contentConfiguration = UIHostingConfiguration {
+                Group {
+                    switch item {
+                    case .paragraph(let paragraph):
+                        MeetingLiveParagraphRow(paragraph: paragraph,
+                            hidesPartialFromAccessibility: input.hidesPartialFromAccessibility,
+                            interfaceLanguageID: input.environment.locale.identifier, isTail: isTail, pending: pending)
+                    case .bubble(let row):
+                        MeetingLiveBubbleRow(row: row,
+                            hidesPartialFromAccessibility: input.hidesPartialFromAccessibility,
+                            interfaceLanguageID: input.environment.locale.identifier, isTail: isTail, pending: pending)
+                    case .pending:
+                        MeetingPendingSpeechView(pending: input.separatePending)
+                            .padding(.top, input.environment.theme.metrics.spacing.xs)
+                    }
+                }
+                .padding(.bottom, bottomPadding)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .environment(\.self, input.environment)
+                .id(item.id)
+            }.margins(.all, 0)
+            return cell
+        }
+
+        private func bottom(_ scroll: UIScrollView) -> CGFloat {
+            max(-scroll.adjustedContentInset.top,
+                scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+        }
+        fileprivate func didLayout(_ table: Table) {
+            guard !applying, !correctingOffset else { return }
+            let extentChanged = lastContentSize != table.contentSize || lastViewportSize != table.bounds.size
+            lastContentSize = table.contentSize; lastViewportSize = table.bounds.size
+            let tailVisible = table.indexPathsForVisibleRows?.contains(IndexPath(row: items.count - 1, section: 0)) == true
+            // An unrelated programmatic offset must remain reachable. Only new data or
+            // reflow of an already visible tail may correct a following viewport.
+            guard following, !table.isDragging, !table.isDecelerating,
+                  needsFollow || (extentChanged && tailVisible), !items.isEmpty, table.bounds.height > 0 else { return }
+            needsFollow = false
+            correctingOffset = true
+            table.scrollToRow(at: IndexPath(row: items.count - 1, section: 0), at: .bottom, animated: false)
+            table.layoutIfNeeded()
+            table.setContentOffset(CGPoint(x: table.contentOffset.x, y: bottom(table)), animated: false)
+            correctingOffset = false
+            previousOffset = table.contentOffset.y
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            userScroll = true; previousOffset = scrollView.contentOffset.y
+        }
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            defer { previousOffset = scrollView.contentOffset.y }
+            guard userScroll, !applying, !correctingOffset else { return }
+            let nearBottom = scrollView.contentOffset.y >= bottom(scrollView) - 4
+            let canReadEarlier = bottom(scrollView) > -scrollView.adjustedContentInset.top + 1
+            let next = nearBottom ? true
+                : (canReadEarlier && scrollView.contentOffset.y < previousOffset - 0.5 ? false : following)
+            guard next != following else { return }
+            following = next
+            needsFollow = false
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.publishedFollowing = self.following
+                self.input?.isPinned = self.following
+            }
+        }
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            scrollViewDidScroll(scrollView)
+            if !decelerate { userScroll = false }
+        }
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            scrollViewDidScroll(scrollView); userScroll = false
+        }
+    }
+}
+#endif
 
 /// iOS 17 has no scroll-geometry callback. This adapter measures the same scroll viewport
 /// through preferences; rendering, IDs, follow actions and transcript ownership remain shared.
@@ -650,7 +872,6 @@ private struct MeetingLiveParagraphRow: View, Equatable {
                 .padding(.vertical, self.theme.metrics.spacing.sm)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(MeetingCaptionTailLayout(isTail: self.isTail))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(self.paragraph.captionLabel + ", "
             + self.paragraph.text(includingPartials: !self.hidesPartialFromAccessibility)
@@ -711,7 +932,6 @@ struct MeetingLiveBubbleRow: View, Equatable {
                 .meetingBubbleStyle(self.presentationStyle)
         }
         .frame(maxWidth: .infinity, alignment: self.isMicrophone && !self.documentStyle ? .trailing : .leading)
-        .modifier(MeetingCaptionTailLayout(isTail: self.isTail))
         .padding(self.isMicrophone ? .leading : .trailing, self.documentStyle ? 0 : 32)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(self.sourceLabel + ", " + (self.hidesPartialFromAccessibility && self.row.isPartial ? "" : self.row.text)
