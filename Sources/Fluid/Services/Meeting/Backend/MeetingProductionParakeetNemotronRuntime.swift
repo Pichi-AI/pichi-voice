@@ -630,7 +630,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     "confidence": String(recognized.result.confidence),
                     "acceptedByPrefixPolicy": String(!observed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         || output == nil || output?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true)],
-                    text: observed.text, words: observed.words.map { .init(text: $0.word, start: $0.start, end: $0.end) })
+                    text: observed.text, words: observed.words.map { .init(text: $0.text, start: $0.start, end: $0.end) })
                 // An empty observation can be silence or a provider's rejected
                 // hypothesis. Neither invalidates speech already accepted for
                 // a shorter prefix. Keep its original coverage and timings.
@@ -669,7 +669,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         MeetingTimelineTrace.shared?.record("asr_window_finalized", fields: ["attemptID": attemptID.uuidString,
             "windowOrdinal": String(epoch.ordinal), "sourceOffsetSample": String(Int((offset * 16_000).rounded())),
             "physicalSampleCount": String(physicalSampleCount), "acceptedSampleCount": String(output.sampleCount)],
-            text: output.text, words: output.words.map { .init(text: $0.word, start: $0.start, end: $0.end) })
+            text: output.text, words: output.words.map { .init(text: $0.text, start: $0.start, end: $0.end) })
         return MeetingParakeetPhaseResult(outputs: [output], boundedPCMSamples: samples,
             boundedPCMSourceSampleCount: physicalSampleCount)
     }
