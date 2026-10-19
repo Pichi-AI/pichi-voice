@@ -1,56 +1,18 @@
 import Foundation
 
 extension PIIRedactor {
-    /// Stable privacy data marker, distinct from a participant/UI label or typed entity.
-    public static let speechBoundaryPlaceholder = "[СКРЫТО]"
-
-    /// A sealed speech boundary admits ordinary final words, while unresolved fields
-    /// remain protected. Reuse the same NER/cue guards with only the generic unfinished
-    /// word hold removed. A candidate suffix is masked, never silently discarded.
-    /// This deliberately favors privacy over precision for incomplete field values.
+    /// A completed ASR fragment uses canonical NER and structured-entity rules.
+    /// Provisional preview holds do not identify entities and must not become masks.
     public static func redactSpeechBoundary(_ text: String, ner: [PIINERSpan]) throws -> (text: String, spans: [PIIRedactedSpan]) {
-        let canonical = try self.redact(text, ner: ner)
-        let source = text as NSString
-        var limit = try self.provisionalSafePrefix(in: text, ner: ner,
-            redactedSpans: canonical.spans, holdingLexicalEdge: false) ?? 0
-        // Quiet is not lexical completion evidence for an uncued final fragment
-        // such as "сидоро" followed later by "ву". Protect that single uncertain
-        // edge; ordinary words in a punctuated completed utterance remain intact.
-        // This may mask a benign unpunctuated final word in privacy mode.
-        let closed = text.trimmingCharacters(in: .whitespacesAndNewlines).last.map { ".!?;:".contains($0) } ?? false
-        if !closed {
-            let lexical = try NSRegularExpression(pattern: #"[\p{L}\p{N}]+"#)
-            if let last = lexical.matches(in: text, range: NSRange(location: 0, length: source.length)).last {
-                // An already masked final value is protected without a generic edge mask.
-                if !canonical.spans.contains(where: {
-                    $0.range.location <= last.range.location && NSMaxRange($0.range) >= NSMaxRange(last.range)
-                }) {
-                    limit = min(limit, last.range.location)
-                }
-            }
-        }
-        // The final-edge decision can introduce a new cut; never expose a raw
-        // prefix of a canonical entity that straddles that cut.
-        for span in canonical.spans where span.range.location < limit && NSMaxRange(span.range) > limit {
-            limit = span.range.location
-        }
-        guard limit < source.length else { return (canonical.text, canonical.spans) }
-        let unresolved = NSRange(location: limit, length: source.length - limit)
-        // The approval guard already retreats to the beginning of an intersected mask.
-        let spans = canonical.spans.filter { NSMaxRange($0.range) <= limit }
-            + [PIIRedactedSpan(range: unresolved, replacement: Self.speechBoundaryPlaceholder)]
-        var output = text
-        for span in spans.reversed() {
-            output = (output as NSString).replacingCharacters(in: span.range, with: span.replacement)
-        }
-        return (output, spans)
+        let result = try self.redact(text, ner: ner)
+        return (result.text, result.spans)
     }
 
     /// Adapter-approved provisional prefix, derived from the same evaluated NER
     /// and canonical spans. Unfinished fields and recent lexical context are
     /// withheld; this does not change durable detection or certify absence of PII.
     public static func provisionalSafePrefix(in text: String, ner: [PIINERSpan],
-                                             redactedSpans: [PIIRedactedSpan], holdingLexicalEdge: Bool = true) throws -> Int? {
+                                             redactedSpans: [PIIRedactedSpan]) throws -> Int? {
         guard text.utf16.count <= PIIWordPieceTokenizer.maximumInputUTF16 else { throw TextPrivacyError.inputTooLong }
         let source = text as NSString
         let full = NSRange(location: 0, length: source.length)
@@ -241,7 +203,7 @@ extension PIIRedactor {
         // completed sentence can show earlier words but never its final token.
         let closedSentence = text.trimmingCharacters(in: .whitespacesAndNewlines).last.map { ".!?".contains($0) } ?? false
         let heldWords = closedSentence ? 1 : 4
-        if holdingLexicalEdge { retreat(words[max(0, words.count - heldWords)].range.location) }
+        retreat(words[max(0, words.count - heldWords)].range.location)
         // Do not show a numeric quantity while its unit is still at the edge.
         for index in words.indices where index + 1 < words.count {
             if covered(words[index].range) { continue }

@@ -117,7 +117,7 @@ enum TextPrivacyResourceError: Error { case operationInProgress }
 /// silently to regex-only or raw publication. Public results have no recovery map.
 actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
     nonisolated var checkpointIdentity: String? {
-        PIIModelDescriptor.russianA1.fingerprint + "/contact-credentials-rules-v3/speech-boundary-v1"
+        PIIModelDescriptor.russianA1.fingerprint + "/contact-credentials-rules-v3/speech-boundary-v2"
     }
     let modelStore: PichiTranscriptPrivacyModelStore
     private let runtime: PIINERRuntime

@@ -40,7 +40,12 @@ private struct ClinicalNERFixtureRedactor: TranscriptTextRedacting {
 #if !PII_POLICY_STANDALONE
 private actor NativePrivacyRedactor: TranscriptTextRedacting {
     let runtime = PIINERRuntime()
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { true }
     func prepare(_ directory: URL) async throws { try await runtime.load(directory: directory) }
+    func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let output = try PIIRedactor.redactSpeechBoundary(text, ner: await runtime.tag(text))
+        return .init(text: output.text, spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) })
+    }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         let ner = try await runtime.tag(text)
         let output = try PIIRedactor.redact(text, ner: ner)
@@ -212,52 +217,96 @@ struct MeetingPrivacyContextTests {
         try check(await unsupported.earliestHeldWordStart == 0, "Unsupported adapter dropped its tail")
 
         let phone = MeetingTranscriptPrivacyContext(redactor: StructuredPrivacyRedactor())
+        // The canonical rule recognizes this seven-digit local phone value. Its
+        // retained prefix must still qualify the following full-number continuation.
         let a = [segment("телефон", track: track, start: 0), segment("8", track: track, start: 1),
-                 segment("999", track: track, start: 2)]
+                 segment("999123", track: track, start: 2)]
         _ = try await phone.redact(.init(segments: a))
         let closedA = try await phone.admitSpeechBoundary()!
         try check(closedA.segments.map(\.id) == a.map(\.id), "Incomplete phone lost source words")
-        try check(!closedA.segments.map(\.text).joined().contains("999"), "Partial phone leaked at silence")
-        let b = [segment("123", track: track, start: 20), segment("45", track: track, start: 21),
-                 segment("67", track: track, start: 22)]
+        try check(!closedA.segments.map(\.text).joined().contains("999123"), "Detected phone leaked at silence")
+        let b = [segment("45", track: track, start: 20), segment("67", track: track, start: 21)]
         _ = try await phone.redact(.init(segments: b))
         let closedB = try await phone.admitSpeechBoundary()!
         try check(closedB.segments.map(\.id) == b.map(\.id), "Resumed phone lost source words")
         try check(closedB.segments.allSatisfy { $0.text == "[ТЕЛЕФОН]" }, "Retained prefix failed to protect continued phone")
         try check(try await phone.finish() == nil, "Stop duplicated an admitted phone")
-        let splitName = MeetingTranscriptPrivacyContext(redactor: StructuredPrivacyRedactor())
-        let stem = segment("документ передали сидоро", track: track, start: 0)
-        _ = try await splitName.redact(.init(segments: [stem]))
-        let protectedStem = try await splitName.admitSpeechBoundary()!
-        try check(protectedStem.segments.first?.id == stem.id
-            && protectedStem.segments.first?.text.contains("документ передали") == true
-            && protectedStem.segments.first?.text.contains("сидоро") == false,
-            "An uncued split surname stem leaked at the closed speech edge")
-        for (index, text) in ["ву", "ивану"].enumerated() {
-            let continuation = segment(text, track: track, start: 20 + index)
-            _ = try await splitName.redact(.init(segments: [continuation]))
-            let safe = try await splitName.admitSpeechBoundary()!
-            try check(safe.segments.first?.id == continuation.id && safe.segments.first?.text.contains(text) == false,
-                "An uncued split-name continuation leaked or lost its source identity")
-            try check(await splitName.earliestHeldWordStart == nil, "A protected split-name fragment remained stuck")
+        print("Speech boundary privacy: ordinary words, contextual phone continuation and idempotence passed")
+    }
+
+    static func completedSpeechBoundaryPrecisionSuite() throws {
+        let ordinary = [
+            "обсудили планы",
+            "обсудили планы.",
+            "обсудили номер задачи и телефон в справочнике затем продолжили обсуждение графика",
+            "коллега рядом продолжает обсуждение",
+            "Это вот они буквально недавно в апреле запустили там новую версию приложения и теперь мы обсуждаем работу интерфейса пока устройство распознаёт речь и показывает текст затем делаем паузу и ждём завершения обработки"
+        ]
+        for text in ordinary {
+            let output = try PIIRedactor.redactSpeechBoundary(text, ner: [])
+            try check(output.text == text && output.spans.isEmpty,
+                "A completed ordinary fragment was masked, including its unpunctuated last word")
         }
-        let ordinaryOpen = try PIIRedactor.redactSpeechBoundary("обсудили планы", ner: [])
-        try check(ordinaryOpen.text.hasPrefix("обсудили ")
-            && ordinaryOpen.text.hasSuffix(PIIRedactor.speechBoundaryPlaceholder),
-            "Only one uncertain unpunctuated lexical edge should be conservatively protected")
-        let partialWord = try PIIRedactor.redactSpeechBoundary("johnson",
-            ner: [.init(range: NSRange(location: 0, length: 4), label: "PER", score: 1)])
-        try check(partialWord.text == PIIRedactor.speechBoundaryPlaceholder,
-            "A partial WordPiece person mask exempted the unprotected lexical suffix")
-        let candidateText = "коллега Ра"
+        // An unfinished-preview hold is not canonical PII evidence. Even a rejected
+        // NER candidate must not turn the rest of this completed fragment into a mask.
+        let candidateText = "коллега рядом продолжает обсуждение"
         let candidate = try PIIRedactor.redactSpeechBoundary(candidateText,
-            ner: [.init(range: (candidateText as NSString).range(of: "Ра"), label: "PER", score: 0.3)])
-        try check(!candidate.text.contains("Ра"), "Short low-confidence name escaped boundary protection")
-        print("Speech boundary privacy: ordinary words, incomplete phone/resume, candidate name, idempotence passed")
+            ner: [.init(range: (candidateText as NSString).range(of: "рядом"), label: "PER", score: 0.3)])
+        try check(candidate.text == candidateText && candidate.spans.isEmpty,
+            "A rejected provisional candidate masked ordinary completed words")
+
+        let text = "Проверили 🙂 Ратмир, телефон 89991234567 и продолжили обсуждение"
+        let source = text as NSString
+        let nameRange = source.range(of: "Ратмир")
+        let phoneRange = source.range(of: "89991234567")
+        let output = try PIIRedactor.redactSpeechBoundary(text,
+            ner: [.init(range: nameRange, label: "PER", score: 0.99)])
+        try check(output.text == "Проверили 🙂 [ИМЯ], телефон [ТЕЛЕФОН] и продолжили обсуждение",
+            "A detected entity changed surrounding ordinary completed text")
+        try check(output.spans.map(\.range) == [nameRange, phoneRange]
+            && output.spans.map(\.replacement) == ["[ИМЯ]", "[ТЕЛЕФОН]"],
+            "Canonical entity masks lost their exact source UTF-16 ranges")
+        var reconstructed = text
+        for span in output.spans.reversed() {
+            try check(Range(span.range, in: text) != nil, "A mask bisected a source character")
+            reconstructed = (reconstructed as NSString).replacingCharacters(in: span.range, with: span.replacement)
+        }
+        try check(reconstructed == output.text, "Speech boundary span reconstruction failed")
+        print("Completed speech privacy: punctuation, cue-only prose, rejected NER and precise entity offsets passed")
+    }
+
+    static func completedSpeechBoundaryContextSuite(using redactor: any TranscriptTextRedacting) async throws {
+        let track = UUID()
+        let phrases = [
+            "обсудили номер задачи и телефон в справочнике затем продолжили обсуждение графика",
+            "проверили работу интерфейса затем делаем паузу и ждём завершения обработки."
+        ]
+        let context = MeetingTranscriptPrivacyContext(redactor: redactor)
+        for (phraseIndex, phrase) in phrases.enumerated() {
+            let words = phrase.split(separator: " ").enumerated().map { index, word in
+                segment(String(word), track: track, start: phraseIndex * 40 + index)
+            }
+            let initial = try await context.redact(.init(segments: words))
+            try check(initial.segments.isEmpty, "The existing normal lexical hold changed")
+            let safe = try await context.admitSpeechBoundary()!
+            try check(safe.segments.map(\.text) == words.map(\.text),
+                "Ordinary completed words remained hidden or were replaced after a quiet boundary")
+            try check(safe.segments.map(\.id) == words.map(\.id)
+                && safe.segments.map(\.start) == words.map(\.start)
+                && safe.segments.map(\.end) == words.map(\.end),
+                "Completed source word identity or timing changed")
+            try check(safe.segments.allSatisfy { $0.originalText == nil }, "Raw sidecar escaped completed publication")
+            try check(await context.earliestHeldWordStart == nil, "Completed ordinary source remained held during silence")
+            try check(try await context.admitSpeechBoundary() == nil, "Repeated quiet progress republished source words")
+        }
+        try check(try await context.finish() == nil, "Stop republished already admitted speech")
+        print("Completed context admission: ordinary source words drain during silence and resumed speech retains timing")
     }
 
     static func main() async throws {
         try await speechBoundaryAdmissionSuite()
+        try completedSpeechBoundaryPrecisionSuite()
+        try await completedSpeechBoundaryContextSuite(using: StructuredPrivacyRedactor())
         try await participantAliasSuite()
         let coverageTrack = UUID()
         let coverageBatch = MeetingPCMTranscriptBatch(segments: [segment("слово", track: coverageTrack, start: 0),
@@ -278,6 +327,7 @@ struct MeetingPrivacyContextTests {
         if let path = ProcessInfo.processInfo.environment["PICHI_PII_TEST_MODEL_DIRECTORY"] {
             let native = NativePrivacyRedactor()
             try await native.prepare(URL(fileURLWithPath: path, isDirectory: true))
+            try await completedSpeechBoundaryContextSuite(using: native)
             try await suite(using: native)
             try await liveSuite(using: native)
             try await provisionalSuite(using: native)

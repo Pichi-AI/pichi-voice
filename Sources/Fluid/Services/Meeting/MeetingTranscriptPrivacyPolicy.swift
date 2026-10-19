@@ -1025,7 +1025,7 @@ actor MeetingTranscriptPrivacyContext {
     }
 
     /// A complete sealed empty ASR window can close already recognized speech without
-    /// ending the meeting. The adapter must explicitly protect incomplete entity values.
+    /// ending the meeting. The adapter applies canonical entity redaction to that text.
     /// Preserve bounded raw context so a number/name continued later is still evaluated.
     func admitSpeechBoundary() async throws -> MeetingPCMTranscriptBatch? {
         guard redactor.supportsSpeechBoundaryAdmission else { return nil }
