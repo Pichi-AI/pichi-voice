@@ -16,6 +16,14 @@ nonisolated struct MeetingBackendIdlePreparedResource: MeetingIdlePreparedResour
     func cleanup() async { await resource.cleanup(); await releaseAdditionalResources?() }
 }
 
+/// Optional prefix resources retain the same admission even when the selected backend
+/// has no native pair capability. A cancelled pair never starts an unadmitted fallback.
+nonisolated struct MeetingIdlePrefixResource: MeetingIdlePreparedResource {
+    let configurationIdentity: String
+    let release: @Sendable () async -> Void
+    func cleanup() async { await release() }
+}
+
 @MainActor
 final class MeetingMemoryProcessingAttempt {
     let request: MeetingBackendRequest
@@ -87,17 +95,17 @@ extension MeetingProcessingPipeline {
         prepareFirst: @escaping @MainActor @Sendable () async throws -> (@Sendable () async -> Void)? = { nil }
     ) async throws -> MeetingIdlePreparationToken? {
         let modelID = settings.selectedSpeechModel.rawValue
-        guard PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: modelID) == true,
-              settings.meetingSpeakerLabelsEnabled,
-              settings.meetingSpeakerProcessingMode(for: .inRoom) == .streaming,
-              let owner = idlePreparedResourceOwner, let idleResourcePreparation else { return nil }
+        guard let owner = idlePreparedResourceOwner else { return nil }
+        let speakerMode = settings.meetingSpeakerProcessingMode(for: .inRoom)
+        let nativePairEnabled = PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: modelID) == true
+            && settings.meetingSpeakerLabelsEnabled && speakerMode == .streaming && idleResourcePreparation != nil
         let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
         let language = settings.meetingRecordingDefaults.languageCode.flatMap { supported.contains($0) ? $0 : nil }
             ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
         let backendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
             selectedModelID: modelID, savedBackendID: settings.meetingTranscriptionBackendID)
         let configuration = PichiMeetingProviderFactory.configuration(backendID: backendID, languageCode: language,
-            diarizationEnabled: true, speakerProcessingMode: .streaming)
+            diarizationEnabled: settings.meetingSpeakerLabelsEnabled, speakerProcessingMode: speakerMode)
         let backend = try backendRegistry.makeBackend(id: backendID, context: .init(legacyExecutor: { _, _ in
             throw MeetingModelResidencyError.unsupportedProvider
         }, idleResourcePreparation: idleResourcePreparation))
@@ -106,9 +114,11 @@ extension MeetingProcessingPipeline {
             let releaseFirst = try await prepareFirst()
             do {
                 try Task.checkCancellation()
+                if !nativePairEnabled {
+                    return releaseFirst.map { MeetingIdlePrefixResource(configurationIdentity: identity, release: $0) }
+                }
                 guard let resource = try await backend.prepareIdleResources(configuration: configuration) else {
-                    await releaseFirst?()
-                    return nil
+                    return releaseFirst.map { MeetingIdlePrefixResource(configurationIdentity: identity, release: $0) }
                 }
                 guard resource.configurationIdentity == configuration.identityFingerprint else {
                     await resource.cleanup()
@@ -117,6 +127,9 @@ extension MeetingProcessingPipeline {
                 return MeetingBackendIdlePreparedResource(backendID: backendID, configuration: configuration,
                     resource: resource, releaseAdditionalResources: releaseFirst)
             } catch {
+                if !Task.isCancelled, !(error is CancellationError), let releaseFirst {
+                    return MeetingIdlePrefixResource(configurationIdentity: identity, release: releaseFirst)
+                }
                 await releaseFirst?()
                 throw error
             }

@@ -24,29 +24,14 @@ final class AppServices: ObservableObject {
     private var pendingIdleResourceEvent = false
     private var isSceneActive = false
     private var hasRestoredInitialState = false
-    private struct IdlePreparationToken: Sendable {
-        let privacy: PichiPrivacyPreparationOwner.IdleToken?
-        let models: MeetingIdlePreparationToken?
-    }
-    private lazy var idlePreparation = MeetingIdlePreparationController<IdlePreparationToken>(
+    private lazy var idlePreparation = MeetingIdlePreparationController<MeetingIdlePreparationToken>(
         prepare: { [settings, transcriptPrivacy, meetingProcessingPipeline] in
-            do {
-                let models = try await meetingProcessingPipeline.prepareSelectedIdleResources(prepareFirst: {
-                    guard await settings.meetingPIIRedactionEnabled,
-                          let token = try await transcriptPrivacy.prepareInstalledForIdle() else { return nil }
-                    return { await transcriptPrivacy.releaseIdlePreparation(token) }
-                })
-                if let models { return IdlePreparationToken(privacy: nil, models: models) }
-            } catch {
-                if Task.isCancelled { throw CancellationError() }
-            }
-            let privacy = await settings.meetingPIIRedactionEnabled
-                ? try await transcriptPrivacy.prepareInstalledForIdle() : nil
-            return privacy.map { IdlePreparationToken(privacy: $0, models: nil) }
-        }, release: { [transcriptPrivacy, meetingProcessingPipeline] token in
-            if let models = token.models { await meetingProcessingPipeline.releaseIdleResources(models) }
-            if let privacy = token.privacy { await transcriptPrivacy.releaseIdlePreparation(privacy) }
-        })
+            try await meetingProcessingPipeline.prepareSelectedIdleResources(prepareFirst: {
+                guard await settings.meetingPIIRedactionEnabled,
+                      let token = try await transcriptPrivacy.prepareInstalledForIdle() else { return nil }
+                return { await transcriptPrivacy.releaseIdlePreparation(token) }
+            })
+        }, release: { [meetingProcessingPipeline] token in await meetingProcessingPipeline.releaseIdleResources(token) })
 
     init(store: (any MeetingSessionStoring)? = nil,
          capture injectedCapture: (any MeetingCaptureControlling)? = nil,

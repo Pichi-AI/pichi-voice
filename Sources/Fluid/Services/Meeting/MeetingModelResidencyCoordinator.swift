@@ -333,8 +333,14 @@ final class MeetingModelResidencyCoordinator {
            attempt == nil, operations.isEmpty, idleDrain == nil {
             // Transfer and close ordinary admission in this same actor turn. There is no
             // suspended gap in which Settings/dictation can retire an adopted resource.
-            prepared = idle.adopt()
-            idlePreparation = nil
+            if let claim = idle.adopt() {
+                prepared = claim
+                idlePreparation = nil
+            } else {
+                // Foreground retirement may already have removed the owner's slot while
+                // its native cleanup is still running. A missing claim is not readiness.
+                await retireIdlePreparation()
+            }
         } else {
             await retireIdlePreparation()
         }

@@ -9,7 +9,9 @@ import sys
 source = Path('Sources/Fluid/Services/ASRService+iOS.swift').read_text()
 retire = source[source.index('    func retireIdleSpeechResidency()'):source.index('    func withMeetingModelResidency<T>(attemptID: UUID, idleResourceIdentity:')]
 release = source[source.index('    private func releaseResidentProvider()'):source.index('    func activateModel(')]
-Path(sys.argv[1]).write_text('import Foundation\nextension IdleSpeechHostWitness {\n' + retire + release + '\n}\n')
+pipeline = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipelineMemoryAttempt.swift').read_text()
+prefix = pipeline[pipeline.index('/// Optional prefix resources'):pipeline.index('@MainActor\nfinal class MeetingMemoryProcessingAttempt')]
+Path(sys.argv[1]).write_text('import Foundation\n' + prefix + '\nextension IdleSpeechHostWitness {\n' + retire + release + '\n}\n')
 PY
 # Actual generic lease and residency coordinator; fake native loaders hold no model/audio.
 xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \

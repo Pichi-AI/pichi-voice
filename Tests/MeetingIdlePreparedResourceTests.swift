@@ -192,6 +192,28 @@ struct MeetingIdlePreparedResourceTests {
             h.releaseGate.release(); await background.value; try await real.value
             check(h.releases == 1 && admitted, "Parallel cancellation and priority admission release exactly once")
         }
+        // Memory-pressure/foreground retirement can clear the owner's slot before the
+        // coordinator metadata disappears. Matching Record must join that exact drain,
+        // rather than treating a nil one-shot claim as successful adoption.
+        do {
+            let h = Harness(blockRelease: true), token = try await h.prepare()!
+            let background = Task { await h.owner.cancel(token) }
+            await until { h.releaseGate.entered }
+            var enteredCold = false
+            let recording = Task {
+                try await h.residency.withExclusive(attemptID: UUID(), participants: [], idleResourceIdentity: "backend/fingerprint") { claim in
+                    enteredCold = true
+                    check(claim == nil && h.weights == 0, "A retired claim must be joined before matching Record falls back")
+                    let cold = try await h.load("backend/fingerprint")
+                    await cold?.cleanup()
+                }
+            }
+            await settle()
+            check(!enteredCold && h.weights == 1, "Matching Record cannot bypass an ongoing direct owner drain")
+            h.releaseGate.release(); await background.value; try await recording.value
+            check(h.loads == 2 && h.releases == 2 && h.maximumWeights == 1,
+                "Cold fallback after memory retirement cannot duplicate resident weights")
+        }
         do {
             let h = Harness(blockLoad: true)
             let idle = Task { try await h.prepare() }
@@ -220,6 +242,24 @@ struct MeetingIdlePreparedResourceTests {
             do { _ = try await h.residency.beginOperationRetiringIdle(owner: "speech", modelID: "x"); preconditionFailure("Terminating admission must reject") }
             catch { check(error is MeetingModelResidencyError, "Termination checks remain intact") }
         }
-        print("Meeting idle prepared resource tests passed: \(checks) checks across 15 admission/ownership scenarios")
+        // Prefix-only fallback remains in the same executable idle admission. A native
+        // ordinary operation cannot begin while those optional weights are still parked.
+        do {
+            let residency = MeetingModelResidencyCoordinator()
+            var prefixReady = false, releases = 0
+            // Use the owner's production coordinator so the executable admission retires it.
+            let actualOwner = MeetingIdlePreparedResourceOwner(residency: residency)
+            let token = try await actualOwner.prepare(identity: "prefix-only") {
+                prefixReady = true
+                return MeetingIdlePrefixResource(configurationIdentity: "prefix-only", release: {
+                    await MainActor.run { prefixReady = false; releases += 1 }
+                })
+            }
+            check(token != nil && prefixReady, "A PII-only fallback must retain its explicit idle admission")
+            let admission = try await residency.beginOperationRetiringIdle(owner: "speech", modelID: "ordinary")
+            check(!prefixReady && releases == 1, "Ordinary native work must join prefix-only retirement")
+            residency.endOperation(admission)
+        }
+        print("Meeting idle prepared resource tests passed: \(checks) checks across 17 admission/ownership scenarios")
     }
 }
