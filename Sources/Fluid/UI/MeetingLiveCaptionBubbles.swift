@@ -205,6 +205,7 @@ struct MeetingLiveBubbleScrollList: View {
         ZStack(alignment: .bottomTrailing) {
             MeetingNativeCaptionTable(rows: self.rows, paragraphs: self.paragraphs,
                 revision: self.documentStyle ? self.renderedParagraphRevision : self.presentationRevision,
+                textSize: self.dynamicTypeSize,
                 documentStyle: self.documentStyle, pending: self.inlinePending,
                 separatePending: self.separatePending,
                 hidesPartialFromAccessibility: self.hidesPartialFromAccessibility,
@@ -369,6 +370,7 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
     let rows: [MeetingLiveBubbleComposer.Row]
     let paragraphs: [MeetingLiveCaptionParagraphs.Paragraph]
     let revision: UInt64?
+    let textSize: DynamicTypeSize
     let documentStyle: Bool
     let pending: MeetingPendingSpeechSnapshot
     let separatePending: MeetingPendingSpeechSnapshot
@@ -411,7 +413,7 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
             fonts: [theme.typography.body, theme.typography.captionStrong],
             brandStyle: theme.typography.brandStyle,
             spacing: [theme.metrics.spacing.xs, theme.metrics.spacing.sm],
-            locale: environment.locale.identifier, typeSize: environment.dynamicTypeSize,
+            locale: environment.locale.identifier, typeSize: textSize,
             scheme: environment.colorScheme, direction: environment.layoutDirection,
             phase: environment.scenePhase, reduceMotion: environment.accessibilityReduceMotion)
     }
@@ -709,6 +711,7 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
                 .padding(.bottom, bottomPadding)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .environment(\.self, input.environment)
+                .environment(\.dynamicTypeSize, input.textSize)
                 .id(item.id))
             }.margins(.all, 0)
         }
