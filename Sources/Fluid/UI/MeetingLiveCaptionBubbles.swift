@@ -378,6 +378,12 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
     @Binding var isPinned: Bool
     @Environment(\.self) private var environment
 
+    private var hostedEnvironment: EnvironmentValues {
+        var values = self.environment
+        values.dynamicTypeSize = self.textSize
+        return values
+    }
+
     private enum Item: Equatable {
         case paragraph(MeetingLiveCaptionParagraphs.Paragraph)
         case bubble(MeetingLiveBubbleComposer.Row)
@@ -710,8 +716,7 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
                 }
                 .padding(.bottom, bottomPadding)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .environment(\.self, input.environment)
-                .environment(\.dynamicTypeSize, input.textSize)
+                .environment(\.self, input.hostedEnvironment)
                 .id(item.id))
             }.margins(.all, 0)
         }

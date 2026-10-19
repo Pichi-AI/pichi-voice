@@ -570,7 +570,7 @@ final class MobileNavigationUITests: XCTestCase {
         app.launchEnvironment["PICHI_UI_CAPTION_REVIEW"] = "1"
         app.launch()
         defer { app.terminate() }
-        let viewport = app.scrollViews["meeting.liveTranscript.viewport"]
+        let viewport = app.tables["meeting.liveTranscript.viewport"]
         let latest = app.buttons["meeting.liveTranscript.latest"]
         XCTAssertTrue(viewport.waitForExistence(timeout: 10))
         XCTAssertFalse(latest.waitForExistence(timeout: 1))
