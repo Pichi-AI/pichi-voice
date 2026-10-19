@@ -79,6 +79,11 @@ final class MobileNavigationUITests: XCTestCase {
             let start = app.buttons["meeting.start"]
             try require((start.exists && start.isEnabled) || app.buttons["transcript.more"].exists,
                         "Meetings must show idle recording controls or an existing completed transcript")
+            let recoveryHeading = app.staticTexts.matching(NSPredicate(format: "label IN %@", [
+                "Meeting transcription was interrupted", "Расшифровка встречи прервана",
+                "Meeting transcription failed", "Не удалось расшифровать встречу"
+            ])).firstMatch
+            try require(!recoveryHeading.exists, "Download smoke refuses interrupted or failed meetings even without retryable audio")
             try require(!app.buttons["meeting.retry"].exists && !app.buttons["meeting.restartProcessing"].exists,
                         "Download smoke refuses a meeting awaiting recovery")
         }
