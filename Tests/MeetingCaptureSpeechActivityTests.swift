@@ -56,7 +56,7 @@ struct MeetingCaptureSpeechActivityTests {
     static func main() async throws {
         let events = Events()
         let worker = MeetingCaptureSpeechActivityWorker(factory: { Fake() }, publish: events.add)
-        for (i, value) in [Float(0), 0, 0.5, 0.99, -1, 0].enumerated() {
+        for (i, value) in [Float(0), 0.1, 0.5, 0.99, -1, 0].enumerated() {
             worker.offer(try input(value, start: Double(i) * 0.256), start: Double(i) * 0.256)
         }
         try await wait(events, count: 6)

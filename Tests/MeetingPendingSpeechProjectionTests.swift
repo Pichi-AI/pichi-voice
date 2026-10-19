@@ -39,6 +39,42 @@ struct MeetingPendingSpeechProjectionTests {
         try require(Set(speech.snapshot.tokens.map(\.id)).count == speech.snapshot.tokens.count, "Token IDs remain unique")
         try require(Set(speech.snapshot.tokens.map(\.widthHint)).count > 3, "Variable widths are deterministic")
         print("PASS speech onset, cadence and identity")
+        func confirmedSpeech(_ projection: inout MeetingPendingSpeechProjection, from: Double, seconds: Double) {
+            for frame in 0..<Int((seconds / 0.02).rounded()) {
+                let start = from + Double(frame) * 0.02
+                projection.observeSpeechActivity(source: .you, start: start, end: start + 0.02, activity: .speech)
+            }
+        }
+        func timedProjection(spacing: Double) -> (MeetingPendingSpeechProjection, MeetingLiveTranscriptSnapshot) {
+            var projection = MeetingPendingSpeechProjection()
+            confirmedSpeech(&projection, from: 0, seconds: 8)
+            var visible = MeetingLiveTranscriptSnapshot.empty
+            visible.revision = 1
+            visible.utterances = (0..<8).map { index in
+                .init(id: UUID(), speaker: .you, text: "слово", start: Double(index) * spacing,
+                      end: Double(index) * spacing + 0.15)
+            }
+            projection.reconcile(visible: visible)
+            return (projection, visible)
+        }
+        var (fast, timed) = timedProjection(spacing: 0.256)
+        var (slow, _) = timedProjection(spacing: 0.75)
+        var repeated = fast
+        timed.revision = 2
+        repeated.reconcile(visible: timed)
+        let fastCount = fast.snapshot.tokens.count, slowCount = slow.snapshot.tokens.count
+        confirmedSpeech(&fast, from: 8, seconds: 4)
+        confirmedSpeech(&slow, from: 8, seconds: 4)
+        confirmedSpeech(&repeated, from: 8, seconds: 4)
+        try require(fast.snapshot.tokens.count - fastCount > slow.snapshot.tokens.count - slowCount,
+                    "New native word spacing adapts visual cadence to faster and slower speech")
+        try require(fast.snapshot.tokens == repeated.snapshot.tokens,
+                    "A higher metadata revision cannot train twice from the same native words")
+        let beforeCadencePause = fast.snapshot.tokens
+        fast.observeSpeechActivity(source: .you, start: 12, end: 12.256, activity: .nonSpeech)
+        try require(fast.snapshot.tokens == beforeCadencePause && fast.snapshot.animatedTokenIDs.isEmpty,
+                    "A learned fast cadence still cannot mint or animate speech in a pause")
+        print("PASS native timing adapts cadence once without creating speech during pauses")
         for (name, level, crossing, crest) in [("silence", Float(0), Float(0), Float(0)),
             ("steady fan", 0.02, 0.12, 3), ("steady tone", 0.02, 0.04, 1.5), ("broadband hiss", 0.02, 0.5, 3)] {
             var projection = MeetingPendingSpeechProjection()

@@ -458,6 +458,8 @@ nonisolated struct MeetingPendingSpeechProjection {
         var lastActivityEnd: Double?
         var lastProgressEnd: Double?
         var reportedQuietWaiting = false
+        var cadenceSeconds: Double = 0.4
+        var cadenceObservedThrough: Double?
     }
     private var tracks: [MeetingLiveSpeaker: Track] = [:]
     private var nextID: UInt64 = 0
@@ -539,16 +541,17 @@ nonisolated struct MeetingPendingSpeechProjection {
         }
         if contributesSpeech {
             track.pendingDuration += end - start
-            // Baseline presentation cadence: 150 shapes/minute, not recognized words.
-            if track.pendingDuration >= 0.4 - 0.000_001 {
-                track.pendingDuration -= 0.4
+            // Start at 150 shapes/minute, then gently follow newly visible native speech
+            // timing. Activity decides when to mint; cadence is still only a UI estimate.
+            if track.pendingDuration >= track.cadenceSeconds - 0.000_001 {
+                track.pendingDuration -= track.cadenceSeconds
                 track.lastProgressEnd = end
                 track.reportedQuietWaiting = false
                 if self.snapshot.tokens.count < Self.maximumTokens {
                     let widths: [Double] = [0.72, 1.02, 0.56, 0.88, 0.64, 1.10, 0.80]
                     self.nextID &+= 1
                     self.snapshot.tokens.append(MeetingPendingSpeechToken(
-                        id: self.nextID, source: source, start: max(0, end - 0.4), end: end,
+                        id: self.nextID, source: source, start: max(0, end - track.cadenceSeconds), end: end,
                         widthHint: widths[Int((self.nextID - 1) % UInt64(widths.count))], level: level))
                     self.snapshot.revision &+= 1
                     self.reportedCapacity = false
@@ -591,6 +594,8 @@ nonisolated struct MeetingPendingSpeechProjection {
                   utterance.start.isFinite, utterance.start >= 0,
                   utterance.end.isFinite, utterance.end > utterance.start,
                   !utterance.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            self.observeCadence(source: utterance.speaker, start: utterance.start,
+                end: utterance.end, text: utterance.text)
             self.applyCoverage(source: utterance.speaker, start: utterance.start, end: utterance.end,
                 captionID: utterance.id, visibleUTF16: utterance.text.utf16.count)
         }
@@ -608,6 +613,26 @@ nonisolated struct MeetingPendingSpeechProjection {
                 + visible.partials.values.reduce(0) { $0 + $1.text.utf16.count }
             self.emit(.reconciled, transcriptRevision: visible.revision, visibleUTF16: visibleUTF16)
         }
+    }
+
+    private mutating func observeCadence(source: MeetingLiveSpeaker, start: Double, end: Double, text: String) {
+        guard var track = self.tracks[source], end.isFinite, start.isFinite, end > start,
+              track.cadenceObservedThrough.map({ end > $0 + 0.000_001 }) != false else { return }
+        // Do not retain text or word counts. A speaker-only revision cannot train twice,
+        // and a long pause is not a slow speaking rate. Single native words use spacing
+        // between successive endpoints rather than their much shorter phonation length.
+        let words = text.split(whereSeparator: { $0.isWhitespace }).filter {
+            $0.contains(where: { $0.isLetter || $0.isNumber })
+        }.count
+        guard words > 0 else { return }
+        defer { track.cadenceObservedThrough = end; self.tracks[source] = track }
+        let span: Double
+        if words == 1, let previous = track.cadenceObservedThrough { span = end - previous }
+        else if words > 1 { span = end - start }
+        else { return }
+        guard span > 0, span <= max(1.5, Double(words)), end - start <= 30 else { return }
+        let observed = min(1, max(0.256, span / Double(words)))
+        track.cadenceSeconds = track.cadenceSeconds * 0.8 + observed * 0.2
     }
 
     private mutating func applyCoverage(source: MeetingLiveSpeaker, start: TimeInterval, end: TimeInterval,
@@ -968,7 +993,9 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
                 start: start, session: session, epoch: input.epoch, route: "normalized-microphone-16k",
                 cancelled: { self.lock.withLock { self.closed || self.epoch != input.epoch } })
             let activity: MeetingSpeechActivity
-            if let p = result?.probability { activity = p >= 0.85 ? .speech : (p <= 0.05 ? .nonSpeech : .unknown) }
+            // The graph OR-aggregates eight internal frames. A low aggregate bounds
+            // every internal probability; intermediate activity remains explicitly unknown.
+            if let p = result?.probability { activity = p >= 0.85 ? .speech : (p <= 0.1 ? .nonSpeech : .unknown) }
             else { activity = .unknown }
             // This is activity anywhere in a 256ms window, never an estimate of voiced
             // milliseconds or recognized words. Partial tails remain unscored/fail-open.

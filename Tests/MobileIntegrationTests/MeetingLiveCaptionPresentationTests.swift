@@ -1003,7 +1003,7 @@ private struct CaptionPreviewFixtureRedactor: TranscriptTextRedacting {
 @MainActor
 private final class CaptionNativeRows: ObservableObject {
     @Published var rows: [MeetingLiveBubbleComposer.Row]
-    @Published var snapshot: MeetingLiveTranscriptSnapshot?
+    @Published var snapshot: MeetingLiveTranscriptSnapshot? = nil
     @Published var pending: MeetingPendingSpeechSnapshot = .empty
     @Published var width: CGFloat
     let height: CGFloat
