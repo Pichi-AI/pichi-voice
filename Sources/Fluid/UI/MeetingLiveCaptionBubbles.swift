@@ -417,10 +417,36 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
     }
 
     final class Table: UITableView {
+        let measurementContainer = UIView()
         var didLayout: ((Table) -> Void)?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil { setNeedsLayout() }
+        }
         override func layoutSubviews() {
             super.layoutSubviews()
             didLayout?(self)
+        }
+    }
+
+    /// A cell owns its ordinary host; the coordinator retains just the live tail
+    /// and pending hosts so fitting never creates a second waveform renderer.
+    final class Cell: UITableViewCell {
+        var ordinaryHost: (UIView & UIContentView)?
+        private var installedHost: UIView?
+        func install(_ host: UIView) {
+            guard installedHost !== host || host.superview !== contentView else { return }
+            if installedHost?.superview === contentView { installedHost?.removeFromSuperview() }
+            installedHost = host
+            host.removeFromSuperview()
+            host.translatesAutoresizingMaskIntoConstraints = false
+            contentView.addSubview(host)
+            NSLayoutConstraint.activate([
+                host.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+                host.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+                host.topAnchor.constraint(equalTo: contentView.topAnchor),
+                host.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+            ])
         }
     }
 
@@ -430,12 +456,16 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
         table.backgroundColor = .clear
         table.separatorStyle = .none
         table.contentInsetAdjustmentBehavior = .never
-        table.rowHeight = UITableView.automaticDimension
-        table.estimatedRowHeight = 100
-        table.selfSizingInvalidation = .enabledIncludingConstraints
+        // Exact delegate heights keep scrolling independent of estimate replacement.
+        table.estimatedRowHeight = 0
+        table.estimatedSectionHeaderHeight = 0
+        table.estimatedSectionFooterHeight = 0
+        table.selfSizingInvalidation = .disabled
         table.sectionHeaderTopPadding = 0
         table.allowsSelection = false
-        table.register(UITableViewCell.self, forCellReuseIdentifier: "caption")
+        table.register(Cell.self, forCellReuseIdentifier: "caption")
+        table.measurementContainer.isHidden = true
+        table.addSubview(table.measurementContainer)
         table.accessibilityIdentifier = "meeting.liveTranscript.viewport"
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
@@ -457,10 +487,23 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
         private var lastViewportSize = CGSize.zero
         private var previousOffset: CGFloat = 0
         private var userScroll = false
+        private var heights: [ID: CGFloat] = [:]
+        private var measuredWidth: CGFloat = 0
+        private var sizingHost: (UIView & UIContentView)?
+        private var activeHosts: [ID: UIView & UIContentView] = [:]
+        private var dirtyHosts: Set<ID> = []
+
+        private var tailIndex: Int { items.count - (items.last?.id == .pending ? 2 : 1) }
+        private func isActive(_ index: Int) -> Bool { index == tailIndex || items[index].id == .pending }
 
         fileprivate func update(_ next: MeetingNativeCaptionTable, table: Table) {
-            guard !applying else { queuedInput = next; return }
+            guard !applying, table.window != nil, table.bounds.width > 0 else {
+                queuedInput = next
+                return
+            }
             let previous = input
+            let widthChanged = measuredWidth != table.bounds.width
+            measuredWidth = table.bounds.width
             let sourceChanged: Bool
             if let previous, previous.documentStyle == next.documentStyle {
                 sourceChanged = next.revision != nil && previous.revision != nil
@@ -469,11 +512,17 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
             } else { sourceChanged = true }
             let appearanceChanged = previous?.appearance != next.appearance
                 || previous?.hidesPartialFromAccessibility != next.hidesPartialFromAccessibility
+            let metricsChanged = widthChanged || previous?.appearance.fonts != next.appearance.fonts
+                || previous?.appearance.brandStyle != next.appearance.brandStyle
+                || previous?.appearance.spacing != next.appearance.spacing
+                || previous?.appearance.locale != next.appearance.locale
+                || previous?.appearance.typeSize != next.appearance.typeSize
+                || previous?.appearance.direction != next.appearance.direction
             let pendingChanged = previous?.pending != next.pending || previous?.separatePending != next.separatePending
             let jumpRequested = next.isPinned != publishedFollowing
             if jumpRequested { following = next.isPinned; publishedFollowing = next.isPinned }
             input = next
-            guard sourceChanged || appearanceChanged || pendingChanged else {
+            guard sourceChanged || appearanceChanged || pendingChanged || widthChanged else {
                 if jumpRequested && following { needsFollow = true; table.setNeedsLayout() }
                 return
             }
@@ -516,6 +565,28 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
                 let first = appearanceChanged ? 0 : max(0, items.count - (hasPending ? 2 : 1))
                 changed = (first..<items.count).map { IndexPath(row: $0, section: 0) }.filter { !insertions.contains($0) }
             }
+            // Heights survive ordinary capture ticks and unchanged source rows. Global
+            // text metrics require one full remeasurement, not a replacement of live cells.
+            if metricsChanged { heights.removeAll(keepingCapacity: true) }
+            for path in changed + insertions {
+                if sourceChanged || pendingChanged || metricsChanged { heights.removeValue(forKey: items[path.row].id) }
+                dirtyHosts.insert(items[path.row].id)
+            }
+            if sourceChanged {
+                let retained = Set(items.map(\.id))
+                heights = heights.filter { retained.contains($0.key) }
+            }
+            let activeIDs = Set([tailIndex, items.count - 1].filter { items.indices.contains($0) }.map { items[$0].id })
+            activeHosts = activeHosts.filter { id, host in
+                if activeIDs.contains(id) { return true }
+                // A recycled cell may still retain this host after it leaves the
+                // viewport. Retire its native attachments before creating a new tail.
+                host.configuration = UIHostingConfiguration { AnyView(EmptyView()) }.margins(.all, 0)
+                if host.superview === table.measurementContainer { host.removeFromSuperview() }
+                return false
+            }
+            dirtyHosts.formIntersection(activeIDs)
+            if appearanceChanged || widthChanged { dirtyHosts.formUnion(activeIDs) }
             applying = true
             needsFollow = following
             let finish: () -> Void = { [weak self, weak table] in
@@ -523,6 +594,10 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
                 // Reconfigure after structural changes so paths address the final model.
                 // Unlike reloadRows, this keeps an existing hosted native text view alive.
                 table.reconfigureRows(at: changed)
+                // Delegate heights, including offscreen rows, must be refreshed after
+                // a fit changes. An empty update preserves all existing cell hosts.
+                table.beginUpdates()
+                table.endUpdates()
                 table.layoutIfNeeded()
                 let anchorIndex = anchor.flatMap { value in
                     sourceChanged ? self.items.firstIndex(where: { $0.id == value.0 })
@@ -552,18 +627,71 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
         }
 
         func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { items.count }
+        func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+            let id = items[indexPath.row].id
+            if let height = heights[id] { return height }
+            guard let table = tableView as? Table, table.window != nil, table.bounds.width > 0 else { return 1 }
+            let host: UIView & UIContentView
+            if isActive(indexPath.row) {
+                host = activeHost(at: indexPath.row, table: table)
+            } else {
+                let configuration = configuration(at: indexPath.row)
+                if let sizingHost { sizingHost.configuration = configuration; host = sizingHost }
+                else {
+                    host = configuration.makeContentView()
+                    sizingHost = host
+                    table.measurementContainer.addSubview(host)
+                }
+            }
+            host.bounds.size.width = table.bounds.width
+            host.invalidateIntrinsicContentSize()
+            host.setNeedsLayout()
+            host.layoutIfNeeded()
+            let fitted = host.systemLayoutSizeFitting(CGSize(width: table.bounds.width, height: 0),
+                withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
+            let scale = table.window?.screen.scale ?? 1
+            let height = max(1, ceil(fitted.height * scale) / scale)
+            heights[id] = height
+            return height
+        }
+
+        private func activeHost(at index: Int, table: Table) -> UIView & UIContentView {
+            let id = items[index].id
+            if let host = activeHosts[id] {
+                if dirtyHosts.remove(id) != nil { host.configuration = configuration(at: index) }
+                return host
+            }
+            let host = configuration(at: index).makeContentView()
+            activeHosts[id] = host
+            dirtyHosts.remove(id)
+            table.measurementContainer.addSubview(host)
+            return host
+        }
+
         func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-            let cell = tableView.dequeueReusableCell(withIdentifier: "caption", for: indexPath)
-            guard let input else { return cell }
-            let item = items[indexPath.row]
-            let tailIndex = items.count - (items.last?.id == .pending ? 2 : 1)
-            let isTail = indexPath.row == tailIndex
-            let pending = isTail ? input.pending : .empty
+            let cell = tableView.dequeueReusableCell(withIdentifier: "caption", for: indexPath) as! Cell
+            guard let table = tableView as? Table else { return cell }
+            let host: UIView & UIContentView
+            if isActive(indexPath.row) { host = activeHost(at: indexPath.row, table: table) }
+            else {
+                let configuration = configuration(at: indexPath.row)
+                if let ordinary = cell.ordinaryHost { ordinary.configuration = configuration; host = ordinary }
+                else { host = configuration.makeContentView(); cell.ordinaryHost = host }
+            }
             cell.backgroundColor = .clear
             cell.selectionStyle = .none
-            let bottomPadding = indexPath.row == items.count - 1 ? 1 : input.environment.theme.metrics.spacing.sm
-            cell.contentConfiguration = UIHostingConfiguration {
-                Group {
+            cell.install(host)
+            return cell
+        }
+
+        private func configuration(at index: Int) -> UIHostingConfiguration<AnyView, EmptyView> {
+            let input = self.input!
+            let item = items[index]
+            let isTail = index == tailIndex
+            let pending = isTail ? input.pending : .empty
+            let bottomPadding = index == items.count - 1 ? 1 : input.environment.theme.metrics.spacing.sm
+            return UIHostingConfiguration {
+                AnyView(Group {
                     switch item {
                     case .paragraph(let paragraph):
                         MeetingLiveParagraphRow(paragraph: paragraph,
@@ -581,9 +709,8 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
                 .padding(.bottom, bottomPadding)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .environment(\.self, input.environment)
-                .id(item.id)
+                .id(item.id))
             }.margins(.all, 0)
-            return cell
         }
 
         private func bottom(_ scroll: UIScrollView) -> CGFloat {
@@ -591,7 +718,16 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
                 scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
         }
         fileprivate func didLayout(_ table: Table) {
-            guard !applying, !correctingOffset else { return }
+            guard !applying, !correctingOffset, table.window != nil, table.bounds.width > 0 else { return }
+            if let queued = queuedInput {
+                queuedInput = nil
+                update(queued, table: table)
+                return
+            }
+            if measuredWidth != table.bounds.width, let input {
+                update(input, table: table)
+                return
+            }
             let viewportChanged = lastViewportSize != table.bounds.size
             let extentChanged = lastContentSize != table.contentSize
             lastContentSize = table.contentSize; lastViewportSize = table.bounds.size
