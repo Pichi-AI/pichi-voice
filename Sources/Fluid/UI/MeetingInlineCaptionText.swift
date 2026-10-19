@@ -153,7 +153,7 @@ private final class InlineCaptionContent {
         }
         let retained = Set(configuration.pending.tokens.map(\.id))
         attachments = attachments.filter { retained.contains($0.key) }
-        let animated = Set(configuration.pending.tokens.suffix(3).map(\.id))
+        let animated = configuration.pending.animatedTokenIDs
         var boundsChanged = false
         for token in configuration.pending.tokens {
             let attachment = attachments[token.id] ?? InlineCaptionAttachment(tokenID: token.id)

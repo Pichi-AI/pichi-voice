@@ -4,6 +4,7 @@ import Foundation
 
 // Headless test context for the production live-model file. No app host, audio hardware,
 // model weights, transcript store or privacy service is constructed by this probe.
+typealias SessionSpeakerID = UUID
 nonisolated enum MeetingAudioTrackKind: Sendable { case microphone, applicationAudio }
 nonisolated enum MeetingEchoDetector {
     static func isLikelyEcho(micText: String, remoteText: String) -> Bool { false }
@@ -175,8 +176,82 @@ struct MeetingPendingSpeechProjectionTests {
         feed(&sources, start: 4, duration: 4, rms: Self.speech)
         try require(sources.snapshot.tokens.isEmpty && !sources.snapshot.isCapturing, "Stopped generations cannot resurrect progress")
         print("PASS invalid PTS, duplicates and terminal intake")
+        try testActivityEvidence()
         try testDelayedReplacementDiagnostics()
         try testCaptureTee()
+    }
+
+    static func testActivityEvidence() throws {
+        func feedEvidence(_ projection: inout MeetingPendingSpeechProjection, source: MeetingLiveSpeaker = .you,
+                          start: Double, duration: Double, activity: MeetingSpeechActivity) {
+            for frame in 0..<Int((duration / 0.02).rounded()) {
+                let time = start + Double(frame) * 0.02
+                projection.observeSpeechActivity(source: source, start: time, end: time + 0.02,
+                    activity: activity)
+            }
+        }
+        var projection = MeetingPendingSpeechProjection()
+        feedEvidence(&projection, start: 0, duration: 2, activity: .speech)
+        let first = projection.snapshot
+        try require(first.tokens.count == 5 && first.activityBySource[.you] == .speech,
+                    "Confirmed speech bypasses energy and modulation heuristics")
+        try require(first.animatedTokenIDs == Set(first.tokens.suffix(3).map(\.id)),
+                    "Only the last three waves of an active source animate")
+        feedEvidence(&projection, start: 2, duration: 8, activity: .nonSpeech)
+        let quiet = projection.snapshot
+        try require(quiet.tokens == first.tokens && quiet.animatedTokenIDs.isEmpty,
+                    "Confirmed pause immediately freezes all retained speech without losing its IDs")
+        try require(quiet.revision == first.revision + 1,
+                    "Hundreds of non-speech decisions publish only one activity transition")
+        feedEvidence(&projection, start: 10, duration: 8, activity: .unknown)
+        let unknown = projection.snapshot
+        try require(unknown.activityBySource[.you] == .unknown && unknown.tokens == quiet.tokens
+                    && unknown.animatedTokenIDs.isEmpty && unknown.revision == quiet.revision + 1,
+                    "Missing VAD evidence stays unknown and cannot claim silence, erase audio or churn revisions")
+        var held = MeetingLiveTranscriptSnapshot.empty
+        held.revision = 1
+        held.utterances = [.init(id: UUID(), speaker: .you, text: "Approved prefix only", start: 0, end: 2,
+            hasIncompleteTextCoverage: true)]
+        projection.reconcile(visible: held)
+        try require(projection.snapshot == unknown,
+                    "PII-held finalized suffix keeps every uncovered pending interval and remains frozen")
+        feedEvidence(&projection, start: 18, duration: 1, activity: .speech)
+        let resumed = projection.snapshot
+        try require(resumed.tokens.starts(with: first.tokens) && !resumed.animatedTokenIDs.isEmpty,
+                    "Confirmed resumed speech preserves history and restarts only bounded recent waves")
+        feedEvidence(&projection, source: .them, start: 0, duration: 2, activity: .speech)
+        let both = projection.snapshot
+        try require(both.animatedTokenIDs.count == 6,
+                    "Independent simultaneous sources each animate at most their own last three waves")
+        feedEvidence(&projection, start: 19, duration: 1, activity: .nonSpeech)
+        let otherOnly = projection.snapshot
+        let otherIDs = Set(otherOnly.tokens.filter { $0.source == .them }.suffix(3).map(\.id))
+        try require(otherOnly.animatedTokenIDs == otherIDs,
+                    "A microphone pause cannot freeze the independently active other source")
+        projection.observeSpeechActivity(source: .you, start: 18, end: 18.02, activity: .speech)
+        projection.observeSpeechActivity(source: .them, start: 0, end: 0.02, activity: .nonSpeech)
+        projection.observeSpeechActivity(source: .you, start: .nan, end: 21, activity: .speech)
+        try require(projection.snapshot == otherOnly,
+                    "Stale, cross-source reordered and invalid detector decisions cannot revive or freeze waves")
+        feed(&projection, start: 20, duration: 2, rms: Self.speech)
+        try require(projection.snapshot.activityBySource[.you] == .speech,
+                    "The heuristic fallback remains usable after unknown decisions without model residency")
+        let retained = projection.snapshot.tokens
+        feed(&projection, start: 22, duration: 5, rms: { _ in 0 })
+        try require(projection.snapshot.tokens == retained && projection.snapshot.activityBySource[.you] == .nonSpeech
+                    && projection.snapshot.animatedTokenIDs == otherIDs,
+                    "Heuristic pauses also freeze their own source after bounded hangover")
+        let settledRevision = projection.snapshot.revision
+        feed(&projection, start: 27, duration: 5, rms: { _ in 0 })
+        try require(projection.snapshot.revision == settledRevision,
+                    "Settled heuristic silence cannot invalidate UI at PCM cadence")
+        projection.stop()
+        let stopped = projection.snapshot
+        projection.stop()
+        feedEvidence(&projection, start: 32, duration: 2, activity: .speech)
+        try require(stopped == projection.snapshot && stopped.tokens.isEmpty && stopped.animatedTokenIDs.isEmpty,
+                    "Stop clears animation and capture once; repeated stop and late evidence are inert")
+        print("PASS speech/pause/resume, unknown evidence, PII hold, per-source animation and transition-only revisions")
     }
 
     static func testDelayedReplacementDiagnostics() throws {
@@ -191,14 +266,16 @@ struct MeetingPendingSpeechProjectionTests {
         feed(&projection, duration: 2, rms: Self.speech)
         let original = projection.snapshot
         feed(&projection, start: 2, duration: 18, rms: { _ in 0.001 })
-        try require(projection.snapshot == original, "Even an 18-second ASR delay cannot erase earlier speech during silence")
+        let quietSnapshot = projection.snapshot
+        try require(quietSnapshot.tokens == original.tokens && quietSnapshot.animatedTokenIDs.isEmpty,
+                    "Even an 18-second ASR delay preserves earlier speech while freezing quiet waves")
         let quiet = receipt.values()
         try require(quiet.filter { $0.kind == .quietWaiting }.count == 1, "One quiet transition produces one diagnostic, not a PCM-frame log flood")
         try require(!quiet.contains { $0.kind == .replaced }, "Quiet is never logged as replacement")
         var held = MeetingLiveTranscriptSnapshot.empty
         held.revision = 1
         projection.reconcile(visible: held)
-        try require(projection.snapshot == original, "An empty/privacy-held update cannot remove pending audio")
+        try require(projection.snapshot == quietSnapshot, "An empty/privacy-held update cannot remove pending audio or restart animation")
         held.revision = 2
         held.partials[.you] = .init(id: UUID(), text: "SYNTHETIC_CONTENT_MUST_NOT_ENTER_DIAGNOSTICS", start: 0, end: 2)
         projection.reconcile(visible: held)

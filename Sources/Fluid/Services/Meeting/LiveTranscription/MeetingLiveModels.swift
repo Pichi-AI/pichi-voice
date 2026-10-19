@@ -375,9 +375,28 @@ nonisolated struct MeetingPendingSpeechToken: Identifiable, Sendable, Equatable 
     var level: Float
 }
 
+/// Evidence for capture presentation only. Unknown is distinct from confirmed non-speech;
+/// neither state proves that audio has been recognized or can be discarded.
+nonisolated enum MeetingSpeechActivity: Sendable, Equatable {
+    case speech, nonSpeech, unknown
+}
+
 nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
     var tokens: [MeetingPendingSpeechToken] = []
     var isCapturing = false
+    var activityBySource: [MeetingLiveSpeaker: MeetingSpeechActivity] = [:]
+
+    /// Both native inline attachments and standalone waves share this bounded animation set.
+    /// Retained audio remains visible while recognition or privacy publication is delayed.
+    var animatedTokenIDs: Set<UInt64> {
+        guard isCapturing else { return [] }
+        var result: Set<UInt64> = []
+        for source in [MeetingLiveSpeaker.you, .them] where activityBySource[source] == .speech {
+            result.formUnion(tokens.lazy.filter { $0.source == source }.suffix(3).map(\.id))
+        }
+        return result
+    }
+
     /// Separate from live-transcript revisions: capture progress cannot invalidate an async
     /// privacy-filtered recognition update.
     var revision: UInt64 = 0
@@ -479,14 +498,50 @@ nonisolated struct MeetingPendingSpeechProjection {
         // rejects broadband hiss. These thresholds classify an animation candidate only.
         let candidate = rms >= Self.minimumActivityRMS && modulation >= 0.12 && zeroCrossingRate < 0.34 && peak <= max(0.02, rms * 9)
         track.consecutiveActivity = candidate ? min(2, track.consecutiveActivity + 1) : 0
-        if track.consecutiveActivity >= 2 {
-            track.lastActivityEnd = end
+        let isSpeech = track.consecutiveActivity >= 2
+        if isSpeech { track.lastActivityEnd = end }
+        // Short intra-syllable dips must not toggle every 20ms. A real detector's explicit
+        // non-speech decision below bypasses this heuristic hangover entirely.
+        let activity: MeetingSpeechActivity = isSpeech || track.lastActivityEnd.map {
+            end - $0 < Self.cadenceResetSeconds - 0.000_001
+        } == true ? .speech : .nonSpeech
+        self.advance(source: source, start: start, end: end, activity: activity,
+            contributesSpeech: isSpeech, level: min(1, max(0.08, sqrt(rms / 0.08))), track: &track)
+        self.tracks[source] = track
+    }
+
+    /// Scalar seam for an admitted detector. No model or audio is retained here, and confirmed
+    /// decisions do not pass through the energy/modulation heuristic. Callers choose one
+    /// evidence stream per source and preserve the same capture-relative time contract.
+    mutating func observeSpeechActivity(source: MeetingLiveSpeaker, start: Double, end: Double,
+                                       activity: MeetingSpeechActivity, level: Float = 0.5) {
+        guard self.snapshot.isCapturing, start.isFinite, end.isFinite, start >= 0,
+              end > start, end - start <= 0.05, level.isFinite, (0...1).contains(level) else { return }
+        var track = self.tracks[source] ?? Track()
+        if let lastEnd = track.lastEnd {
+            guard start >= lastEnd - 0.000_001 else { return }
+            if start - lastEnd > 0.06 { track.pendingDuration = 0 }
+        }
+        track.lastEnd = end
+        if activity == .speech { track.lastActivityEnd = end }
+        else { track.pendingDuration = 0 }
+        self.advance(source: source, start: start, end: end, activity: activity,
+            contributesSpeech: activity == .speech, level: level, track: &track)
+        self.tracks[source] = track
+    }
+
+    private mutating func advance(source: MeetingLiveSpeaker, start: Double, end: Double,
+                                  activity: MeetingSpeechActivity, contributesSpeech: Bool,
+                                  level: Float, track: inout Track) {
+        if (self.snapshot.activityBySource[source] ?? .unknown) != activity {
+            self.snapshot.activityBySource[source] = activity
+            self.snapshot.revision &+= 1
+        }
+        if contributesSpeech {
             track.pendingDuration += end - start
-            // Baseline presentation cadence: 150 words/minute, not a claim about actual words.
+            // Baseline presentation cadence: 150 shapes/minute, not recognized words.
             if track.pendingDuration >= 0.4 - 0.000_001 {
                 track.pendingDuration -= 0.4
-                // A short accepted bump must not keep old waves alive forever.
-                // Only sustained activity that earns a visual fragment extends its lifetime.
                 track.lastProgressEnd = end
                 track.reportedQuietWaiting = false
                 if self.snapshot.tokens.count < Self.maximumTokens {
@@ -494,8 +549,7 @@ nonisolated struct MeetingPendingSpeechProjection {
                     self.nextID &+= 1
                     self.snapshot.tokens.append(MeetingPendingSpeechToken(
                         id: self.nextID, source: source, start: max(0, end - 0.4), end: end,
-                        widthHint: widths[Int((self.nextID - 1) % UInt64(widths.count))],
-                        level: min(1, max(0.08, sqrt(rms / 0.08)))))
+                        widthHint: widths[Int((self.nextID - 1) % UInt64(widths.count))], level: level))
                     self.snapshot.revision &+= 1
                     self.reportedCapacity = false
                     self.emit(.created, source: source, tokens: [self.snapshot.tokens.last!])
@@ -505,19 +559,14 @@ nonisolated struct MeetingPendingSpeechProjection {
                 }
             }
         }
-        if let lastActivityEnd = track.lastActivityEnd {
-            // Unminted cadence must not accumulate across separate background bumps.
-            if end - lastActivityEnd >= Self.cadenceResetSeconds { track.pendingDuration = 0 }
-        }
+        if let lastActivityEnd = track.lastActivityEnd,
+           end - lastActivityEnd >= Self.cadenceResetSeconds { track.pendingDuration = 0 }
         if let lastProgressEnd = track.lastProgressEnd, end - lastProgressEnd >= Self.quietWaitingSeconds,
            !track.reportedQuietWaiting {
-            // Silence stops minting. It does not prove the preceding speech has
-            // been recognized, rejected as noise, or admitted by privacy yet.
             track.reportedQuietWaiting = true
             self.emit(.quietWaiting, source: source,
                 tokens: self.snapshot.tokens.filter { $0.source == source }, start: lastProgressEnd, end: end)
         }
-        self.tracks[source] = track
     }
 
     /// Recognition-based retirement uses only caller-approved, actually visible captions. PII-held words and
@@ -605,10 +654,12 @@ nonisolated struct MeetingPendingSpeechProjection {
     }
 
     mutating func stop() {
+        guard self.snapshot.isCapturing else { return }
         let removed = self.snapshot.tokens
         self.tracks.removeAll()
         self.snapshot.tokens.removeAll()
         self.snapshot.isCapturing = false
+        self.snapshot.activityBySource.removeAll()
         self.snapshot.revision &+= 1
         self.emit(.stopped, tokens: removed)
     }
