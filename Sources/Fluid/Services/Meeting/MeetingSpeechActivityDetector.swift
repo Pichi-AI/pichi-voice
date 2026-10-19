@@ -87,9 +87,9 @@ nonisolated struct MeetingLocalSileroActivityModel: MeetingSpeechActivityFrameMo
 }
 
 nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFrameModel> {
-    static var version: String { "speech-shadow-b2-v1" }
+    static var version: String { "speech-shadow-b2-v2" }
     struct Frame: Codable, Equatable {
-        enum Unknown: String, Codable { case invalidInput, unscoredCoverage, contextWarmup, modelFailure, overBudget, cancelled, disabled }
+        enum Unknown: String, Codable { case invalidInput, unscoredCoverage, contextWarmup, modelFailure, overBudget, budgetCooldown, cancelled, disabled }
         let start: Double
         let epoch: UInt64
         let probability: Float?
@@ -103,7 +103,12 @@ nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFra
     private var scope: String?
     private var sessionID: UUID?
     private var needsReset = true
-    private var failures = 0
+    private var modelFailures = 0
+    private var consecutiveOverBudget = 0
+    // nil is normal operation, zero permits one recovery prediction. Positive values
+    // consume only real, valid, contiguous PCM, not wall time or padded samples.
+    private var budgetCooldownRemainingSamples: Int?
+    private static var budgetCooldownSamples: Int { 32_000 }
     private let clock: () -> Double
     init(model: Model, clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
         self.model = model; self.clock = clock
@@ -121,7 +126,11 @@ nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFra
         route: String,
         cancelled: () -> Bool = { false }
     ) -> Frame {
-        if self.sessionID != session { self.failures = 0; self.needsReset = true }
+        if self.sessionID != session {
+            self.modelFailures = 0; self.consecutiveOverBudget = 0
+            self.budgetCooldownRemainingSamples = nil; self.needsReset = true
+            self.scope = nil; self.lastEnd = nil
+        }
         self.sessionID = session
         func unknown(_ reason: Frame.Unknown) -> Frame {
             Frame(start: start.isFinite ? start : 0, epoch: epoch, probability: nil, unknown: reason)
@@ -130,29 +139,61 @@ nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFra
               samples.count == 4096, valid.count == samples.count,
               samples.allSatisfy(\.isFinite)
         else {
-            self.needsReset = true; if self.failures < 3 { self.failures = 0 }; return unknown(.invalidInput)
+            self.resetUnscoredContext(); return unknown(.invalidInput)
         }
         let nextScope = "\(session):\(epoch):\(route)"
-        if self.scope != nextScope || self.lastEnd.map({ abs($0 - start) > 1.0 / 32_000 }) != false { self.needsReset = true }
+        if self.scope != nextScope || self.lastEnd.map({ abs($0 - start) > 1.0 / 32_000 }) != false {
+            self.needsReset = true
+            // A gap, replay or new source epoch cannot shorten the recovery interval.
+            if self.budgetCooldownRemainingSamples != nil {
+                self.budgetCooldownRemainingSamples = Self.budgetCooldownSamples
+            }
+        }
         self.scope = nextScope; self.lastEnd = start + 0.256
-        guard !cancelled() else { self.needsReset = true; if self.failures < 3 { self.failures = 0 }; return unknown(.cancelled) }
-        guard self.failures < 3 else { self.needsReset = true; return unknown(.disabled) }
-        guard valid.allSatisfy({ $0 }) else { self.needsReset = true; self.failures = 0; return unknown(.unscoredCoverage) }
+        guard !cancelled() else { self.resetUnscoredContext(); return unknown(.cancelled) }
+        guard self.modelFailures < 3 else { self.needsReset = true; return unknown(.disabled) }
+        guard valid.allSatisfy({ $0 }) else { self.resetUnscoredContext(); return unknown(.unscoredCoverage) }
+        if let remaining = self.budgetCooldownRemainingSamples, remaining > 0 {
+            self.budgetCooldownRemainingSamples = max(0, remaining - samples.count)
+            self.needsReset = true
+            return unknown(.budgetCooldown)
+        }
         let reset = self.needsReset, began = self.clock()
         do {
             let probability = try model.probability(samples: samples, reset: reset)
-            guard !cancelled() else { self.needsReset = true; self.failures = 0; return unknown(.cancelled) }
-            guard self.clock() - began <= 0.1 else {
-                self.failures += 1; self.needsReset = true; return unknown(.overBudget)
-            }
+            guard !cancelled() else { self.resetUnscoredContext(); return unknown(.cancelled) }
             guard probability.isFinite, (0...1).contains(probability) else {
-                self.failures += 1; self.needsReset = true; return unknown(.modelFailure)
+                self.modelFailures += 1; self.consecutiveOverBudget = 0
+                self.needsReset = true; return unknown(.modelFailure)
             }
-            self.failures = 0; self.needsReset = false
+            self.modelFailures = 0
+            let elapsed = self.clock() - began
+            guard elapsed.isFinite, elapsed >= 0, elapsed <= 0.1 else {
+                self.consecutiveOverBudget += 1; self.needsReset = true
+                if self.budgetCooldownRemainingSamples != nil || self.consecutiveOverBudget >= 3 {
+                    // After the initial three slow calls, retry at most once per new
+                    // two seconds of source PCM. A slow recovery call cools down again.
+                    self.budgetCooldownRemainingSamples = Self.budgetCooldownSamples
+                    self.consecutiveOverBudget = 0
+                }
+                return unknown(.overBudget)
+            }
+            self.consecutiveOverBudget = 0; self.budgetCooldownRemainingSamples = nil
+            self.needsReset = false
             if reset { return unknown(.contextWarmup) }
             return Frame(start: start, epoch: epoch, probability: probability, unknown: nil)
         } catch {
-            self.failures += 1; self.needsReset = true; return unknown(.modelFailure)
+            self.modelFailures += 1; self.consecutiveOverBudget = 0
+            self.needsReset = true; return unknown(.modelFailure)
+        }
+    }
+
+    private mutating func resetUnscoredContext() {
+        self.needsReset = true
+        if self.modelFailures < 3 { self.modelFailures = 0 }
+        self.consecutiveOverBudget = 0
+        if self.budgetCooldownRemainingSamples != nil {
+            self.budgetCooldownRemainingSamples = Self.budgetCooldownSamples
         }
     }
 }

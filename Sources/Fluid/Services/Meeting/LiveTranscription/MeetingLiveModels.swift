@@ -980,7 +980,9 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
     private let session = UUID()
     private let publish: @Sendable (Double, Double, MeetingSpeechActivity) -> Void
 
-    init(factory: @escaping Factory, publish: @escaping @Sendable (Double, Double, MeetingSpeechActivity) -> Void) {
+    init(factory: @escaping Factory,
+         clock: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
+         publish: @escaping @Sendable (Double, Double, MeetingSpeechActivity) -> Void) {
         self.publish = publish
         queue.async { [self] in
             guard !lock.withLock({ closed }) else { return }
@@ -989,7 +991,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
             let began = ProcessInfo.processInfo.systemUptime
             MeetingTimelineTrace.shared?.record("vad_model_load_begin", fields: ["captureID": session.uuidString])
             do {
-                detector = MeetingSpeechActivityDetector(model: Model(value: try factory()))
+                detector = MeetingSpeechActivityDetector(model: Model(value: try factory()), clock: clock)
                 MeetingTimelineTrace.shared?.record("vad_model_load_end", fields: ["captureID": session.uuidString,
                     "outcome": "loaded", "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000)])
             } catch {
@@ -1114,8 +1116,11 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
                 "probability": result?.probability.map { String($0) } ?? "unavailable",
                 "unknownReason": result?.unknown?.rawValue ?? (result == nil ? "no-detector" : "none"),
                 "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000),
+                "detectorPolicyVersion": MeetingSpeechActivityDetector<Model>.version,
                 "probabilityScope": "OR-aggregate-8x32ms" ])
             if result?.unknown == .disabled {
+                // Only repeated actual model failures disable the attempt. Transient
+                // budget cooldown frames remain unknown and keep this worker available.
                 lock.withLock {
                     unavailable = true; evidence.removeAll(); inputs.removeAll(); pendingSamples = 0
                 }
