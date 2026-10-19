@@ -403,10 +403,10 @@ nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
     static let empty = MeetingPendingSpeechSnapshot()
 }
 
-/// A small signal heuristic for capture animation, not a calibrated VAD. The existing Silero
-/// detector is an offline model with its own residency; this path must not load a second model.
-/// Silence, steady background and impulses do not create progress. Modulated non-speech can
-/// still resemble speech, so the UI must describe audio capture, never recognized words.
+/// Scalar-only projection. Mobile capture supplies activity from its single model worker;
+/// legacy capture can still use the inexpensive signal heuristic below. Positive model
+/// windows mean speech somewhere in that window, not exact voiced duration or word counts.
+/// Wave cadence is a bounded presentation estimate, never recognized words.
 nonisolated struct MeetingPendingSpeechProjection {
     static let maximumTokens = 64
     static let minimumActivityRMS: Float = 0.0042
@@ -516,7 +516,7 @@ nonisolated struct MeetingPendingSpeechProjection {
     mutating func observeSpeechActivity(source: MeetingLiveSpeaker, start: Double, end: Double,
                                        activity: MeetingSpeechActivity, level: Float = 0.5) {
         guard self.snapshot.isCapturing, start.isFinite, end.isFinite, start >= 0,
-              end > start, end - start <= 0.05, level.isFinite, (0...1).contains(level) else { return }
+              end > start, end - start <= 0.256_001, level.isFinite, (0...1).contains(level) else { return }
         var track = self.tracks[source] ?? Track()
         if let lastEnd = track.lastEnd {
             guard start >= lastEnd - 0.000_001 else { return }
@@ -667,7 +667,8 @@ nonisolated struct MeetingPendingSpeechProjection {
 }
 
 /// Synchronous metadata tee. Reads the caller-owned PCM once without retaining or copying
-/// an audio buffer, retains fixed-size scalar statistics, and coalesces main-runloop delivery.
+/// unbounded audio, retains fixed-size scalar statistics, and coalesces main-runloop delivery.
+/// Optional model inference has a separate bounded worker; the projection lock never guards it.
 final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     private struct Meter {
         var count = 0
@@ -682,21 +683,49 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     private let originBox: MeetingLiveOriginBox
     private let onUpdate: @Sendable (MeetingPendingSpeechSnapshot) -> Void
     private var projection: MeetingPendingSpeechProjection
+    private var activityWorker: MeetingCaptureSpeechActivityWorker?
     private let onDiagnostic: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)?
     private var meters: [MeetingLiveSpeaker: Meter] = [:]
     private var publicationScheduled = false
     private var lastPublishedRevision: UInt64 = 0
 
     init(originBox: MeetingLiveOriginBox,
+         activityModel: MeetingCaptureSpeechActivityWorker.Factory? = nil,
          diagnostics: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)? = nil,
          onUpdate: @escaping @Sendable (MeetingPendingSpeechSnapshot) -> Void) {
         self.originBox = originBox
         self.onUpdate = onUpdate
         self.onDiagnostic = diagnostics
         self.projection = MeetingPendingSpeechProjection(diagnostics: diagnostics)
+        if let activityModel {
+            self.activityWorker = MeetingCaptureSpeechActivityWorker(factory: activityModel) { [weak self] start, end, activity in
+                guard let self else { return }
+                let publish = self.lock.withLock {
+                    self.projection.observeSpeechActivity(source: .you, start: start, end: end, activity: activity)
+                    return self.reservePublication()
+                }
+                if publish { self.schedulePublication() }
+            }
+        }
+    }
+
+    func confidentlyNonSpeech(start: Double, end: Double) -> Bool {
+        self.activityWorker?.confidentlyNonSpeech(start: start, end: end) ?? false
+    }
+
+    func stopAndWait() async {
+        self.stop()
+        await self.activityWorker?.join()
     }
 
     func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
+        if let activityWorker, kind == .microphone {
+            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            guard pts.isNumeric else { return }
+            let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: self.originBox.establish(pts))
+            activityWorker.offer(sampleBuffer, start: start)
+            return
+        }
         guard CMSampleBufferIsValid(sampleBuffer), CMSampleBufferDataIsReady(sampleBuffer),
               let description = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee,
@@ -773,6 +802,7 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     }
 
     func stop() {
+        self.activityWorker?.stop()
         self.lock.withLock { self.projection.stop(); self.meters.removeAll() }
     }
 
@@ -797,5 +827,163 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
             self.onUpdate(snapshot)
         }
         CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
+}
+
+
+/// The mobile tee already supplies normalized 16kHz mono PCM. A single attempt-owned
+/// worker loads one optional model and owns its recurrent state. Admission only retains
+/// bounded sample buffers; conversion, inference and model loading never run on capture.
+/// Unknown coverage always fails open for ASR. No audio file or model download is created.
+final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable {
+    typealias Factory = @Sendable () throws -> any MeetingSpeechActivityFrameModel
+    private struct Model: MeetingSpeechActivityFrameModel {
+        var value: any MeetingSpeechActivityFrameModel
+        mutating func probability(samples: [Float], reset: Bool) throws -> Float {
+            try value.probability(samples: samples, reset: reset)
+        }
+    }
+    private struct Input: @unchecked Sendable {
+        let buffer: CMSampleBuffer
+        let start: Double
+        let count: Int
+        let epoch: UInt64
+    }
+    private struct Evidence {
+        let start: Double
+        let end: Double
+        let activity: MeetingSpeechActivity
+    }
+    private let queue = DispatchQueue(label: "meeting.speech-activity", qos: .utility)
+    private let lock = NSLock()
+    private var inputs: [Input] = []
+    private var pendingSamples = 0
+    private var scheduled = false
+    private var closed = false
+    private var epoch: UInt64 = 0
+    private var evidence: [Evidence] = []
+    private var detector: MeetingSpeechActivityDetector<Model>?
+    private var samples: [Float] = []
+    private var sampleStart = 0.0
+    private var previousEnd: Double?
+    private var previousEpoch: UInt64?
+    private let session = UUID()
+    private let publish: @Sendable (Double, Double, MeetingSpeechActivity) -> Void
+
+    init(factory: @escaping Factory, publish: @escaping @Sendable (Double, Double, MeetingSpeechActivity) -> Void) {
+        self.publish = publish
+        queue.async { [self] in
+            guard !lock.withLock({ closed }) else { return }
+            // A missing or invalid model leaves the whole attempt unknown. Capture and
+            // recognition continue. The next explicit recording can try again.
+            detector = (try? factory()).map { MeetingSpeechActivityDetector(model: Model(value: $0)) }
+        }
+    }
+
+    func offer(_ buffer: CMSampleBuffer, start: Double) {
+        let count = CMSampleBufferGetNumSamples(buffer)
+        guard start.isFinite, start >= 0, count > 0, count <= 16_000,
+              CMSampleBufferIsValid(buffer), CMSampleBufferDataIsReady(buffer),
+              let description = CMSampleBufferGetFormatDescription(buffer),
+              let format = try? MeetingPCMFormatContract(formatDescription: description),
+              format.sampleRate == 16_000, format.channelCount == 1,
+              let block = CMSampleBufferGetDataBuffer(buffer),
+              CMBlockBufferGetDataLength(block) <= count * MemoryLayout<Float>.stride else { return }
+        let shouldSchedule = lock.withLock { () -> Bool in
+            guard !closed else { return false }
+            // At most two seconds of admitted PCM and sixteen retained buffers. Overflow
+            // invalidates evidence immediately; recognition never waits for this worker.
+            if inputs.count >= 16 || pendingSamples + count > 32_000 {
+                inputs.removeAll(); pendingSamples = 0; epoch &+= 1; evidence.removeAll()
+            }
+            inputs.append(Input(buffer: buffer, start: start, count: count, epoch: epoch))
+            pendingSamples += count
+            guard !scheduled else { return false }
+            scheduled = true
+            return true
+        }
+        if shouldSchedule { queue.async { [self] in drain() } }
+    }
+
+    func confidentlyNonSpeech(start: Double, end: Double) -> Bool {
+        guard start.isFinite, end.isFinite, start >= 0, end > start else { return false }
+        return lock.withLock {
+            guard !closed else { return false }
+            var cursor = start
+            for item in evidence where item.end > start && item.start < end {
+                guard item.start <= cursor + 0.000_001, item.activity == .nonSpeech else { return false }
+                cursor = max(cursor, item.end)
+            }
+            return cursor >= end - 0.000_001
+        }
+    }
+
+    func stop() {
+        lock.withLock { closed = true; inputs.removeAll(); pendingSamples = 0; evidence.removeAll() }
+    }
+
+    /// Queue barrier joins an in-flight non-preemptible CoreML prediction and releases its
+    /// model before the attempt is declared finished. Never synchronously blocks main.
+    func join() async {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                detector = nil; samples.removeAll(); previousEnd = nil
+                continuation.resume()
+            }
+        }
+    }
+
+    private func drain() {
+        while let input = lock.withLock({ () -> Input? in
+            guard !closed, !inputs.isEmpty else { scheduled = false; return nil }
+            let next = inputs.removeFirst(); pendingSamples -= next.count; return next
+        }) {
+            autoreleasepool { process(input) }
+        }
+    }
+
+    private func process(_ input: Input) {
+        let expectedEnd = input.start + Double(input.count) / 16_000
+        let changed = previousEpoch != input.epoch || previousEnd.map { abs($0 - input.start) > 1.0 / 32_000 } != false
+        if changed {
+            samples.removeAll(keepingCapacity: true); sampleStart = input.start
+            lock.withLock { evidence.removeAll() }
+        }
+        previousEpoch = input.epoch; previousEnd = expectedEnd
+        guard let copied = MeetingLiveSampleCopy.copy(input.buffer),
+              copied.buffer.format.sampleRate == 16_000, copied.buffer.format.channelCount == 1,
+              copied.buffer.format.commonFormat == .pcmFormatFloat32,
+              let pcm = copied.buffer.floatChannelData?[0] else {
+            samples.removeAll(keepingCapacity: true); previousEnd = nil
+            emit(start: input.start, end: expectedEnd, activity: .unknown, epoch: input.epoch)
+            return
+        }
+        if samples.isEmpty { sampleStart = input.start }
+        samples.append(contentsOf: UnsafeBufferPointer(start: pcm, count: input.count))
+        while samples.count >= 4096 {
+            let frame = Array(samples.prefix(4096))
+            samples.removeFirst(4096)
+            let start = sampleStart; sampleStart += 0.256
+            let result = detector?.process(samples: frame, valid: [Bool](repeating: true, count: 4096),
+                start: start, session: session, epoch: input.epoch, route: "normalized-microphone-16k",
+                cancelled: { self.lock.withLock { self.closed || self.epoch != input.epoch } })
+            let activity: MeetingSpeechActivity
+            if let p = result?.probability { activity = p >= 0.85 ? .speech : (p <= 0.05 ? .nonSpeech : .unknown) }
+            else { activity = .unknown }
+            // This is activity anywhere in a 256ms window, never an estimate of voiced
+            // milliseconds or recognized words. Partial tails remain unscored/fail-open.
+            emit(start: start, end: start + 0.256, activity: activity, epoch: input.epoch)
+        }
+    }
+
+    private func emit(start: Double, end: Double, activity: MeetingSpeechActivity, epoch: UInt64) {
+        let admitted = lock.withLock { () -> Bool in
+            guard !closed, self.epoch == epoch else { return false }
+            evidence.append(Evidence(start: start, end: end, activity: activity))
+            evidence.removeAll { $0.end < end - 90 }
+            if evidence.count > 512 { evidence.removeFirst(evidence.count - 512) }
+            return true
+        }
+        if admitted { publish(start, end, activity) }
     }
 }

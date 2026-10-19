@@ -52444,6 +52444,38 @@
           }
         }
       }
+    },
+    "Speech detection": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speech detection"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Определение речи"
+          }
+        }
+      }
+    },
+    "Detect speech for live audio placeholders and skip confidently silent recognition windows.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detect speech for live audio placeholders and skip confidently silent recognition windows."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Определять речь для звуковых волн и пропускать распознавание фрагментов с уверенно определённой тишиной."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

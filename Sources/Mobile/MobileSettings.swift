@@ -127,6 +127,7 @@ struct MobileRecordingSettings: View {
                     }
                 }.accessibilityIdentifier("recording.microphone")
             }
+            MobileSpeechActivitySettings()
             Section(PichiLocalization.text("Transcript language")) {
                 Picker(PichiLocalization.text("Language"), selection: selectedLanguage) {
                     ForEach(supportedLanguages, id: \.self) { code in
@@ -383,5 +384,28 @@ private struct MobilePrivacySettings: View {
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
         }.navigationTitle(PichiLocalization.text("Privacy")).accessibilityIdentifier("settings.privacy.detail")
+    }
+}
+
+
+/// This is an explicit model preparation action, separate from immediate microphone start.
+private struct MobileSpeechActivitySettings: View {
+    @ObservedObject private var resources = MeetingSpeechActivityResources.shared
+    @ObservedObject private var coordinator = AppServices.shared.meetingSessionCoordinator
+    @State private var error: String?
+    var body: some View {
+        Section(PichiLocalization.text("Speech detection")) {
+            Text(PichiLocalization.text("Detect speech for live audio placeholders and skip confidently silent recognition windows."))
+            if resources.isPreparing { ProgressView(value: resources.progress) }
+            else if resources.isReady { Label(PichiLocalization.text("Ready"), systemImage: "checkmark.circle.fill") }
+            Button(PichiLocalization.text("Download")) {
+                Task {
+                    do { try await resources.prepare(); error = nil }
+                    catch { self.error = error.localizedDescription }
+                }
+            }.disabled(resources.isPreparing || coordinator.isRecording || coordinator.hasPendingStart || coordinator.isProcessing)
+                .accessibilityIdentifier("recording.downloadSpeechActivity")
+            if let error { Text(error).foregroundStyle(.red) }
+        }.task { await resources.refresh() }
     }
 }

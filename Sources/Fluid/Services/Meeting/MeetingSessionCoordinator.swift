@@ -147,13 +147,19 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var startupTrackHealth: [MeetingAudioTrackID: MeetingTrackHealth] = [:]
     private var startupWriterFailures: Set<MeetingAudioTrackID?> = []
     private var pendingSpeechCapture: MeetingPendingSpeechCapture?
+    private var pendingSpeechTeardownTask: Task<Void, Never>?
+    private let speechActivityModel: MeetingCaptureSpeechActivityWorker.Factory?
     private var pendingSpeechDiagnosticID: UUID?
     private var captureGeneration: UUID? {
         didSet {
             if self.captureGeneration != oldValue {
                 self.logPendingSpeechState("generation_reset")
                 self.lastLiveSourceRevision = 0
-                self.pendingSpeechCapture?.stop()
+                if let pending = self.pendingSpeechCapture {
+                    pending.stop()
+                    let previous = self.pendingSpeechTeardownTask
+                    self.pendingSpeechTeardownTask = Task { await previous?.value; await pending.stopAndWait() }
+                }
                 self.pendingSpeechCapture = nil
                 self.pendingSpeech = .empty
                 self.pendingSpeechDiagnosticID = nil
@@ -246,6 +252,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         processing: any MeetingProcessingControlling,
         audioArbiter: any MeetingAudioActivityArbitrating,
         preferredMicrophoneUID: @escaping @MainActor () -> String? = { nil },
+        speechActivityModel: MeetingCaptureSpeechActivityWorker.Factory? = nil,
         settings: SettingsStore = .shared,
         defaultConfigurationResolver: (@MainActor (MeetingCaptureMode, String) async throws -> MeetingCaptureConfiguration)? = nil,
         redactorProvider: @escaping @MainActor () throws -> (any TranscriptTextRedacting)? = { nil },
@@ -259,6 +266,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.capture = capture
         self.processing = processing
         self.audioArbiter = audioArbiter
+        self.speechActivityModel = speechActivityModel
         self.preferredMicrophoneUID = preferredMicrophoneUID
         self.settings = settings
         self.defaultConfigurationResolver = defaultConfigurationResolver
@@ -640,6 +648,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         var captureStarted = false
         var captureStartAttempted = false
 
+        await self.pendingSpeechTeardownTask?.value
+        self.pendingSpeechTeardownTask = nil
         let captureOrigin = MeetingLiveOriginBox()
         let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator(originBox: captureOrigin) { [weak self] snapshot in
             // Common-modes trampoline, not the main dispatch queue: the queue is starved while the
@@ -668,7 +678,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
         } else { pendingDiagnostics = nil }
         let pendingSpeechCapture = MeetingPendingSpeechCapture(originBox: captureOrigin,
-            diagnostics: pendingDiagnostics) { [weak self] snapshot in
+            activityModel: self.speechActivityModel, diagnostics: pendingDiagnostics) { [weak self] snapshot in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 guard self.captureGeneration == generation,
@@ -2659,12 +2669,17 @@ final class MeetingSessionCoordinator: ObservableObject {
         let coordinator = self.liveTranscriptionCoordinator
         self.liveTranscriptionCoordinator = nil
         self.logPendingSpeechState("capture_teardown")
-        self.pendingSpeechCapture?.stop()
+        let pendingCapture = self.pendingSpeechCapture
+        pendingCapture?.stop()
+        let pendingCleanup = self.pendingSpeechTeardownTask
         self.pendingSpeechCapture = nil
         self.pendingSpeech = .empty
         self.pendingSpeechDiagnosticID = nil
         let publication = self.livePrivacyPublication
         let cleanup = Task { @MainActor in
+            await pendingCleanup?.value
+            await pendingCapture?.stopAndWait()
+            self.pendingSpeechTeardownTask = nil
             await publication.stop()
             await coordinator?.stop()
         }

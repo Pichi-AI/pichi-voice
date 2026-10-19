@@ -49,6 +49,7 @@ final class AppServices: ObservableObject {
         self.meetingSessionCoordinator = MeetingSessionCoordinator(
             store: store, capture: capture, processing: pipeline, audioArbiter: arbiter,
             preferredMicrophoneUID: { settings.meetingRecordingDefaults.microphoneCoreAudioUID },
+            speechActivityModel: MeetingSileroActivityArtifacts.open,
             settings: settings,
             defaultConfigurationResolver: { mode, title in
                 // Preferences are one immutable request snapshot. Async discovery/preparation

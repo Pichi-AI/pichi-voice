@@ -166,3 +166,5 @@ Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift
 Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift
 Sources/Fluid/Services/Meeting/MeetingStreamingTranscriptState.swift
 Sources/Fluid/Services/Meeting/MeetingProcessingPipelineStreamingAttempt.swift
+
+Sources/Fluid/Services/Meeting/MeetingSpeechActivityResources.swift
