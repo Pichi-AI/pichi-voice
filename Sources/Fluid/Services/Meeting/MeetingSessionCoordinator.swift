@@ -732,6 +732,18 @@ final class MeetingSessionCoordinator: ObservableObject {
                     self.liveTranscript.revision += 1
                     self.liveTranscript.availability = .available
                     self.reconcilePendingSpeech()
+                    // This is an accepted protected display value, not durable history or a
+                    // rendered frame. Optional chaining also avoids metadata work when off.
+                    MeetingTimelineTrace.shared?.record("protected_live_publication", fields: [
+                        "sessionID": session.id.uuidString, "generation": generation.uuidString,
+                        "stage": "pcm-protected-preview", "source": "you",
+                        "transcriptRevision": String(self.liveTranscript.revision),
+                        "partialPresent": String(self.liveTranscript.partials[.you] != nil),
+                        "partialID": self.liveTranscript.partials[.you]?.id.uuidString ?? "unavailable",
+                        "sourceStartSeconds": self.liveTranscript.partials[.you].map { String($0.start) } ?? "unavailable",
+                        "sourceEndSeconds": self.liveTranscript.partials[.you]?.end.map { String($0) } ?? "unavailable",
+                        "utf16Count": String(self.liveTranscript.partials[.you]?.text.utf16.count ?? 0),
+                        "publicationScope": "accepted-coordinator-assignment-not-render-frame"])
                 }, confidentlyNonSpeech: { [weak pendingSpeechCapture] start, end in
                     await pendingSpeechCapture?.awaitConfidentNonSpeech(start: start, end: end) ?? false
                 })
@@ -2043,6 +2055,22 @@ final class MeetingSessionCoordinator: ObservableObject {
                 if safe.hasNewWords(since: self.liveTranscript) { self.lastLiveSpeechAt = Date() }
                 self.liveTranscript = safe
                 self.reconcilePendingSpeech()
+                if let trace = MeetingTimelineTrace.shared {
+                    // Only accepted, privacy-filtered partials supply source metadata here.
+                    // The two capture sources bound this metadata work independently of history.
+                    for source in [MeetingLiveSpeaker.you, .them] {
+                        guard let partial = self.liveTranscript.partials[source] else { continue }
+                        trace.record("protected_live_publication", fields: [
+                            "sessionID": self.activeSession?.id.uuidString ?? "unavailable",
+                            "generation": generation.uuidString,
+                            "stage": "redacted-live-snapshot", "source": source == .you ? "you" : "them",
+                            "transcriptRevision": String(self.liveTranscript.revision), "partialPresent": "true",
+                            "partialID": partial.id.uuidString, "sourceStartSeconds": String(partial.start),
+                            "sourceEndSeconds": partial.end.map { String($0) } ?? "unavailable",
+                            "utf16Count": String(partial.text.utf16.count),
+                            "publicationScope": "accepted-coordinator-assignment-not-render-frame"])
+                    }
+                }
             }, failed: { [weak self] generation in
                 guard let self, self.captureGeneration == generation else { return }
                 self.handleCaptureEvent(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil,

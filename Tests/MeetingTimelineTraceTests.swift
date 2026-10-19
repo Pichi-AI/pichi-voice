@@ -50,6 +50,57 @@ import Foundation
         scoped.record("later-hypothesis", text: "must-not-leak")
         let scopedData = try String(contentsOf: scoped.fileURL, encoding: .utf8)
         try require(scoped.status.closed && !scopedData.contains("must-not-leak"), "first-meeting-only")
-        print("MeetingTimelineTrace: default-disabled/private-format/event-byte-queue-limits passed")
+        try await protectedPublication(root: root.appendingPathComponent("accepted-preview"))
+        print("MeetingTimelineTrace: default-disabled/private-format/event-byte-queue-limits/accepted-protected-preview passed")
+    }
+
+    static func protectedPublication(root: URL) async throws {
+        let trace = MeetingTimelineTrace(directory: root)
+        let probe = MeetingProtectedLivePublicationProbe()
+        let generation = UUID()
+        let session = MeetingProtectedLivePublicationProbe.Session(id: UUID())
+        probe.memoryCheckpointGeneration = generation
+        probe.activeSession = session
+        probe.trace = trace
+        let publish = probe.preview(session: session, generation: generation)
+        let partial = MeetingLivePartial(id: UUID(), text: "Synthetic protected words", start: 12.5, end: 14.75)
+        try publish(partial)
+        try require(probe.liveTranscript.partials[.you] == partial && probe.liveTranscript.revision == 1,
+            "accepted-preview-retains-actual-source-and-revision")
+        probe.memoryCheckpointGeneration = UUID()
+        do { try publish(partial); throw NSError(domain: "stale-generation-admitted", code: 1) }
+        catch is CancellationError {}
+        probe.memoryCheckpointGeneration = generation
+        probe.activeSession = .init(id: UUID())
+        do { try publish(partial); throw NSError(domain: "wrong-session-admitted", code: 1) }
+        catch is CancellationError {}
+        try require(trace.status.accepted == 1 && probe.reconciliationCount == 1,
+            "rejected-callbacks-neither-publish-nor-trace")
+        probe.activeSession = session
+        try publish(nil)
+        probe.trace = nil
+        try publish(partial)
+        try require(trace.status.accepted == 2 && probe.liveTranscript.revision == 3,
+            "disabled-trace-preserves-publication-without-recording")
+        await trace.finish()
+        let rows = try String(contentsOf: trace.fileURL, encoding: .utf8).split(separator: "\n").map {
+            try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: Any]
+        }.filter { $0["kind"] as? String == "protected_live_publication" }
+        try require(rows.count == 2, "only-accepted-enabled-publications-traced")
+        let first = rows[0]["fields"] as! [String: String]
+        try require(first["sessionID"] == session.id.uuidString && first["generation"] == generation.uuidString,
+            "trace-identifies-actual-owned-session")
+        try require(first["partialID"] == partial.id.uuidString && first["transcriptRevision"] == "1"
+            && first["sourceStartSeconds"] == "12.5" && first["sourceEndSeconds"] == "14.75"
+            && first["utf16Count"] == String(partial.text.utf16.count), "trace-measures-accepted-partial")
+        try require(first["stage"] == "pcm-protected-preview" && first["source"] == "you"
+            && first["publicationScope"] == "accepted-coordinator-assignment-not-render-frame",
+            "scope-does-not-claim-pixel-or-durable-publication")
+        let clear = rows[1]["fields"] as! [String: String]
+        try require(clear["partialPresent"] == "false" && clear["utf16Count"] == "0"
+            && clear["sourceStartSeconds"] == "unavailable" && clear["sourceEndSeconds"] == "unavailable",
+            "accepted-clear-does-not-invent-a-source-range")
+        try require(rows.allSatisfy { $0["text"] == nil && $0["words"] == nil },
+            "protected-publication-metadata-adds-no-transcript-text")
     }
 }
