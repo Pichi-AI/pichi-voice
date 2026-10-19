@@ -54,7 +54,7 @@ printf '\n%s\n' \
     'Use your own Personal Team and unique bundle ID, keep both for later updates.' \
     'Set PICHI_SOURCE_REVISION to the original revision above, even after a local archive import.' \
     'Build Release, disable Debug executable and keep DerivedData/package checkouts inside the worktree.' \
-    'Before replacing an existing app: export current meetings, settings and your voice profile; stop recording and processing.' \
+    'Before replacing an existing app: stop recording/processing, export meetings and use Xcode Devices > Download Container to back up its current data, including settings and voice profile.' \
     'Verify the signed app revision, team, bundle ID, profile expiry and exact device membership before installing.' \
     'Never uninstall the app, reset its container or delete data to resolve a signing problem.' \
     'Apple Account sign-in, device pairing, iPadOS compatibility and provisioning remain to be checked in Xcode.'

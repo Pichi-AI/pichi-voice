@@ -56,7 +56,7 @@ open Fluid.xcodeproj
 
 ```bash
 git init -b main
-git add .
+git add --force .
 git -c user.name='Local Demo' -c user.email='demo@example.invalid' commit -m 'Import delivered demo sources'
 PICHI_LOCAL_SOURCE_COMMIT="$(git rev-parse HEAD)"
 PICHI_DEMO_ORIGINAL_REVISION='FULL_ORIGINAL_COMMIT_FROM_VERIFIED_HANDOFF'
