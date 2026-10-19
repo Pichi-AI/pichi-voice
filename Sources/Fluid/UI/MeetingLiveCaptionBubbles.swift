@@ -104,24 +104,16 @@ nonisolated enum MeetingLiveCaptionParagraphs {
     }
 }
 
-private extension MeetingLiveBubbleComposer.Row {
-    var captionLabel: String {
-        participant.map { MeetingTranscriptExporter.speakerLabel(for: $0, language: PichiLocalization.language) }
-            ?? speaker.captionSourceLabel
+extension MeetingLiveBubbleComposer.Row {
+    var captionLabel: String? {
+        guard self.hasReadableParticipant, let participant else { return nil }
+        return MeetingTranscriptExporter.timestampText(self.readingTurnStart) + " "
+            + MeetingTranscriptExporter.speakerLabel(for: participant, language: PichiLocalization.language)
     }
 }
 
-private extension MeetingLiveCaptionParagraphs.Paragraph {
-    var captionLabel: String {
-        participant.map { MeetingTranscriptExporter.speakerLabel(for: $0, language: PichiLocalization.language) }
-            ?? speaker.captionSourceLabel
-    }
-}
-
-private extension MeetingLiveSpeaker {
-    var captionSourceLabel: String {
-        self == .you ? PichiLocalization.text("Microphone") : PichiLocalization.text("Meeting audio")
-    }
+extension MeetingLiveCaptionParagraphs.Paragraph {
+    var captionLabel: String? { rows[0].captionLabel }
 }
 
 /// Snapshot-to-row work changes with protected recognition, not the much more frequent
@@ -1004,10 +996,11 @@ private struct MeetingLiveParagraphRow: View, Equatable {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if self.paragraph.showsLabel {
-                Text(self.paragraph.captionLabel)
+            if self.paragraph.showsLabel, let label = self.paragraph.captionLabel {
+                Text(label)
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.paragraph.speaker == .you ? self.theme.palette.accentText : self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Group {
                 if self.isTail {
@@ -1024,9 +1017,11 @@ private struct MeetingLiveParagraphRow: View, Equatable {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(self.paragraph.captionLabel + ", "
-            + self.paragraph.text(includingPartials: !self.hidesPartialFromAccessibility)
-            + (self.pending.tokens.isEmpty ? "" : ", " + PichiLocalization.text("Audio captured, waiting for transcription")))
+        .accessibilityLabel([
+            self.paragraph.showsLabel ? self.paragraph.captionLabel : nil,
+            self.paragraph.text(includingPartials: !self.hidesPartialFromAccessibility),
+            self.pending.tokens.isEmpty ? nil : PichiLocalization.text("Audio captured, waiting for transcription"),
+        ].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityHidden(self.hidesPartialFromAccessibility && self.paragraph.rows.allSatisfy(\.isPartial)
             && self.pending.tokens.isEmpty)
         .accessibilityIdentifier("meeting.liveParagraph.\(self.paragraph.id.uuidString)")
@@ -1052,7 +1047,7 @@ struct MeetingLiveBubbleRow: View, Equatable {
 
     private var isMicrophone: Bool { self.row.speaker == .you }
 
-    private var sourceLabel: String {
+    private var sourceLabel: String? {
         self.row.captionLabel
     }
 
@@ -1066,10 +1061,11 @@ struct MeetingLiveBubbleRow: View, Equatable {
 
     var body: some View {
         VStack(alignment: self.isMicrophone && !self.documentStyle ? .trailing : .leading, spacing: 4) {
-            if self.row.showsLabel {
-                Text(self.sourceLabel)
+            if self.row.showsLabel, let label = self.sourceLabel {
+                Text(label)
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.isMicrophone ? self.theme.palette.accentText : self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Group {
                 if self.isTail {
@@ -1085,8 +1081,11 @@ struct MeetingLiveBubbleRow: View, Equatable {
         .frame(maxWidth: .infinity, alignment: self.isMicrophone && !self.documentStyle ? .trailing : .leading)
         .padding(self.isMicrophone ? .leading : .trailing, self.documentStyle ? 0 : 32)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(self.sourceLabel + ", " + (self.hidesPartialFromAccessibility && self.row.isPartial ? "" : self.row.text)
-            + (self.pending.tokens.isEmpty ? "" : ", " + PichiLocalization.text("Audio captured, waiting for transcription")))
+        .accessibilityLabel([
+            self.row.showsLabel ? self.sourceLabel : nil,
+            self.hidesPartialFromAccessibility && self.row.isPartial ? nil : self.row.text,
+            self.pending.tokens.isEmpty ? nil : PichiLocalization.text("Audio captured, waiting for transcription"),
+        ].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityHidden(self.hidesPartialFromAccessibility && self.row.isPartial && self.pending.tokens.isEmpty)
     }
 

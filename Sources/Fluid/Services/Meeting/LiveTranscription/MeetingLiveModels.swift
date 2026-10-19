@@ -3,8 +3,8 @@ import CoreMedia
 import Foundation
 
 /// Internal live-only source tags: `.you` is the microphone track and `.them` is application audio.
-/// Source captions use neutral labels. Protected streaming results can additionally supply
-/// participant presentation without changing source routing or partial recognition contracts.
+/// Protected streaming results can additionally supply participant presentation without
+/// changing source routing or partial recognition contracts.
 nonisolated enum MeetingLiveSpeaker: Sendable, Equatable {
     case you
     case them
@@ -27,7 +27,7 @@ nonisolated struct MeetingLiveUtterance: Identifiable, Sendable, Equatable {
     /// Its original end then cannot retire the audio still waiting for safe text.
     var hasIncompleteTextCoverage = false
     /// Optional product speaker evidence for protected streaming results. Source-only engines
-    /// and provisional hypotheses keep the existing neutral microphone/application labels.
+    /// and provisional hypotheses do not claim a participant identity.
     var participant: MeetingSpeakerPresentation? = nil
 }
 
@@ -159,6 +159,18 @@ nonisolated enum MeetingLiveBubbleComposer {
         var isPartial: Bool
         var showsLabel: Bool
         var participant: MeetingSpeakerPresentation? = nil
+        /// Original session-relative first-word time, retained independently of reading ownership.
+        var start: TimeInterval = 0
+        /// The first word of the current readable participant turn, including layout continuations.
+        var readingTurnStart: TimeInterval = 0
+
+        var hasReadableParticipant: Bool {
+            guard let participant else { return false }
+            switch participant.label {
+            case .identified, .estimated, .interrupting: return true
+            case .unknown, .candidates: return false
+            }
+        }
 
         func hasSameSpeaker(as other: Self) -> Bool {
             speaker == other.speaker && participant?.identity == other.participant?.identity
@@ -182,19 +194,42 @@ nonisolated enum MeetingLiveBubbleComposer {
     static func rows(for snapshot: MeetingLiveTranscriptSnapshot) -> [Row] {
         var rows = snapshot.utterances.map {
             Row(id: $0.id, speaker: $0.speaker, text: $0.text, isPartial: false,
-                showsLabel: false, participant: $0.participant)
+                showsLabel: false, participant: $0.participant, start: $0.start)
         }
         let activePartials = [MeetingLiveSpeaker.you, .them]
             .compactMap { speaker in snapshot.partials[speaker].map { (speaker, $0) } }
             .filter { pair in !snapshot.utterances.contains { $0.id == pair.1.id } }
             .sorted { $0.1.start < $1.1.start }
         for (speaker, partial) in activePartials {
-            rows.append(Row(id: partial.id, speaker: speaker, text: partial.text, isPartial: true, showsLabel: false))
+            rows.append(Row(id: partial.id, speaker: speaker, text: partial.text, isPartial: true,
+                            showsLabel: false, start: partial.start))
+        }
+
+        // Unresolved words and provisional hypotheses continue the last readable participant
+        // on their own capture source. This is a transient reading projection only: the snapshot
+        // retains its original uncertainty, IDs, text and timing for later speaker corrections.
+        var readingTurns: [MeetingLiveSpeaker: (participant: MeetingSpeakerPresentation, start: TimeInterval)] = [:]
+        for index in rows.indices {
+            let source = rows[index].speaker
+            let previous = readingTurns[source]
+            if rows[index].hasReadableParticipant, let participant = rows[index].participant {
+                let start = previous.flatMap { $0.participant.identity == participant.identity ? $0.start : nil }
+                    ?? rows[index].start
+                readingTurns[source] = (participant, start)
+                rows[index].readingTurnStart = start
+            } else if let previous {
+                rows[index].participant = previous.participant.markingEstimated()
+                rows[index].readingTurnStart = previous.start
+            } else {
+                rows[index].participant = nil
+                rows[index].readingTurnStart = rows[index].start
+            }
         }
 
         var labelIndex = rows.startIndex
         for index in rows.indices {
-            rows[index].showsLabel = index == rows.startIndex || !rows[index].hasSameSpeaker(as: rows[index - 1])
+            rows[index].showsLabel = rows[index].hasReadableParticipant
+                && (index == rows.startIndex || !rows[index].hasSameSpeaker(as: rows[index - 1]))
             if rows[index].showsLabel { labelIndex = index }
             // The visible header belongs to the complete continuous reading turn, even
             // when long text is divided into several layout paragraphs below that header.

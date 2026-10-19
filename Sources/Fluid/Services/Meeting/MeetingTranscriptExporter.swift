@@ -928,7 +928,7 @@ nonisolated enum MeetingTranscriptExporter {
     }
 
     static func timestampText(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds.rounded(.down)))
+        guard seconds.isFinite, seconds >= 0, let total = Int(exactly: seconds.rounded(.down)) else { return "00:00" }
         let hours = total / 3600
         let minutes = (total % 3600) / 60
         let secs = total % 60

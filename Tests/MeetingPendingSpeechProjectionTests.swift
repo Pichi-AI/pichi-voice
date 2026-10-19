@@ -27,6 +27,9 @@ struct MeetingPendingSpeechProjectionTests {
     }
     static func speech(_ time: Double) -> Float { 0.018 + 0.011 * Float(sin(time * 2 * .pi * 3)) }
     static func main() throws {
+        try testReadableParticipantContinuity()
+        try testReadableParticipantCorrectionsAndSources()
+        try testElapsedParticipantTurnTimes()
         var speech = MeetingPendingSpeechProjection()
         var first: Double?
         for frame in 0..<400 {
@@ -215,6 +218,113 @@ struct MeetingPendingSpeechProjectionTests {
         try testActivityEvidence()
         try testDelayedReplacementDiagnostics()
         try testCaptureTee()
+    }
+
+    static func testReadableParticipantContinuity() throws {
+        let name = MeetingSpeakerPresentation.Name(displayName: "Участник 1", isLocalUser: false)
+        let first = MeetingSpeakerPresentation(identity: "first", label: .identified(name), participantID: UUID())
+        let second = MeetingSpeakerPresentation(identity: "second", label: .identified(name), participantID: UUID())
+        let unknown = MeetingSpeakerPresentation(identity: "unresolved", label: .unknown)
+        let candidates = MeetingSpeakerPresentation(identity: "candidates", label: .candidates([name, nil], relation: .conflict))
+        func snapshot(_ participants: [MeetingSpeakerPresentation?]) -> MeetingLiveTranscriptSnapshot {
+            var value = MeetingLiveTranscriptSnapshot.empty
+            value.utterances = participants.enumerated().map { index, participant in
+                .init(id: UUID(), speaker: .you, text: index == 1 ? "А" : "слово\(index)",
+                      start: Double(index), end: Double(index) + 0.1, participant: participant)
+            }
+            return value
+        }
+        let initial = snapshot([nil, unknown, candidates])
+        let initialRows = MeetingLiveBubbleComposer.rows(for: initial)
+        try require(initialRows.allSatisfy { !$0.showsLabel && $0.participant == nil },
+                    "Initial unresolved text has neither a fake speaker identity nor a source header")
+        for participants in [[first, unknown, first], [first, nil, first], [first, candidates, first]] {
+            let value = snapshot(participants)
+            let original = value
+            let rows = MeetingLiveBubbleComposer.rows(for: value)
+            try require(rows.map(\.showsLabel) == [true, false, false]
+                        && rows.allSatisfy { $0.participant?.identity == first.identity },
+                        "An unresolved letter, nil owner or candidate set continues the known readable turn")
+            try require(rows[1].participant?.isEstimated == true,
+                        "Carried reading ownership remains an internal estimate rather than new speaker evidence")
+            try require(value == original && rows.map(\.id) == value.utterances.map(\.id)
+                        && rows.map(\.text) == value.utterances.map(\.text)
+                        && rows.map(\.start) == value.utterances.map(\.start),
+                        "Composition preserves raw uncertainty, row IDs, text order and native start times")
+        }
+        var value = snapshot([first, unknown, second])
+        let partialID = UUID()
+        value.partials[.you] = .init(id: partialID, text: "продолжение", start: 3, end: 3.5)
+        let original = value
+        let rows = MeetingLiveBubbleComposer.rows(for: value)
+        try require(rows.map(\.showsLabel) == [true, false, true, false]
+                    && rows.map { $0.participant?.identity } == [first.identity, first.identity, second.identity, second.identity],
+                    "Only an actual new participant splits a turn; an unassigned partial follows that participant")
+        try require(rows.last?.id == partialID && rows.last?.isPartial == true && value == original,
+                    "A source-only growing partial retains its ID and original evidence while continuing the readable turn")
+        print("PASS live unresolved letters, nil/candidate ownership, initial anonymity and known participant switches")
+    }
+
+    static func testReadableParticipantCorrectionsAndSources() throws {
+        let owner = UUID(), other = UUID()
+        let first = MeetingSpeakerPresentation(identity: "participant-a", label: .identified(.init(displayName: "Same alias", isLocalUser: false)), participantID: owner)
+        let second = MeetingSpeakerPresentation(identity: "participant-b", label: .identified(.init(displayName: "Same alias", isLocalUser: false)), participantID: other)
+        let unknown = MeetingSpeakerPresentation(identity: "unknown", label: .unknown)
+        var value = MeetingLiveTranscriptSnapshot.empty
+        value.revision = 1
+        value.utterances = [
+            .init(id: UUID(), speaker: .you, text: "первое", start: 7, end: 7.4, participant: first),
+            .init(id: UUID(), speaker: .them, text: "другая дорожка", start: 8, end: 8.4, participant: unknown),
+            .init(id: UUID(), speaker: .you, text: "продолжение", start: 9, end: 9.4, participant: nil),
+            .init(id: UUID(), speaker: .them, text: "ответ", start: 10, end: 10.4, participant: second),
+        ]
+        let before = MeetingLiveBubbleComposer.rows(for: value)
+        try require(before.map { $0.participant?.identity } == [first.identity, nil, first.identity, second.identity]
+                    && before.map(\.showsLabel) == [true, false, true, true],
+                    "Unresolved ownership never leaks across capture sources or collapses distinct equal-name identities")
+        try require(before[2].readingTurnStart == 7 && before[3].readingTurnStart == 10,
+                    "Resumed source headers retain their readable turn origin; the new participant uses its own first word")
+        value.revision = 2
+        value.utterances[2].participant = second
+        let corrected = MeetingLiveBubbleComposer.rows(for: value)
+        try require(corrected[2].participant == second && corrected[2].readingTurnStart == 9
+                    && corrected.map(\.id) == before.map(\.id) && corrected.map(\.text) == before.map(\.text),
+                    "A higher revision with unchanged row IDs replaces provisional reading ownership with actual corrected identity")
+        value.revision = 3
+        value.utterances[2].participant = .init(identity: second.identity,
+            label: .identified(.init(displayName: "Ручное имя", isLocalUser: false)), participantID: other)
+        try require(MeetingLiveBubbleComposer.rows(for: value)[2].participant == value.utterances[2].participant,
+                    "Manual participant names are refreshed without translated-name comparisons or stale identity caches")
+        print("PASS independent source ownership, equal aliases, same-ID speaker corrections and manual names")
+    }
+
+    static func testElapsedParticipantTurnTimes() throws {
+        for (seconds, expected) in [(0.0, "00:00"), (7.9, "00:07"), (59, "00:59"), (60, "01:00"),
+                                    (755, "12:35"), (3599, "59:59"), (3600, "1:00:00"), (3755, "1:02:35")] {
+            try require(MeetingTranscriptExporter.timestampText(seconds) == expected,
+                        "Elapsed timestamp format is stable at minute/hour boundaries and uses the first word's whole second")
+        }
+        for seconds in [-1.0, -Double.infinity, Double.infinity, Double.nan, Double.greatestFiniteMagnitude] {
+            try require(MeetingTranscriptExporter.timestampText(seconds) == "00:00",
+                        "Invalid, negative and unrepresentable elapsed values are handled before integer conversion")
+        }
+        let participant = MeetingSpeakerPresentation(identity: "speaker", label: .identified(.init(displayName: "Участник", isLocalUser: false)))
+        var value = MeetingLiveTranscriptSnapshot.empty
+        value.utterances = [
+            .init(id: UUID(), speaker: .you, text: "Начало\n", start: 7.8, end: 8, participant: participant),
+            .init(id: UUID(), speaker: .you, text: String(repeating: "слово ", count: 200), start: 20, end: 40, participant: participant),
+        ]
+        value.partials[.you] = .init(id: UUID(), text: "ожидаю", start: 50)
+        let before = MeetingLiveBubbleComposer.rows(for: value)
+        value.revision += 1
+        value.partials[.you]?.text += " новые слова"
+        value.partials[.you]?.end = 55
+        let after = MeetingLiveBubbleComposer.rows(for: value)
+        try require(before.allSatisfy { $0.readingTurnStart == 7.8 }
+                    && after.allSatisfy { $0.readingTurnStart == 7.8 }
+                    && after.map(\.showsLabel) == [true, false, false],
+                    "Explicit newline, long layout paragraphs, pending growth and revisions cannot replace a turn's first-word time")
+        print("PASS finite elapsed timestamp boundaries and stable first-word turn anchors")
     }
 
     static func testActivityEvidence() throws {
