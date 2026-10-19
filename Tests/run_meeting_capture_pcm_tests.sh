@@ -19,7 +19,7 @@ start = contract.index('nonisolated protocol MeetingMemoryAudioConsuming:')
 root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia\n' + contract[start:] + '\n'
     + 'class MeetingProcessingPipeline {}\n'
     + 'final class DebugLogger: Sendable { static let shared = DebugLogger(); func info(_ message: String, source: String) {} }\n'
-    + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = [] }\n'
+    + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = []; var protectedSourceThroughSample: Int? = nil }\n'
     + 'struct MeetingBackendSpeakerActivity: Sendable {}\n'
     + 'final class MeetingMemoryAudioArchive: @unchecked Sendable { private let lock = NSLock(); private var count = 0; var totalSampleCount: Int { lock.withLock { count } }; func append(_ samples: UnsafeBufferPointer<Float>) throws { lock.withLock { count += samples.count } }; func seal() throws {} }\n')
 source = pathlib.Path('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift').read_text()

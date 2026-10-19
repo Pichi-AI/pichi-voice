@@ -7,6 +7,12 @@ nonisolated protocol MeetingPreparedStreamingPCMProcessing: Sendable {
                    preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingStreamingPCMObservation
     func finishStreaming() async throws -> MeetingStreamingPCMObservation
     func discardActivity(beforeSample: Int) async throws
+    /// Joins mandatory downstream work before the next window's optional-work decision.
+    func recordWindowProcessing(_ feedback: MeetingPCMWindowProcessingFeedback) async throws
+}
+
+extension MeetingPreparedStreamingPCMProcessing {
+    func recordWindowProcessing(_ feedback: MeetingPCMWindowProcessingFeedback) async throws {}
 }
 
 nonisolated struct MeetingStreamingPCMObservation: Sendable {
@@ -63,15 +69,16 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
                        (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?,
                        CheckedContinuation<MeetingStreamingPCMObservation, Error>)
         case discard(UUID, Int, CheckedContinuation<Void, Error>)
+        case processed(UUID, MeetingPCMWindowProcessingFeedback, CheckedContinuation<Void, Error>)
         case finish(UUID, CheckedContinuation<MeetingStreamingPCMObservation, Error>)
 
         var id: UUID {
-            switch self { case .recognize(let id, _, _, _, _), .discard(let id, _, _), .finish(let id, _): return id }
+            switch self { case .recognize(let id, _, _, _, _), .discard(let id, _, _), .processed(let id, _, _), .finish(let id, _): return id }
         }
         func fail(_ error: Error) {
             switch self {
             case .recognize(_, _, _, _, let reply), .finish(_, let reply): reply.resume(throwing: error)
-            case .discard(_, _, let reply): reply.resume(throwing: error)
+            case .discard(_, _, let reply), .processed(_, _, let reply): reply.resume(throwing: error)
             }
         }
     }
@@ -125,6 +132,10 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
 
     func discardActivity(beforeSample: Int) async throws {
         try await self.submit { .discard(UUID(), beforeSample, $0) }
+    }
+
+    func recordWindowProcessing(_ feedback: MeetingPCMWindowProcessingFeedback) async throws {
+        try await self.submit { .processed(UUID(), feedback, $0) }
     }
 
     /// A failed microphone start or an empty recording has no native state to flush. The
@@ -270,6 +281,10 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
                 reply.resume(returning: value)
             case .discard(_, let sample, let reply):
                 try await session.discardActivity(beforeSample: sample)
+                try self.resolve(command.id)
+                reply.resume()
+            case .processed(_, let feedback, let reply):
+                try await session.recordWindowProcessing(feedback)
                 try self.resolve(command.id)
                 reply.resume()
             case .finish:

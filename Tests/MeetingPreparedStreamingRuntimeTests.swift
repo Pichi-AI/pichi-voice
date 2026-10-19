@@ -368,6 +368,8 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
         try await shortAndEmptyFinalizationMatrix()
         try await lifecyclePreviewAdmission()
         try await streamingPreviewDoesNotRepeatSealedPrivacy()
+        try await completedWindowPacingFeedback()
+        try await invalidWindowCompletionFeedback()
         let r = Recorder(); let s = make(r)
         let w = MeetingPCMProgressiveWindow.fixture()
         let task = Task { try await s.recognize(window: w, offset: 0, preview: nil) }
@@ -383,6 +385,8 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
         try require(r.progress.allSatisfy { $0.batch.segments.isEmpty && $0.asrStableThroughSample == nil && $0.sealedEmptyASRRange == nil },
                     "Progress callbacks contain no transcript and cannot advance the ASR watermark")
         try await s.discardActivity(beforeSample: 3)
+        try await s.recordWindowProcessing(.init(sourceStartSample: 0, sourceFrameCount: 5,
+            chargedPendingFrames: 0, maximumPendingFrames: 960_000))
         let second = try await s.recognize(window: .fixture(samples: [0, 0, 0], final: true), offset: 5.0 / 16_000, preview: nil)
         try require(second.batch.segments.first?.id == "5:0", "Different physical windows retain unique ASR-native word IDs")
         try require(second.activity.allSatisfy { $0.token.analysisEpochID.ordinal == 0 && $0.start == 3.0 / 16_000 }, "One global speaker epoch and acknowledged retained floor survive multiple windows")
@@ -466,7 +470,106 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
         try await adaptiveOwnerEvidence()
         try await ownerScopeRetiresModelsBeforeEncoder()
         try await optionalOwnerPreflightAndCancellation()
-        print("15 prepared streaming runtime contract groups passed")
+        print("17 prepared streaming runtime contract groups passed")
+    }
+
+    private static func invalidWindowCompletionFeedback() async throws {
+        let recorder = Recorder(), runtime = make(recorder)
+        _ = try await runtime.recognize(window: .fixture(samples: [0.1], final: true), offset: 0, preview: nil)
+        let events = recorder.snapshot
+        do {
+            _ = try await runtime.recognize(window: .fixture(samples: [0.1], final: true), offset: 1.0 / 16_000, preview: nil)
+            throw FixtureFailure.invalid
+        } catch MeetingStreamingPCMControllerError.invalidScope {}
+        try require(recorder.snapshot == events, "Missing publication receipt rejects the next window before native work")
+        for value in [
+            MeetingPCMWindowProcessingFeedback(sourceStartSample: 1, sourceFrameCount: 1, chargedPendingFrames: 0, maximumPendingFrames: 960_000),
+            .init(sourceStartSample: 0, sourceFrameCount: 2, chargedPendingFrames: 0, maximumPendingFrames: 960_000),
+            .init(sourceStartSample: 0, sourceFrameCount: 1, chargedPendingFrames: -1, maximumPendingFrames: 960_000),
+            .init(sourceStartSample: 0, sourceFrameCount: 1, chargedPendingFrames: 960_001, maximumPendingFrames: 960_000)
+        ] {
+            do { try await runtime.recordWindowProcessing(value); throw FixtureFailure.invalid }
+            catch MeetingStreamingPCMControllerError.invalidScope {}
+        }
+        let valid = MeetingPCMWindowProcessingFeedback(sourceStartSample: 0, sourceFrameCount: 1,
+            chargedPendingFrames: 0, maximumPendingFrames: 960_000)
+        try await runtime.recordWindowProcessing(valid)
+        do { try await runtime.recordWindowProcessing(valid); throw FixtureFailure.invalid }
+        catch MeetingStreamingPCMControllerError.invalidScope {}
+        _ = try await runtime.recognize(window: .fixture(samples: [0.1], final: true), offset: 1.0 / 16_000, preview: nil)
+        let final = try await runtime.finishStreaming()
+        try require(final.acceptedThroughSample == 2 && final.asrStableThroughSample == 2,
+                    "Invalid receipts cannot advance source coverage or prevent a corrected matching receipt")
+        await runtime.cleanup()
+        print("PASS missing, mismatched, duplicate and invalid-budget receipts without source mutation")
+    }
+
+    private static func completedWindowPacingFeedback() async throws {
+        // Actual progressive ASR loop + prepared adapter + controller. Synthetic inference is
+        // instantaneous; the delays stand for canonical privacy and the joined durable store.
+        // Recording early is the prior bug, and must exhibit unnecessary optional work.
+        func run(recordEarly: Bool = false, slowDownstream: Bool = false,
+                 futurePCMWait: Bool = false, pending: Int = 0) async throws -> (calls: [String], text: [String]) {
+            let recorder = Recorder(), prepared = make(recorder)
+            let controller = try await MeetingStreamingPCMController.prepare { body in
+                do { try await body(prepared) } catch { await prepared.cleanup(); throw error }
+                await prepared.cleanup()
+            }
+            let feedback = MeetingPCMWindowProcessingFeedback(sourceStartSample: 0, sourceFrameCount: 8_000,
+                chargedPendingFrames: pending, maximumPendingFrames: 960_000)
+            let first = MeetingPCMProgressiveWindow.fixture()
+            let operation = Task { try await controller.recognize(window: first, offset: 0) }
+            first.fixtureAppend(Array(repeating: 0.1, count: 4_000), final: false)
+            for _ in 0..<10_000 {
+                if recorder.snapshot.contains("asr:4000") { break }
+                await Task.yield()
+            }
+            try require(recorder.snapshot.contains("asr:4000"), "First optional prefix must execute")
+            if futurePCMWait { try await Task.sleep(for: .milliseconds(400)) }
+            first.fixtureAppend(Array(repeating: 0.1, count: 4_000), final: true)
+            let firstResult = try await operation.value
+            if recordEarly { try await controller.recordWindowProcessing(feedback) }
+            if slowDownstream {
+                try await Task.sleep(for: .milliseconds(200)) // Canonical privacy.
+                try await Task.sleep(for: .milliseconds(200)) // Persistence and projection.
+            }
+            if !recordEarly { try await controller.recordWindowProcessing(feedback) }
+            let priorCalls = recorder.snapshot.filter { $0.hasPrefix("asr:") }.count
+            let second = MeetingPCMProgressiveWindow.fixture()
+            let secondOperation = Task { try await controller.recognize(window: second, offset: 0.5) }
+            second.fixtureAppend(Array(repeating: 0.1, count: 4_000), final: false)
+            for _ in 0..<10_000 {
+                if recorder.snapshot.contains("progress:12000") { break }
+                await Task.yield()
+            }
+            try require(recorder.snapshot.contains("progress:12000"),
+                        "Suppressed prefixes still feed every sample to the diarizer and progress owner")
+            // The progress callback precedes inference. Give its continuation time to run.
+            try await Task.sleep(for: .milliseconds(10))
+            second.fixtureAppend(Array(repeating: 0.1, count: 4_000), final: true)
+            let secondResult = try await secondOperation.value
+            try await controller.recordWindowProcessing(.init(sourceStartSample: 8_000, sourceFrameCount: 8_000,
+                chargedPendingFrames: 0, maximumPendingFrames: 960_000))
+            let final = try await controller.finishStreaming()
+            try require(final.isFinal && final.asrStableThroughSample == 16_000,
+                        "Pacing must preserve complete final source coverage")
+            try require(recorder.snapshot.filter { $0.hasPrefix("dia:") } ==
+                ["dia:0:4000", "dia:4000:4000", "dia:8000:4000", "dia:12000:4000"],
+                "Pacing must preserve contiguous exactly-once speaker input")
+            return (Array(recorder.snapshot.filter { $0.hasPrefix("asr:") }.dropFirst(priorCalls)),
+                    [firstResult, secondResult].flatMap { $0.batch.segments.map { "\($0.text):\($0.start):\($0.end)" } })
+        }
+        let early = try await run(recordEarly: true, slowDownstream: true)
+        let corrected = try await run(slowDownstream: true)
+        let pressure = try await run(pending: 36 * 16_000)
+        let waited = try await run(futurePCMWait: true)
+        try require(early.calls == ["asr:4000", "asr:8000"], "Early timing misses mandatory downstream cost")
+        try require(corrected.calls == ["asr:8000"], "Slow canonical privacy/store suppresses the next optional prefix")
+        try require(pressure.calls == ["asr:8000"], "Charged 36 seconds suppresses optional work below the real 60-second ceiling")
+        try require(waited.calls == early.calls, "Waiting for future captured PCM cannot suppress healthy previews")
+        try require(corrected.text == early.text && pressure.text == early.text && waited.text == early.text,
+                    "Optional work reduction cannot change final native text, timings or coverage")
+        print("PASS post-publication pacing, charged pressure, unchanged canonical words and excluded future PCM waits")
     }
 
     private static func streamingPreviewDoesNotRepeatSealedPrivacy() async throws {
@@ -695,6 +798,8 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
         _ = try await admissionSession.recognize(window: .fixture(samples: boundarySource.signal(0..<176_000), final: true),
             offset: 0, preview: nil)
         try await admissionSession.discardActivity(beforeSample: 163_840)
+        try await admissionSession.recordWindowProcessing(.init(sourceStartSample: 0, sourceFrameCount: 176_000,
+            chargedPendingFrames: 0, maximumPendingFrames: 960_000))
         _ = try await admissionSession.recognize(window: .fixture(samples: boundarySource.signal(176_000..<192_000), final: true),
             offset: 11, preview: nil)
         _ = try await admissionSession.finishStreaming()
@@ -746,6 +851,8 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
             collectOwnerEvidence: true, useAdaptiveOwnerEvidence: true, onProgress: { _ in })
         let source = OwnerReplayFixture(frames: 40 * 16_000, ranges: [12 * 16_000..<19 * 16_000])
         _ = try await session.recognize(window: .fixture(samples: source.signal(0..<320_000), final: true), offset: 0, preview: nil)
+        try await session.recordWindowProcessing(.init(sourceStartSample: 0, sourceFrameCount: 320_000,
+            chargedPendingFrames: 0, maximumPendingFrames: 960_000))
         _ = try await session.recognize(window: .fixture(samples: source.signal(320_000..<640_000), final: true), offset: 20, preview: nil)
         _ = try await session.finishStreaming()
         let live = try session.ownerEvidence()?.samples ?? []

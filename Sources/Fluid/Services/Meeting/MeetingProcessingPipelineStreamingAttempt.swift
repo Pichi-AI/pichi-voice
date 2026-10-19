@@ -80,6 +80,11 @@ extension MeetingProcessingPipeline {
                     if await state.metadataDiagnostics?.isFinal != true {
                         try await controller.discardActivity(beforeSample: await state.retainActivityFromSample)
                     }
+                }, didProcessWindow: { feedback in
+                    // The timing owner excludes only waits for future PCM. This receipt joins
+                    // canonical privacy above and the full checkpoint/projection before the
+                    // next optional preview decision on the prepared worker.
+                    try await controller.recordWindowProcessing(feedback)
                 }, finalize: {
                     if controller.cancelIfUnstarted() {
                         await state.cancel()

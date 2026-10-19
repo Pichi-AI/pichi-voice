@@ -34,6 +34,8 @@ private nonisolated struct Prepared: MeetingPreparedStreamingPCMProcessing {
     var entered: Signal? = nil
     var inferenceGate: Signal? = nil
     var failRecognition = false
+    var feedbackEntered: Signal? = nil
+    var feedbackGate: Signal? = nil
 
     func recognize(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
                    preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingStreamingPCMObservation {
@@ -55,6 +57,11 @@ private nonisolated struct Prepared: MeetingPreparedStreamingPCMProcessing {
                      processedThroughSample: 3, retainedFromSample: 0, isFinal: true)
     }
     func discardActivity(beforeSample: Int) async throws { await self.evidence.record("ack-\(beforeSample)") }
+    func recordWindowProcessing(_ feedback: MeetingPCMWindowProcessingFeedback) async throws {
+        await self.evidence.record("feedback")
+        await self.feedbackEntered?.release()
+        await self.feedbackGate?.wait()
+    }
 }
 
 @main
@@ -90,7 +97,31 @@ nonisolated struct MeetingStreamingPCMControllerTests {
         try await self.testDetachedScopePreservesReentry()
         try await self.testDeferredPreparationAndEarlyStop()
         try await self.testDeferredFailureAndCancellation()
+        try await self.testFeedbackCancellationJoin()
         print("PASS streaming controller preparation, single-command admission, actual PCM wait cancellation, guarded previews and joined resource teardown")
+    }
+
+    static func testFeedbackCancellationJoin() async throws {
+        let evidence = Evidence(), entered = Signal(), feedback = Signal(), cleanup = Signal()
+        let controller = try await MeetingStreamingPCMController.prepare(using: self.scoped(
+            .init(evidence: evidence, feedbackEntered: entered, feedbackGate: feedback), cleanupGate: cleanup))
+        let operation = Task {
+            do {
+                try await controller.recordWindowProcessing(.init(sourceStartSample: 0, sourceFrameCount: 1,
+                    chargedPendingFrames: 0, maximumPendingFrames: 960_000))
+                throw NSError(domain: "ExpectedFeedbackCancellation", code: 1)
+            } catch is CancellationError { await evidence.record("feedback-returned") }
+        }
+        await entered.wait()
+        operation.cancel()
+        try require(await !evidence.contains("feedback-returned"), "Cancellation joins the active feedback command")
+        await feedback.release()
+        for _ in 0..<20 { await Task.yield() }
+        try require(await !evidence.contains("feedback-returned"), "Feedback cancellation still owns native scope cleanup")
+        await cleanup.release()
+        try await operation.value
+        try require(await evidence.events.suffix(2) == ["cleaned", "feedback-returned"],
+                    "Cancellation cannot abandon feedback or release the prepared scope early")
     }
 
     static func testDeferredPreparationAndEarlyStop() async throws {

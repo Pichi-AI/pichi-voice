@@ -31,6 +31,23 @@ struct MeetingPCMPreviewPacingTests {
         }
         print("PASS startup, headroom and recovery hysteresis")
 
+        pacing.record(computeSeconds: 0.1, audioSeconds: 20,
+            chargedPendingFrames: 36 * 16_000, maximumPendingFrames: 60 * 16_000)
+        try require(!pacing.permitsIntermediateObservations,
+                    "Charged PCM pressure suppresses optional prefixes before the 60-second ceiling")
+        pacing.record(computeSeconds: 0.1, audioSeconds: 20,
+            chargedPendingFrames: 24 * 16_000, maximumPendingFrames: 60 * 16_000)
+        try require(!pacing.permitsIntermediateObservations, "Queue recovery boundary retains hysteresis")
+        pacing.record(computeSeconds: 0.1, audioSeconds: 20,
+            chargedPendingFrames: 23 * 16_000, maximumPendingFrames: 60 * 16_000)
+        try require(pacing.permitsIntermediateObservations, "Both compute and charged queue must recover")
+        for (pending, maximum) in [(-1, 960_000), (960_001, 960_000), (0, 0)] {
+            pacing.record(computeSeconds: 100, audioSeconds: 20,
+                chargedPendingFrames: pending, maximumPendingFrames: maximum)
+            try require(pacing.permitsIntermediateObservations, "Invalid budget feedback cannot alter pacing")
+        }
+        print("PASS charged budget pressure and independent recovery hysteresis")
+
         for permits in [true, false] {
             var sampleCount = 0
             var inferenceFrames: [Int] = []

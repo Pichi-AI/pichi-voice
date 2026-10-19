@@ -18,6 +18,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     private var closed = false
     private var finished = false
     private var pacing = MeetingPCMPreviewPacing()
+    private var pendingWindowTiming: (start: Int, frames: Int, timing: MeetingPCMWindowComputeTiming)?
     private var update = MeetingIncrementalDiarizationUpdate(activity: [], acceptedThroughSample: 0,
         processedThroughSample: 0, retainedFromSample: 0, isFinal: false)
     private var speakers: [MeetingSessionSpeaker] = []
@@ -51,6 +52,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
                    preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingStreamingPCMObservation {
         try self.begin()
         defer { self.end() }
+        guard self.pendingWindowTiming == nil else { throw MeetingStreamingPCMControllerError.invalidScope }
         guard offset.isFinite, offset >= 0, offset <= 31_536_000,
               abs(offset * 16_000 - (offset * 16_000).rounded()) < 0.001,
               Int((offset * 16_000).rounded()) == self.update.acceptedThroughSample else {
@@ -131,13 +133,33 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
             speakerNameFormat: self.speakerNameFormat,
             speakerAttributionPolicy: self.configuration.speakerAttributionPolicy)
         self.speakers = attributed.mergingSpeakers(into: self.speakers)
-        self.pacing.record(computeSeconds: timing.computeSeconds, audioSeconds: Double(physicalCount) / 16_000)
+        // Do not sample pacing here: canonical privacy, persistence and UI projection have
+        // not run yet. Their joined cost is charged when the transport acknowledges this
+        // exact window. Retain only a clock and scalar identity, never the PCM or text.
+        self.pendingWindowTiming = (epoch.ordinal, physicalCount, timing)
         try Task.checkCancellation()
         return self.observation(batch: attributed, asrStableThroughSample: self.update.acceptedThroughSample,
             sealedEmptyASRRange: output.sampleCount == physicalCount && attributed.isComplete
                 && output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && output.words.isEmpty && attributed.segments.isEmpty
                 ? epoch.ordinal..<self.update.acceptedThroughSample : nil)
+    }
+
+    func recordWindowProcessing(_ feedback: MeetingPCMWindowProcessingFeedback) async throws {
+        try self.begin()
+        defer { self.end() }
+        guard let pending = self.pendingWindowTiming,
+              feedback.sourceStartSample == pending.start, feedback.sourceFrameCount == pending.frames,
+              feedback.chargedPendingFrames >= 0, feedback.maximumPendingFrames > 0,
+              feedback.chargedPendingFrames <= feedback.maximumPendingFrames else {
+            throw MeetingStreamingPCMControllerError.invalidScope
+        }
+        let compute = pending.timing.computeSeconds
+        self.pacing.record(computeSeconds: compute, audioSeconds: Double(pending.frames) / 16_000,
+            chargedPendingFrames: feedback.chargedPendingFrames, maximumPendingFrames: feedback.maximumPendingFrames)
+        self.pendingWindowTiming = nil
+        DebugLogger.shared.info("streaming_preview_headroom computeMS=\(Int64(min(86_400, compute) * 1_000)) physicalFrames=\(pending.frames) chargedPendingFrames=\(feedback.chargedPendingFrames) budgetFrames=\(feedback.maximumPendingFrames) intermediate=\(self.pacing.permitsIntermediateObservations)",
+            source: "MeetingPCMRuntime")
     }
 
     func finishStreaming() async throws -> MeetingStreamingPCMObservation {
@@ -187,6 +209,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         await self.diarizer.cleanupStreaming()
         self.speakers.removeAll()
         self.ownerSamples = nil
+        self.pendingWindowTiming = nil
         self.update = .init(activity: [], acceptedThroughSample: 0, processedThroughSample: 0,
                             retainedFromSample: 0, isFinal: false)
     }

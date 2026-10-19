@@ -56,12 +56,17 @@ nonisolated struct MeetingPCMPreviewPacing: Sendable {
         (hasNewPCM && permitsIntermediateObservations) || (isFinal && !permitsIntermediateObservations)
     }
 
-    mutating func record(computeSeconds: TimeInterval, audioSeconds: TimeInterval) {
+    mutating func record(computeSeconds: TimeInterval, audioSeconds: TimeInterval,
+                         chargedPendingFrames: Int = 0, maximumPendingFrames: Int? = nil) {
         guard computeSeconds.isFinite, computeSeconds >= 0,
-              audioSeconds.isFinite, audioSeconds > 0 else { return }
-        if self.permitsIntermediateObservations, computeSeconds * 5 >= audioSeconds * 3 {
+              audioSeconds.isFinite, audioSeconds > 0, chargedPendingFrames >= 0,
+              maximumPendingFrames.map({ $0 > 0 && chargedPendingFrames <= $0 }) ?? (chargedPendingFrames == 0) else { return }
+        // Match the compute hysteresis: shed repeated prefixes before the admission ceiling,
+        // and restore them only after both processing and the charged queue have headroom.
+        let pressure = maximumPendingFrames.map { Double(chargedPendingFrames) / Double($0) } ?? 0
+        if self.permitsIntermediateObservations, computeSeconds * 5 >= audioSeconds * 3 || pressure >= 0.6 {
             self.permitsIntermediateObservations = false
-        } else if !self.permitsIntermediateObservations, computeSeconds * 5 < audioSeconds * 2 {
+        } else if !self.permitsIntermediateObservations, computeSeconds * 5 < audioSeconds * 2, pressure < 0.4 {
             self.permitsIntermediateObservations = true
         }
     }
