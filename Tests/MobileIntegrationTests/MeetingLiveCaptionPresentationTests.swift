@@ -484,7 +484,7 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
             }, isCapturing: false, revision: 1)
             try await settle(host, "Only real participant turns become native rows") {
                 self.descendants(in: host.controller.view).compactMap { $0 as? UITableView }.contains {
-                    $0.numberOfRows(inSection: 0) == 2 && $0.visibleCells.count == 2
+                    $0.numberOfSections > 0 && $0.numberOfRows(inSection: 0) == 2 && $0.visibleCells.count == 2
                 }
             }
             capture(host, step: "readable-headers-elapsed-time", scheme: scheme)
