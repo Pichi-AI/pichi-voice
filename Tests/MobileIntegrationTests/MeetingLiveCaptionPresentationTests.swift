@@ -456,6 +456,41 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testReadableTurnHeadersShowElapsedTimeWithoutAnonymousRows() async throws {
+        let first = MeetingSpeakerPresentation(identity: "first",
+            label: .identified(.init(displayName: "Анна", isLocalUser: false)))
+        let second = MeetingSpeakerPresentation(identity: "second",
+            label: .identified(.init(displayName: "Борис", isLocalUser: false)))
+        let unknown = MeetingSpeakerPresentation(identity: "unresolved", label: .unknown)
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.revision = 1
+        snapshot.utterances = [
+            .init(id: UUID(), speaker: .you, text: "Первая реплика.", start: 7.8, end: 8, participant: first),
+            .init(id: UUID(), speaker: .you, text: "А", start: 8, end: 8.04, participant: unknown),
+            .init(id: UUID(), speaker: .you, text: "затем продолжение.", start: 26, end: 27, participant: first),
+            .init(id: UUID(), speaker: .you, text: "Следующий участник отвечает.",
+                  start: 3_755.2, end: 3_756, participant: second),
+        ]
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(rows.filter(\.showsLabel).compactMap(\.captionLabel), ["00:07 Анна", "1:02:35 Борис"])
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 2)
+        for scheme in [ColorScheme.light, .dark] {
+            let host = try CaptionNativeHost(rows: [], scheme: scheme)
+            defer { host.close() }
+            host.model.snapshot = snapshot
+            host.model.pending = .init(tokens: (0..<3).map {
+                .init(id: UInt64($0 + 1), source: .you, start: 3_756 + Double($0) * 0.4,
+                      end: 3_756.4 + Double($0) * 0.4, widthHint: 0.8, level: 0.6)
+            }, isCapturing: false, revision: 1)
+            try await settle(host, "Only real participant turns become native rows") {
+                self.descendants(in: host.controller.view).compactMap { $0 as? UITableView }.contains {
+                    $0.numberOfRows(inSection: 0) == 2 && $0.visibleCells.count == 2
+                }
+            }
+            capture(host, step: "readable-headers-elapsed-time", scheme: scheme)
+        }
+    }
+
     func testViewportHeightShrinkKeepsTheLatestProtectedTextVisible() async throws {
         let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: .light)
         defer { host.close() }
