@@ -480,9 +480,9 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
 
             let oldItems = sourceChanged ? items : []
             let firstVisible = table.indexPathsForVisibleRows?.min()
-            let anchor = !following ? firstVisible.flatMap { path -> (ID, CGFloat)? in
+            let anchor = !following ? firstVisible.flatMap { path -> (ID, Int, CGFloat)? in
                 guard items.indices.contains(path.row) else { return nil }
-                return (items[path.row].id, table.rectForRow(at: path).minY - table.contentOffset.y)
+                return (items[path.row].id, path.row, table.rectForRow(at: path).minY - table.contentOffset.y)
             } : nil
             var removals: [IndexPath] = [], insertions: [IndexPath] = [], changed: [IndexPath] = []
             if sourceChanged {
@@ -524,8 +524,12 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
                 // Unlike reloadRows, this keeps an existing hosted native text view alive.
                 table.reconfigureRows(at: changed)
                 table.layoutIfNeeded()
-                if let anchor, let index = self.items.firstIndex(where: { $0.id == anchor.0 }), !self.following {
-                    let y = table.rectForRow(at: IndexPath(row: index, section: 0)).minY - anchor.1
+                let anchorIndex = anchor.flatMap { value in
+                    sourceChanged ? self.items.firstIndex(where: { $0.id == value.0 })
+                        : (self.items.indices.contains(value.1) && self.items[value.1].id == value.0 ? value.1 : nil)
+                }
+                if let anchor, let index = anchorIndex, !self.following {
+                    let y = table.rectForRow(at: IndexPath(row: index, section: 0)).minY - anchor.2
                     table.setContentOffset(CGPoint(x: table.contentOffset.x, y: y), animated: false)
                 }
                 self.applying = false
@@ -588,13 +592,14 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
         }
         fileprivate func didLayout(_ table: Table) {
             guard !applying, !correctingOffset else { return }
-            let extentChanged = lastContentSize != table.contentSize || lastViewportSize != table.bounds.size
+            let viewportChanged = lastViewportSize != table.bounds.size
+            let extentChanged = lastContentSize != table.contentSize
             lastContentSize = table.contentSize; lastViewportSize = table.bounds.size
             let tailVisible = table.indexPathsForVisibleRows?.contains(IndexPath(row: items.count - 1, section: 0)) == true
             // An unrelated programmatic offset must remain reachable. Only new data or
             // reflow of an already visible tail may correct a following viewport.
             guard following, !table.isDragging, !table.isDecelerating,
-                  needsFollow || (extentChanged && tailVisible), !items.isEmpty, table.bounds.height > 0 else { return }
+                  needsFollow || viewportChanged || (extentChanged && tailVisible), !items.isEmpty, table.bounds.height > 0 else { return }
             needsFollow = false
             correctingOffset = true
             table.scrollToRow(at: IndexPath(row: items.count - 1, section: 0), at: .bottom, animated: false)
@@ -609,7 +614,9 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
         }
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             defer { previousOffset = scrollView.contentOffset.y }
-            guard userScroll, !applying, !correctingOffset else { return }
+            // VoiceOver can move its reading viewport without a pan gesture. Owned
+            // layout corrections remain excluded by the same guards as native drags.
+            guard userScroll || UIAccessibility.isVoiceOverRunning, !applying, !correctingOffset else { return }
             let nearBottom = scrollView.contentOffset.y >= bottom(scrollView) - 4
             let canReadEarlier = bottom(scrollView) > -scrollView.adjustedContentInset.top + 1
             let next = nearBottom ? true

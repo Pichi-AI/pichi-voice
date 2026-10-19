@@ -408,6 +408,18 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testViewportHeightShrinkKeepsTheLatestProtectedTextVisible() async throws {
+        let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: .light)
+        defer { host.close() }
+        let scroll = try await captionScroll(in: host)
+        try await settle(host, "Initial captions follow before viewport height changes") { self.nearBottom(scroll) }
+        host.model.height *= 0.55
+        try await settle(host, "A shorter viewport keeps the latest text visible without new speech") {
+            abs(scroll.bounds.height - host.model.height) < 2 && self.nearBottom(scroll)
+        }
+        capture(host, step: "viewport-height-following", scheme: .light)
+    }
+
     func testDynamicTypeReflowKeepsTheLatestProtectedTextVisible() async throws {
         let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: .light)
         defer { host.close() }
@@ -1030,7 +1042,7 @@ private final class CaptionNativeRows: ObservableObject {
     @Published var textSize: DynamicTypeSize = .large
     @Published var pending: MeetingPendingSpeechSnapshot = .empty
     @Published var width: CGFloat
-    let height: CGFloat
+    @Published var height: CGFloat
 
     init(rows: [MeetingLiveBubbleComposer.Row], width: CGFloat, height: CGFloat) {
         self.rows = rows; self.width = width; self.height = height
