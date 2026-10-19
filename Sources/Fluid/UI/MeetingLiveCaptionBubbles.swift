@@ -247,7 +247,7 @@ struct MeetingLiveBubbleScrollList: View {
     #if !os(iOS)
     private var legacyViewport: some View {
         let insertionKey = RowInsertionKey(count: self.rows.count, lastID: self.rows.last?.id)
-        ScrollViewReader { proxy in
+        return ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
