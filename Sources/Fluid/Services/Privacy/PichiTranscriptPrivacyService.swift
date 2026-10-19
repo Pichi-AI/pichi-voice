@@ -208,6 +208,7 @@ actor PichiPrivacyPreparationOwner {
     typealias Progress = @Sendable (Double) -> Void
     private struct Operation {
         let id: UUID
+        let resourceGeneration: UUID
         let task: Task<Bool, Error>
         var idle: IdleToken?
         var waiters: Set<UUID> = []
@@ -218,6 +219,7 @@ actor PichiPrivacyPreparationOwner {
     private var operation: Operation?
     private var idleReady: IdleToken?
     private var releasing: Task<Void, Never>?
+    private var resourceGeneration = UUID()
 
     init(isReady: @escaping @Sendable () async -> Bool,
          load: @escaping @Sendable (Bool, @escaping Progress) async throws -> Bool,
@@ -236,9 +238,11 @@ actor PichiPrivacyPreparationOwner {
                 continue
             }
             if operation == nil {
+                let generation = resourceGeneration
                 let ready = await isReady()
-                // Recheck after the runtime actor hop: another caller may have begun work.
-                if operation != nil || releasing != nil { continue }
+                // A load/unload can fully finish during this actor hop. Absence of a
+                // current task alone cannot validate the returned readiness snapshot.
+                if resourceGeneration != generation || operation != nil || releasing != nil { continue }
                 try Task.checkCancellation()
                 if ready { idleReady = nil; return }
             }
@@ -258,6 +262,10 @@ actor PichiPrivacyPreparationOwner {
             }
             switch result {
             case .success(true):
+                // A different waiter may already have adopted and then explicitly retired
+                // this completed task's model before this waiter resumes.
+                guard resourceGeneration == selected.resourceGeneration, releasing == nil,
+                      operation == nil || operation?.id == selected.id else { continue }
                 if operation?.id == selected.id { operation = nil }
                 idleReady = nil
                 return
@@ -274,34 +282,40 @@ actor PichiPrivacyPreparationOwner {
     }
 
     func prepareInstalledForIdle() async throws -> IdleToken? {
-        try Task.checkCancellation()
-        await releasing?.value
-        guard operation == nil else { return nil }
-        if await isReady() { return nil }
-        guard operation == nil, releasing == nil else { return nil }
-        let token = IdleToken(id: UUID())
-        let selected = begin(installedOnly: true, idle: token, progress: { _ in })
-        let result = await withTaskCancellationHandler {
-            await selected.task.result
-        } onCancel: {
-            Task { await self.releaseIdle(token) }
-        }
-        if Task.isCancelled {
-            await releaseIdle(token)
-            throw CancellationError()
-        }
-        guard operation?.id == selected.id, operation?.idle == token else { return nil }
-        switch result {
-        case .success(true):
-            operation = nil
-            idleReady = token
-            return token
-        case .success(false):
-            operation = nil
-            return nil
-        case .failure(let error):
-            await retire(selected.id)
-            throw error
+        while true {
+            try Task.checkCancellation()
+            await releasing?.value
+            guard operation == nil else { return nil }
+            let generation = resourceGeneration
+            let ready = await isReady()
+            try Task.checkCancellation()
+            guard resourceGeneration == generation, operation == nil, releasing == nil else { continue }
+            if ready { return nil }
+            let token = IdleToken(id: UUID())
+            let selected = begin(installedOnly: true, idle: token, progress: { _ in })
+            let result = await withTaskCancellationHandler {
+                await selected.task.result
+            } onCancel: {
+                Task { await self.releaseIdle(token) }
+            }
+            if Task.isCancelled {
+                await releaseIdle(token)
+                throw CancellationError()
+            }
+            guard resourceGeneration == selected.resourceGeneration,
+                  operation?.id == selected.id, operation?.idle == token else { return nil }
+            switch result {
+            case .success(true):
+                operation = nil
+                idleReady = token
+                return token
+            case .success(false):
+                operation = nil
+                return nil
+            case .failure(let error):
+                await retire(selected.id)
+                throw error
+            }
         }
     }
 
@@ -331,6 +345,7 @@ actor PichiPrivacyPreparationOwner {
     }
 
     private func begin(installedOnly: Bool, idle: IdleToken?, progress: @escaping Progress) -> Operation {
+        resourceGeneration = UUID()
         let load = self.load, release = self.release
         let task = Task(priority: installedOnly ? .utility : .userInitiated) {
             do {
@@ -342,7 +357,7 @@ actor PichiPrivacyPreparationOwner {
                 throw error
             }
         }
-        let selected = Operation(id: UUID(), task: task, idle: idle)
+        let selected = Operation(id: UUID(), resourceGeneration: resourceGeneration, task: task, idle: idle)
         operation = selected
         return selected
     }
@@ -368,6 +383,7 @@ actor PichiPrivacyPreparationOwner {
 
     private func releaseResource() async {
         if let releasing { await releasing.value; return }
+        resourceGeneration = UUID()
         let release = self.release
         let task = Task { await release() }
         releasing = task

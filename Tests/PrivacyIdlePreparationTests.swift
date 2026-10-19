@@ -45,6 +45,23 @@ private actor Completion {
     func finish() { finished = true }
 }
 
+/// Suspends exactly one readiness call after it has captured the runtime's Boolean.
+/// This exposes an unload that fully finishes while that stale snapshot is in flight.
+private actor ReadinessSnapshotGate {
+    private var shouldHold = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    var isHolding: Bool { continuation != nil }
+    func arm() { shouldHold = true }
+    func snapshot(_ ready: Bool) async -> Bool {
+        if shouldHold {
+            shouldHold = false
+            await withCheckedContinuation { continuation = $0 }
+        }
+        return ready
+    }
+    func resume() { let prior = continuation; continuation = nil; prior?.resume() }
+}
+
 @main
 struct PrivacyIdlePreparationTests {
     private static var assertions = 0
@@ -82,6 +99,53 @@ struct PrivacyIdlePreparationTests {
 
     @MainActor
     static func main() async throws {
+        // Readiness is a resource-generation snapshot, not a promise that remains true
+        // after an owner-controlled unload completes while the callback is suspended.
+        do {
+            let loader = Loader(), gate = ReadinessSnapshotGate()
+            let owner = PichiPrivacyPreparationOwner(isReady: { await gate.snapshot(loader.ready) },
+                load: { installedOnly, _ in try await loader.load(installedOnly: installedOnly) },
+                unload: { await loader.unload() })
+            let token = try await owner.prepareInstalledForIdle()!
+            await gate.arm()
+            let recording = Task { try await owner.prepare() }
+            await until { await gate.isHolding }
+            await owner.releaseIdle(token)
+            check(await !loader.ready, "The regression must actually unload the old idle resource")
+            await gate.resume(); try await recording.value
+            let ready = await loader.ready, c = await loader.counts()
+            check(ready && c.loads == 2, "Record must reject a stale true snapshot and reload the current resource")
+            try await owner.unload()
+        }
+        do {
+            let loader = Loader(), gate = ReadinessSnapshotGate()
+            let owner = PichiPrivacyPreparationOwner(isReady: { await gate.snapshot(loader.ready) },
+                load: { installedOnly, _ in try await loader.load(installedOnly: installedOnly) },
+                unload: { await loader.unload() })
+            let token = try await owner.prepareInstalledForIdle()!
+            await gate.arm()
+            let replacement = Task { try await owner.prepareInstalledForIdle() }
+            await until { await gate.isHolding }
+            await owner.releaseIdle(token)
+            await gate.resume()
+            guard let nextToken = try await replacement.value else { preconditionFailure("Idle must recheck the retired readiness generation") }
+            check(await loader.counts().loads == 2, "Installed-only readiness cannot accept a retired true snapshot")
+            await owner.releaseIdle(nextToken)
+        }
+        do {
+            let loader = Loader(), gate = ReadinessSnapshotGate()
+            let owner = PichiPrivacyPreparationOwner(isReady: { await gate.snapshot(loader.ready) },
+                load: { installedOnly, _ in try await loader.load(installedOnly: installedOnly) },
+                unload: { await loader.unload() })
+            await gate.arm()
+            let idle = Task { try await owner.prepareInstalledForIdle() }
+            await until { await gate.isHolding }
+            try await owner.prepare()
+            await gate.resume()
+            let token = try await idle.value, c = await loader.counts()
+            check(token == nil && c.loads == 1, "A stale false snapshot cannot reload an already adopted resource")
+            try await owner.unload()
+        }
         // A completed warm resource is transferred, never reopened or unloaded by an old token.
         do {
             let loader = Loader(), owner = owner(loader)
@@ -240,6 +304,6 @@ struct PrivacyIdlePreparationTests {
             await until { await loader.counts().loads == 2 }
             await controller.update(input(active: false))
         }
-        print("Privacy idle preparation tests passed: \(assertions) assertions across 12 ownership/lifecycle scenarios")
+        print("Privacy idle preparation tests passed: \(assertions) assertions across 15 ownership/lifecycle scenarios")
     }
 }
