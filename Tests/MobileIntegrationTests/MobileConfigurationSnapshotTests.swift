@@ -287,7 +287,7 @@ final class MobilePCMAdmissionTests: XCTestCase {
         // Metadata only. The version gate must run before opening source audio.
         session.audioTracks = [.init(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
             sourceDisplayName: "Synthetic microphone", format: nil, timebase: session.timebase,
-            health: .init(), chunks: [.init(id: UUID(), sequence: 0, relativeFilePath: "synthetic.caf",
+            health: .waiting, chunks: [.init(id: UUID(), sequence: 0, relativeFilePath: "synthetic.caf",
                 presentationStart: .init(value: 0, timescale: 1000),
                 presentationEnd: .init(value: 1000, timescale: 1000), discontinuities: [],
                 sha256: String(repeating: "a", count: 64), byteCount: 1024, finalizationState: .finalized)])]

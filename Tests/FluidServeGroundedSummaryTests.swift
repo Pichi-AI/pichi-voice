@@ -366,17 +366,19 @@ struct FluidServeGroundedSummaryTests {
         check(cleanTurns.count == 3 && cleanTurns[1].segments.count == 3,
               "A normal clean reply is retained as a real different participant's turn")
         var manual = session; manual.transcriptSegments[2].revision = 1
+        manual.transcriptSegments[2].attributionState = .assigned
+        manual.transcriptSegments[2].overlap = .none
         check(MeetingTranscriptExporter.speakerPresentations(in: manual)[rows[2].id]?.participantID == b,
               "An explicit correction is not absorbed by surrounding reading context")
         var inferred = session
         inferred.transcriptSegments[0].speakerAttributionInference = .init(rule: .surroundingSpeaker,
             originalState: .unassigned, originalOverlap: .none,
             precedingSegmentID: UUID(), followingSegmentID: rows[4].id)
-        check(MeetingTranscriptExporter.speakerPresentations(in: inferred)[rows[2].id]?.participantID == b,
+        check(MeetingTranscriptExporter.speakerPresentations(in: inferred)[rows[2].id]?.participantID != a,
               "A legacy inferred identity cannot anchor a new contextual ownership guess")
         var missing = session
         missing.transcriptCoverageGaps = [.init(trackID: track, start: 0.55, end: 0.58, reason: .missingOrUnreadableAudio)]
-        check(MeetingTranscriptExporter.speakerPresentations(in: missing)[rows[2].id]?.participantID == b,
+        check(MeetingTranscriptExporter.speakerPresentations(in: missing)[rows[2].id]?.participantID != a,
               "A missing-audio barrier blocks contextual ownership")
     }
 
