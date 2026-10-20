@@ -295,7 +295,7 @@ final class MobilePCMAdmissionTests: XCTestCase {
         let configuration = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.gigaamModelID,
             asrArtifactFingerprint: "synthetic-model-bytes", languageCode: "ru", speakerLabelsEnabled: false)
         let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: session.id,
-            backendID: descriptor.id, backendVersion: "1", configuration: configuration,
+            backendID: descriptor.id, backendVersion: "2", configuration: configuration,
             piiRedactionEnabled: false, privacyFingerprint: nil)
         let working = MeetingRetainedProcessingCheckpoint(sessionDirectory: directory)
         let payload = Data("synthetic-old-timed-words".utf8)
