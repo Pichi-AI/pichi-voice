@@ -54,6 +54,7 @@ import Foundation
         try duplicateAndBackdatedSnapshots()
         try sourceGuards()
         try unsafeWholeBoutCannotAdmit()
+        try manualReferencedIdentity()
         try nativeBoutPartitionInvariance()
         try limitsAndAtomicity()
         try policyCompatibility()
@@ -226,6 +227,36 @@ import Foundation
             check(value.admittedVoiceSeconds(for: b) == 0)
             if kind == 6 { check(output.inserted[0].speakerID == mainID) }
         }
+    }
+
+    static func manualReferencedIdentity() throws {
+        let c = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "c")
+        let cID = MeetingTranscriptAssembler.speakerID(attemptID: attempt, token: c)
+        let manual = MeetingSessionSpeaker(id: cID, displayName: "Retained manual alias",
+            diarizationClusterID: "\(epoch):c", trackKind: .microphone, isLocalUser: true,
+            identityCandidates: [])
+        var short = word(4500, 0, 0.04, token: b)
+        short.speakerID = cID; short.attributionState = .assigned; short.revision = 1
+        let words = [short, word(4501, 7, 13, token: a)]
+        let activity = [MeetingBackendSpeakerActivity(token: b, start: 0, end: 6),
+                        MeetingBackendSpeakerActivity(token: a, start: 7, end: 13)]
+        // C has no independent native word/activity. Its accepted manual reference still
+        // retains its identity and alias through the assembler's existing registry merge.
+        let batch = try MeetingPCMRecordingAttribution.assemble(
+            transcript: .init(segments: words, speakers: [manual]), activity: activity,
+            epoch: epoch, attemptID: attempt, duration: 20, speakerNameFormat: "Speaker %lld")
+        check(batch.segments[0].speakerID == cID)
+        check(batch.speakers.filter { $0.id == cID }.count == 1)
+        check(batch.speakers.first(where: { $0.id == cID })?.displayName == manual.displayName)
+        check(batch.speakers.first(where: { $0.id == cID })?.isLocalUser == false,
+              "Complete-attempt owner verification must revoke an unsupported owner label")
+        var value = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld",
+                             priorSpeakers: [manual])
+        let output = try update(&value, words: words, activity: activity, end: 20)
+        check(output.inserted[0].speakerID == cID)
+        check(output.speakers.filter { $0.id == cID }.count == 1)
+        check(output.speakers.first(where: { $0.id == cID }) == manual,
+              "A bounded streaming update must retain its incoming owner flags and alias")
     }
 
     static func nativeBoutPartitionInvariance() throws {
