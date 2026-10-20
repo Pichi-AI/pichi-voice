@@ -223,8 +223,8 @@ nonisolated enum MeetingTranscriptExporter {
         /// A legacy incoming turn can begin with an unresolved source member. Keep its
         /// reading identity separate from that member's immutable stored evidence.
         var projectedSpeakerID: SessionSpeakerID? = nil
-        /// An unresolved paragraph never creates a participant header. Returning to the same
-        /// readable owner after such a paragraph does not announce a new participant either.
+        /// Each displayed paragraph repeats its known participant beside its timestamp.
+        /// An unresolved paragraph does not invent a participant header.
         var showsSpeakerLabel = true
         var id: MeetingTranscriptSegmentID { segments[0].id }
         var firstSegment: MeetingTranscriptSegment { segments[0] }
