@@ -40,11 +40,3 @@ missing, never interpreted as silence or proof that a model did no work. Native 
 capture remains a separate requirement. This tracing changes no model policy or pipeline
 scheduling. `Tests/run_meeting_timeline_trace_tests.sh` exercises the disabled path, private
 format/permissions, event and byte caps, queue overflow and truncation accounting.
-
-For a saved-reading investigation, additionally set `PICHI_MEETING_READING_TARGET_WORD_ID`
-to a valid segment UUID. The actual paragraph pass records that word and at most two
-neighbors on each side, actual boundary predicate outcomes and run rejection stage, all
-intermediate owner-map values, current policy values and the resulting paragraph identity
-and bounded member-ID sample. The character predicate variants are observations only;
-they never override reading policy. An absent target is recorded explicitly. No target
-selection by transcript text, extra normal-mode projection pass or support-log output occurs.

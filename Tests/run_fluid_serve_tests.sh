@@ -13,7 +13,6 @@ set -- Sources/Fluid/Services/ModelTemperatureSupport.swift \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     "$task_test_dir/AttributionTypes.swift" \
-    Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
     Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift \
     Sources/Fluid/Services/Meeting/PichiMeetingSummaryDocument.swift \
