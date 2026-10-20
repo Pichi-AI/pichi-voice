@@ -166,10 +166,11 @@ final class MeetingInlineCaptionLayoutTests: XCTestCase {
             let theme = AppTheme.adaptive(accent: .purple, colorScheme: scheme)
             let row = MeetingLiveBubbleComposer.Row(id: UUID(), speaker: .you, text: text,
                                                     isPartial: false, showsLabel: false)
-            pending = MeetingPendingSpeechSnapshot(tokens: [0.65, 1, 1.35, 0.8].enumerated().map { index, width in
+            let pending = MeetingPendingSpeechSnapshot(tokens: [0.65, 1, 1.35, 0.8].enumerated().map { index, width in
                 .init(id: UInt64(index + 1), source: .you, start: Double(index), end: Double(index + 1),
                       widthHint: width, level: 0.7)
             }, isCapturing: false, revision: 1)
+            self.pending = pending
             controller = NSHostingController(rootView: AnyView(VStack(alignment: .leading, spacing: 0) {
                 MeetingInlineCaptionText(rows: [row], pending: pending)
                     .fixedSize(horizontal: false, vertical: true)
