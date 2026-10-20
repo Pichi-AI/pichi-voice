@@ -929,21 +929,32 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
-    private func revealParagraphAboveNavigation(_ paragraph: XCUIElement, step: String) throws {
+    private func revealParagraphAboveNavigation(_ paragraph: XCUIElement, step: String,
+                                               container: XCUIElement? = nil) throws {
         let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
         XCTAssertTrue(scroll.exists)
-        for attempt in 0..<6 {
+        for attempt in 0..<8 {
+            let window = app.windows.firstMatch.frame
+            let viewport = scroll.frame.intersection(window)
+            let top = max(viewport.minY, app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame.maxY : viewport.minY)
+            let bottom = min(viewport.maxY, app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : viewport.maxY)
             // A phone in landscape may virtualize the paragraph below its header. Scroll
             // it into the accessibility tree before asking for an off-screen element's frame.
+            // A stable container may already exist while its expected body label differs.
             if !paragraph.exists {
+                if let container, container.exists, container.frame.maxY > top, container.frame.minY < bottom,
+                   !paragraph.waitForExistence(timeout: 2) {
+                    recordSavedParagraphAccessibility(step: step, container: container)
+                    XCTFail("The saved paragraph container is visible, but its expected text prefix is absent")
+                    return
+                }
+                if paragraph.exists { continue }
                 let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
                 let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
                 from.press(forDuration: 0.05, thenDragTo: to)
                 capture("\(step)-reveal-\(attempt)")
                 continue
             }
-            let top = app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame.maxY : app.windows.firstMatch.frame.minY
-            let bottom = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : app.windows.firstMatch.frame.maxY
             if paragraph.isHittable && paragraph.frame.minY >= top && paragraph.frame.maxY <= bottom { return }
             let upwards = paragraph.frame.maxY > bottom
             let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.65 : 0.35))
@@ -951,7 +962,60 @@ final class MobileNavigationUITests: XCTestCase {
             from.press(forDuration: 0.05, thenDragTo: to)
             capture("\(step)-scroll-\(attempt)")
         }
+        recordSavedParagraphAccessibility(step: step, container: container)
         XCTFail("The full paragraph must be readable above the navigation controls")
+    }
+
+    private func savedParagraphIdentifiers(expectedCount: Int) throws -> [String]? {
+        guard let encoded = ProcessInfo.processInfo.environment["PICHI_PRIVATE_SAVED_EXPECTED_PARAGRAPH_IDS"] else { return nil }
+        let ids = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String],
+                               "Expected paragraph IDs must be a JSON string array")
+        let matched = try XCTUnwrap(ids.count == expectedCount ? ids : nil,
+                                   "Each expected saved paragraph must have its matching stable ID")
+        return try matched.map { try XCTUnwrap(UUID(uuidString: $0), "Expected paragraph IDs must be UUIDs").uuidString }
+    }
+
+    private func normalizedParagraphText(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private func recordSavedParagraphAccessibility(step: String, container: XCUIElement?, expected: String? = nil) {
+        let elements = container.map { $0.descendants(matching: .staticText).allElementsBoundByIndex }
+            ?? app.staticTexts.allElementsBoundByIndex
+        let labels = elements.map { "\($0.identifier): \($0.label)" }.joined(separator: "\n")
+        let details = "expected: \(expected ?? "not supplied")\ncontainer: \(container?.identifier ?? "global fallback")\n\(labels)"
+        let attachment = XCTAttachment(string: details)
+        attachment.name = "\(step)-actual-paragraph-accessibility"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// Prefixes only locate the body within its stable paragraph container. Passing still
+    /// requires the complete label, preserving every non-whitespace character and word.
+    private func assertSavedParagraphs(_ expected: [String], identifiers: [String]?, step: String) throws {
+        let checked = try XCTUnwrap(expected.count >= 3 ? Array(expected.prefix(3)) : nil,
+                                   "The saved-session review checks three complete original paragraphs")
+        for (index, text) in checked.enumerated() {
+            let container = identifiers.map {
+                app.descendants(matching: .any).matching(identifier: "transcript.paragraph.\($0[index])").firstMatch
+            }
+            let texts = container.map { $0.descendants(matching: .staticText) } ?? app.staticTexts
+            let prefix = String(text.prefix(16))
+            let body = texts.matching(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch
+            if index == 0 {
+                if let container { _ = container.waitForExistence(timeout: 15) }
+                else { _ = body.waitForExistence(timeout: 15) }
+            }
+            try revealParagraphAboveNavigation(body, step: "\(step)-\(index)", container: container)
+            if !body.exists || normalizedParagraphText(body.label) != normalizedParagraphText(text) {
+                recordSavedParagraphAccessibility(step: "\(step)-\(index)", container: container, expected: text)
+                capture("\(step)-\(index)-text-mismatch")
+            }
+            XCTAssertTrue(body.exists, "The expected body must exist inside the original saved paragraph")
+            XCTAssertEqual(normalizedParagraphText(body.label), normalizedParagraphText(text),
+                           "The complete saved paragraph must match the protected replay; a matching prefix is insufficient")
+            capture("\(step)-\(index)-visible")
+        }
     }
 
 
@@ -1222,6 +1286,7 @@ final class MobileNavigationUITests: XCTestCase {
         let encoded = try XCTUnwrap(environment["PICHI_PRIVATE_SAVED_EXPECTED_PARAGRAPHS"])
         let expected = try JSONSerialization.jsonObject(with: Data(encoded.utf8)) as! [String]
         XCTAssertFalse(expected.isEmpty)
+        let identifiers = try savedParagraphIdentifiers(expectedCount: expected.count)
         for (language, appearance, history) in [("en", "light", "History"), ("ru", "dark", "История")] {
             app.terminate()
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
@@ -1232,12 +1297,7 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(meeting.waitForExistence(timeout: 15))
             meeting.tap()
             XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 15))
-            for (index, text) in expected.prefix(3).enumerated() {
-                let paragraph = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
-                XCTAssertTrue(paragraph.waitForExistence(timeout: 15), "The original saved words remain readable")
-                try revealParagraphAboveNavigation(paragraph, step: "saved-reading-\(language)-\(index)")
-                capture("saved-reading-\(language)-\(index)-visible")
-            }
+            try assertSavedParagraphs(expected, identifiers: identifiers, step: "saved-reading-\(language)")
             XCTAssertFalse(app.staticTexts["Unknown speaker"].exists)
             XCTAssertFalse(app.staticTexts["Неизвестный участник"].exists)
             XCTAssertFalse(app.staticTexts["Microphone"].exists)
@@ -1258,6 +1318,7 @@ final class MobileNavigationUITests: XCTestCase {
               let expected = try JSONSerialization.jsonObject(with: data) as? [String], !expected.isEmpty else {
             throw XCTSkip("Provide an authorized session ID and expected paragraphs for read-only device review")
         }
+        let identifiers = try savedParagraphIdentifiers(expectedCount: expected.count)
         app.terminate()
         app.launchArguments = ["-PichiInterfaceLanguage", "ru"]
         app.launch()
@@ -1283,19 +1344,7 @@ final class MobileNavigationUITests: XCTestCase {
         capture("private-saved-transcript")
         let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
         XCTAssertTrue(scroll.waitForExistence(timeout: 5))
-        for (index, text) in expected.enumerated() {
-            let paragraph = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
-            for attempt in 0..<40 {
-                if paragraph.exists && paragraph.isHittable { break }
-                let from = scroll.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.8))
-                let to = scroll.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25))
-                from.press(forDuration: 0.05, thenDragTo: to)
-                capture("private-saved-\(index)-scroll-\(attempt)")
-            }
-            XCTAssertTrue(paragraph.exists && paragraph.isHittable,
-                          "The actual saved unknown prefix must be inside its incoming participant's paragraph")
-            capture("private-saved-\(index)-merged")
-        }
+        try assertSavedParagraphs(expected, identifiers: identifiers, step: "private-saved")
         #endif
     }
 
