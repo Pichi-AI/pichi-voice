@@ -254,6 +254,16 @@ private final class InlineCaptionAttachment: NSTextAttachment {
     override func image(for bounds: CGRect, attributes: [NSAttributedString.Key: Any],
                         location: any NSTextLocation, textContainer: NSTextContainer?) ->
         InlineCaptionImage? { nil }
+
+    #if os(macOS)
+    // AppKit otherwise uses the empty attachment cell's 1x1 fallback even when
+    // bounds is set. Reserve the full word before placing its live waveform host.
+    override func attachmentBounds(for attributes: [NSAttributedString.Key: Any],
+                                   location: any NSTextLocation, textContainer: NSTextContainer?,
+                                   proposedLineFragment: CGRect, position: CGPoint) -> CGRect {
+        self.bounds
+    }
+    #endif
 }
 
 @MainActor
