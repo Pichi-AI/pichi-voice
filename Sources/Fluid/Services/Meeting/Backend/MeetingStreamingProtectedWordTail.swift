@@ -95,6 +95,20 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
     private var phase: Phase = .active
     private var retained: [Retained] = []
     private var speakers: [MeetingSessionSpeaker]
+    private struct VoiceSupport: Sendable {
+        var intervals: [MeetingSpeakerAttributionInterval] = []
+        var qualified = false
+    }
+    /// Sponsored native bouts only, coalesced and discarded once the fixed admission
+    /// requirement is earned. No PCM, embeddings, raw text or full meeting history.
+    private var voiceSupport: [MeetingBackendSpeakerToken: VoiceSupport] = [:]
+    var retainedAdmissionIntervalCount: Int { self.voiceSupport.values.reduce(0) { $0 + $1.intervals.count } }
+    var retainedAdmissionTokenCount: Int { self.voiceSupport.count }
+    func admittedVoiceSeconds(for token: MeetingBackendSpeakerToken) -> TimeInterval {
+        guard let support = self.voiceSupport[token] else { return 0 }
+        return support.qualified ? MeetingTranscriptAssembler.minimumSpeakerSeconds
+            : support.intervals.reduce(0) { $0 + $1.duration }
+    }
     private var watermarks = Watermarks(asrStableThrough: 0, diarizationProcessedThrough: 0, privacySafeThrough: 0)
     private(set) var committedThrough: TimeInterval = 0
     private(set) var retainActivityFrom: TimeInterval = 0
@@ -154,6 +168,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
     mutating func cancel() {
         self.retained.removeAll(keepingCapacity: false)
         self.speakers.removeAll(keepingCapacity: false)
+        self.voiceSupport.removeAll(keepingCapacity: false)
         self.phase = .cancelled
     }
 
@@ -254,6 +269,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 transcript: .init(segments: self.retained.map(\.original), speakers: self.speakers),
                 activity: boundedActivity, epoch: self.epoch, attemptID: self.attemptID, duration: duration,
                 speakerNameFormat: self.speakerNameFormat, speakerAttributionPolicy: self.policy)
+            try self.updateVoiceSupport(activity: activity,
+                original: self.retained.map(\.original), scored: result.segments)
             guard result.speakers.count <= self.limits.maximumSpeakers else { throw Failure.speakerLimit }
             let ownerFlags = Dictionary(uniqueKeysWithValues: self.speakers.map { ($0.id, $0.isLocalUser) })
             var identities = result
@@ -315,6 +332,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                     revisions.append(patch)
                 }
             }
+        } else {
+            try self.updateVoiceSupport(activity: activity, original: [], scored: [])
         }
 
         let threshold = final ? watermarks.commonThrough : max(0, watermarks.commonThrough - self.policyLookahead)
@@ -338,6 +357,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
             guard provisional.isEmpty else { throw Failure.invalidWatermark }
             self.phase = .finished
             self.retained.removeAll(keepingCapacity: false)
+            self.voiceSupport.removeAll(keepingCapacity: false)
             self.committedThrough = max(self.committedThrough, watermarks.commonThrough)
             self.retainActivityFrom = self.committedThrough
         }
@@ -350,6 +370,74 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
 
     private static func timing(_ segment: MeetingTranscriptSegment) -> MeetingTranscriptNativeTiming {
         segment.nativeTiming ?? .init(start: segment.start.seconds, end: segment.end.seconds)
+    }
+
+    private mutating func updateVoiceSupport(activity: [MeetingBackendSpeakerActivity],
+        original: [MeetingTranscriptSegment], scored: [MeetingTranscriptSegment]
+    ) throws {
+        guard self.policy.enableVoicedSpeakerAdmission else { return }
+        let scoredByID = Dictionary(scored.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        guard original.count == scored.count, scoredByID.count == scored.count,
+              original.allSatisfy({ scoredByID[$0.id] != nil }) else { throw Failure.revisionIdentityMismatch }
+        var lexical: [MeetingBackendSpeakerToken: [MeetingSpeakerAttributionInterval]] = [:]
+        for source in original {
+            try Task.checkCancellation()
+            guard let current = scoredByID[source.id] else { throw Failure.revisionIdentityMismatch }
+            guard source.status == .final, source.completeness == .complete, !source.isEcho,
+                  source.attributionState != .timingUncertain, source.originalText == nil,
+                  source.isUserTextEdited != true, source.speakerAttributionInference == nil,
+                  source.nativePrecision == .word, source.nativeUnitID?.isEmpty == false,
+                  source.text.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }),
+                  case let .assigned(token) = source.nativeSpeakerAssignment,
+                  current.nativeSpeakerAssignment == .assigned(token), current.overlap == .none,
+                  token.analysisEpochID == self.epoch else { continue }
+            if let summary = source.speakerAttribution {
+                guard summary.unitID == source.nativeUnitID, summary.rawAssignment == .assigned(token),
+                      summary.rule.isIndependentAcousticSelection, summary.selectedToken == token,
+                      summary.selectedSpeakerID == source.speakerID else { continue }
+            } else {
+                guard source.revision == 0,
+                      source.speakerID.map({ $0 == MeetingTranscriptAssembler.speakerID(attemptID: self.attemptID, token: token) }) ?? true
+                else { continue }
+            }
+            if let summary = current.speakerAttribution {
+                guard summary.rule.isIndependentAcousticSelection, summary.selectedToken == token,
+                      summary.rawAssignment == .assigned(token) else { continue }
+            }
+            let timing = Self.timing(source)
+            lexical[token, default: []].append(.init(start: timing.start, end: timing.end))
+        }
+        for token in lexical.keys { lexical[token] = try MeetingSpeakerAttribution.unionedIntervals(lexical[token]!) }
+        let byToken = Dictionary(grouping: activity, by: \.token)
+        for (token, entries) in byToken {
+            try Task.checkCancellation()
+            var support = self.voiceSupport[token] ?? VoiceSupport()
+            guard !support.qualified else { continue }
+            let bouts = try MeetingSpeakerAttribution.unionedIntervals(entries.map { .init(start: $0.start, end: $0.end) })
+            let words = lexical[token] ?? []
+            let sponsored = bouts.filter { bout in
+                words.contains { min($0.end, bout.end) - max($0.start, bout.start) > self.policy.comparisonTolerance }
+                    || support.intervals.contains { min($0.end, bout.end) - max($0.start, bout.start) >= 0 }
+            }
+            guard !sponsored.isEmpty else { continue }
+            support.intervals = try MeetingSpeakerAttribution.unionedIntervals(support.intervals + sponsored)
+            if support.intervals.reduce(0, { $0 + $1.duration }) + self.policy.comparisonTolerance
+                >= MeetingTranscriptAssembler.minimumSpeakerSeconds {
+                support.qualified = true
+                support.intervals.removeAll(keepingCapacity: false)
+            }
+            self.voiceSupport[token] = support
+            guard self.voiceSupport.count <= self.limits.maximumSpeakers else { throw Failure.speakerLimit }
+            guard self.retainedAdmissionIntervalCount <= self.limits.maximumActivityIntervals else { throw Failure.activityLimit }
+        }
+        let qualification = MeetingVoicedSpeakerAdmission(attemptID: self.attemptID, epoch: self.epoch,
+            tokens: Set(self.voiceSupport.filter { $0.value.qualified }.map(\.key)))
+        let admitted = try MeetingTranscriptAssembler(speakerNameFormat: self.speakerNameFormat)
+            .admitPCMIdentities(qualification, attemptID: self.attemptID, epoch: self.epoch, priorSpeakers: self.speakers)
+        guard Set(self.speakers.map(\.id)).union(admitted.map(\.id)).count <= self.limits.maximumSpeakers else {
+            throw Failure.speakerLimit
+        }
+        self.speakers = Self.identityOnly(MeetingPCMTranscriptBatch(segments: [], speakers: admitted).mergingSpeakers(into: self.speakers))
     }
 
     private func canReuseAutomaticIdentity(original: MeetingTranscriptSegment,
@@ -419,6 +507,17 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         if checkTime, let start = self.retained.map({ Self.timing($0.original).start }).min(),
            let end = self.retained.map({ Self.timing($0.original).end }).max(),
            end - start > self.limits.maximumRetainedSeconds { throw Failure.retainedTimeLimit }
+    }
+}
+
+/// Ephemeral receipt created only by the bounded native-activity owner in this file.
+/// It cannot be decoded from a checkpoint or constructed from word counts by a provider.
+nonisolated struct MeetingVoicedSpeakerAdmission: Sendable {
+    let attemptID: UUID
+    let epoch: MeetingAnalysisEpochID
+    let tokens: Set<MeetingBackendSpeakerToken>
+    fileprivate init(attemptID: UUID, epoch: MeetingAnalysisEpochID, tokens: Set<MeetingBackendSpeakerToken>) {
+        self.attemptID = attemptID; self.epoch = epoch; self.tokens = tokens
     }
 }
 

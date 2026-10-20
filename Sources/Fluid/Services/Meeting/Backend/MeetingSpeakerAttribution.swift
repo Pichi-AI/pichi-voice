@@ -33,6 +33,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     /// A pure independently selected reply ends a pending mixed bout instead of being
     /// reassigned to the surrounding participant. Absent in frozen older attempts.
     let preserveIndependentSpeakerTurns: Bool
+    /// Admit identities from real voiced bouts, including repeated brief replies in one
+    /// attempt. Missing in older frozen attempts, whose word-envelope admission stays intact.
+    let enableVoicedSpeakerAdmission: Bool
 
     init(
         schemaVersion: Int = Self.currentVersion,
@@ -55,7 +58,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         enableBriefInterruption: Bool = true,
         enableMainSpeakerContinuation: Bool = true,
         enableIndependentAcousticAnchors: Bool = true,
-        preserveIndependentSpeakerTurns: Bool = true
+        preserveIndependentSpeakerTurns: Bool = true,
+        enableVoicedSpeakerAdmission: Bool = true
     ) {
         self.schemaVersion = schemaVersion
         self.comparisonTolerance = comparisonTolerance
@@ -78,6 +82,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         self.enableMainSpeakerContinuation = enableMainSpeakerContinuation
         self.enableIndependentAcousticAnchors = enableIndependentAcousticAnchors
         self.preserveIndependentSpeakerTurns = preserveIndependentSpeakerTurns
+        self.enableVoicedSpeakerAdmission = enableVoicedSpeakerAdmission
     }
 
     /// Exact, length-framed values avoid locale, delimiter and rounding collisions. Zero has one
@@ -119,6 +124,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         if self.preserveIndependentSpeakerTurns {
             entries.append(("independentSpeakerTurnsPreserved", "true"))
         }
+        if self.enableVoicedSpeakerAdmission {
+            entries.append(("voicedSpeakerAdmissionEnabled", "true"))
+        }
         let canonical = MeetingConfigFingerprintEncoding.encode(entries)
         let digest = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
         return "speaker-attribution-v\(self.schemaVersion):\(digest)"
@@ -155,6 +163,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         case enableMainSpeakerContinuation
         case enableIndependentAcousticAnchors
         case preserveIndependentSpeakerTurns
+        case enableVoicedSpeakerAdmission
     }
 
     init(from decoder: Decoder) throws {
@@ -180,7 +189,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
             enableBriefInterruption: c.decode(Bool.self, forKey: .enableBriefInterruption),
             enableMainSpeakerContinuation: c.decodeIfPresent(Bool.self, forKey: .enableMainSpeakerContinuation) ?? false,
             enableIndependentAcousticAnchors: c.decodeIfPresent(Bool.self, forKey: .enableIndependentAcousticAnchors) ?? false,
-            preserveIndependentSpeakerTurns: c.decodeIfPresent(Bool.self, forKey: .preserveIndependentSpeakerTurns) ?? false
+            preserveIndependentSpeakerTurns: c.decodeIfPresent(Bool.self, forKey: .preserveIndependentSpeakerTurns) ?? false,
+            enableVoicedSpeakerAdmission: c.decodeIfPresent(Bool.self, forKey: .enableVoicedSpeakerAdmission) ?? false
         )
         _ = try self.validated()
     }

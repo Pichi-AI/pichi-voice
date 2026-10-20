@@ -345,7 +345,8 @@ nonisolated struct MeetingTranscriptAssembler {
             emitted: visibleUnits,
             identityLinks: identityLinks,
             confirmedLocalUserTokens: input.confirmedLocalUserTokens,
-            activity: evidence.speakerActivity
+            activity: evidence.speakerActivity,
+            useVoicedAdmission: input.speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true
         )
         let speakerIDsByToken = Dictionary(
             speakers.map { ($0.token, $0.speaker.id) },
@@ -703,7 +704,10 @@ nonisolated struct MeetingTranscriptAssembler {
         identityLinks: [MeetingSpeakerIdentityLink],
         priorSpeakers: [MeetingSessionSpeaker] = [],
         confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = [],
-        activity: [MeetingBackendSpeakerActivity] = []
+        activity: [MeetingBackendSpeakerActivity] = [],
+        useVoicedAdmission: Bool = false,
+        contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = [],
+        qualifiedNativeTokens: Set<MeetingBackendSpeakerToken> = []
     ) -> [(token: MeetingBackendSpeakerToken, speaker: MeetingSessionSpeaker)] {
         var tokens: [MeetingBackendSpeakerToken] = []
         var seen = Set<MeetingBackendSpeakerToken>()
@@ -711,6 +715,7 @@ nonisolated struct MeetingTranscriptAssembler {
             guard case let .assigned(token) = unit.speaker, seen.insert(token).inserted else { continue }
             tokens.append(token)
         }
+        for token in qualifiedNativeTokens where seen.insert(token).inserted { tokens.append(token) }
         tokens.sort {
             ($0.analysisEpochID.trackID.uuidString, $0.analysisEpochID.ordinal, $0.analysisEpochID.generation, $0.label)
                 < ($1.analysisEpochID.trackID.uuidString, $1.analysisEpochID.ordinal, $1.analysisEpochID.generation, $1.label)
@@ -723,6 +728,12 @@ nonisolated struct MeetingTranscriptAssembler {
         var unitIntervals: [MeetingBackendSpeakerToken: [MeetingAnalysisInterval]] = [:]
         for (unit, _) in emitted {
             guard case let .assigned(token) = unit.speaker else { continue }
+            if useVoicedAdmission {
+                guard unit.text.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }),
+                      !contextualBarriers.contains(where: { $0.analysisEpochID == unit.analysisEpochID
+                          && min($0.interval.end, unit.analysisEnd) - max($0.interval.start, unit.analysisStart)
+                              > MeetingAnalysisManifestSchema.mappingToleranceSeconds }) else { continue }
+            }
             let identity = canonicalByToken[token] ?? token
             wordsByIdentity[identity, default: 0] += unit.text.split(whereSeparator: \.isWhitespace).count
             unitIntervals[token, default: []].append(.init(start: unit.analysisStart, end: unit.analysisEnd))
@@ -735,7 +746,16 @@ nonisolated struct MeetingTranscriptAssembler {
                 secondsByIdentity[identity, default: 0] += Self.unionIntervals(intervals).reduce(0) { $0 + $1.duration }
             } else {
                 let voice = (activityByToken[token] ?? []).map { MeetingAnalysisInterval(start: $0.start, end: $0.end) }
-                secondsByIdentity[identity, default: 0] += Self.intersectionDuration(intervals, voice)
+                if useVoicedAdmission {
+                    // CTC emits lexical spikes, not an acoustic occupancy mask. Count the
+                    // actual voiced bouts containing independent lexical evidence instead.
+                    let supported = voice.filter { bout in intervals.contains {
+                        min($0.end, bout.end) - max($0.start, bout.start) > MeetingAnalysisManifestSchema.mappingToleranceSeconds
+                    } }
+                    secondsByIdentity[identity, default: 0] += Self.unionIntervals(supported).reduce(0) { $0 + $1.duration }
+                } else {
+                    secondsByIdentity[identity, default: 0] += Self.intersectionDuration(intervals, voice)
+                }
             }
         }
         let isSubstantial = { (identity: MeetingBackendSpeakerToken) in
@@ -746,7 +766,8 @@ nonisolated struct MeetingTranscriptAssembler {
         let tracksWithSubstantialSpeaker = Set(wordsByIdentity.keys.filter(isSubstantial).map(\.analysisEpochID.trackID))
         let speakingTokens = tokens.filter { token in
             let identity = canonicalByToken[token] ?? token
-            return isSubstantial(identity) || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
+            return qualifiedNativeTokens.contains(token) || isSubstantial(identity)
+                || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
         }
         let localIdentities = Set(confirmedLocalUserTokens.map { canonicalByToken[$0] ?? $0 })
         let priorIDs = Set(priorSpeakers.map(\.id))
@@ -847,7 +868,9 @@ nonisolated struct MeetingTranscriptAssembler {
         }
         let speakers = self.makeSpeakers(attemptID: attemptID, trackKinds: [epoch.trackID: .microphone],
                                          emitted: visible, identityLinks: identityLinks, priorSpeakers: reconciledPriorSpeakers,
-                                         confirmedLocalUserTokens: confirmedLocalUserTokens, activity: activity)
+                                         confirmedLocalUserTokens: confirmedLocalUserTokens, activity: activity,
+                                         useVoicedAdmission: speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true,
+                                         contextualBarriers: contextualBarriers)
         let speakerIDs = Dictionary(speakers.map { ($0.token, $0.speaker.id) }, uniquingKeysWith: { first, _ in first })
         let segments = emitted.map { unit, interval in
             let decision = decisionsByID[unit.id]
@@ -882,6 +905,29 @@ nonisolated struct MeetingTranscriptAssembler {
             speakers: speakers.map(\.speaker))
         batch.speakers = batch.mergingSpeakers(into: reconciledPriorSpeakers)
         return batch
+    }
+
+    /// The bounded strict-memory owner supplies native voiced support earned across windows.
+    /// Admit identity records only; ordinary per-word safety and mapping remain unchanged.
+    func admitPCMIdentities(_ qualification: MeetingVoicedSpeakerAdmission,
+        attemptID: UUID, epoch: MeetingAnalysisEpochID, priorSpeakers: [MeetingSessionSpeaker]
+    ) throws -> [MeetingSessionSpeaker] {
+        try Task.checkCancellation()
+        guard qualification.attemptID == attemptID, qualification.epoch == epoch,
+              qualification.tokens.count <= MeetingSpeakerVoiceSamples.maximumProfiles,
+              qualification.tokens.allSatisfy({ $0.analysisEpochID == epoch && !$0.label.isEmpty }) else {
+            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+        }
+        let tokens = qualification.tokens.filter { token in
+            let id = Self.speakerID(attemptID: attemptID, token: token), cluster = Self.scopedClusterID(for: token)
+            // Do not resurrect a merged identity or replace conflicting/manual registry metadata.
+            return !priorSpeakers.contains { $0.id == id || $0.diarizationClusterID == cluster }
+        }
+        let admitted = self.makeSpeakers(attemptID: attemptID, trackKinds: [epoch.trackID: .microphone],
+            emitted: [], identityLinks: [], priorSpeakers: priorSpeakers,
+            useVoicedAdmission: true, qualifiedNativeTokens: tokens).map(\.speaker)
+        try Task.checkCancellation()
+        return admitted
     }
 
     /// Identity-only verification reuses the assembler's stable token mapping. It never mints
