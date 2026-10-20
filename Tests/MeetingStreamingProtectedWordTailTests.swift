@@ -38,8 +38,10 @@ struct MeetingStreamingProtectedWordTailTests {
             watermarks: marks(end), attemptID: attempt, epoch: epoch)
     }
 
-    static func tail(limits: Tail.Limits = .init(), prior: [MeetingSessionSpeaker] = []) throws -> Tail {
-        try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", limits: limits, priorSpeakers: prior)
+    static func tail(limits: Tail.Limits = .init(), prior: [MeetingSessionSpeaker] = [],
+                     policy: MeetingSpeakerAttributionPolicy = .standard) throws -> Tail {
+        try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: policy,
+                 limits: limits, priorSpeakers: prior)
     }
 
     static func expect(_ expected: Tail.Failure, _ operation: () throws -> Void) {
@@ -59,6 +61,7 @@ struct MeetingStreamingProtectedWordTailTests {
         try knownNeighborIdentity()
         try knownNeighborSafety()
         try knownContinuationIdentityAndPartitions()
+        try independentKnownReplyAndPartitions()
         try alternatingContinuationPartitions()
         try longStream(mode: 0)
         try longStream(mode: 1)
@@ -388,7 +391,7 @@ struct MeetingStreamingProtectedWordTailTests {
                       word(95, 26.4, 26.5), word(96, 26.5, 26.6), word(97, 26.6, 26.7),
                       word(98, 26.7, 26.8), word(99, 26.9, 27.1)]
         let support = [activity("a", 20, 26), activity("b", 26.1, 26.2), activity("b", 26.4, 26.5),
-                       activity("b", 26.6, 26.7), activity("c", 26.45, 26.65), activity("d", 26.47, 26.49),
+                       activity("b", 26.5, 26.7), activity("c", 26.45, 26.65), activity("d", 26.47, 26.49),
                        activity("b", 26.9, 27.1)]
         var oneShot = try tail(prior: established.speakers)
         let canonical = try oneShot.finish(safeWords: .init(segments: source), activity: support,
@@ -402,8 +405,9 @@ struct MeetingStreamingProtectedWordTailTests {
         check(canonical.inserted[2].speakerAttribution?.candidates.isEmpty == true)
         check(canonical.inserted[6].speakerAttribution?.candidates.isEmpty == true)
         check(canonical.inserted[3].speakerAttribution?.rawAssignment.tokens.count == 3)
-        check(canonical.inserted[4].speakerAttribution?.rawAssignment.tokens.map(\.label) == ["c"])
-        check(canonical.inserted[4].speakerAttribution?.relation == .single)
+        check(canonical.inserted[4].speakerAttribution?.rawAssignment.tokens.map(\.label) == ["b", "c"])
+        check(canonical.inserted[4].speakerAttribution?.relation == .simultaneous,
+              "This fixture covers genuinely mixed continuation, not an independent reply")
         for split in 0...source.count {
             var value = try tail(prior: established.speakers)
             let prefix = Array(source.prefix(split)), suffix = Array(source.dropFirst(split))
@@ -458,24 +462,96 @@ struct MeetingStreamingProtectedWordTailTests {
         }
     }
 
+    static func independentKnownReplyAndPartitions() throws {
+        let established = try MeetingPCMRecordingAttribution.assemble(
+            transcript: .init(segments: [word(200, 0, 6), word(201, 7, 13)]),
+            activity: [activity("a", 0, 6), activity("b", 7, 13)],
+            epoch: epoch, attemptID: attempt, duration: 13, speakerNameFormat: "Speaker %lld")
+        let aID = established.segments[0].speakerID, bID = established.segments[1].speakerID
+        check(aID != nil && bID != nil && aID != bID)
+        let raw = [word(202, 20, 20.2), word(203, 20.3, 20.45),
+                   word(204, 20.45, 20.55, text: "Да."), word(205, 20.55, 20.8),
+                   word(206, 20.9, 21.1)]
+        let support = [activity("a", 20, 20.45), activity("a", 20.55, 21.1), activity("b", 20.4, 20.6)]
+        // Production has already attached immutable native assignment before the tail.
+        // Seed the same acoustic-only source without either contextual policy's output.
+        let source = try MeetingPCMRecordingAttribution.assemble(
+            transcript: .init(segments: raw, speakers: established.speakers), activity: support,
+            epoch: epoch, attemptID: attempt, duration: 21.1, speakerNameFormat: "Speaker %lld",
+            speakerAttributionPolicy: nil).segments
+        for preserveReply in [true, false] {
+            let policy = MeetingSpeakerAttributionPolicy(preserveIndependentSpeakerTurns: preserveReply)
+            var oneShot = try tail(prior: established.speakers, policy: policy)
+            let canonical = try oneShot.finish(safeWords: .init(segments: source), activity: support,
+                watermarks: marks(21.1), attemptID: attempt, epoch: epoch)
+            let reply = canonical.inserted[2]
+            check(reply.nativeSpeakerAssignment?.tokens.map(\.label) == ["b"])
+            check(reply.speakerID == (preserveReply ? bID : aID),
+                  "A clean short known reply must keep its own UUID; only frozen old policy swallows it")
+            check(reply.attributionState == .assigned && reply.speakerID != nil,
+                  "Small-window admission must not lose an already established reply identity")
+            if preserveReply {
+                check(reply.speakerAttribution?.rule != .mainSpeakerContinuation)
+                check(canonical.inserted[0].speakerID == aID && canonical.inserted[4].speakerID == aID)
+            } else {
+                check(reply.speakerAttribution?.rule == .mainSpeakerContinuation)
+                check(reply.speakerAttribution?.selectedToken?.label == "a"
+                      && reply.speakerAttribution?.selectedSpeakerID == aID,
+                      "Frozen legacy policy reproduces the contextual override without a missing UUID")
+            }
+            for split in 0...source.count {
+                var value = try tail(prior: established.speakers, policy: policy)
+                let prefix = Array(source.prefix(split)), suffix = Array(source.dropFirst(split))
+                let cursor = prefix.last?.nativeTiming?.end ?? 0
+                let prefixSupport = support.filter { $0.start < cursor }.map {
+                    MeetingBackendSpeakerActivity(token: $0.token, start: $0.start, end: min($0.end, cursor))
+                }
+                let first = try update(&value, words: prefix, activity: prefixSupport, end: cursor)
+                let final = try value.finish(safeWords: .init(segments: suffix), activity: support,
+                    watermarks: marks(21.1), attemptID: attempt, epoch: epoch)
+                var observed = Dictionary(uniqueKeysWithValues: (first.inserted + final.inserted).map { ($0.id, $0) })
+                for patch in final.revisions {
+                    guard var row = observed[patch.segmentID] else { check(false); continue }
+                    _ = try patch.apply(to: &row)
+                    observed[patch.segmentID] = row
+                }
+                for expected in canonical.inserted {
+                    let row = observed[expected.id]!
+                    check(row.speakerID == expected.speakerID && row.speakerAttribution == expected.speakerAttribution,
+                          "Stop partition changed current or frozen independent-reply ownership")
+                    check(row.id == expected.id && row.text == expected.text && row.originalText == expected.originalText)
+                    check(row.start == expected.start && row.end == expected.end && row.nativeTiming == expected.nativeTiming)
+                    check(row.nativeUnitID == expected.nativeUnitID && row.nativeSpeakerAssignment == expected.nativeSpeakerAssignment)
+                }
+                check(final.isFinal && final.provisionalSpeakerIDs.isEmpty)
+            }
+        }
+    }
+
     static func alternatingContinuationPartitions() throws {
         let established = try MeetingPCMRecordingAttribution.assemble(
-            transcript: .init(segments: [word(100, 0, 6)]), activity: [activity("a", 0, 6)],
-            epoch: epoch, attemptID: attempt, duration: 6, speakerNameFormat: "Speaker %lld")
+            transcript: .init(segments: [word(100, 0, 6), word(120, 7, 13)]),
+            activity: [activity("a", 0, 6), activity("b", 7, 13)],
+            epoch: epoch, attemptID: attempt, duration: 13, speakerNameFormat: "Speaker %lld")
         let knownID = established.segments[0].speakerID
-        check(knownID != nil)
-        let source = (0..<9).map { word(101 + $0, 20 + Double($0) * 0.3, 20.2 + Double($0) * 0.3) }
+        let replyID = established.segments[1].speakerID
+        check(knownID != nil && replyID != nil && knownID != replyID)
+        let raw = (0..<9).map { word(101 + $0, 20 + Double($0) * 0.3, 20.2 + Double($0) * 0.3) }
         let support = [activity("a", 20, 20.5), activity("a", 20.9, 21.7), activity("a", 22.1, 22.6),
                        activity("b", 20.4, 21), activity("b", 21.6, 22.2)]
+        let source = try MeetingPCMRecordingAttribution.assemble(
+            transcript: .init(segments: raw, speakers: established.speakers), activity: support,
+            epoch: epoch, attemptID: attempt, duration: 22.6, speakerNameFormat: "Speaker %lld",
+            speakerAttributionPolicy: nil).segments
         var oneShot = try tail(prior: established.speakers)
         let canonical = try oneShot.finish(safeWords: .init(segments: source), activity: support,
             watermarks: marks(22.6), attemptID: attempt, epoch: epoch)
-        check(canonical.inserted.allSatisfy { $0.speakerID == knownID },
-              "Overlapping alternating claims split continuing A reading ownership")
+        check(canonical.inserted[0].speakerID == knownID && canonical.inserted[8].speakerID == knownID)
         for position in [2, 6] {
-            check(canonical.inserted[position].speakerAttribution?.rule == .mainSpeakerContinuation)
-            check(canonical.inserted[position].speakerAttribution?.rawAssignment.tokens.map(\.label) == ["b"])
-            check(canonical.inserted[position].speakerAttribution?.relation == .single)
+            check(canonical.inserted[position].speakerID == replyID && canonical.inserted[position].attributionState == .assigned,
+                  "Each alternating clean B reply must remain assigned to its established participant")
+            check(canonical.inserted[position].speakerAttribution?.rule != .mainSpeakerContinuation)
+            check(canonical.inserted[position].nativeSpeakerAssignment?.tokens.map(\.label) == ["b"])
         }
         for split in 0...source.count {
             var value = try tail(prior: established.speakers)
