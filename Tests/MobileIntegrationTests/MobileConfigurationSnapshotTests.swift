@@ -273,7 +273,7 @@ final class MobilePCMAdmissionTests: XCTestCase {
 
     func testOldGigaAMTimingCheckpointIsRejectedBeforePreparationWithoutChangingSavedData() async throws {
         let descriptor = try self.descriptor()
-        XCTAssertEqual(descriptor.version, "2")
+        XCTAssertEqual(descriptor.version, "3")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DecoderVersion.\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }

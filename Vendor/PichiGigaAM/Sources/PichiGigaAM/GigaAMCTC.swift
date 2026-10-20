@@ -133,7 +133,7 @@ struct GigaAMCTC {
             if currentText.isEmpty { start = Double(token.startFrame) * Self.frameDuration }
             currentText += body
             end = Double(token.endFrame + 1) * Self.frameDuration
-            if body.unicodeScalars.contains(where: CharacterSet.alphanumerics.contains) {
+            if body.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) {
                 if lexicalStart == nil { lexicalStart = Double(token.startFrame) * Self.frameDuration }
                 lexicalEnd = end
             }
