@@ -173,8 +173,7 @@ final class MeetingInlineCaptionLayoutTests: XCTestCase {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(theme.palette.contentBackground)
                 .appTheme(theme)
-                .environment(\.colorScheme, scheme)
-                .environment(\.accessibilityReduceMotion, true)))
+                .environment(\.colorScheme, scheme)))
             window = QuietWindow(contentRect: CGRect(x: -10000, y: -10000, width: 392, height: 180),
                                  styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
