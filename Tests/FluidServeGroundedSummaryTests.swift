@@ -104,16 +104,36 @@ struct FluidServeGroundedSummaryTests {
         try manager.copyItem(at: URL(fileURLWithPath: CommandLine.arguments[1]), to: tool)
         try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": suiteName, "CFBundleDisplayName": "Synthetic voice app"], format: .xml, options: 0).write(to: contents.appendingPathComponent("Info.plist"))
         func run(_ arguments: [String], environment: [String: String]? = nil) throws -> (Int32, String, Process.TerminationReason) {
-            let process = Process(); let output = Pipe()
+            let process = Process()
+            let outputURL = base.appendingPathComponent("cli-output-\(UUID().uuidString).txt")
+            guard manager.createFile(atPath: outputURL.path, contents: nil,
+                                     attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
+            defer { try? manager.removeItem(at: outputURL) }
+            let output = try FileHandle(forWritingTo: outputURL)
+            defer { try? output.close() }
             process.executableURL = tool; process.arguments = arguments
             if let environment { process.environment = environment }
+            // Waiting before draining a Pipe can stall even small replies when Darwin
+            // reduces its capacity. An owned file lets the child finish under the same
+            // deadline; read the complete synthetic reply with an explicit memory bound.
             process.standardOutput = output; process.standardError = output
             try process.run()
             let deadline = Date().addingTimeInterval(10)
             while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
             if process.isRunning { process.terminate() }
             process.waitUntilExit()
-            return (process.terminationStatus, String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self), process.terminationReason)
+            let reader = try FileHandle(forReadingFrom: outputURL)
+            defer { try? reader.close() }
+            let maximumOutputBytes = 8 * 1024 * 1024
+            var captured = Data()
+            while let bytes = try reader.read(upToCount: min(65_536, maximumOutputBytes + 1 - captured.count)), !bytes.isEmpty {
+                captured.append(bytes)
+                guard captured.count <= maximumOutputBytes else {
+                    throw NSError(domain: "FluidServeTestOutput", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "Synthetic CLI output exceeded its 8 MiB test bound"])
+                }
+            }
+            return (process.terminationStatus, String(decoding: captured, as: UTF8.self), process.terminationReason)
         }
         let capabilities = ModelTemperatureSupport(defaults: defaults)
         let endpoint = "https://gateway.test/TeamA/v1?Scope=AbC"
