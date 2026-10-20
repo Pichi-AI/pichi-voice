@@ -1233,7 +1233,7 @@ final class MobileNavigationUITests: XCTestCase {
             meeting.tap()
             XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 15))
             for (index, text) in expected.prefix(3).enumerated() {
-                let paragraph = app.staticTexts[text].firstMatch
+                let paragraph = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
                 XCTAssertTrue(paragraph.waitForExistence(timeout: 15), "The original saved words remain readable")
                 try revealParagraphAboveNavigation(paragraph, step: "saved-reading-\(language)-\(index)")
                 capture("saved-reading-\(language)-\(index)-visible")
@@ -1284,7 +1284,7 @@ final class MobileNavigationUITests: XCTestCase {
         let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
         XCTAssertTrue(scroll.waitForExistence(timeout: 5))
         for (index, text) in expected.enumerated() {
-            let paragraph = app.staticTexts[text].firstMatch
+            let paragraph = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
             for attempt in 0..<40 {
                 if paragraph.exists && paragraph.isHittable { break }
                 let from = scroll.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.8))
