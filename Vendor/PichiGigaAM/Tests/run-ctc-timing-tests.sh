@@ -28,7 +28,7 @@ SWIFT
 ctc_platform="$(xcrun --show-sdk-platform-path)"
 ctc_frameworks="$ctc_platform/Developer/Library/Frameworks"
 ctc_libraries="$ctc_platform/Developer/usr/lib"
-xcrun swiftc -swift-version 5 -module-cache-path "$ctc_build/ModuleCache" \
+xcrun swiftc -O -swift-version 5 -module-cache-path "$ctc_build/ModuleCache" \
     -F "$ctc_frameworks" -I "$ctc_libraries" -L "$ctc_libraries" \
     -Xlinker -rpath -Xlinker "$ctc_frameworks" -Xlinker -rpath -Xlinker "$ctc_libraries" \
     Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMCTC.swift \
