@@ -660,7 +660,7 @@ nonisolated enum MeetingTranscriptExporter {
                     + policy.comparisonTolerance else { continue }
             } else {
                 guard (first...last).allSatisfy({ punctuation(segments[$0])
-                        || segments[$0].text.unicodeScalars.contains(where: CharacterSet.alphanumerics.contains) }),
+                        || segments[$0].text.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) } }),
                       tail.end.seconds - head.start.seconds <= policy.maximumBoundaryResidualSeconds
                         + policy.comparisonTolerance,
                       gap <= policy.maximumBoundaryResidualSeconds + policy.comparisonTolerance,
