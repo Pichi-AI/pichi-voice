@@ -375,6 +375,9 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
     private mutating func updateVoiceSupport(activity: [MeetingBackendSpeakerActivity],
         original: [MeetingTranscriptSegment], scored: [MeetingTranscriptSegment]
     ) throws {
+        // Same-epoch native activity is append-only evidence: admitted bouts can extend,
+        // backdate their onset or be evicted after acknowledgement, but never retract.
+        // A reset/retraction needs a new analysis epoch, not reuse of a saturated receipt.
         guard self.policy.enableVoicedSpeakerAdmission else { return }
         let scoredByID = Dictionary(scored.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         guard original.count == scored.count, scoredByID.count == scored.count,
@@ -390,15 +393,15 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                   source.text.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }),
                   case let .assigned(token) = source.nativeSpeakerAssignment,
                   current.nativeSpeakerAssignment == .assigned(token), current.overlap == .none,
-                  token.analysisEpochID == self.epoch else { continue }
+                  token.analysisEpochID == self.epoch,
+                  source.speakerID.map({ $0 == MeetingTranscriptAssembler.speakerID(attemptID: self.attemptID, token: token) }) ?? true
+            else { continue }
             if let summary = source.speakerAttribution {
                 guard summary.unitID == source.nativeUnitID, summary.rawAssignment == .assigned(token),
                       summary.rule.isIndependentAcousticSelection, summary.selectedToken == token,
                       summary.selectedSpeakerID == source.speakerID else { continue }
             } else {
-                guard source.revision == 0,
-                      source.speakerID.map({ $0 == MeetingTranscriptAssembler.speakerID(attemptID: self.attemptID, token: token) }) ?? true
-                else { continue }
+                guard source.revision == 0 else { continue }
             }
             if let summary = current.speakerAttribution {
                 guard summary.rule.isIndependentAcousticSelection, summary.selectedToken == token,

@@ -902,7 +902,7 @@ struct MeetingSpeakerAttributionTests {
         self.check(!oldPolicy.enableSameSpeakerPauseResolution && !oldPolicy.enableMainSpeakerContinuation && oldPolicy.schemaVersion == 2)
         self.check(oldPolicy == MeetingSpeakerAttributionPolicy(enableSameSpeakerPauseResolution: false,
             enableMainSpeakerContinuation: false, enableIndependentAcousticAnchors: false,
-            preserveIndependentSpeakerTurns: false))
+            preserveIndependentSpeakerTurns: false, enableVoicedSpeakerAdmission: false))
         self.check(oldPolicy.fingerprint == oldFingerprint && policy.fingerprint != oldFingerprint)
         let oldRoundTrip = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: JSONEncoder().encode(oldPolicy))
         self.check(oldRoundTrip == oldPolicy && oldRoundTrip.fingerprint == oldFingerprint)
@@ -910,11 +910,12 @@ struct MeetingSpeakerAttributionTests {
         priorObject.removeValue(forKey: "enableMainSpeakerContinuation")
         priorObject.removeValue(forKey: "enableIndependentAcousticAnchors")
         priorObject.removeValue(forKey: "preserveIndependentSpeakerTurns")
+        priorObject.removeValue(forKey: "enableVoicedSpeakerAdmission")
         let priorPolicy = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONSerialization.data(withJSONObject: priorObject))
         self.check(priorPolicy.enableSameSpeakerPauseResolution && !priorPolicy.enableMainSpeakerContinuation)
         self.check(priorPolicy == .init(enableMainSpeakerContinuation: false, enableIndependentAcousticAnchors: false,
-                                       preserveIndependentSpeakerTurns: false))
+                                       preserveIndependentSpeakerTurns: false, enableVoicedSpeakerAdmission: false))
         self.check(priorPolicy.fingerprint == "speaker-attribution-v2:0207a0b121f07fa78e18222b5ddfbfd17ac65c2560a17b26f9e36cb365be8fb3")
         self.check(priorPolicy.fingerprint != policy.fingerprint && priorPolicy.fingerprint != oldFingerprint)
         self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
@@ -922,20 +923,23 @@ struct MeetingSpeakerAttributionTests {
         var beforeAcoustic = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         beforeAcoustic.removeValue(forKey: "enableIndependentAcousticAnchors")
         beforeAcoustic.removeValue(forKey: "preserveIndependentSpeakerTurns")
+        beforeAcoustic.removeValue(forKey: "enableVoicedSpeakerAdmission")
         let frozen = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONSerialization.data(withJSONObject: beforeAcoustic))
         self.check(!frozen.enableIndependentAcousticAnchors && policy.enableIndependentAcousticAnchors)
         self.check(frozen.fingerprint == "speaker-attribution-v2:00622a913604f7a3bb029e865dedb93e1ea27aa50cd86972d11115a1a78fe53a")
-        self.check(frozen == .init(enableIndependentAcousticAnchors: false, preserveIndependentSpeakerTurns: false)
+        self.check(frozen == .init(enableIndependentAcousticAnchors: false, preserveIndependentSpeakerTurns: false,
+                                  enableVoicedSpeakerAdmission: false)
                    && frozen.fingerprint != policy.fingerprint)
         self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONEncoder().encode(frozen)) == frozen)
         var beforeTurnBoundaries = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         beforeTurnBoundaries.removeValue(forKey: "preserveIndependentSpeakerTurns")
+        beforeTurnBoundaries.removeValue(forKey: "enableVoicedSpeakerAdmission")
         let frozenTurnPolicy = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONSerialization.data(withJSONObject: beforeTurnBoundaries))
         self.check(!frozenTurnPolicy.preserveIndependentSpeakerTurns && policy.preserveIndependentSpeakerTurns)
-        self.check(frozenTurnPolicy == .init(preserveIndependentSpeakerTurns: false)
+        self.check(frozenTurnPolicy == .init(preserveIndependentSpeakerTurns: false, enableVoicedSpeakerAdmission: false)
                    && frozenTurnPolicy.fingerprint != policy.fingerprint,
                    "Previously saved attempts retain the old semantics and exact immutable policy identity")
         self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,

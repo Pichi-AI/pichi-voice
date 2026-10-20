@@ -53,6 +53,8 @@ import Foundation
         try actualDurationAndNoise()
         try duplicateAndBackdatedSnapshots()
         try sourceGuards()
+        try unsafeWholeBoutCannotAdmit()
+        try nativeBoutPartitionInvariance()
         try limitsAndAtomicity()
         try policyCompatibility()
         try await cancellation()
@@ -175,6 +177,76 @@ import Foundation
         check(value.retainedAdmissionTokenCount == 0 && value.retainedAdmissionIntervalCount == 0)
         let fresh = try tail()
         check(fresh.retainedAdmissionTokenCount == 0)
+    }
+
+    static func unsafeWholeBoutCannotAdmit() throws {
+        let mainID = MeetingTranscriptAssembler.speakerID(attemptID: attempt, token: a)
+        let main = MeetingSessionSpeaker(id: mainID, displayName: "Preserved manual alias",
+            diarizationClusterID: "\(epoch):a", trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        let activity = [MeetingBackendSpeakerActivity(token: b, start: 0, end: 6),
+                        MeetingBackendSpeakerActivity(token: a, start: 7, end: 13)]
+        for kind in 0..<10 {
+            var short = word(4000, 0, 0.04, token: b)
+            switch kind {
+            case 0: short.isUserTextEdited = true
+            case 1: short.originalText = "Manual text correction"
+            case 2: short.status = .provisional
+            case 3: short.completeness = .incompleteTrack
+            case 4: short.isLikelyEcho = true
+            case 5: short.attributionState = .timingUncertain
+            case 6:
+                short.speakerID = mainID; short.attributionState = .assigned; short.revision = 1
+            case 9: short.nativeSpeakerAssignment = .unassigned
+            default:
+                let unit = MeetingFinalTextUnit(id: short.nativeUnitID!, trackID: epoch.trackID,
+                    analysisEpochID: epoch, precision: .word, text: short.text, analysisStart: 0,
+                    analysisEnd: 0.04, speaker: .assigned(b), analysisSpanIDs: [])
+                let decision = try MeetingSpeakerAttribution.resolve(units: [unit], activity: activity)[0]
+                var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(
+                    MeetingTranscriptSpeakerAttribution(decision: decision, speakerIDs: [:]))) as! [String: Any]
+                if kind == 7 { object["unitID"] = "mismatching-provenance" }
+                else {
+                    object["selectedSpeakerID"] = mainID.uuidString
+                    short.speakerID = mainID; short.attributionState = .assigned
+                }
+                short.speakerAttribution = try JSONDecoder().decode(MeetingTranscriptSpeakerAttribution.self,
+                    from: JSONSerialization.data(withJSONObject: object))
+            }
+            let words = [short, word(4001, 7, 13, token: a)]
+            let result = try MeetingPCMRecordingAttribution.assemble(
+                transcript: .init(segments: words, speakers: [main]), activity: activity,
+                epoch: epoch, attemptID: attempt, duration: 20, speakerNameFormat: "Speaker %lld")
+            check(result.speakers.allSatisfy { $0.diarizationClusterID != "\(epoch):b" },
+                  "An unsafe forty-millisecond row sponsored a six-second identity before the tail")
+            check(result.segments.map(\.text) == words.map(\.text))
+            if kind == 6 { check(result.segments[0].speakerID == mainID, "Manual speaker assignment changed") }
+            var value = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", priorSpeakers: [main])
+            let output = try update(&value, words: words, activity: activity, end: 20)
+            check(output.speakers.allSatisfy { $0.diarizationClusterID != "\(epoch):b" })
+            check(value.admittedVoiceSeconds(for: b) == 0)
+            if kind == 6 { check(output.inserted[0].speakerID == mainID) }
+        }
+    }
+
+    static func nativeBoutPartitionInvariance() throws {
+        let mainActivity = MeetingBackendSpeakerActivity(token: a, start: 7, end: 13)
+        let merged = MeetingBackendSpeakerActivity(token: b, start: 0, end: 6)
+        let variants = [[merged], [.init(token: b, start: 0, end: 2.4), .init(token: b, start: 2.4, end: 6)],
+                        [.init(token: b, start: 0, end: 4), .init(token: b, start: 2, end: 6)],
+                        [merged, merged]]
+        let words = [word(5000, 0, 0.04, token: b), word(5001, 7, 13, token: a)]
+        var expected: [MeetingTranscriptSegment]?
+        for variant in variants {
+            let activity = variant + [mainActivity]
+            let batch = try MeetingPCMRecordingAttribution.assemble(transcript: .init(segments: words),
+                activity: activity, epoch: epoch, attemptID: attempt, duration: 20, speakerNameFormat: "Speaker %lld")
+            check(batch.segments[0].speakerID != nil && batch.speakers.count == 2)
+            if let expected { check(batch.segments == expected) } else { expected = batch.segments }
+            var value = try tail()
+            let output = try update(&value, words: words, activity: activity, end: 20)
+            check(output.inserted[0].speakerID == batch.segments[0].speakerID)
+            check(value.admittedVoiceSeconds(for: b) == 5 && value.retainedAdmissionIntervalCount == 0)
+        }
     }
 
     static func policyCompatibility() throws {
