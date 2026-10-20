@@ -80,6 +80,12 @@ final class MeetingInlineCaptionLayoutTests: XCTestCase {
             XCTAssertEqual(try XCTUnwrap(native.textLayoutManager).usageBoundsForTextContainer, used,
                            "A speculative width cannot change the displayed glyph wrapping")
         }
+        // Reproduce a rejected proposal directly, independently of SwiftUI's
+        // proposal ordering on a particular macOS release.
+        container.size = CGSize(width: displayedWidth * 2, height: .greatestFiniteMagnitude)
+        native.needsLayout = true
+        native.layoutSubtreeIfNeeded()
+        XCTAssertEqual(container.size.width, displayedWidth, accuracy: 0.5)
         fixture.settle()
         try verifyWaves(in: native, pending: fixture.pending)
     }
@@ -103,7 +109,7 @@ final class MeetingInlineCaptionLayoutTests: XCTestCase {
         XCTAssertNotNil(native.textLayoutManager, "Inline captions retain TextKit 2")
         XCTAssertEqual(try XCTUnwrap(native.textContainer).size.width, native.bounds.width, accuracy: 0.5,
                        "The committed native bounds own displayed text wrapping")
-        XCTAssertEqual(native.subviews.filter { $0.accessibilityIdentifier()?.hasPrefix("meeting.inlineWave.") == true }.count,
+        XCTAssertEqual(native.subviews.filter { $0.accessibilityIdentifier().hasPrefix("meeting.inlineWave.") }.count,
                        pending.tokens.count)
         for token in pending.tokens {
             let host = try wave(token.id, in: native)
