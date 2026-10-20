@@ -30,6 +30,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     let enableBriefInterruption: Bool
     let enableMainSpeakerContinuation: Bool
     let enableIndependentAcousticAnchors: Bool
+    /// A pure independently selected reply ends a pending mixed bout instead of being
+    /// reassigned to the surrounding participant. Absent in frozen older attempts.
+    let preserveIndependentSpeakerTurns: Bool
 
     init(
         schemaVersion: Int = Self.currentVersion,
@@ -51,7 +54,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         enableSameSpeakerPauseResolution: Bool = true,
         enableBriefInterruption: Bool = true,
         enableMainSpeakerContinuation: Bool = true,
-        enableIndependentAcousticAnchors: Bool = true
+        enableIndependentAcousticAnchors: Bool = true,
+        preserveIndependentSpeakerTurns: Bool = true
     ) {
         self.schemaVersion = schemaVersion
         self.comparisonTolerance = comparisonTolerance
@@ -73,6 +77,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         self.enableBriefInterruption = enableBriefInterruption
         self.enableMainSpeakerContinuation = enableMainSpeakerContinuation
         self.enableIndependentAcousticAnchors = enableIndependentAcousticAnchors
+        self.preserveIndependentSpeakerTurns = preserveIndependentSpeakerTurns
     }
 
     /// Exact, length-framed values avoid locale, delimiter and rounding collisions. Zero has one
@@ -111,6 +116,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         if self.enableIndependentAcousticAnchors {
             entries.append(("independentAcousticAnchorsEnabled", "true"))
         }
+        if self.preserveIndependentSpeakerTurns {
+            entries.append(("independentSpeakerTurnsPreserved", "true"))
+        }
         let canonical = MeetingConfigFingerprintEncoding.encode(entries)
         let digest = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
         return "speaker-attribution-v\(self.schemaVersion):\(digest)"
@@ -146,6 +154,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         case enableDominance, enableNeighborResolution, enableSameSpeakerPauseResolution, enableBriefInterruption
         case enableMainSpeakerContinuation
         case enableIndependentAcousticAnchors
+        case preserveIndependentSpeakerTurns
     }
 
     init(from decoder: Decoder) throws {
@@ -170,7 +179,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
             enableSameSpeakerPauseResolution: c.decodeIfPresent(Bool.self, forKey: .enableSameSpeakerPauseResolution) ?? false,
             enableBriefInterruption: c.decode(Bool.self, forKey: .enableBriefInterruption),
             enableMainSpeakerContinuation: c.decodeIfPresent(Bool.self, forKey: .enableMainSpeakerContinuation) ?? false,
-            enableIndependentAcousticAnchors: c.decodeIfPresent(Bool.self, forKey: .enableIndependentAcousticAnchors) ?? false
+            enableIndependentAcousticAnchors: c.decodeIfPresent(Bool.self, forKey: .enableIndependentAcousticAnchors) ?? false,
+            preserveIndependentSpeakerTurns: c.decodeIfPresent(Bool.self, forKey: .preserveIndependentSpeakerTurns) ?? false
         )
         _ = try self.validated()
     }
@@ -881,8 +891,9 @@ nonisolated enum MeetingSpeakerAttribution {
     /// Shared presentation ownership for a short mixed/interruption run between the same
     /// independent original speaker. Callers establish native precision, evidence eligibility,
     /// source/epoch scope, manual-edit protection and contextual barriers. Unknown words may
-    /// accompany a mixed word, and clean words may be enclosed by the same validated bout.
-    /// An unknown-only run or a clean reply cannot activate this rule. The latest original
+    /// accompany a mixed word. An independent nonmixed reply ends the pending bout under
+    /// the current policy; frozen older policies can still enclose clean words. An
+    /// unknown-only run or a clean reply cannot activate this rule. The latest original
     /// clean anchor before the first interruption owns the pending bout; an older matching
     /// speaker cannot claim a newer speaker's interruption. Prefix counts keep admission linear.
     /// Accepted windows retire their interior anchors. Barriers or an expired window reset the
@@ -930,6 +941,16 @@ nonisolated enum MeetingSpeakerAttribution {
             try self.checkCancellation(at: after)
             let isAnchor = anchorIdentities[after] != nil && !blocked.contains(after)
             if let before = pendingBefore {
+                // A real independently supported turn is not an uncertainty island. Even
+                // one short word can be a reply; mixed context before or after it cannot
+                // transfer its ownership to a returning participant. Keep mixed acoustic
+                // selections eligible for the conservative continuation convention.
+                if policy.preserveIndependentSpeakerTurns, isAnchor, !interruptions[after],
+                   anchorIdentities[after] != anchorIdentities[before] {
+                    pendingBefore = nil
+                    latestAnchor = after
+                    continue
+                }
                 if isAnchor, anchorIdentities[after] == anchorIdentities[before] {
                     if after > before + 1, invalidPrefix[after] == invalidPrefix[before + 1],
                        interruptionPrefix[after] > interruptionPrefix[before + 1],

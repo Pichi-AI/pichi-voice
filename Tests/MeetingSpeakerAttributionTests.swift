@@ -62,6 +62,7 @@ struct MeetingSpeakerAttributionTests {
         try self.interruptions()
         try self.interruptionWordSupport()
         try self.mainSpeakerContinuation()
+        try self.independentReplyBoundaries()
         try self.continuationAdmission()
         try self.scopeAndChronology()
         try self.contextBarrierIntervals()
@@ -525,13 +526,16 @@ struct MeetingSpeakerAttributionTests {
                                 self.activity("a", offset + 0.55, offset + 1.1), self.activity("b", offset + 0.4, offset + 0.6)]
             let boutOutput = try self.resolve(wholeBout, boutActivity)
             for position in 1...3 {
-                self.check(boutOutput[position].selectedToken == a && boutOutput[position].rule == .mainSpeakerContinuation,
-                           "A clean word inside a mixed interruption bout split continuing ownership")
-                self.check(boutOutput[position].backgroundTokens.isEmpty)
+                self.check(boutOutput[position].selectedToken == b,
+                           "Mixed context cannot swallow an independently supported reply")
             }
+            self.check(boutOutput[2].rule == .singleAcousticSupport)
             self.check(boutOutput[2].rawAssignment == .assigned(b) && boutOutput[2].relation == .single)
             self.check(boutOutput[2].candidates.map(\.token) == [b] && boutOutput[2].candidates[0].supportSeconds > 0)
             self.check(try self.resolve(wholeBout.reversed(), boutActivity.reversed()) == boutOutput)
+            let frozenBout = try self.resolve(wholeBout, boutActivity, policy: .init(preserveIndependentSpeakerTurns: false))
+            self.check(frozenBout[1...3].allSatisfy { $0.selectedToken == a && $0.rule == .mainSpeakerContinuation },
+                       "A frozen older policy must retain its previous ownership semantics")
             let nearestOwner = [self.unit("older-a", offset + 3.5, offset + 3.7, .assigned(a)),
                                 self.unit("main-b", offset + 4.6, offset + 4.8, .assigned(b)),
                                 self.unit("mixed-before", offset + 4.9, offset + 5.1, .ambiguous([a, b])),
@@ -547,10 +551,10 @@ struct MeetingSpeakerAttributionTests {
                        "An earlier independent A word changed ownership")
             self.check(nearest[1].selectedToken == b && nearest[1].rule == .singleAcousticSupport)
             for position in 2...4 {
-                self.check(nearest[position].selectedToken == b && nearest[position].rule == .mainSpeakerContinuation,
-                           "An older matching A anchor hijacked B's interruption bout")
-                self.check(nearest[position].cueUnitIDs == ["main-b", "return-b"])
+                self.check(nearest[position].selectedToken == a,
+                           "A clean reply starts a new turn even when a different participant returns")
             }
+            self.check(nearest[3].rule == .singleAcousticSupport)
             self.check(nearest[3].rawAssignment == .assigned(a) && nearest[3].candidates.map(\.token) == [a])
             self.check(try self.resolve(nearestOwner.reversed(), nearestActivity.reversed()) == nearest)
             let old = try self.resolve([left, adjacent[2], right], sparse, policy: .init(enableMainSpeakerContinuation: false))
@@ -572,6 +576,35 @@ struct MeetingSpeakerAttributionTests {
                                self.activity("b", offset + start, offset + end), self.activity("a", offset + after, offset + after + 0.2)]
                 self.check((try self.resolve(words, support)[1].rule == .mainSpeakerContinuation) == expected,
                            "Continuation did not honor exact span/pause budgets")
+            }
+        }
+    }
+
+    static func independentReplyBoundaries() throws {
+        let a = self.token("a"), b = self.token("b"), c = self.token("c")
+        for offset in [0.0, 815.48, 6_243.68, 10_000.0] {
+            for duration in [0.04, 0.1, 0.56, 1.0] {
+                for reply in [b, c] {
+                    let replyStart = offset + 0.7, replyEnd = replyStart + duration
+                    let words = [self.unit("before", offset, offset + 0.2, .assigned(a)),
+                                 self.unit("mixed-before", offset + 0.3, offset + 0.6, .ambiguous([a, reply])),
+                                 self.unit("independent-reply", replyStart, replyEnd, .assigned(reply)),
+                                 self.unit("mixed-after", replyEnd + 0.1, replyEnd + 0.4, .ambiguous([a, reply])),
+                                 self.unit("return", replyEnd + 0.5, replyEnd + 0.7, .assigned(a))]
+                    let activity = [self.activity("a", offset, offset + 0.6),
+                                    self.activity(reply.label, offset + 0.4, replyEnd + 0.3),
+                                    self.activity("a", replyEnd + 0.1, replyEnd + 0.7)]
+                    let result = try self.resolve(words, activity)
+                    let independent = try self.resolve(words, activity, epochs: [Self.epoch])[2]
+                    self.check(result[2] == independent && result[2].rule == .singleAcousticSupport
+                               && result[2].selectedToken == reply,
+                               "A genuinely independent short reply must retain its original acoustic decision")
+                    self.check(result[0].selectedToken == a && result[4].selectedToken == a)
+                    self.check(try self.resolve(words.reversed(), activity.reversed()) == result)
+                    let frozen = try self.resolve(words, activity, policy: .init(preserveIndependentSpeakerTurns: false))
+                    self.check(frozen[2].selectedToken == a && frozen[2].rule == .mainSpeakerContinuation,
+                               "The synthetic regression must reproduce the old mixed-bout swallowing defect")
+                }
             }
         }
     }
@@ -673,27 +706,35 @@ struct MeetingSpeakerAttributionTests {
         self.check(try runs(values, candidates: [false, false, false, true, true, false],
                             interruptions: [false, false, false, false, true, false],
                             anchors: [true, true, true, false, false, true]) == [.init(first: 3, last: 4, before: 2, after: 5)])
-        // The nearest clean speaker before the first interruption owns the pending bout.
-        // Interior speakers cannot close it or start a later overlapping claim.
+        // Frozen older policies let the nearest original owner consume interior speakers.
+        // The current policy instead treats independent nonmixed replies as turn boundaries.
         let alternating = (0..<9).map { Interval(start: Double($0) * 0.3, end: Double($0) * 0.3 + 0.2) }
         let identities: [String?] = ["a", nil, "b", nil, "a", nil, "b", nil, "a"]
         let expected: [MeetingSpeakerAttribution.ContinuationRun] = [.init(first: 1, last: 3, before: 0, after: 4),
                                                                    .init(first: 5, last: 7, before: 4, after: 8)]
         self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: alternating,
             candidates: Array(repeating: true, count: 9), interruptions: [false, true, false, true, false, true, false, true, false],
-            anchorIdentities: identities, policy: .standard) == expected)
+            anchorIdentities: identities, policy: .init(preserveIndependentSpeakerTurns: false)) == expected)
+        self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: alternating,
+            candidates: Array(repeating: true, count: 9), interruptions: [false, true, false, true, false, true, false, true, false],
+            anchorIdentities: identities, policy: .standard).isEmpty)
         self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: alternating,
             candidates: Array(repeating: true, count: 9), interruptions: Array(repeating: false, count: 9),
             anchorIdentities: identities, policy: .standard).isEmpty)
         let uuidA = UUID(), uuidB = UUID()
         self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: alternating,
             candidates: Array(repeating: true, count: 9), interruptions: [false, true, false, true, false, true, false, true, false],
-            anchorIdentities: identities.map { $0.map { $0 == "a" ? uuidA : uuidB } }, policy: .standard) == expected,
+            anchorIdentities: identities.map { $0.map { $0 == "a" ? uuidA : uuidB } },
+            policy: .init(preserveIndependentSpeakerTurns: false)) == expected,
                    "Saved UUID identities changed generic continuation admission")
+        self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: alternating,
+            candidates: Array(repeating: true, count: 9), interruptions: [false, true, false, true, false, true, false, true, false],
+            anchorIdentities: identities.map { $0.map { $0 == "a" ? uuidA : uuidB } }, policy: .standard).isEmpty,
+                   "Independent turn boundaries must not depend on a model token representation")
         let antiHijack = (0..<6).map { Interval(start: Double($0) * 0.3, end: Double($0) * 0.3 + 0.2) }
         self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: antiHijack,
             candidates: Array(repeating: true, count: 6), interruptions: [false, false, true, false, true, false],
-            anchorIdentities: ["a", "b", nil, "a", nil, "b"], policy: .standard)
+            anchorIdentities: ["a", "b", nil, "a", nil, "b"], policy: .init(preserveIndependentSpeakerTurns: false))
             == [.init(first: 2, last: 4, before: 1, after: 5)])
         let expired = [Interval(start: 0, end: 0.2), .init(start: 0.3, end: 0.5), .init(start: 1, end: 1.2),
                        .init(start: 5, end: 5.2), .init(start: 5.3, end: 5.5)]
@@ -713,9 +754,13 @@ struct MeetingSpeakerAttributionTests {
         let began = Date()
         let indexed = try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: dense,
             candidates: Array(repeating: true, count: largeCount), interruptions: (0..<largeCount).map { !$0.isMultiple(of: 2) },
-            anchorIdentities: manyAnchors, policy: .standard)
+            anchorIdentities: manyAnchors, policy: .init(preserveIndependentSpeakerTurns: false))
         self.check(!indexed.isEmpty)
         self.check(zip(indexed, indexed.dropFirst()).allSatisfy { $0.after <= $1.before })
+        self.check(try MeetingSpeakerAttribution.continuingSpeakerRuns(intervals: dense,
+            candidates: Array(repeating: true, count: largeCount), interruptions: (0..<largeCount).map { !$0.isMultiple(of: 2) },
+            anchorIdentities: manyAnchors, policy: .standard).isEmpty,
+                   "Dense independent replies must stay boundaries without repeated context scans")
         print("ATTRIBUTION_CONTINUATION_LINEAR units=\(largeCount) runs=\(indexed.count) elapsed=\(Date().timeIntervalSince(began))")
     }
 
@@ -856,30 +901,45 @@ struct MeetingSpeakerAttributionTests {
         let oldPolicy = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: oldJSON)
         self.check(!oldPolicy.enableSameSpeakerPauseResolution && !oldPolicy.enableMainSpeakerContinuation && oldPolicy.schemaVersion == 2)
         self.check(oldPolicy == MeetingSpeakerAttributionPolicy(enableSameSpeakerPauseResolution: false,
-            enableMainSpeakerContinuation: false, enableIndependentAcousticAnchors: false))
+            enableMainSpeakerContinuation: false, enableIndependentAcousticAnchors: false,
+            preserveIndependentSpeakerTurns: false))
         self.check(oldPolicy.fingerprint == oldFingerprint && policy.fingerprint != oldFingerprint)
         let oldRoundTrip = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: JSONEncoder().encode(oldPolicy))
         self.check(oldRoundTrip == oldPolicy && oldRoundTrip.fingerprint == oldFingerprint)
         var priorObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         priorObject.removeValue(forKey: "enableMainSpeakerContinuation")
         priorObject.removeValue(forKey: "enableIndependentAcousticAnchors")
+        priorObject.removeValue(forKey: "preserveIndependentSpeakerTurns")
         let priorPolicy = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONSerialization.data(withJSONObject: priorObject))
         self.check(priorPolicy.enableSameSpeakerPauseResolution && !priorPolicy.enableMainSpeakerContinuation)
-        self.check(priorPolicy == .init(enableMainSpeakerContinuation: false, enableIndependentAcousticAnchors: false))
+        self.check(priorPolicy == .init(enableMainSpeakerContinuation: false, enableIndependentAcousticAnchors: false,
+                                       preserveIndependentSpeakerTurns: false))
         self.check(priorPolicy.fingerprint == "speaker-attribution-v2:0207a0b121f07fa78e18222b5ddfbfd17ac65c2560a17b26f9e36cb365be8fb3")
         self.check(priorPolicy.fingerprint != policy.fingerprint && priorPolicy.fingerprint != oldFingerprint)
         self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONEncoder().encode(priorPolicy)).fingerprint == priorPolicy.fingerprint)
         var beforeAcoustic = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         beforeAcoustic.removeValue(forKey: "enableIndependentAcousticAnchors")
+        beforeAcoustic.removeValue(forKey: "preserveIndependentSpeakerTurns")
         let frozen = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONSerialization.data(withJSONObject: beforeAcoustic))
         self.check(!frozen.enableIndependentAcousticAnchors && policy.enableIndependentAcousticAnchors)
         self.check(frozen.fingerprint == "speaker-attribution-v2:00622a913604f7a3bb029e865dedb93e1ea27aa50cd86972d11115a1a78fe53a")
-        self.check(frozen == .init(enableIndependentAcousticAnchors: false) && frozen.fingerprint != policy.fingerprint)
+        self.check(frozen == .init(enableIndependentAcousticAnchors: false, preserveIndependentSpeakerTurns: false)
+                   && frozen.fingerprint != policy.fingerprint)
         self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONEncoder().encode(frozen)) == frozen)
+        var beforeTurnBoundaries = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
+        beforeTurnBoundaries.removeValue(forKey: "preserveIndependentSpeakerTurns")
+        let frozenTurnPolicy = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
+            from: JSONSerialization.data(withJSONObject: beforeTurnBoundaries))
+        self.check(!frozenTurnPolicy.preserveIndependentSpeakerTurns && policy.preserveIndependentSpeakerTurns)
+        self.check(frozenTurnPolicy == .init(preserveIndependentSpeakerTurns: false)
+                   && frozenTurnPolicy.fingerprint != policy.fingerprint,
+                   "Previously saved attempts retain the old semantics and exact immutable policy identity")
+        self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
+            from: JSONEncoder().encode(frozenTurnPolicy)) == frozenTurnPolicy)
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         object["schemaVersion"] = MeetingSpeakerAttributionPolicy.currentVersion + 1
         do {
