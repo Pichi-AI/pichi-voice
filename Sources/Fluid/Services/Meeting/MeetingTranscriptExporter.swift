@@ -510,6 +510,30 @@ nonisolated enum MeetingTranscriptExporter {
         let blocked = MeetingSpeakerAttribution.overlappingIntervalIndices(source.map {
             .init(start: $0.nativeTiming?.start ?? $0.start.seconds, end: $0.nativeTiming?.end ?? $0.end.seconds)
         }, tolerance: MeetingSpeakerAttributionPolicy.standard.comparisonTolerance, checkpoint: { _ in })
+        // The first words have no outgoing anchor. Apply the same incoming-neighbor
+        // reading convention to an entirely unsupported leading prefix, using the first
+        // independent following voice. The existing unknown horizon includes the wait
+        // for that voice; source gaps, edits and competing acoustic evidence still block
+        // it. This supplies an estimated reading owner, never a native assignment.
+        let leadingCount = segments.indices.prefix {
+            eligible[$0] && candidateTokens[$0].isEmpty && segments[$0].nativeSpeakerAssignment == .unassigned
+        }.count
+        if leadingCount > 0, leadingCount < segments.count,
+           let token = anchors[leadingCount], let id = identities[token]?.first,
+           positions[segments[0].id] == 0 {
+            let first = segments[0], incoming = segments[leadingCount]
+            let policy = MeetingSpeakerAttributionPolicy.standard
+            let range = 0...leadingCount
+            if intervals[leadingCount].start - intervals[0].start <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance,
+               range.allSatisfy({ positions[segments[$0].id] == $0 && !blocked.contains($0)
+                   && segments[$0].sourceTrackID == first.sourceTrackID }),
+               !(session.transcriptCoverageGaps ?? []).contains(where: {
+                   $0.trackID == first.sourceTrackID && (!$0.start.isFinite || !$0.end.isFinite
+                       || ($0.start < incoming.end.seconds && $0.end > first.start.seconds))
+               }) {
+                for index in 0..<leadingCount { owners[segments[index].id] = id }
+            }
+        }
         for run in runs {
             let range = run.before...run.after, first = segments[run.before], last = segments[run.after]
             guard let token = anchors[run.after], let id = identities[token]?.first,

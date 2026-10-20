@@ -57,6 +57,75 @@ extension MeetingSessionStoreCheckpointTests {
         check(MeetingTranscriptExporter.speakerLabel(for: MeetingTranscriptExporter.speakerPresentation(for: unknown, in: session)) == "Unknown speaker",
               "Detailed evidence tools retain uncertainty while product captions omit it")
 
+        let incoming = word("Начало.", 2.16, raw: ta, selected: ta, owner: a, map: both)
+        let secondUnknown = word("ещё", 0.2, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
+        for revision in [0, 1, 7] {
+            var prefix = unknown
+            prefix.revision = revision
+            if revision == 0 { prefix.speakerAttribution = nil } // Current compact native publication.
+            session.transcriptSegments = [prefix, secondUnknown, incoming]
+            let original = session, originalJSON = try MeetingTranscriptExporter.json(for: session)
+            let reading = MeetingTranscriptExporter.displayParagraphs(for: session.transcriptSegments, in: session)
+            check(reading.count == 1 && reading[0].segments == session.transcriptSegments,
+                  "A bounded leading unsupported phrase joins its first independent incoming participant")
+            check(reading[0].firstSegment.start == prefix.start
+                  && MeetingTranscriptExporter.timestampText(reading[0].firstSegment.start.seconds) == "00:00",
+                  "The joined turn keeps the leading speech's original start time")
+            let labels = MeetingTranscriptExporter.speakerPresentations(in: session)
+            check(labels.values.allSatisfy { $0.participantID == a && $0.isEstimated },
+                  "The leading-neighbor convention is an estimated reading owner, not new acoustic evidence")
+            check(MeetingTranscriptExporter.text(for: session) == "[00:00] Имя Ёё: Я ещё Начало.",
+                  "Text export and the saved reading view share the incoming participant and complete phrase")
+            let projected = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: session)) as! [String: Any]
+            let projectedRows = projected["segments"] as! [[String: Any]]
+            check(projectedRows.count == 1 && projectedRows[0]["speakerID"] as? String == a.uuidString
+                  && projectedRows[0]["text"] as? String == "Я ещё Начало.",
+                  "Portable reading export retains every leading word under the same projected participant")
+            let unchangedJSON = try MeetingTranscriptExporter.json(for: session)
+            check(session == original && originalJSON == unchangedJSON,
+                  "Leading-neighbor projection preserves canonical JSON, native timing, frozen metadata and manual names")
+        }
+        for (start, expectedOwner) in [(2.16, true), (3.54, true), (3.540_001, false)] {
+            session.transcriptSegments = [unknown, word("Начало.", start, raw: ta, selected: ta, owner: a, map: both)]
+            check((MeetingTranscriptExporter.speakerPresentations(in: session)[unknown.id]?.participantID == a) == expectedOwner,
+                  "A single leading word uses the exact existing unknown horizon including its wait for the incoming voice")
+        }
+        func leadingRemainsAnonymous(_ value: MeetingSession, _ reason: String) {
+            check(MeetingTranscriptExporter.speakerPresentations(in: value)[unknown.id]?.participantID == nil, reason)
+        }
+        let leadingBase: MeetingSession = {
+            var value = session; value.transcriptSegments = [unknown, secondUnknown, incoming]; return value
+        }()
+        for kind in 0..<8 {
+            var blocked = leadingBase
+            switch kind {
+            case 0:
+                blocked.transcriptSegments[1].sourceTrackID = UUID()
+            case 1:
+                blocked.transcriptCoverageGaps = [.init(trackID: source, start: 0.15, end: 1, reason: .processingFailed)]
+            case 2:
+                blocked.transcriptSegments[0].isUserTextEdited = true
+            case 3:
+                blocked.transcriptSegments[1] = word("другой голос", 0.2, raw: tb, selected: nil, owner: nil,
+                                                    rule: .insufficientSupport)
+            case 4:
+                blocked.transcriptSegments[0].attributionState = .timingUncertain
+            case 5:
+                blocked.transcriptSegments[0].isLikelyEcho = true
+            case 6:
+                blocked.transcriptSegments[2] = first // Incoming source evidence arrives beyond the existing horizon.
+            default:
+                blocked.transcriptSegments[0].originalText = "Manually corrected original"
+            }
+            leadingRemainsAnonymous(blocked, "A source, acoustic, edit, timing or long-gap barrier blocks leading-neighbor ownership (\(kind))")
+        }
+        let independentFirst = word("Да.", 0.04, raw: tb, selected: tb, owner: b, map: both)
+        session.transcriptSegments = [independentFirst, incoming]
+        let independentLeading = MeetingTranscriptExporter.speakerPresentations(in: session)
+        check(independentLeading[independentFirst.id]?.participantID == b
+              && independentLeading[incoming.id]?.participantID == a,
+              "An independently assigned first short reply is never reassigned to the next participant")
+
         let oldOverride = word("Да.", 11.0, raw: tb, selected: ta, owner: a, rule: .mainSpeakerContinuation, map: both)
         let bAnchor = word("Ответ.", 10.6, raw: tb, selected: tb, owner: b, map: both)
         let aAfter = word("Продолжение.", 11.3, raw: ta, selected: ta, owner: a, map: both)
