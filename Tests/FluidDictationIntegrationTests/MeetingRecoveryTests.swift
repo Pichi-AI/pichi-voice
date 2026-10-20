@@ -2040,7 +2040,13 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(MeetingTranscriptExporter.text(for: session, includeEchoes: true).contains(echo.text))
         XCTAssertTrue(visibleText.contains("Amelia Richardson"))
         XCTAssertTrue(visibleText.contains("Rafael Moreno"))
-        XCTAssertTrue(visibleText.contains("Unknown speaker"))
+        let anonymous = try XCTUnwrap(session.transcriptSegments.first { !$0.isEcho && $0.speakerID == nil })
+        XCTAssertTrue(visibleText.components(separatedBy: "\n\n").contains("[02:40] \(anonymous.text)"),
+                      "The complete unresolved passage remains readable with its timestamp and no invented participant caption")
+        XCTAssertFalse(visibleText.contains("Unknown speaker"))
+        for segment in session.transcriptSegments where !segment.isEcho {
+            XCTAssertTrue(visibleText.contains(segment.text), "Reading captions must not remove any protected source text")
+        }
 
         var echoOnly = session
         echoOnly.title = "Meeting with only probable echo remaining"

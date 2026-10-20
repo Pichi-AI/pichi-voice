@@ -41,7 +41,10 @@ final class FluidServeTests: XCTestCase {
         XCTAssertEqual(FluidServeMeetings.transcript(for: meeting), MeetingTranscriptExporter.text(for: session))
         XCTAssertFalse(FluidServeMeetings.transcript(for: meeting).contains("echo of the far side"))
         XCTAssertTrue(FluidServeMeetings.transcript(for: meeting).contains("[00:20] Priya: merged speaker keeps the name"))
-        XCTAssertTrue(FluidServeMeetings.transcript(for: meeting).contains("[00:30] Unknown speaker: two people at once"))
+        let paragraphs = FluidServeMeetings.transcript(for: meeting).components(separatedBy: "\n\n")
+        XCTAssertEqual(paragraphs.count, 3)
+        XCTAssertEqual(paragraphs.last, "[00:30] two people at once",
+                       "Unresolved evidence preserves its complete readable text without an invented participant caption")
     }
 
     func testMeetingsStillRecordingEmptyOrUnreadableAreNotServed() throws {
