@@ -1175,6 +1175,10 @@ private struct MeetingTranscriptSegmentRow: View {
             }
         }
         .contextMenu {
+            if let onRenameSpeakerTapped = self.onRenameSpeakerTapped {
+                Button("Rename Speaker", systemImage: "person.crop.circle", action: onRenameSpeakerTapped)
+                    .disabled(!self.isQuiescent)
+            }
             Menu("Reassign to") {
                 ForEach(self.reassignTargets) { target in
                     Button(MeetingTranscriptExporter.speakerDisplayName(target, language: PichiLocalization.language)) {
