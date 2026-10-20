@@ -95,10 +95,16 @@ extension MeetingProcessingPipeline {
         prepareFirst: @escaping @MainActor @Sendable () async throws -> (@Sendable () async -> Void)? = { nil }
     ) async throws -> MeetingIdlePreparationToken? {
         let modelID = settings.selectedSpeechModel.rawValue
-        guard let owner = idlePreparedResourceOwner else { return nil }
+        guard let owner = idlePreparedResourceOwner else {
+            MeetingTimelineTrace.shared?.record("idle_preparation_selection", fields: ["hasOwner": "false"])
+            return nil
+        }
         let speakerMode = settings.meetingSpeakerProcessingMode(for: .inRoom)
         let nativePairEnabled = PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: modelID) == true
             && settings.meetingSpeakerLabelsEnabled && speakerMode == .streaming && idleResourcePreparation != nil
+        MeetingTimelineTrace.shared?.record("idle_preparation_selection", fields: ["hasOwner": "true",
+            "nativePairEnabled": String(nativePairEnabled), "streaming": String(speakerMode == .streaming),
+            "speakerLabels": String(settings.meetingSpeakerLabelsEnabled), "hasIdleFactory": String(idleResourcePreparation != nil)])
         let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
         let language = settings.meetingRecordingDefaults.languageCode.flatMap { supported.contains($0) ? $0 : nil }
             ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"

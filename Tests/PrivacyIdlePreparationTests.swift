@@ -62,6 +62,33 @@ private actor ReadinessSnapshotGate {
     func resume() { let prior = continuation; continuation = nil; prior?.resume() }
 }
 
+@MainActor final class IdleSceneRestoreProbe {
+    var entered = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func wait() async { entered = true; await withCheckedContinuation { continuation = $0 } }
+    func finish() { continuation?.resume(); continuation = nil }
+}
+@MainActor final class IdleSceneCoordinatorProbe {
+    let restore = IdleSceneRestoreProbe()
+    func ensureRestored() async { await restore.wait() }
+    func sweepExpiredAudio() async {}
+}
+@MainActor final class IdleSceneHostProbe {
+    let meetingSessionCoordinator = IdleSceneCoordinatorProbe()
+    var isUIReady = false
+    var hasRestoredInitialState = false
+    var isSceneActive = false
+    var preparations = 0
+    lazy var controller = MeetingIdlePreparationController<UUID>(prepare: { [weak self] in
+        await MainActor.run { self?.preparations += 1 }
+        return UUID()
+    }, release: { _ in })
+    func updateIdlePreparation() async {
+        await controller.update(.init(isSceneActive: isSceneActive, isUIReady: isUIReady && hasRestoredInitialState,
+            preparationEnabled: true, configurationIdentity: "scene-lifecycle", hasRecordingActivity: false, hasOtherModelWork: false))
+    }
+}
+
 @main
 struct PrivacyIdlePreparationTests {
     private static var assertions = 0
@@ -99,6 +126,22 @@ struct PrivacyIdlePreparationTests {
 
     @MainActor
     static func main() async throws {
+        // The initial view task captures an inactive phase while restore is suspended.
+        // A later actual foreground event must remain authoritative after restore joins.
+        // Both host methods and the task's service calls are extracted from MobileApp.
+        do {
+            let host = IdleSceneHostProbe()
+            let initial = Task { await runInitialMobileTask(services: host, capturedSceneActive: false) }
+            await until { await MainActor.run { host.meetingSessionCoordinator.restore.entered } }
+            await host.setSceneActive(true)
+            host.meetingSessionCoordinator.restore.finish()
+            await initial.value
+            check(host.isSceneActive, "An initial task's captured inactive scene cannot overwrite a newer active event")
+            await until { await MainActor.run { host.preparations == 1 } }
+            check(mobileSceneUsesInitialCallback, "One scene callback must supply both initial and later phases")
+            check(host.hasRestoredInitialState && host.preparations == 1, "Foreground preparation starts once after restoration joins")
+            await host.controller.shutdown()
+        }
         // Readiness is a resource-generation snapshot, not a promise that remains true
         // after an owner-controlled unload completes while the callback is suspended.
         do {
@@ -326,6 +369,6 @@ struct PrivacyIdlePreparationTests {
             await controller.update(state); await settle()
             check(attempts == 2, "Shutdown cannot restart optional preparation")
         }
-        print("Privacy idle preparation tests passed: \(assertions) assertions across 16 ownership/lifecycle scenarios")
+        print("Privacy idle preparation tests passed: \(assertions) assertions across 17 ownership/lifecycle scenarios")
     }
 }

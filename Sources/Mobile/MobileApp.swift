@@ -24,13 +24,24 @@ final class AppServices: ObservableObject {
     private var pendingIdleResourceEvent = false
     private var isSceneActive = false
     private var hasRestoredInitialState = false
+    private var lastIdleDecision: [String: String]?
     private lazy var idlePreparation = MeetingIdlePreparationController<MeetingIdlePreparationToken>(
         prepare: { [settings, transcriptPrivacy, meetingProcessingPipeline] in
-            try await meetingProcessingPipeline.prepareSelectedIdleResources(prepareFirst: {
-                guard await settings.meetingPIIRedactionEnabled,
-                      let token = try await transcriptPrivacy.prepareInstalledForIdle() else { return nil }
-                return { await transcriptPrivacy.releaseIdlePreparation(token) }
-            })
+            MeetingTimelineTrace.shared?.record("idle_preparation_request")
+            do {
+                let token = try await meetingProcessingPipeline.prepareSelectedIdleResources(prepareFirst: {
+                    guard await settings.meetingPIIRedactionEnabled,
+                          let token = try await transcriptPrivacy.prepareInstalledForIdle() else { return nil }
+                    return { await transcriptPrivacy.releaseIdlePreparation(token) }
+                })
+                MeetingTimelineTrace.shared?.record("idle_preparation_result", fields: ["outcome": token == nil ? "no_resource" : "resource_ready"])
+                return token
+            } catch {
+                MeetingTimelineTrace.shared?.record("idle_preparation_result", fields: [
+                    "outcome": error is CancellationError ? "cancelled" : "failed",
+                    "errorType": String(reflecting: type(of: error))])
+                throw error
+            }
         }, release: { [meetingProcessingPipeline] token in await meetingProcessingPipeline.releaseIdleResources(token) })
 
     init(store: (any MeetingSessionStoring)? = nil,
@@ -174,6 +185,18 @@ final class AppServices: ObservableObject {
                         String(settings.meetingPIIRedactionEnabled), String(settings.meetingSpeakerLabelsEnabled),
                         settings.meetingSpeakerProcessingMode(for: .inRoom).rawValue, String(settings.meetingSaveAudio)].joined(separator: "|")
         let enabled = settings.meetingPIIRedactionEnabled || settings.meetingSpeakerProcessingMode(for: .inRoom) == .streaming
+        if MeetingTimelineTrace.enabled {
+            let decision = ["sceneActive": String(isSceneActive), "uiReady": String(isUIReady),
+                "restoreComplete": String(hasRestoredInitialState), "quiescent": String(coordinator.isQuiescent),
+                "recordingActivity": String(meetingActivity), "otherWork": String(otherWork), "enabled": String(enabled),
+                "speakerOrVADResourceWork": String(isPreparingIdleResources),
+                "ordinaryResidencyWork": String(MeetingModelResidencyCoordinator.shared.hasOrdinaryOperations),
+                "adoptionSupported": String(asr.supportsPreparedProviderAdoption), "hasResidencyOwner": String(asr.idleModelResidency != nil)]
+            if decision != lastIdleDecision {
+                lastIdleDecision = decision
+                MeetingTimelineTrace.shared?.record("idle_preparation_decision", fields: decision)
+            }
+        }
         await idlePreparation.update(.init(isSceneActive: isSceneActive, isUIReady: isUIReady && hasRestoredInitialState,
             preparationEnabled: enabled, configurationIdentity: identity,
             hasRecordingActivity: meetingActivity, hasOtherModelWork: otherWork, resourceRevision: idleResourceRevision))
@@ -244,9 +267,11 @@ struct PichiVoiceMobileApp: App {
                 if ProcessInfo.processInfo.environment["PICHI_UI_CAPTION_REVIEW"] == "1" { return }
                 #endif
                 await services.signalUIReady()
-                await services.setSceneActive(scenePhase == .active)
             }
-            .onChange(of: scenePhase) { _, phase in
+            // The initial task may outlive a scene transition while restoration joins.
+            // This one source owns both initial and later phase values, so its old
+            // captured scene cannot overwrite a newer foreground event after restore.
+            .onChange(of: scenePhase, initial: true) { _, phase in
                 Task { await services.setSceneActive(phase == .active) }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
