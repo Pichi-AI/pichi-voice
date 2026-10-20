@@ -900,7 +900,9 @@ nonisolated struct MeetingTranscriptAssembler {
         "\(token.analysisEpochID):\(token.label.precomposedStringWithCanonicalMapping)"
     }
 
-    private static func speakerID(attemptID: UUID, token: MeetingBackendSpeakerToken) -> SessionSpeakerID {
+    /// Reconciliation may validate an already admitted identity against this exact scope.
+    /// Product identities are still admitted and created only by this assembler.
+    static func speakerID(attemptID: UUID, token: MeetingBackendSpeakerToken) -> SessionSpeakerID {
         Self.stableUUID("speaker:\(attemptID.uuidString):\(Self.scopedClusterID(for: token))")
     }
 

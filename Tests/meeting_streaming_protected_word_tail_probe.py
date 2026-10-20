@@ -66,6 +66,16 @@ subprocess.run([
     str(ROOT / "Tests/MeetingStreamingProtectedWordTailTests.swift"), "-o", str(BUILD / "tests")
 ], cwd=ROOT, check=True)
 subprocess.run([str(BUILD / "tests")], cwd=ROOT, check=True)
+subprocess.run([
+    "xcrun", "swiftc", "-O", "-swift-version", "6", "-strict-concurrency=complete",
+    "-default-isolation", "MainActor", "-parse-as-library", "-module-cache-path", str(BUILD / "ModuleCache"),
+    str(BUILD / "ValueContracts.swift"), str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"),
+    str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
+    str(BUILD / "PCMAssembly.swift"), str(meeting / "Backend/MeetingStreamingProtectedWordTail.swift"),
+    str(ROOT / "Tests/MeetingKnownSpeakerRegistryTests.swift"),
+    "-o", str(BUILD / "registry-tests")
+], cwd=ROOT, check=True)
+subprocess.run([str(BUILD / "registry-tests")], cwd=ROOT, check=True)
 
 # Exercise the integration actor against the original privacy admission implementation.
 # External native/resource orchestration is excluded, while privacy, models, speaker policy,

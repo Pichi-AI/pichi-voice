@@ -282,6 +282,15 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                       !original.isEcho, original.attributionState != .timingUncertain,
                       let summary = resolved[index].speakerAttribution,
                       let token = summary.selectedToken else { continue }
+                let cluster = "\(token.analysisEpochID):\(token.label.precomposedStringWithCanonicalMapping)"
+                let matchingSpeakers = self.speakers.filter { $0.diarizationClusterID == cluster }
+                guard let known = matchingSpeakers.first else { continue }
+                // A provider can already have attached the same automatic contextual ID to
+                // this safe word. That metadata is not a manual assignment. Reuse it only
+                // when complete native provenance and one active admitted identity agree.
+                let sameAutomaticContext = self.canReuseAutomaticIdentity(original: original,
+                    summary: summary, token: token, known: known, matchingCount: matchingSpeakers.count)
+                let permitsContextIdentity = original.speakerID == nil || sameAutomaticContext
                 let timing = Self.timing(original)
                 let hasWordSupport = boundedActivity.contains { $0.token == token
                     && min($0.end, timing.end) - max($0.start, timing.start) > self.policy.comparisonTolerance }
@@ -289,14 +298,11 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 // anchors, cue paths and barriers using this same immutable source snapshot.
                 // A gap word need not itself contain the chosen voice. Resolve its existing
                 // identity without changing native assignment or inventing acoustic support.
-                let hasNeighborCues = original.speakerID == nil && summary.rawAssignment == .unassigned
+                let hasNeighborCues = permitsContextIdentity && summary.rawAssignment == .unassigned
                     && (summary.rule == .neighborAgreement || summary.rule == .incomingSpeaker)
                     && (summary.relation == .none || summary.relation == .single)
-                let hasContinuationCues = original.speakerID == nil && summary.rule == .mainSpeakerContinuation
-                guard hasWordSupport || hasNeighborCues || hasContinuationCues,
-                      let known = self.speakers.first(where: {
-                          $0.diarizationClusterID == "\(token.analysisEpochID):\(token.label.precomposedStringWithCanonicalMapping)"
-                      }) else { continue }
+                let hasContinuationCues = permitsContextIdentity && summary.rule == .mainSpeakerContinuation
+                guard hasWordSupport || hasNeighborCues || hasContinuationCues else { continue }
                 resolved[index].speakerID = known.id
                 resolved[index].attributionState = .assigned
                 resolved[index].speakerAttribution = .init(streamingSummary: summary,
@@ -344,6 +350,39 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
 
     private static func timing(_ segment: MeetingTranscriptSegment) -> MeetingTranscriptNativeTiming {
         segment.nativeTiming ?? .init(start: segment.start.seconds, end: segment.end.seconds)
+    }
+
+    private func canReuseAutomaticIdentity(original: MeetingTranscriptSegment,
+        summary: MeetingTranscriptSpeakerAttribution, token: MeetingBackendSpeakerToken,
+        known: MeetingSessionSpeaker, matchingCount: Int
+    ) -> Bool {
+        guard original.speakerID == known.id, original.attributionState == .assigned,
+              matchingCount == 1, known.mergedIntoSpeakerID == nil,
+              known.trackKind == .microphone,
+              self.speakers.filter({ $0.id == known.id }).count == 1,
+              token.analysisEpochID == self.epoch,
+              known.id == MeetingTranscriptAssembler.speakerID(attemptID: self.attemptID, token: token),
+              original.nativePrecision == .word, original.sourceTrackID == self.epoch.trackID,
+              original.isUserTextEdited != true, original.originalText == nil,
+              original.speakerAttributionInference == nil,
+              let nativeUnitID = original.nativeUnitID, !nativeUnitID.isEmpty,
+              let timing = original.nativeTiming,
+              abs(original.start.seconds - timing.start) <= 0.001,
+              abs(original.end.seconds - timing.end) <= 0.001,
+              let nativeAssignment = original.nativeSpeakerAssignment,
+              let prior = original.speakerAttribution,
+              prior.unitID == nativeUnitID, summary.unitID == nativeUnitID,
+              prior.rawAssignment == nativeAssignment, summary.rawAssignment == nativeAssignment,
+              prior.selectedToken == token, prior.selectedSpeakerID == known.id,
+              [.neighborAgreement, .incomingSpeaker, .mainSpeakerContinuation].contains(prior.rule),
+              (prior.candidates + prior.background).allSatisfy({ $0.token.analysisEpochID == self.epoch }),
+              prior.policyVersion == self.policy.schemaVersion, summary.policyVersion == self.policy.schemaVersion,
+              prior.policyFingerprint == self.policy.fingerprint,
+              summary.policyFingerprint == prior.policyFingerprint else { return false }
+        switch nativeAssignment {
+        case .unassigned, .ambiguous: return true
+        case .assigned: return false
+        }
     }
 
     private static func identityOnly(_ speakers: [MeetingSessionSpeaker]) -> [MeetingSessionSpeaker] {
