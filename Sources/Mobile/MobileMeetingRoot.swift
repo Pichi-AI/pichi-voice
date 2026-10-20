@@ -646,10 +646,12 @@ struct MobileMeetingRoot: View {
                 Text(MeetingTranscriptExporter.timestampText(segment.start.seconds))
                     .font(theme.typography.codeCaption).foregroundStyle(theme.palette.secondaryText)
                     .padding(.top, theme.metrics.spacing.sm)
-                Text(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: session,
-                    speakerNames: names, language: PichiLocalization.language))
-                    .font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
-                    .padding(.top, theme.metrics.spacing.sm)
+                if let label = MeetingTranscriptExporter.captionLabel(for: paragraph, in: session,
+                    speakerNames: names, language: PichiLocalization.language) {
+                    Text(label)
+                        .font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
+                        .padding(.top, theme.metrics.spacing.sm)
+                }
                 Spacer(minLength: 0)
                 if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
                     Button {

@@ -592,8 +592,9 @@ struct FluidServeGroundedSummaryTests {
         let dialogueTurns = MeetingTranscriptExporter.displayParagraphs(for: dialogue, in: session)
         check(dialogueTurns.map(\.segments) == [Array(dialogue[0...1]), [dialogue[2]], [dialogue[3]], [dialogue[4]], [dialogue[5]]],
               "Actual speaker switches and unknown attribution remain distinct turns")
-        check(MeetingTranscriptExporter.text(for: session).contains("[00:43] Unknown speaker: to"),
-              "An unknown word never acquires the neighboring speaker's name")
+        check(MeetingTranscriptExporter.text(for: session).contains("[00:43] to")
+              && !MeetingTranscriptExporter.text(for: session).contains("Unknown speaker"),
+              "An unresolved word keeps its text and time without an invented participant caption")
 
         let changedSource = [segment("Source one.", 0), segment("Source two.", 1, source: UUID())]
         check(MeetingTranscriptExporter.displayParagraphs(for: changedSource, in: session).count == 2,

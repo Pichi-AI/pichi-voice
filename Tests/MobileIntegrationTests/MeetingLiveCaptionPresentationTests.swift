@@ -1209,7 +1209,7 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
                     segment("и", track: track, start: 1.8),
                     segment("продолжение.", track: track, start: 2.4, speaker: a, attribution: .assigned)]
         for index in rows.indices { rows[index].revision = 0; rows[index].originalText = nil }
-        for index in [1, 3] { rows[index].attributionState = .overlappingSpeakers; rows[index].overlap = .ambiguous }
+        for index in [1, 2, 3] { rows[index].attributionState = .overlappingSpeakers; rows[index].overlap = .ambiguous }
         source.transcriptSegments = rows
         let original = try MeetingTranscriptExporter.json(for: source)
         let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: source)
@@ -1298,6 +1298,8 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
         for (language, expected) in [(PichiInterfaceLanguage.english, "Unknown speaker"), (.russian, "Неизвестный участник")] {
             let value = MeetingSpeakerPresentation(identity: "historical-multiple", label: .candidates([], relation: .several))
             XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: value, language: language), expected)
+            XCTAssertNil(MeetingTranscriptExporter.captionLabel(for: value, language: language),
+                         "Product transcript captions omit uncertain/source labels while evidence remains available")
         }
     }
     private func session() -> MeetingSession {

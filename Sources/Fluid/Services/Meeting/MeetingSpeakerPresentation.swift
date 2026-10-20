@@ -42,4 +42,13 @@ nonisolated struct MeetingSpeakerPresentation: Sendable, Equatable {
         if case .estimated = label { return true }
         return false
     }
+
+    /// Uncertainty remains available to correction/evidence consumers, but never creates
+    /// an invented participant or an audio-source label in the readable transcript.
+    var hasReadableParticipant: Bool {
+        switch label {
+        case .identified, .estimated, .interrupting: return true
+        case .unknown, .candidates: return false
+        }
+    }
 }

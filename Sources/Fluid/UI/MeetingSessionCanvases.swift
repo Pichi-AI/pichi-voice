@@ -425,11 +425,14 @@ struct MeetingResultCanvas: View {
            showsLabel: Bool, speaker: MeetingSessionSpeaker?)] {
         let speakers = Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map { ($0.id, $0) })
         var previousIdentity: String?
+        var previousTrack: MeetingAudioTrackID?
         return visibleSegments.map { segment in
             let presentation = presentations[segment.id]
                 ?? MeetingTranscriptExporter.speakerPresentation(for: segment, in: self.session)
-            let showsLabel = previousIdentity != presentation.identity
-            previousIdentity = presentation.identity
+            if previousTrack != segment.sourceTrackID { previousIdentity = nil }
+            previousTrack = segment.sourceTrackID
+            let showsLabel = presentation.hasReadableParticipant && previousIdentity != presentation.identity
+            if presentation.hasReadableParticipant { previousIdentity = presentation.identity }
             return (segment, presentation, showsLabel, presentation.participantID.flatMap { speakers[$0] })
         }
     }
@@ -486,10 +489,10 @@ struct MeetingResultCanvas: View {
                             ForEach(rows, id: \.segment.id) { row in
                                 MeetingTranscriptSegmentRow(
                                     segment: row.segment,
-                                    speakerName: MeetingTranscriptExporter.speakerLabel(
+                                    speakerName: MeetingTranscriptExporter.captionLabel(
                                         for: row.presentation,
                                         language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language
-                                    ),
+                                    ) ?? "",
                                     showsSpeakerLabel: row.showsLabel,
                                     speakerTint: row.speaker.flatMap { self.speakerTints[$0.id] },
                                     onRenameSpeakerTapped: {

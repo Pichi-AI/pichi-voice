@@ -39,9 +39,11 @@ struct MeetingSessionStoreCheckpointTests {
         let manifestURL = directory.appendingPathComponent("session.json")
         var checks = 0
         func check(_ value: Bool, _ message: String) {
+            if !value { FileHandle.standardError.write(Data("FAIL: \(message)\n".utf8)) }
             precondition(value, message)
             checks += 1
         }
+        try Self.checkReadableTranscriptContract(check)
 
         try Self.checkPlainParticipantLabels(template: session, check: check)
         try Self.checkManualCorrectionOfProjectedOwner(template: session, check: check)
@@ -536,8 +538,8 @@ struct MeetingSessionStoreCheckpointTests {
             word.originalText = nil
             word.revision = 0
             word.speakerID = index == 2 ? speakerB.id : speakerA.id
-            if index == 1 || index == 3 {
-                word.speakerID = nil
+            if index == 1 || index == 2 || index == 3 {
+                if index != 2 { word.speakerID = nil }
                 word.overlap = .ambiguous
                 word.attributionState = .overlappingSpeakers
             }
@@ -547,7 +549,7 @@ struct MeetingSessionStoreCheckpointTests {
         let targetID = source.transcriptSegments[2].id
         let readingID = MeetingTranscriptExporter.speakerPresentations(in: source)[targetID]?.participantID
         check(readingID == speakerA.id && source.transcriptSegments[2].speakerID == speakerB.id,
-              "The raw intervening participant is displayed inside the continuing main turn")
+              "A genuinely mixed intervening word can use the continuing reading owner before manual correction")
 
         try source.reassignSegment(id: targetID, to: speakerB.id, replacingReadingSpeakerID: readingID)
         let corrected = source.transcriptSegments[2]

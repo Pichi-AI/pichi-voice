@@ -6,6 +6,15 @@ final class MobileNavigationUITests: XCTestCase {
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
+        if name.contains("testSavedTranscriptCaptionContractInBothAppearances") {
+            #if !targetEnvironment(simulator)
+            throw XCTSkip("This staged-session UI contract is simulator-only; physical saved-session review is separately guarded")
+            #else
+            guard ProcessInfo.processInfo.environment["PICHI_PRIVATE_SAVED_SESSION_ID"] != nil else {
+                throw XCTSkip("Stage an authorized local saved-session fixture and provide its ID")
+            }
+            #endif
+        }
         let productionDownload = name.contains("testPhysicalProductionDownloadSpeechActivity")
         let productionSmoke = name.contains("testPhysicalProductionMeetingAndProtectedExport") || productionDownload
         if productionSmoke {
@@ -1202,6 +1211,40 @@ final class MobileNavigationUITests: XCTestCase {
             capture("explicit-alias-\(language)-persisted")
             rename("Иван Петров", to: "Анна")
         }
+    }
+
+    func testSavedTranscriptCaptionContractInBothAppearances() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Simulator-only saved transcript contract")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        let sessionID = try XCTUnwrap(environment["PICHI_PRIVATE_SAVED_SESSION_ID"])
+        let encoded = try XCTUnwrap(environment["PICHI_PRIVATE_SAVED_EXPECTED_PARAGRAPHS"])
+        let expected = try JSONSerialization.jsonObject(with: Data(encoded.utf8)) as! [String]
+        XCTAssertFalse(expected.isEmpty)
+        for (language, appearance, history) in [("en", "light", "History"), ("ru", "dark", "История")] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launch()
+            capture("saved-reading-\(language)-ready")
+            openNavigation("history", title: history)
+            let meeting = app.buttons["history.session.\(sessionID)"]
+            XCTAssertTrue(meeting.waitForExistence(timeout: 15))
+            meeting.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 15))
+            for (index, text) in expected.prefix(3).enumerated() {
+                let paragraph = app.staticTexts[text].firstMatch
+                XCTAssertTrue(paragraph.waitForExistence(timeout: 15), "The original saved words remain readable")
+                try revealParagraphAboveNavigation(paragraph, step: "saved-reading-\(language)-\(index)")
+                capture("saved-reading-\(language)-\(index)-visible")
+            }
+            XCTAssertFalse(app.staticTexts["Unknown speaker"].exists)
+            XCTAssertFalse(app.staticTexts["Неизвестный участник"].exists)
+            XCTAssertFalse(app.staticTexts["Microphone"].exists)
+            XCTAssertFalse(app.staticTexts["Микрофон"].exists)
+            capture("saved-reading-\(language)-no-unsupported-header")
+        }
+        #endif
     }
 
     func testPrivateSavedIncomingParagraphsOnPhysicalDevice() throws {

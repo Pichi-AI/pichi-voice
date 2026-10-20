@@ -21,8 +21,13 @@ nonisolated enum MeetingTranscriptExporter {
         return self.displayParagraphs(for: segments, in: session).compactMap { paragraph in
             let selected = paragraph.segments.filter { segmentIDs?.contains($0.id) ?? true }
             guard let segment = selected.first else { return nil }
-            let speaker = Self.speakerLabel(for: paragraph, in: session, speakerNames: speakerNames)
-            return "[\(Self.timestampText(segment.start.seconds))] \(speaker): \(DisplayParagraph(segments: selected).text)"
+            var headingParagraph = paragraph
+            // A selected excerpt stands on its own even when its full-session paragraph
+            // would suppress a repeated participant heading.
+            if segmentIDs != nil { headingParagraph.showsSpeakerLabel = true }
+            let speaker = Self.captionLabel(for: headingParagraph, in: session, speakerNames: speakerNames)
+            let heading = speaker.map { "\($0): " } ?? ""
+            return "[\(Self.timestampText(segment.start.seconds))] \(heading)\(DisplayParagraph(segments: selected).text)"
         }.joined(separator: "\n\n")
     }
 
@@ -96,6 +101,17 @@ nonisolated enum MeetingTranscriptExporter {
         language: PichiInterfaceLanguage = .english, bundle: Bundle = .main
     ) -> String {
         self.speakerLabel(for: presentation.label, language: language, bundle: bundle)
+    }
+
+    /// Product captions require an actual readable participant. The detailed label resolver
+    /// remains available to evidence/correction tools without leaking its uncertainty labels
+    /// into live/history UI or plain transcript export.
+    static func captionLabel(
+        for presentation: MeetingSpeakerPresentation,
+        language: PichiInterfaceLanguage = .english, bundle: Bundle = .main
+    ) -> String? {
+        guard presentation.hasReadableParticipant else { return nil }
+        return self.speakerLabel(for: presentation, language: language, bundle: bundle)
     }
 
     private static func speakerLabel(
@@ -207,6 +223,9 @@ nonisolated enum MeetingTranscriptExporter {
         /// A legacy incoming turn can begin with an unresolved source member. Keep its
         /// reading identity separate from that member's immutable stored evidence.
         var projectedSpeakerID: SessionSpeakerID? = nil
+        /// An unresolved paragraph never creates a participant header. Returning to the same
+        /// readable owner after such a paragraph does not announce a new participant either.
+        var showsSpeakerLabel = true
         var id: MeetingTranscriptSegmentID { segments[0].id }
         var firstSegment: MeetingTranscriptSegment { segments[0] }
         let text: String
@@ -250,6 +269,22 @@ nonisolated enum MeetingTranscriptExporter {
                                 language: language, bundle: bundle)
     }
 
+    static func captionLabel(
+        for paragraph: DisplayParagraph, in session: MeetingSession,
+        speakerNames: [SessionSpeakerID: String], language: PichiInterfaceLanguage = .english,
+        bundle: Bundle = .main
+    ) -> String? {
+        guard paragraph.showsSpeakerLabel else { return nil }
+        if let projected = paragraph.projectedSpeakerID {
+            guard let name = self.speakerName(projected, in: session, speakerNames: speakerNames) else { return nil }
+            return self.speakerLabel(for: .estimated(name), language: language, bundle: bundle)
+        }
+        let label = self.speakerLabelValue(for: paragraph.firstSegment, in: session, speakerNames: speakerNames)
+        let presentation = self.speakerPresentation(for: paragraph.firstSegment, in: session, speakerNames: speakerNames)
+        guard presentation.hasReadableParticipant else { return nil }
+        return self.speakerLabel(for: label, language: language, bundle: bundle)
+    }
+
     /// Detailed evidence identities still drive correction rows and JSON. A readable turn is
     /// instead defined by the foreground speaker and meaningful uncertainty/background changes,
     /// not which individual word needed a neighbor rule or retained a suppressed candidate.
@@ -267,7 +302,8 @@ nonisolated enum MeetingTranscriptExporter {
     /// Reading ownership follows a continuing participant across a bounded mixed bout. This
     /// is the same contextual convention as the canonical resolver, not new voice evidence.
     private static func mainSpeakerReadingOwners(
-        for segments: [MeetingTranscriptSegment], in session: MeetingSession
+        for segments: [MeetingTranscriptSegment], in session: MeetingSession,
+        recoveredOwners: [MeetingTranscriptSegmentID: SessionSpeakerID] = [:]
     ) -> [MeetingTranscriptSegmentID: SessionSpeakerID] {
         guard segments.count >= 3 else { return [:] }
         let source = session.transcriptSegments.enumerated().sorted {
@@ -298,9 +334,18 @@ nonisolated enum MeetingTranscriptExporter {
         }
         let interruptions = segments.map { safe($0) && isInterruption($0) }
         let anchors: [SessionSpeakerID?] = segments.enumerated().map { index, value in
-            guard safe(value),
-                  value.attributionState == nil || value.attributionState == .assigned,
-                  value.speakerAttributionInference == nil else { return nil }
+            guard safe(value), value.speakerAttributionInference == nil else { return nil }
+            // Older continuation policies could override a clean native reply. Its exact
+            // recovered token/UUID mapping is an original acoustic anchor, not the old
+            // contextual choice. Do not let a second reading pass swallow it again.
+            if let recovered = recoveredOwners[value.id], let summary = value.speakerAttribution,
+               summary.rule == .mainSpeakerContinuation, summary.relation == .single,
+               summary.background.isEmpty, value.overlap == .none,
+               case let .assigned(token) = value.nativeSpeakerAssignment,
+               summary.rawAssignment == .assigned(token), summary.selectedToken != token {
+                return recovered
+            }
+            guard value.attributionState == nil || value.attributionState == .assigned else { return nil }
             if let summary = value.speakerAttribution {
                 guard summary.rule.isIndependentAcousticSelection, summary.selectedSpeakerID == value.speakerID,
                       summary.unitID == value.nativeUnitID, summary.rawAssignment == value.nativeSpeakerAssignment,
@@ -395,6 +440,24 @@ nonisolated enum MeetingTranscriptExporter {
         }
         var owners: [MeetingTranscriptSegmentID: SessionSpeakerID] = [:]
         for segment in segments {
+            // Repair only the reading projection of an old demonstrable policy override.
+            // Names, stored IDs, native timing and the canonical JSON remain untouched.
+            // A clean independent token must map uniquely through original native anchors.
+            if let summary = evidence(segment), summary.rule == .mainSpeakerContinuation,
+               summary.relation == .single, summary.background.isEmpty, segment.overlap == .none,
+               summary.selectedSpeakerID == segment.speakerID,
+               case let .assigned(nativeToken) = segment.nativeSpeakerAssignment,
+               nativeToken.analysisEpochID.trackID == segment.sourceTrackID,
+               summary.selectedToken != nativeToken,
+               !(session.transcriptCoverageGaps ?? []).contains(where: {
+                   $0.trackID == segment.sourceTrackID
+                       && (!$0.start.isFinite || !$0.end.isFinite
+                           || ($0.start < segment.end.seconds && $0.end > segment.start.seconds))
+               }),
+               let mapped = identities[nativeToken], mapped.count == 1 {
+                owners[segment.id] = mapped.first
+                continue
+            }
             guard segment.speakerID == nil, let summary = evidence(segment),
                   summary.selectedSpeakerID == nil, let token = summary.selectedToken,
                   let mapped = identities[token], mapped.count == 1,
@@ -653,8 +716,8 @@ nonisolated enum MeetingTranscriptExporter {
     }
 
     /// Input order is retained. Callers supply chronological, non-echo segments.
-    /// Adjacent nil-speaker fragments can flow under the honest unknown-speaker label. Their
-    /// distinct uncertainty states remain on every canonical member, not an invented identity.
+    /// Unresolved fragments retain their uncertainty on canonical members. Readable captions
+    /// omit an unsupported participant name instead of exposing an unknown/source label.
     /// Identified speaker/state changes and source/evidence changes stay boundaries. Short safe
     /// gaps in untouched pre-canonical archives retain the legacy projection's estimate marker.
     /// Buffer size,
@@ -663,8 +726,8 @@ nonisolated enum MeetingTranscriptExporter {
     static func displayParagraphs(for segments: [MeetingTranscriptSegment], in session: MeetingSession) -> [DisplayParagraph] {
         let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
         let legacyBridges = self.legacyReadingBridges(for: segments, in: session)
-        let continuations = self.mainSpeakerReadingOwners(for: segments, in: session)
         let canonicalMappings = self.unmappedCanonicalReadingOwners(for: segments, in: session)
+        let continuations = self.mainSpeakerReadingOwners(for: segments, in: session, recoveredOwners: canonicalMappings)
         let contextualOwners = legacyBridges.merging(canonicalMappings) { _, canonical in canonical }
             .merging(continuations) { _, continuation in continuation }
         let readingOwners = contextualOwners.merging(self.boundaryReadingOwners(
@@ -691,12 +754,28 @@ nonisolated enum MeetingTranscriptExporter {
                 containsLegacyBridge = false
             }
             if members.isEmpty { projectedSpeakerID = readingOwners[segment.id] }
+            else if projectedSpeakerID == nil { projectedSpeakerID = readingOwners[segment.id] }
             members.append(segment)
             containsLegacyBridge = containsLegacyBridge || legacyBridges[segment.id] != nil
         }
         if !members.isEmpty {
             paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge,
                                                projectedSpeakerID: projectedSpeakerID))
+        }
+        var lastReadable: (track: MeetingAudioTrackID, identity: String)?
+        for index in paragraphs.indices {
+            let paragraph = paragraphs[index], first = paragraph.firstSegment
+            let presentation = self.speakerPresentation(for: first, in: session, speakerNames: names)
+            let owner = paragraph.projectedSpeakerID
+            let readable = owner != nil || presentation.hasReadableParticipant
+            let identity = self.paragraphIdentity(for: first, legacySpeakerID: owner, in: session, speakerNames: names)
+            if let previous = lastReadable, previous.track != first.sourceTrackID { lastReadable = nil }
+            paragraphs[index].showsSpeakerLabel = readable && lastReadable?.identity != identity
+            if readable { lastReadable = (first.sourceTrackID, identity) }
+            else if paragraph.segments.contains(where: {
+                $0.attributionState == .timingUncertain || $0.isUserTextEdited == true
+                    || ($0.revision > 0 && $0.speakerAttribution == nil)
+            }) { lastReadable = nil }
         }
         return paragraphs
     }

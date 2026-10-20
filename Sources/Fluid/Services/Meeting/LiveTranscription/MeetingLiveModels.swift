@@ -165,11 +165,7 @@ nonisolated enum MeetingLiveBubbleComposer {
         var readingTurnStart: TimeInterval = 0
 
         var hasReadableParticipant: Bool {
-            guard let participant else { return false }
-            switch participant.label {
-            case .identified, .estimated, .interrupting: return true
-            case .unknown, .candidates: return false
-            }
+            participant?.hasReadableParticipant == true
         }
 
         func hasSameSpeaker(as other: Self) -> Bool {
