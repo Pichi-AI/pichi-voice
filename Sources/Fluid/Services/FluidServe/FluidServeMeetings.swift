@@ -339,6 +339,9 @@ nonisolated enum FluidServeMeetings {
     /// The shared readable projection groups timed fragments without discarding their evidence.
     /// A range still includes turns by their native start, matching the existing CLI options.
     static func transcript(for meeting: Meeting, from: TimeInterval? = nil, to: TimeInterval? = nil) -> String {
+        if from == nil, to == nil {
+            return MeetingTranscriptExporter.text(for: meeting.source)
+        }
         let segmentIDs = Set(meeting.turns.filter { segment in
             if let from, segment.start.seconds < from { return false }
             if let to, segment.start.seconds > to { return false }
