@@ -246,5 +246,28 @@ extension MeetingSessionStoreCheckpointTests {
         let excerpt = MeetingTranscriptExporter.text(for: session, segmentIDs: [returning.id])
         check(excerpt.contains("Имя Ёё: Возврат."),
               "An isolated excerpt retains the same participant as the complete document")
+
+        // The ordinary optimized app previously rejected Cyrillic lexical residuals while
+        // the isolated core accepted them. Exercise the actual reading rule, not a copy
+        // of the Unicode predicate; native Release UI checks cover the full-module route.
+        for lexical in ["А", "И", "я", "Ё", "ё", "7", "A"] {
+            var outgoing = word("Конец.", 58.84, raw: ta, selected: ta, owner: a, map: both)
+            outgoing.end = .init(value: 60_000, timescale: 1_000)
+            outgoing.nativeTiming = .init(start: 58.84, end: 60)
+            outgoing.speakerAttribution = nil
+            var residual = word(lexical, 60, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
+            residual.end = .init(value: 60_040, timescale: 1_000)
+            residual.nativeTiming = .init(start: 60, end: 60.04)
+            residual.speakerAttribution = nil
+            let next = word("Вопрос?", 62.44, raw: tb, selected: tb, owner: b, map: both)
+            session.transcriptSegments = [outgoing, residual, next]
+            let unchanged = session
+            let reading = MeetingTranscriptExporter.displayParagraphs(for: session.transcriptSegments, in: session)
+            check(reading.count == 2 && reading[0].segments.map(\.id) == [outgoing.id, residual.id]
+                  && reading[0].text == "Конец. " + lexical,
+                  "A short supported-boundary lexical residual remains in its outgoing reading turn: " + lexical)
+            check(reading.last?.segments == [next] && session == unchanged,
+                  "Residual typography preserves the next independent participant and all canonical evidence")
+        }
     }
 }
