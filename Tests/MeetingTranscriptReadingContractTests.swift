@@ -126,6 +126,68 @@ extension MeetingSessionStoreCheckpointTests {
               && independentLeading[incoming.id]?.participantID == a,
               "An independently assigned first short reply is never reassigned to the next participant")
 
+        let previousTurn = word("Прошлая реплика.", 1_921.88, raw: ta, selected: ta, owner: a, map: both)
+        let incomingPrefix = word("А", 1_934.32, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
+        let nextTurn = word("ты", 1_934.48, raw: tb, selected: tb, owner: b, map: both)
+        var pauseBase = session
+        pauseBase.transcriptSegments = [previousTurn, incomingPrefix, nextTurn]
+        for compact in [true, false] {
+            var value = pauseBase
+            value.transcriptSegments[1].revision = compact ? 0 : 7
+            if compact { value.transcriptSegments[1].speakerAttribution = nil }
+            let original = value, beforeJSON = try MeetingTranscriptExporter.json(for: value)
+            let reading = MeetingTranscriptExporter.displayParagraphs(for: value.transcriptSegments, in: value)
+            check(reading.count == 2 && reading[1].segments == Array(value.transcriptSegments.suffix(2)),
+                  "An unsupported new-turn prefix after a pause joins its immediate independent incoming neighbor")
+            check(reading[1].firstSegment.start == incomingPrefix.start && reading[1].projectedSpeakerID == b,
+                  "The incoming turn keeps the original prefix time and the next participant's existing UUID")
+            let projected = MeetingTranscriptExporter.speakerPresentations(in: value)
+            check(projected[incomingPrefix.id]?.participantID == b && projected[incomingPrefix.id]?.isEstimated == true,
+                  "New-turn incoming ownership remains a contextual reading estimate")
+            check(MeetingTranscriptExporter.text(for: value).contains("[32:14] Другое имя: А ты"),
+                  "The complete reading export includes the unsupported prefix under the incoming manual name")
+            let afterJSON = try MeetingTranscriptExporter.json(for: value)
+            check(value == original && beforeJSON == afterJSON,
+                  "Pause-prefix projection preserves native uncertainty, frozen metadata, source words and manual names")
+        }
+        var multiplePrefix = pauseBase
+        multiplePrefix.transcriptSegments = [previousTurn, incomingPrefix,
+            word("ещё", 1_934.44, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport),
+            word("ты", 1_934.64, raw: tb, selected: tb, owner: b, map: both)]
+        let multipleReading = MeetingTranscriptExporter.displayParagraphs(for: multiplePrefix.transcriptSegments, in: multiplePrefix)
+        check(multipleReading.count == 2 && multipleReading[1].segments == Array(multiplePrefix.transcriptSegments.dropFirst())
+              && multipleReading[1].projectedSpeakerID == b,
+              "Every unsupported member of a bounded new-turn prefix joins the incoming participant without losing words")
+        for kind in 0..<11 {
+            var blocked = pauseBase
+            switch kind {
+            case 0: blocked.transcriptSegments[1].isUserTextEdited = true
+            case 1:
+                blocked.transcriptSegments[1] = word("А", 1_934.32, raw: ta, selected: nil, owner: nil,
+                                                    rule: .insufficientSupport)
+            case 2:
+                blocked.transcriptCoverageGaps = [.init(trackID: source, start: 1_930, end: 1_931, reason: .processingFailed)]
+            case 3:
+                let otherEpoch = MeetingAnalysisEpochID(trackID: source, ordinal: 1)
+                let otherToken = MeetingBackendSpeakerToken(analysisEpochID: otherEpoch, label: "voice-b")
+                blocked.transcriptSegments[2] = word("ты", 1_934.48, raw: otherToken, selected: otherToken, owner: b,
+                                                    map: [otherToken: b])
+            case 4:
+                blocked.transcriptSegments[0] = word("Рядом.", 1_934.12, raw: ta, selected: ta, owner: a, map: both)
+                blocked.transcriptSegments[2] = word("ты", 1_936.4, raw: tb, selected: tb, owner: b, map: both)
+            case 5: blocked.transcriptSegments[1].sourceTrackID = UUID()
+            case 6:
+                blocked.transcriptSegments[2] = word("ты", 1_938, raw: tb, selected: tb, owner: b, map: both)
+            case 7:
+                blocked.transcriptSegments[1].attributionState = .timingUncertain
+            case 8: blocked.transcriptSegments[0].isUserTextEdited = true
+            case 9: blocked.transcriptSegments[2].isUserTextEdited = true
+            default: blocked.transcriptSegments[1].overlap = .ambiguous
+            }
+            check(MeetingTranscriptExporter.speakerPresentations(in: blocked)[blocked.transcriptSegments[1].id]?.participantID == nil,
+                  "A manual, candidate, gap, epoch, nearby outgoing, source or timing barrier blocks one-sided incoming ownership (\(kind))")
+        }
+
         let oldOverride = word("Да.", 11.0, raw: tb, selected: ta, owner: a, rule: .mainSpeakerContinuation, map: both)
         let bAnchor = word("Ответ.", 10.6, raw: tb, selected: tb, owner: b, map: both)
         let aAfter = word("Продолжение.", 11.3, raw: ta, selected: ta, owner: a, map: both)
@@ -177,10 +239,12 @@ extension MeetingSessionStoreCheckpointTests {
         let returning = word("Возврат.", 22, raw: ta, selected: ta, owner: a, map: both)
         session.transcriptSegments = [first, gap, returning]
         let full = MeetingTranscriptExporter.displayParagraphs(for: session.transcriptSegments, in: session)
-        check(full.count == 3 && !full[2].showsSpeakerLabel,
-              "An unresolved run does not repeatedly announce the same returning readable participant")
+        check(full.count == 3 && full[2].showsSpeakerLabel,
+              "Every known paragraph timestamp repeats its participant even after an unresolved run")
+        check(MeetingTranscriptExporter.captionLabel(for: full[2], in: session, speakerNames: names) == "Имя Ёё",
+              "A returning known paragraph never leaves a bare timestamp")
         let excerpt = MeetingTranscriptExporter.text(for: session, segmentIDs: [returning.id])
         check(excerpt.contains("Имя Ёё: Возврат."),
-              "Copying an isolated excerpt retains its participant even when the full document suppresses a repeated heading")
+              "An isolated excerpt retains the same participant as the complete document")
     }
 }

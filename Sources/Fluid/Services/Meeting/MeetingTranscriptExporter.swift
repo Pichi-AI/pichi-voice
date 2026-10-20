@@ -510,29 +510,44 @@ nonisolated enum MeetingTranscriptExporter {
         let blocked = MeetingSpeakerAttribution.overlappingIntervalIndices(source.map {
             .init(start: $0.nativeTiming?.start ?? $0.start.seconds, end: $0.nativeTiming?.end ?? $0.end.seconds)
         }, tolerance: MeetingSpeakerAttributionPolicy.standard.comparisonTolerance, checkpoint: { _ in })
-        // The first words have no outgoing anchor. Apply the same incoming-neighbor
-        // reading convention to an entirely unsupported leading prefix, using the first
-        // independent following voice. The existing unknown horizon includes the wait
-        // for that voice; source gaps, edits and competing acoustic evidence still block
-        // it. This supplies an estimated reading owner, never a native assignment.
-        let leadingCount = segments.indices.prefix {
-            eligible[$0] && candidateTokens[$0].isEmpty && segments[$0].nativeSpeakerAssignment == .unassigned
-        }.count
-        if leadingCount > 0, leadingCount < segments.count,
-           let token = anchors[leadingCount], let id = identities[token]?.first,
-           positions[segments[0].id] == 0 {
-            let first = segments[0], incoming = segments[leadingCount]
-            let policy = MeetingSpeakerAttributionPolicy.standard
-            let range = 0...leadingCount
-            if intervals[leadingCount].start - intervals[0].start <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance,
-               range.allSatisfy({ positions[segments[$0].id] == $0 && !blocked.contains($0)
-                   && segments[$0].sourceTrackID == first.sourceTrackID }),
-               !(session.transcriptCoverageGaps ?? []).contains(where: {
-                   $0.trackID == first.sourceTrackID && (!$0.start.isFinite || !$0.end.isFinite
-                       || ($0.start < incoming.end.seconds && $0.end > first.start.seconds))
-               }) {
-                for index in 0..<leadingCount { owners[segments[index].id] = id }
+        // A new turn can begin with unsupported words before its first independent voice.
+        // Reuse the incoming-neighbor reading convention both at the start of a session
+        // and after a proven pause from an independent prior turn. Nearby outgoing speech
+        // still needs the ordinary two-sided rule. This is an estimated reading owner;
+        // neither acoustic evidence nor the finite unknown horizon changes.
+        let policy = MeetingSpeakerAttributionPolicy.standard
+        var incomingPosition = 0
+        while incomingPosition < segments.count {
+            func unsupported(_ index: Int) -> Bool {
+                eligible[index] && candidateTokens[index].isEmpty && segments[index].nativeSpeakerAssignment == .unassigned
+                    && segments[index].attributionState == .unassigned && segments[index].overlap == .none
             }
+            guard unsupported(incomingPosition) else { incomingPosition += 1; continue }
+            let first = incomingPosition
+            while incomingPosition < segments.count, unsupported(incomingPosition) { incomingPosition += 1 }
+            guard incomingPosition < segments.count, let token = anchors[incomingPosition],
+                  let id = identities[token]?.first else { continue }
+            let scopeStart: Int
+            if first == 0 {
+                guard positions[segments[first].id] == 0 else { continue }
+                scopeStart = first
+            } else {
+                guard let previous = anchors[first - 1], previous.analysisEpochID == token.analysisEpochID,
+                      intervals[first].start - intervals[first - 1].end > policy.maximumNeighborGapSeconds + policy.comparisonTolerance
+                else { continue }
+                scopeStart = first - 1
+            }
+            let head = segments[scopeStart], incoming = segments[incomingPosition]
+            let range = scopeStart...incomingPosition
+            guard let sourceStart = positions[head.id],
+                  intervals[incomingPosition].start - intervals[first].start <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance,
+                  range.allSatisfy({ positions[segments[$0].id] == sourceStart + $0 - scopeStart
+                      && !blocked.contains(sourceStart + $0 - scopeStart) && segments[$0].sourceTrackID == head.sourceTrackID }),
+                  !(session.transcriptCoverageGaps ?? []).contains(where: {
+                      $0.trackID == head.sourceTrackID && (!$0.start.isFinite || !$0.end.isFinite
+                          || ($0.start < incoming.end.seconds && $0.end > head.start.seconds))
+                  }) else { continue }
+            for index in first..<incomingPosition { owners[segments[index].id] = id }
         }
         for run in runs {
             let range = run.before...run.after, first = segments[run.before], last = segments[run.after]
@@ -786,20 +801,12 @@ nonisolated enum MeetingTranscriptExporter {
             paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge,
                                                projectedSpeakerID: projectedSpeakerID))
         }
-        var lastReadable: (track: MeetingAudioTrackID, identity: String)?
         for index in paragraphs.indices {
             let paragraph = paragraphs[index], first = paragraph.firstSegment
             let presentation = self.speakerPresentation(for: first, in: session, speakerNames: names)
-            let owner = paragraph.projectedSpeakerID
-            let readable = owner != nil || presentation.hasReadableParticipant
-            let identity = self.paragraphIdentity(for: first, legacySpeakerID: owner, in: session, speakerNames: names)
-            if let previous = lastReadable, previous.track != first.sourceTrackID { lastReadable = nil }
-            paragraphs[index].showsSpeakerLabel = readable && lastReadable?.identity != identity
-            if readable { lastReadable = (first.sourceTrackID, identity) }
-            else if paragraph.segments.contains(where: {
-                $0.attributionState == .timingUncertain || $0.isUserTextEdited == true
-                    || ($0.revision > 0 && $0.speakerAttribution == nil)
-            }) { lastReadable = nil }
+            // Each timestamp starts a displayed paragraph, so repeat its known name even
+            // when an unresolved paragraph intervened. Unsupported names remain absent.
+            paragraphs[index].showsSpeakerLabel = paragraph.projectedSpeakerID != nil || presentation.hasReadableParticipant
         }
         return paragraphs
     }
