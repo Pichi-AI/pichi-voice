@@ -6,6 +6,9 @@ import Foundation
 final nonisolated class MeetingTimelineTrace: @unchecked Sendable {
     static let enabled = ProcessInfo.processInfo.environment["PICHI_MEETING_TIMELINE_PROFILE"] == "1"
     static let shared: MeetingTimelineTrace? = enabled ? MeetingTimelineTrace() : nil
+    /// Explicit segment identity only. Never select a diagnostic target from transcript text.
+    static let readingTargetWordID: UUID? = enabled
+        ? ProcessInfo.processInfo.environment["PICHI_MEETING_READING_TARGET_WORD_ID"].flatMap(UUID.init(uuidString:)) : nil
 
     struct Word: Codable, Sendable {
         let text: String
