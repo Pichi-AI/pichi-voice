@@ -329,12 +329,12 @@ struct FluidServeGroundedSummaryTests {
                   attributionState: mixed ? .overlappingSpeakers : speaker == nil ? .unassigned : .assigned)
         }
         let rows = [word(0, "Начало", a), word(1, "короткая", nil, mixed: true),
-                    word(2, "вставка", b), word(3, "и", nil, mixed: true), word(4, "продолжение.", a)]
+                    word(2, "вставка", b, mixed: true), word(3, "и", nil, mixed: true), word(4, "продолжение.", a)]
         session.transcriptSegments = rows
         let original = try MeetingTranscriptExporter.json(for: session)
         let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session)
         check(paragraphs.count == 1 && paragraphs[0].segments == rows,
-              "The complete bounded mixed bout, including its clean interior word, stays with continuing A")
+              "A genuinely mixed bout stays with continuing A; independent replies are tested separately")
         let presentations = MeetingTranscriptExporter.speakerPresentations(in: session)
         check(rows.allSatisfy { presentations[$0.id]?.participantID == a },
               "Every reading member has the same owner for labels, styling and actions")

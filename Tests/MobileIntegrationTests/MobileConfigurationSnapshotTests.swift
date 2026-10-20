@@ -271,6 +271,57 @@ final class MobilePCMAdmissionTests: XCTestCase {
         var runtime = 0
     }
 
+    func testOldGigaAMTimingCheckpointIsRejectedBeforePreparationWithoutChangingSavedData() async throws {
+        let descriptor = try self.descriptor()
+        XCTAssertEqual(descriptor.version, "2")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DecoderVersion.\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var capture = self.captureConfiguration()
+        capture.audioStorageMode = .retainedFiles
+        capture.speakerLabelsEnabled = false
+        capture.piiRedactionEnabled = false
+        var session = MeetingSession(configuration: capture,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1,
+                            machTimebaseDenominator: 1, firstPresentationTime: nil))
+        // Metadata only. The version gate must run before opening source audio.
+        session.audioTracks = [.init(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+            sourceDisplayName: "Synthetic microphone", format: nil, timebase: session.timebase,
+            health: .init(), chunks: [.init(id: UUID(), sequence: 0, relativeFilePath: "synthetic.caf",
+                presentationStart: .init(value: 0, timescale: 1000),
+                presentationEnd: .init(value: 1000, timescale: 1000), discontinuities: [],
+                sha256: String(repeating: "a", count: 64), byteCount: 1024, finalizationState: .finalized)])]
+        let source = session
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.gigaamModelID,
+            asrArtifactFingerprint: "synthetic-model-bytes", languageCode: "ru", speakerLabelsEnabled: false)
+        let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: session.id,
+            backendID: descriptor.id, backendVersion: "1", configuration: configuration,
+            piiRedactionEnabled: false, privacyFingerprint: nil)
+        let working = MeetingRetainedProcessingCheckpoint(sessionDirectory: directory)
+        let payload = Data("synthetic-old-timed-words".utf8)
+        try working.write(.init(pin: pin, inputFingerprint: "synthetic-input", ownerVoiceIdentity: nil,
+            runtimeFingerprint: nil, payload: payload), session: session)
+        let checkpointURL = directory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName)
+        let before = try Data(contentsOf: checkpointURL)
+        let probe = Probe()
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: {
+            probe.asr += 1; XCTFail("Incompatible decoder cannot prepare ASR"); return ASRService()
+        }, meetingRuntimeFactory: { _ in
+            probe.runtime += 1; throw RuntimeReached()
+        }, prepareDiarizationDependencies: { _ in probe.dependencies += 1 })
+        do {
+            _ = try await pipeline.process(session: session, sessionDirectory: directory,
+                progress: { _ in XCTFail("Incompatible decoder cannot begin processing") })
+            XCTFail("An old decoder checkpoint must require an explicit restart with retained audio")
+        } catch MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration {} catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertEqual(probe.asr + probe.runtime + probe.dependencies, 0)
+        XCTAssertEqual(try Data(contentsOf: checkpointURL), before)
+        XCTAssertEqual(try working.read(session: session)?.payload, payload)
+        XCTAssertEqual(session, source)
+    }
+
     private actor CaptureProbe: MeetingCaptureControlling {
         private(set) var permissions = 0
         private(set) var starts = 0

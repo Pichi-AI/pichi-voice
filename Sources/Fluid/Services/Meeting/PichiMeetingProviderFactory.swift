@@ -38,7 +38,9 @@ enum PichiMeetingProviderFactory {
         PichiMeetingProviderFactory.gigaamModelID: Registration(
             descriptor: MeetingBackendDescriptor(
                 id: .gigaam,
-                version: "1",
+                // Version 2 uses lexical CTC word envelopes. Existing retained-pin
+                // validation rejects version 1 before any preparation or checkpoint reuse.
+                version: "2",
                 execution: .local,
                 supportedLanguageCodes: ["ru"],
                 supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
