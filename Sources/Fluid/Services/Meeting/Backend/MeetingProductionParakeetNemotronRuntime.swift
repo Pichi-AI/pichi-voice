@@ -704,6 +704,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let ownerPolicy: MeetingOwnerVoiceVerifier.Policy = adaptiveOwnerEvidence ? .streamingV2 : .legacy
         let collectOwnerEvidence = self.ownerVoiceProfileSnapshot != nil
             && artifact.profile.verifiesStreamingOwner(implementationFingerprint: configuration.diarizationFingerprint)
+        let liveOwnerVerification = artifact.profile.verifiesLiveStreamingOwner(
+            implementationFingerprint: configuration.diarizationFingerprint)
         let idleResources = self.takeIdleResources()
         do {
             try idleResources?.claim(configuration: configuration, artifact: artifact)
@@ -718,12 +720,13 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     let session = MeetingPreparedStreamingRuntime(runtime: self, asr: asr, diarizer: diarizer,
                         trackID: trackID, attemptID: attemptID, configuration: configuration,
                         speakerNameFormat: self.pcmSpeakerNameFormat, collectOwnerEvidence: collectOwnerEvidence,
-                        useAdaptiveOwnerEvidence: adaptiveOwnerEvidence, onProgress: onProgress)
+                        useAdaptiveOwnerEvidence: adaptiveOwnerEvidence,
+                        verifyOwnerDuringCapture: liveOwnerVerification, onProgress: onProgress)
                     do {
                         try await body(session)
                         try Task.checkCancellation()
                         try session.requireFinished()
-                        ownerEvidence.set(try session.ownerEvidence())
+                        if !liveOwnerVerification { ownerEvidence.set(try session.ownerEvidence()) }
                         await session.cleanup()
                     } catch {
                         await session.cleanup()
@@ -1153,7 +1156,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
     }
 
-    /// Runs in its own phase, so the additional encoder never overlaps ASR or Nemotron residency.
+    /// Scoped local encoder. Streaming V3 invokes it serially inside the existing owned
+    /// model grant; earlier recipes invoke it after ASR and Nemotron residency ends.
     /// Only short, admitted single-speaker excerpts reach this local model; no audio is uploaded.
     func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
         try Task.checkCancellation()

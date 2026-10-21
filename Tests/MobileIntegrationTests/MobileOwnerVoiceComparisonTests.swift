@@ -75,6 +75,12 @@ private nonisolated struct OwnerVoiceComparisonOptions: Sendable {
 /// The report schema permits numbers and booleans only. Raw PCM and embeddings stay inside
 /// the joined inference worker and can never be encoded through this value type.
 private nonisolated struct OwnerVoiceComparisonScalars: Encodable, Sendable {
+    struct LiveCheckpoint: Encodable, Sendable {
+        let sourceFrames: Int
+        let admittedProfiles: Int
+        let verifiedOwnerCount: Int
+        let inferenceSeconds: Double
+    }
     struct Quality: Encodable, Sendable {
         let sampleCount: Int
         let finiteCount: Int
@@ -126,6 +132,7 @@ private nonisolated struct OwnerVoiceComparisonScalars: Encodable, Sendable {
     let inferenceSeconds: Double
     var ownerProfileUnchanged: Bool
     let variants: [Variant]
+    let liveCheckpoints: [LiveCheckpoint]
 
     static func matrix(_ lhs: [[Float]], _ rhs: [[Float]]) -> [[Float?]] {
         lhs.map { a in rhs.map { b in MeetingSpeakerEmbeddingIndex.cosineDistance(a, b) } }
@@ -278,14 +285,32 @@ final class MobileOwnerVoiceComparisonTests: XCTestCase {
                 duplicateEncodingMatchedMaximumDistance: repeatedDistance,
                 duplicateEncodingMaximumAbsoluteDifference: repeatedDifference))
         }
-        return .init(schemaVersion: 1, sourceQuality: .init(samples),
+        var liveCheckpoints: [OwnerVoiceComparisonScalars.LiveCheckpoint] = []
+        for seconds in [6, 7, 8, 10, 16, 20] where seconds * 16_000 <= samples.count {
+            let count = seconds * 16_000
+            var live = MeetingStreamingOwnerVoiceSamples(epoch: epoch, useAdaptiveOwnerEvidence: true)
+            for start in stride(from: 0, to: count, by: 16_000) {
+                let end = min(count, start + 16_000)
+                live.append(Array(samples[start..<end]), sourceStartSample: start)
+                live.collect(activity: [.init(slotIndex: 0, start: 0, end: Double(end) / 16_000)],
+                    processedThroughSample: end)
+            }
+            let excerpts = live.liveExcerpts()
+            let started = ProcessInfo.processInfo.systemUptime
+            let queries = try MeetingSpeakerVoiceEncoder.encode(samples: excerpts)
+            let seconds = ProcessInfo.processInfo.systemUptime - started
+            let verified = MeetingOwnerVoiceVerifier.confirmedTokens(owner: owner, profiles: queries, policy: .streamingV2)
+            liveCheckpoints.append(.init(sourceFrames: count, admittedProfiles: queries.count,
+                verifiedOwnerCount: verified.count, inferenceSeconds: seconds))
+        }
+        return .init(schemaVersion: 2, sourceQuality: .init(samples),
             ownerReferenceSelfDistance: MeetingSpeakerVoiceMatcher.distance(reference, reference),
             ownerReferenceSelfMatrix: OwnerVoiceComparisonScalars.matrix(owner.embeddings, owner.embeddings),
             ownerReferenceValid: MeetingOwnerVoiceProfileStore.isValid(owner), ownerOriginalPCMAvailable: false,
             maximumDistance: MeetingSpeakerVoiceMatcher.maximumDistance, requiredAmbiguityMargin: MeetingSpeakerVoiceMatcher.ambiguityMargin,
             independentCandidatesPerComparison: 1, observedAmbiguityMarginAvailable: false,
             adaptiveEvidenceAvailable: adaptiveExcerpt != nil,
-            inferenceSeconds: elapsed, ownerProfileUnchanged: false, variants: variants)
+            inferenceSeconds: elapsed, ownerProfileUnchanged: false, variants: variants, liveCheckpoints: liveCheckpoints)
     }
 
     func testPrivateVoiceDiagnosticRequiresEveryOptInAndBoundedInput() throws {

@@ -101,7 +101,7 @@ streamingWitnesses = r'''
         guard let scope = self.scope else { return [] }
         if scope.failEncoder { throw StreamingScopeFailure.encoder }
         await scope.waitForEncoderRelease()
-        return [.init()]
+        return samples.map { .init(token: $0.token) }
     }
 '''
 provider = Path('Sources/Fluid/Services/TranscriptionProvider.swift').read_text()

@@ -28,11 +28,15 @@ nonisolated struct MeetingStreamingPCMObservation: Sendable {
     /// Exact source interval of a sealed, complete ASR result with no words.
     /// This is a decoder result, not inferred VAD confidence or elapsed time.
     let sealedEmptyASRRange: Range<Int>?
+    /// Exact acoustic owner decision, independent of text/privacy readiness. Nil leaves the
+    /// prior decision unchanged; an empty set revokes it. Tokens never create participants.
+    let confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken>?
 
     init(batch: MeetingPCMTranscriptBatch, activity: [MeetingBackendSpeakerActivity],
          acceptedThroughSample: Int, processedThroughSample: Int, retainedFromSample: Int,
          isFinal: Bool, asrStableThroughSample: Int? = nil,
-         sealedEmptyASRRange: Range<Int>? = nil) {
+         sealedEmptyASRRange: Range<Int>? = nil,
+         confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken>? = nil) {
         self.batch = batch
         self.activity = activity
         self.acceptedThroughSample = acceptedThroughSample
@@ -41,6 +45,7 @@ nonisolated struct MeetingStreamingPCMObservation: Sendable {
         self.isFinal = isFinal
         self.asrStableThroughSample = asrStableThroughSample
         self.sealedEmptyASRRange = sealedEmptyASRRange
+        self.confirmedLocalUserTokens = confirmedLocalUserTokens
     }
 }
 

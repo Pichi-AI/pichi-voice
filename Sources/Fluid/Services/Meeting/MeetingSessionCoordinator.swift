@@ -205,7 +205,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private enum TranscriptCorrection {
         case editText(segmentID: MeetingTranscriptSegmentID, previousText: String, previousOriginalText: String?,
                       previousUserTextEdited: Bool?, previousRevision: Int)
-        case rename(speakerID: SessionSpeakerID, previousName: String)
+        case rename(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?)
         case reassign(
             segmentID: MeetingTranscriptSegmentID,
             previousSpeakerID: SessionSpeakerID?,
@@ -229,7 +229,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             targetID: SessionSpeakerID,
             movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int, previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?, previousLegacyInference: MeetingSpeakerAttributionInference?)]
         )
-        case renameBatch([(speakerID: SessionSpeakerID, previousName: String)])
+        case renameBatch([(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?)])
 
         var requiresTranscriptPrivacyPublication: Bool {
             switch self {
@@ -1279,23 +1279,24 @@ final class MeetingSessionCoordinator: ObservableObject {
     @discardableResult
     func renameSpeaker(sessionID: MeetingSessionID, speakerID: SessionSpeakerID, to displayName: String) async throws -> MeetingSession {
         try await self.performCorrection(sessionID: sessionID) { session in
-            let previousName = session.speakers.first(where: { $0.id == speakerID })?.displayName ?? ""
+            let previous = session.speakers.first(where: { $0.id == speakerID })
             try session.renameSpeaker(id: speakerID, to: displayName)
-            return .rename(speakerID: speakerID, previousName: previousName)
+            return .rename(speakerID: speakerID, previousName: previous?.displayName ?? "",
+                           previousGeneratedNumber: previous?.generatedParticipantNumber)
         }
     }
 
     @discardableResult
     func renameSpeakers(sessionID: MeetingSessionID, names: [SessionSpeakerID: String]) async throws -> MeetingSession {
         try await self.performCorrection(sessionID: sessionID) { session in
-            var applied: [(speakerID: SessionSpeakerID, previousName: String)] = []
+            var applied: [(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?)] = []
             for (speakerID, name) in names {
                 guard let existing = session.speakers.first(where: { $0.id == speakerID }),
                       existing.mergedIntoSpeakerID == nil else { continue }
                 let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty, trimmed != existing.displayName else { continue }
                 try session.renameSpeaker(id: speakerID, to: trimmed)
-                applied.append((speakerID, existing.displayName))
+                applied.append((speakerID, existing.displayName, existing.generatedParticipantNumber))
             }
             return .renameBatch(applied)
         }
@@ -1625,9 +1626,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.transcriptSegments[index].isUserTextEdited = previousUserTextEdited
             session.transcriptSegments[index].revision = previousRevision
             return true
-        case let .rename(speakerID, previousName):
+        case let .rename(speakerID, previousName, previousGeneratedNumber):
             guard let index = session.speakers.firstIndex(where: { $0.id == speakerID }) else { return false }
             session.speakers[index].displayName = previousName
+            session.speakers[index].generatedParticipantNumber = previousGeneratedNumber
             return true
         case let .reassign(
             segmentID,
@@ -1684,6 +1686,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             for entry in entries {
                 guard let index = session.speakers.firstIndex(where: { $0.id == entry.speakerID }) else { continue }
                 session.speakers[index].displayName = entry.previousName
+                session.speakers[index].generatedParticipantNumber = entry.previousGeneratedNumber
                 restored = true
             }
             return restored

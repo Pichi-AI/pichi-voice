@@ -9,7 +9,9 @@ nonisolated struct MeetingAnalysisEpochID: Hashable, Sendable { let trackID: UUI
 nonisolated struct MeetingBackendSpeakerToken: Hashable, Sendable { let analysisEpochID: MeetingAnalysisEpochID; let label: String }
 nonisolated struct MeetingBackendSpeakerActivity: Sendable { let token: MeetingBackendSpeakerToken; let start: Double; let end: Double }
 nonisolated struct MeetingSpeakerVoiceSamples: Sendable { let token: MeetingBackendSpeakerToken; let clips: [[Float]] }
-nonisolated struct MeetingSpeakerVoiceProfile: Sendable {}
+nonisolated struct MeetingSpeakerVoiceProfile: Sendable {
+    var token = MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: UUID(), ordinal: 0), label: "slot-0")
+}
 nonisolated struct MeetingOwnerVoiceProfileSnapshot: Sendable {}
 nonisolated struct MeetingMaterializedSpanSamples: Sendable {}
 nonisolated struct MeetingNemotronModelArtifact: Equatable, Sendable {
@@ -17,14 +19,15 @@ nonisolated struct MeetingNemotronModelArtifact: Equatable, Sendable {
         enum Preference: Equatable { case cpuOnly, devicePreferred }
         var streamingImplementationFingerprint = "synthetic-pinned-profile"
         func acceptsStreamingImplementationFingerprint(_ value: String) -> Bool {
-            value == self.streamingImplementationFingerprint || value == "synthetic-legacy-anonymous" || value == "synthetic-owner-v1"
+            value == self.streamingImplementationFingerprint || value == "synthetic-legacy-anonymous" || value == "synthetic-owner-v1" || value == "synthetic-live"
         }
         func verifiesStreamingOwner(implementationFingerprint value: String) -> Bool {
-            value == self.streamingImplementationFingerprint || value == "synthetic-owner-v1"
+            value == self.streamingImplementationFingerprint || value == "synthetic-owner-v1" || value == "synthetic-live"
         }
         func usesAdaptiveStreamingOwnerEvidence(implementationFingerprint value: String) -> Bool {
-            value == self.streamingImplementationFingerprint
+            value == self.streamingImplementationFingerprint || value == "synthetic-live"
         }
+        func verifiesLiveStreamingOwner(implementationFingerprint value: String) -> Bool { value == "synthetic-live" }
         var isExperimental = true
         var computePreference = Preference.cpuOnly
     }
@@ -58,14 +61,15 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     var speakers: [MeetingSessionSpeaker] = []
     var isComplete = true
     var speechObservationIsFinal = true
-    func mergingSpeakers(into existing: [MeetingSessionSpeaker]) -> [MeetingSessionSpeaker] {
+    func mergingSpeakers(into existing: [MeetingSessionSpeaker], speakerNameFormat: String = "Speaker %lld") -> [MeetingSessionSpeaker] {
         existing + self.speakers.filter { candidate in !existing.contains { $0.id == candidate.id } }
     }
 }
 nonisolated enum MeetingPCMRecordingAttribution {
     static func assemble(transcript: MeetingPCMTranscriptBatch, activity: [MeetingBackendSpeakerActivity],
                          epoch: MeetingAnalysisEpochID, attemptID: UUID, duration: Double,
-                         speakerNameFormat: String, speakerAttributionPolicy: Int?) throws -> MeetingPCMTranscriptBatch {
+                         speakerNameFormat: String, confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = [],
+                         speakerAttributionPolicy: Int?) throws -> MeetingPCMTranscriptBatch {
         guard activity.allSatisfy({ $0.token.analysisEpochID == epoch && $0.end <= duration }) else { throw FixtureFailure.assembly }
         return transcript
     }
@@ -479,7 +483,65 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
         try await ownerScopeRetiresModelsBeforeEncoder()
         try await adoptedPairRetiresModelsBeforeEncoder()
         try await optionalOwnerPreflightAndCancellation()
-        print("18 prepared streaming runtime contract groups passed")
+        try await liveOwnerBeforeStopAndJoinedCancellation()
+        print("19 prepared streaming runtime contract groups passed")
+    }
+
+    private nonisolated static func liveOwnerBeforeStopAndJoinedCancellation() async throws {
+        var configuration = MeetingFinalProcessingConfiguration()
+        configuration.diarizationFingerprint = "synthetic-live"
+        let frozen = configuration
+        for failEncoder in [false, true] {
+            let scope = StreamingScopeFixture(failEncoder: failEncoder)
+            let runtime = MeetingParakeetNemotronRuntime(scope: scope)
+            let recorder = Recorder()
+            let controller = MeetingStreamingPCMController.deferred { body in
+                try await runtime.withPreparedStreamingPCM(trackID: UUID(), attemptID: UUID(), configuration: frozen,
+                    onProgress: { value in
+                        recorder.observation(value)
+                        if value.confirmedLocalUserTokens?.isEmpty == false { scope.event("live-owner") }
+                    }, body: body)
+            }
+            let audio = (0..<320_000).map { 0.1 * sin(Float($0) * 0.031) }
+            let observed = try await controller.recognize(window: .fixture(samples: audio, final: true), offset: 0)
+            try require(!observed.isFinal && !scope.snapshot.contains("speaker-scope-closed"),
+                "Live owner scoring must complete while capture and both prepared model scopes remain open")
+            let first = recorder.progress.first { $0.confirmedLocalUserTokens?.isEmpty == false }
+            try require((first != nil) == !failEncoder, "Unavailable encoding cannot manufacture a local user")
+            if let first {
+                try require(first.acceptedThroughSample == 112_000 && first.batch.segments.isEmpty,
+                    "First synthetic owner evidence is ready at 7s, before ASR speaker publication and Stop")
+            }
+            let encodes = scope.snapshot.filter { $0 == "voice-encode" }.count
+            try require(encodes == (failEncoder ? 1 : 3), "Novel evidence is scored at bounded 2s then 10s speech cadence")
+            try await controller.recordWindowProcessing(.init(sourceStartSample: 0, sourceFrameCount: 320_000,
+                chargedPendingFrames: 0, maximumPendingFrames: 384_000))
+            _ = try await controller.recognize(window: .fixture(samples: [Float](repeating: 0, count: 320_000), final: true), offset: 20)
+            try require(scope.snapshot.filter { $0 == "voice-encode" }.count == encodes,
+                "Long silence cannot trigger repeated inference on unchanged evidence")
+            _ = try await controller.finishStreaming()
+            try require(scope.snapshot.last == "asr-scope-closed", "Finish joins all native owners after final evidence")
+        }
+        let scope = StreamingScopeFixture(blockEncoder: true)
+        let runtime = MeetingParakeetNemotronRuntime(scope: scope)
+        let controller = MeetingStreamingPCMController.deferred { body in
+            try await runtime.withPreparedStreamingPCM(trackID: UUID(), attemptID: UUID(), configuration: frozen,
+                onProgress: { value in
+                    if value.confirmedLocalUserTokens?.isEmpty == false { scope.event("unexpected-owner") }
+                }, body: body)
+        }
+        let audio = (0..<128_000).map { 0.1 * sin(Float($0) * 0.031) }
+        let recognize = Task { try await controller.recognize(window: .fixture(samples: audio, final: true), offset: 0) }
+        for _ in 0..<10_000 { if scope.snapshot.contains("voice-encode") { break }; await Task.yield() }
+        try require(scope.snapshot.contains("voice-encode"), "Live encoder must start before cancellation")
+        let joined = Task { await controller.cancelAndWait(); scope.event("cancel-joined") }
+        for _ in 0..<20 { await Task.yield() }
+        try require(!scope.snapshot.contains("cancel-joined"), "Live cancellation must join noncooperative encoding")
+        scope.releaseEncoder()
+        await joined.value
+        do { _ = try await recognize.value; throw FixtureFailure.invalid } catch is CancellationError {}
+        try require(!scope.snapshot.contains("unexpected-owner"), "Cancelled live evidence cannot escape into publication")
+        print("PASS V3 pre-Stop acoustic decision, bounded retries, silence, optional failure and joined live cancellation")
     }
 
     private static func invalidWindowCompletionFeedback() async throws {

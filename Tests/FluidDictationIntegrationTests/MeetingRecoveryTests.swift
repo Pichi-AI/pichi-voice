@@ -5105,22 +5105,26 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
-        let (session, speakerA, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        var (session, speakerA, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        session.speakers[0].generatedParticipantNumber = 1
+        session.speakers[1].generatedParticipantNumber = 2
         try await store.create(session)
 
         let coordinator = MeetingSessionCoordinator(
             store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
         )
 
-        _ = try await coordinator.renameSpeakers(
+        let renamed = try await coordinator.renameSpeakers(
             sessionID: session.id,
             names: [speakerA: "Erik", speakerB: "Maya"]
         )
+        XCTAssertTrue(renamed.speakers.allSatisfy { $0.generatedParticipantNumber == nil })
         let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
 
         let namesByID = Dictionary(uniqueKeysWithValues: undone.speakers.map { ($0.id, $0.displayName) })
         XCTAssertEqual(namesByID[speakerA], "Speaker A")
         XCTAssertEqual(namesByID[speakerB], "Speaker B")
+        XCTAssertEqual(undone.speakers.map(\.generatedParticipantNumber), [1, 2])
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
     }
 
