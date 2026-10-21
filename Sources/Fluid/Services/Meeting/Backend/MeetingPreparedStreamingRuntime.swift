@@ -295,6 +295,8 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
             self.ownerProfiles.removeAll(keepingCapacity: false)
             self.confirmedOwnerTokens.removeAll(keepingCapacity: false)
             DebugLogger.shared.info("mode=streaming owner_verification=unavailable preservedAnonymousSpeech=true", source: "MeetingPCMRuntime")
+            self.traceOwnerDecision(encodedProfiles: 0, candidateProfiles: 0, fullEvidenceProfiles: 0,
+                outcome: "encoderUnavailable", final: final, since: began)
             return
         }
         try Task.checkCancellation()
@@ -310,15 +312,32 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         let clipFramesByToken = Dictionary(uniqueKeysWithValues: evidence.compactMap { entry in
             entry.clipFrames.map { (entry.profile.token, $0) }
         })
+        let diagnosticObserver = MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: samples, profiles: candidates,
+            streaming: true, clipFramesByToken: clipFramesByToken)
+        var decisionOutcome: MeetingOwnerVoiceVerifier.Diagnostics.Outcome?
         self.confirmedOwnerTokens = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.runtime.ownerVoiceProfileSnapshot,
             profiles: candidates, policy: self.ownerVerificationPolicy, clipFramesByToken: clipFramesByToken,
-            diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: samples, profiles: candidates,
-                streaming: true, clipFramesByToken: clipFramesByToken))
+            diagnostics: { details in
+                decisionOutcome = details.outcome
+                diagnosticObserver?(details)
+            })
+        self.traceOwnerDecision(encodedProfiles: profiles.count, candidateProfiles: candidates.count,
+            fullEvidenceProfiles: evidence.filter { $0.clipFrames == [80_000, 80_000] }.count,
+            outcome: decisionOutcome?.rawValue ?? "unavailable", final: final, since: began)
+    }
+
+    /// Both successful scoring and optional encoder failure are product decisions.
+    /// Keep their scalar trace at the same post-gate boundary as emitted observations.
+    private func traceOwnerDecision(encodedProfiles: Int, candidateProfiles: Int,
+                                    fullEvidenceProfiles: Int, outcome: String, final: Bool, since began: Double) {
         MeetingTimelineTrace.shared?.record("owner_verification", fields: [
             "attemptID": self.attemptID.uuidString,
             "acceptedThroughSample": String(self.update.acceptedThroughSample),
             "processedThroughSample": String(self.update.processedThroughSample),
-            "encodedProfiles": String(profiles.count), "candidateProfiles": String(candidates.count),
+            "encodedProfiles": String(encodedProfiles), "candidateProfiles": String(candidateProfiles),
+            "fullEvidenceProfiles": String(fullEvidenceProfiles),
+            "policy": self.ownerVerificationPolicy.diagnosticName,
+            "decisionOutcome": outcome,
             "confirmedCount": String(self.confirmedOwnerTokens.count),
             "confirmedSlots": self.confirmedOwnerTokens.map(\.label).sorted().joined(separator: ","),
             "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000),

@@ -701,7 +701,7 @@ private nonisolated enum StreamingOwnerIdentityOracle {
                 let fullEvidence = try integer(event, "fullEvidenceProfiles", maximum: candidates)
                 guard event.fields["policy"] == "streamingV4", let decision = event.fields["decisionOutcome"],
                       ["missingOwner", "invalidOwner", "duplicateTokens", "invalidLinks", "noValidCandidates",
-                       "referenceDistance", "winnerMargin", "insufficientEvidence", "confirmed"].contains(decision),
+                       "referenceDistance", "winnerMargin", "insufficientEvidence", "encoderUnavailable", "confirmed"].contains(decision),
                       (decision == "confirmed") == (count > 0), count == 0 || fullEvidence > 0 else { throw Failure.decision }
                 if candidates > 0 && encoded > 0 {
                     candidateEvaluations += 1
