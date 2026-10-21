@@ -328,17 +328,17 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
                 presentationTime: CMTime(value: Int64(sampleOffset + start), timescale: 16_000))
             // Match production capture's live tee: VAD and pending-wave projection
             // must observe the same source clock as the strict PCM consumer.
-            self.liveAudioHandler?(.microphone, buffer)
             if let retainedWriter, !retainedWriter.enqueue(buffer) { throw MeetingMemoryAudioError.overload }
             guard consumer.enqueue(buffer) else { throw MeetingMemoryAudioError.overload }
+            self.liveAudioHandler?(.microphone, buffer)
         }
     }
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
         guard let (id, original) = active, id == sessionID else { throw MeetingCaptureError.wrongActiveSession }
+        defer { active = nil; consumer = nil; retainedWriter = nil; liveAudioHandler = nil }
         var track = if let retainedWriter { await retainedWriter.stop() } else { original }
         try await consumer?.finish()
         track.health.status = .stopped
-        active = nil; consumer = nil; retainedWriter = nil; liveAudioHandler = nil
         return .init(tracks: [track], stoppedAt: Date())
     }
     func shutdownForTermination() async {
