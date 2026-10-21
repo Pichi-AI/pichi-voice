@@ -179,6 +179,9 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
         let task = Task<MeetingCaptureStopResult, Error> {
             var failure: Error?
             do { try await active.runtime.stop() } catch { failure = error }
+            // Recording ends when the audio runtime joins, before writer/model finalization.
+            // Keep this same boundary on partial failure; inference latency is not capture time.
+            let stoppedAt = Date()
             var track: MeetingAudioTrack
             if let writer = active.writer { track = await writer.stop() } else {
                 track = active.track
@@ -186,7 +189,7 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
                 track.health.status = .stopped
             }
             do { try await active.memoryConsumer?.finish() } catch { failure = failure ?? error }
-            let result = MeetingCaptureStopResult(tracks: [track], stoppedAt: Date())
+            let result = MeetingCaptureStopResult(tracks: [track], stoppedAt: stoppedAt)
             if let failure { throw MeetingCaptureError.captureStopFailed(failure.localizedDescription, partialResult: result) }
             return result
         }

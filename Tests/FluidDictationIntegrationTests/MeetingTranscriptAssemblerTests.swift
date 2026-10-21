@@ -70,7 +70,9 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             duration: 12, units: units, confirmedLocalUserTokens: [owner])
         XCTAssertEqual(result.speakers.count, 2)
         XCTAssertEqual(result.speakers.filter(\.isLocalUser).map(\.displayName), ["Speaker 1"])
-        XCTAssertEqual(result.speakers.filter { !$0.isLocalUser }.map(\.displayName), ["Speaker 2"])
+        XCTAssertEqual(result.speakers.filter { !$0.isLocalUser }.map(\.displayName), ["Speaker 1"])
+        XCTAssertEqual(result.speakers.filter(\.isLocalUser).map(\.generatedParticipantNumber), [0])
+        XCTAssertEqual(result.speakers.filter { !$0.isLocalUser }.map(\.generatedParticipantNumber), [1])
         XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil })
     }
 
@@ -95,7 +97,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(batch.segments.first?.attributionState, .unassigned)
     }
 
-    func testWholeRecordingAttributionPreservesNativeWordPrecisionAndInterruptionEvidence() throws {
+    func testWholeRecordingContinuationPreservesNativeWordPrecisionAndInterruptionEvidence() throws {
         let attempt = UUID(), track = UUID()
         let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
         let main = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "voice-a")
@@ -124,12 +126,18 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         let mixed = result.segments[2]
         let attribution = try XCTUnwrap(mixed.speakerAttribution)
         XCTAssertEqual(attribution.rawAssignment, .ambiguous([main, other]))
-        XCTAssertEqual(attribution.selectedToken, other)
-        XCTAssertEqual(attribution.rule, .briefInterruption)
-        XCTAssertEqual(attribution.background.map(\.token), [main])
+        // The standard reading policy keeps a short interruption inside the continuing
+        // speaker's turn, without changing native word timing or acoustic evidence.
+        XCTAssertEqual(attribution.selectedToken, main)
+        XCTAssertEqual(attribution.rule, .mainSpeakerContinuation)
+        XCTAssertTrue(attribution.background.isEmpty)
         XCTAssertEqual(Set(attribution.candidates.map(\.token)), [main, other])
+        XCTAssertEqual(attribution.relation, .simultaneous)
         XCTAssertNotNil(mixed.speakerID)
-        XCTAssertEqual(mixed.speakerID, result.segments[4].speakerID)
+        XCTAssertEqual(mixed.speakerID, result.segments[1].speakerID)
+        XCTAssertEqual(mixed.speakerID, result.segments[3].speakerID)
+        XCTAssertNotNil(result.segments[4].speakerID)
+        XCTAssertNotEqual(mixed.speakerID, result.segments[4].speakerID)
         XCTAssertEqual(mixed.overlap, .ambiguous, "Selecting a reading owner does not erase simultaneous speech")
     }
 
@@ -207,17 +215,26 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             sourceTrackID: track, speakerID: nil, text: "Synthetic coarse utterance", revision: 0,
             status: .final, overlap: .none, completeness: .complete, nativePrecision: .utterance,
             nativeUnitID: "coarse", nativeTiming: .init(start: 0, end: duration))
-        let words = (0..<count).map { index in
-            MeetingTranscriptSegment(id: UUID(), start: self.mediaTime(Double(index * 2)),
-                end: self.mediaTime(Double(index * 2 + 1)), sourceTrackID: track, speakerID: nil,
+        var words: [MeetingTranscriptSegment] = []
+        words.reserveCapacity(count)
+        for index in 0..<count {
+            let start = Double(index * 2)
+            let end = start + 1
+            words.append(MeetingTranscriptSegment(id: UUID(), start: self.mediaTime(start),
+                end: self.mediaTime(end), sourceTrackID: track, speakerID: nil,
                 text: "word-\(index)", revision: 0, status: .final, overlap: .none, completeness: .complete,
                 nativePrecision: .word, nativeUnitID: "native-\(index)",
-                nativeTiming: .init(start: Double(index * 2), end: Double(index * 2 + 1)))
+                nativeTiming: .init(start: start, end: end)))
         }
         let transcript = MeetingPCMTranscriptBatch(segments: [coarse] + words)
-        let activity = (0..<count).flatMap { index in [
-            MeetingBackendSpeakerActivity(token: first, start: Double(index * 2), end: Double(index * 2 + 1)),
-            MeetingBackendSpeakerActivity(token: second, start: Double(index * 2 + 1), end: Double(index * 2 + 2))]
+        var activity: [MeetingBackendSpeakerActivity] = []
+        activity.reserveCapacity(count * 2)
+        for index in 0..<count {
+            let start = Double(index * 2)
+            let boundary = start + 1
+            let end = start + 2
+            activity.append(MeetingBackendSpeakerActivity(token: first, start: start, end: boundary))
+            activity.append(MeetingBackendSpeakerActivity(token: second, start: boundary, end: end))
         }
         let result = try MeetingPCMRecordingAttribution.assemble(transcript: transcript, activity: activity,
             epoch: epoch, attemptID: attempt, duration: duration, speakerNameFormat: "Speaker %lld")
@@ -245,7 +262,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         catch { XCTFail("Cancellation was converted into a different error: \(error)") }
     }
 
-    func testSkippedReceiptBlocksInterruptionContextAndSurvivesSidecarReplay() throws {
+    func testSkippedReceiptBlocksContinuationContextAndSurvivesSidecarReplay() throws {
         let (plan, manifest, span) = try self.onlineMicFixture()
         let main = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "a")
         let other = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "b")
@@ -261,16 +278,24 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                 coverageReceipts: receipts, echoVerdicts: echoes))
         }
         let baseline = try assemble(self.receipts(for: manifest))
-        XCTAssertEqual(baseline.sidecar.speakerAttributionDecisions.first { $0.unitID == "mixed" }?.rule, .briefInterruption)
+        let baselineMixed = try XCTUnwrap(baseline.sidecar.speakerAttributionDecisions.first { $0.unitID == "mixed" })
+        XCTAssertEqual(baselineMixed.rule, .mainSpeakerContinuation)
+        XCTAssertEqual(baselineMixed.selectedToken, main)
+        XCTAssertEqual(baselineMixed.cueUnitIDs, ["before", "after"])
         for status in [MeetingSpanCoverageStatus.skipped, .failed, .providerTruncated] {
             let result = try assemble([
                 .init(id: "processed-before", spanID: span.id, analysisStart: 0, analysisEnd: 6, status: .processed),
                 .init(id: "gap", spanID: span.id, analysisStart: 6, analysisEnd: 6.1, status: status),
                 .init(id: "processed-after", spanID: span.id, analysisStart: 6.1, analysisEnd: 10, status: .processed)])
             let decision = try XCTUnwrap(result.sidecar.speakerAttributionDecisions.first { $0.unitID == "mixed" })
-            XCTAssertNotEqual(decision.rule, .briefInterruption)
+            XCTAssertFalse(decision.rule.isHeuristic,
+                "A coverage gap blocks interruption and continuing-speaker context alike")
+            XCTAssertEqual(decision.rule, .ambiguous)
             XCTAssertNil(decision.selectedToken)
+            XCTAssertTrue(decision.cueUnitIDs.isEmpty)
             XCTAssertEqual(decision.rawAssignment, units[1].speaker)
+            XCTAssertEqual(decision.candidates, baselineMixed.candidates)
+            XCTAssertEqual(decision.simultaneousIntervals, baselineMixed.simultaneousIntervals)
             XCTAssertEqual(result.sidecar.units, baseline.sidecar.units)
             XCTAssertEqual(result.sidecar.speakerActivity, baseline.sidecar.speakerActivity)
             XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), units.map { Optional($0.speaker) })
@@ -306,18 +331,36 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                 coverageReceipts: self.receipts(for: manifest), echoVerdicts: echoes))
         }
         let baseline = try assemble(units)
-        XCTAssertEqual(baseline.sidecar.speakerAttributionDecisions.filter { $0.rule == .briefInterruption }.count, 2)
+        let baselineMixed = baseline.sidecar.speakerAttributionDecisions.filter { $0.rule == .mainSpeakerContinuation }
+        XCTAssertEqual(Set(baselineMixed.map(\.unitID)), ["mixed-0", "mixed-1"])
+        for decision in baselineMixed {
+            XCTAssertEqual(decision.selectedToken?.label, "a")
+            XCTAssertEqual(Set(decision.rawAssignment.tokens.map(\.label)), ["a", "b"])
+        }
         let quarantined = self.unit(id: "invalid-provenance", span: spans[1], analysisStart: 11.9, analysisEnd: 12.05,
             epoch: spans[0].analysisEpochID, speaker: .unassigned, spanIDs: [spans[1].id])
         let result = try assemble(units + [quarantined])
-        XCTAssertEqual(result.sidecar.dispositions.first { $0.unitID == quarantined.id }?.disposition, .rejectedInvalidTiming)
+        let quarantineRecord = try XCTUnwrap(result.sidecar.dispositions.first { $0.unitID == quarantined.id })
+        XCTAssertEqual(quarantineRecord.disposition, .rejectedInvalidTiming)
+        XCTAssertEqual(quarantineRecord.reasonCode, MeetingUnitQuarantineReason.analysisEpochMismatch.rawValue)
+        XCTAssertEqual(Set(result.sidecar.speakerAttributionDecisions.map(\.unitID)), Set(units.map(\.id)))
         XCTAssertFalse(result.sidecar.speakerAttributionDecisions.contains { $0.unitID == quarantined.id },
             "No interval query or clipped support is legal for quarantined provenance")
         XCTAssertFalse(result.sidecar.speakerAttributionDecisions.contains { $0.rule.isHeuristic })
+        for original in baselineMixed {
+            let decision = try XCTUnwrap(result.sidecar.speakerAttributionDecisions.first { $0.unitID == original.unitID })
+            XCTAssertEqual(decision.rule, .ambiguous)
+            XCTAssertNil(decision.selectedToken)
+            XCTAssertTrue(decision.cueUnitIDs.isEmpty)
+            XCTAssertEqual(decision.rawAssignment, original.rawAssignment)
+            XCTAssertEqual(decision.candidates, original.candidates)
+            XCTAssertEqual(decision.simultaneousIntervals, original.simultaneousIntervals)
+        }
         XCTAssertEqual(result.segments.map(\.id), baseline.segments.map(\.id))
         XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), baseline.segments.map(\.nativeSpeakerAssignment))
         XCTAssertTrue(result.sidecar.units.contains(quarantined))
-        XCTAssertNoThrow(try result.sidecar.validated())
+        let replay = try JSONDecoder().decode(MeetingResultSidecar.self, from: JSONEncoder().encode(result.sidecar))
+        XCTAssertEqual(try replay.validated(), result.sidecar)
     }
 
     // MARK: - Session/manifest fixtures

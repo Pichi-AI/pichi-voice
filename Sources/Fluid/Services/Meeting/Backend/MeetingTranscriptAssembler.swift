@@ -345,7 +345,8 @@ nonisolated struct MeetingTranscriptAssembler {
             emitted: visibleUnits,
             identityLinks: identityLinks,
             confirmedLocalUserTokens: input.confirmedLocalUserTokens,
-            activity: evidence.speakerActivity
+            activity: evidence.speakerActivity,
+            useVoicedAdmission: input.speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true
         )
         let speakerIDsByToken = Dictionary(
             speakers.map { ($0.token, $0.speaker.id) },
@@ -703,7 +704,11 @@ nonisolated struct MeetingTranscriptAssembler {
         identityLinks: [MeetingSpeakerIdentityLink],
         priorSpeakers: [MeetingSessionSpeaker] = [],
         confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = [],
-        activity: [MeetingBackendSpeakerActivity] = []
+        activity: [MeetingBackendSpeakerActivity] = [],
+        useVoicedAdmission: Bool = false,
+        contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = [],
+        voicedAdmissionUnitIDs: Set<String>? = nil,
+        qualifiedNativeTokens: Set<MeetingBackendSpeakerToken> = []
     ) -> [(token: MeetingBackendSpeakerToken, speaker: MeetingSessionSpeaker)] {
         var tokens: [MeetingBackendSpeakerToken] = []
         var seen = Set<MeetingBackendSpeakerToken>()
@@ -711,6 +716,7 @@ nonisolated struct MeetingTranscriptAssembler {
             guard case let .assigned(token) = unit.speaker, seen.insert(token).inserted else { continue }
             tokens.append(token)
         }
+        for token in qualifiedNativeTokens where seen.insert(token).inserted { tokens.append(token) }
         tokens.sort {
             ($0.analysisEpochID.trackID.uuidString, $0.analysisEpochID.ordinal, $0.analysisEpochID.generation, $0.label)
                 < ($1.analysisEpochID.trackID.uuidString, $1.analysisEpochID.ordinal, $1.analysisEpochID.generation, $1.label)
@@ -721,8 +727,18 @@ nonisolated struct MeetingTranscriptAssembler {
         // minting "Speaker N". A track where every slot is brief keeps them all.
         var wordsByIdentity: [MeetingBackendSpeakerToken: Int] = [:]
         var unitIntervals: [MeetingBackendSpeakerToken: [MeetingAnalysisInterval]] = [:]
+        var voicedUnitIntervals: [MeetingBackendSpeakerToken: [MeetingAnalysisInterval]] = [:]
         for (unit, _) in emitted {
             guard case let .assigned(token) = unit.speaker else { continue }
+            if useVoicedAdmission {
+                guard unit.text.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }
+                if voicedAdmissionUnitIDs?.contains(unit.id) != false,
+                   !contextualBarriers.contains(where: { $0.analysisEpochID == unit.analysisEpochID
+                       && min($0.interval.end, unit.analysisEnd) - max($0.interval.start, unit.analysisStart)
+                           > MeetingAnalysisManifestSchema.mappingToleranceSeconds }) {
+                    voicedUnitIntervals[token, default: []].append(.init(start: unit.analysisStart, end: unit.analysisEnd))
+                }
+            }
             let identity = canonicalByToken[token] ?? token
             wordsByIdentity[identity, default: 0] += unit.text.split(whereSeparator: \.isWhitespace).count
             unitIntervals[token, default: []].append(.init(start: unit.analysisStart, end: unit.analysisEnd))
@@ -734,8 +750,22 @@ nonisolated struct MeetingTranscriptAssembler {
             if activity.isEmpty {
                 secondsByIdentity[identity, default: 0] += Self.unionIntervals(intervals).reduce(0) { $0 + $1.duration }
             } else {
-                let voice = (activityByToken[token] ?? []).map { MeetingAnalysisInterval(start: $0.start, end: $0.end) }
-                secondsByIdentity[identity, default: 0] += Self.intersectionDuration(intervals, voice)
+                let voice = Self.unionIntervals((activityByToken[token] ?? []).map {
+                    MeetingAnalysisInterval(start: $0.start, end: $0.end)
+                })
+                if useVoicedAdmission {
+                    // CTC emits lexical spikes, not an acoustic occupancy mask. Count the
+                    // actual voiced bouts containing independent lexical evidence instead.
+                    let supported = voice.filter { bout in (voicedUnitIntervals[token] ?? []).contains {
+                        min($0.end, bout.end) - max($0.start, bout.start) > MeetingAnalysisManifestSchema.mappingToleranceSeconds
+                    } }
+                    // Unsafe/manual source rows retain the former envelope admission, but
+                    // cannot expand forty milliseconds into a whole native voiced bout.
+                    secondsByIdentity[identity, default: 0] += max(Self.intersectionDuration(intervals, voice),
+                        supported.reduce(0) { $0 + $1.duration })
+                } else {
+                    secondsByIdentity[identity, default: 0] += Self.intersectionDuration(intervals, voice)
+                }
             }
         }
         let isSubstantial = { (identity: MeetingBackendSpeakerToken) in
@@ -746,14 +776,11 @@ nonisolated struct MeetingTranscriptAssembler {
         let tracksWithSubstantialSpeaker = Set(wordsByIdentity.keys.filter(isSubstantial).map(\.analysisEpochID.trackID))
         let speakingTokens = tokens.filter { token in
             let identity = canonicalByToken[token] ?? token
-            return isSubstantial(identity) || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
+            return qualifiedNativeTokens.contains(token) || isSubstantial(identity)
+                || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
         }
         let localIdentities = Set(confirmedLocalUserTokens.map { canonicalByToken[$0] ?? $0 })
-        let priorIDs = Set(priorSpeakers.map(\.id))
-        let ordinals = Dictionary(uniqueKeysWithValues: speakingTokens.filter {
-            canonicalByToken[$0] == nil && !priorIDs.contains(Self.speakerID(attemptID: attemptID, token: $0))
-        }.enumerated().map { ($0.element, $0.offset + priorSpeakers.count + 1) })
-        return speakingTokens.map { token in
+        let mapped: [(token: MeetingBackendSpeakerToken, speaker: MeetingSessionSpeaker)] = speakingTokens.map { token in
             let canonical = canonicalByToken[token] ?? token
             let scopedClusterID = Self.scopedClusterID(for: canonical)
             let speakerID = Self.speakerID(attemptID: attemptID, token: canonical)
@@ -766,14 +793,23 @@ nonisolated struct MeetingTranscriptAssembler {
                 token,
                 MeetingSessionSpeaker(
                     id: speakerID,
-                    displayName: String(format: self.speakerNameFormat, Int64(ordinals[canonical] ?? 1)),
+                    displayName: String(format: self.speakerNameFormat, Int64(1)),
                     diarizationClusterID: scopedClusterID,
                     trackKind: trackKinds[token.analysisEpochID.trackID] ?? .microphone,
                     isLocalUser: isLocalUser,
-                    identityCandidates: []
+                    identityCandidates: [],
+                    generatedParticipantNumber: isLocalUser ? 0 : 1
                 )
             )
         }
+        var ordered = priorSpeakers
+        var indices = Dictionary(ordered.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        for item in mapped {
+            if let index = indices[item.speaker.id] { ordered[index] = item.speaker }
+            else { indices[item.speaker.id] = ordered.count; ordered.append(item.speaker) }
+        }
+        let numbered = MeetingSessionSpeaker.numberingGeneratedParticipants(ordered, speakerNameFormat: self.speakerNameFormat)
+        return mapped.map { ($0.token, numbered[indices[$0.speaker.id]!]) }
     }
 
     private static func unionIntervals(_ intervals: [MeetingAnalysisInterval]) -> [MeetingAnalysisInterval] {
@@ -811,10 +847,12 @@ nonisolated struct MeetingTranscriptAssembler {
         confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = [],
         activity: [MeetingBackendSpeakerActivity] = [],
         speakerAttributionPolicy: MeetingSpeakerAttributionPolicy? = .standard,
-        contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = []
+        contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = [],
+        voicedAdmissionUnitIDs: Set<String>? = nil
     ) throws -> MeetingPCMTranscriptBatch {
         guard offset.isFinite, offset >= 0, duration.isFinite, duration > 0,
               Set(units.map(\.id)).count == units.count,
+              voicedAdmissionUnitIDs?.isSubset(of: Set(units.map(\.id))) ?? true,
               activity.allSatisfy({ $0.token.analysisEpochID == epoch
                   && MeetingEvidenceInterval.isValid(start: $0.start, end: $0.end)
                   && $0.end <= duration + 1e-6 && !$0.token.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
@@ -847,7 +885,10 @@ nonisolated struct MeetingTranscriptAssembler {
         }
         let speakers = self.makeSpeakers(attemptID: attemptID, trackKinds: [epoch.trackID: .microphone],
                                          emitted: visible, identityLinks: identityLinks, priorSpeakers: reconciledPriorSpeakers,
-                                         confirmedLocalUserTokens: confirmedLocalUserTokens, activity: activity)
+                                         confirmedLocalUserTokens: confirmedLocalUserTokens, activity: activity,
+                                         useVoicedAdmission: speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true,
+                                         contextualBarriers: contextualBarriers,
+                                         voicedAdmissionUnitIDs: voicedAdmissionUnitIDs)
         let speakerIDs = Dictionary(speakers.map { ($0.token, $0.speaker.id) }, uniquingKeysWith: { first, _ in first })
         let segments = emitted.map { unit, interval in
             let decision = decisionsByID[unit.id]
@@ -880,15 +921,55 @@ nonisolated struct MeetingTranscriptAssembler {
         }
         var batch = MeetingPCMTranscriptBatch(segments: segments,
             speakers: speakers.map(\.speaker))
-        batch.speakers = batch.mergingSpeakers(into: reconciledPriorSpeakers)
+        batch.speakerNameFormat = self.speakerNameFormat
+        batch.speakers = batch.mergingSpeakers(into: reconciledPriorSpeakers, speakerNameFormat: self.speakerNameFormat)
         return batch
+    }
+
+    /// The bounded strict-memory owner supplies native voiced support earned across windows.
+    /// Admit identity records only; ordinary per-word safety and mapping remain unchanged.
+    func admitPCMIdentities(_ qualification: MeetingVoicedSpeakerAdmission,
+        attemptID: UUID, epoch: MeetingAnalysisEpochID, priorSpeakers: [MeetingSessionSpeaker]
+    ) throws -> [MeetingSessionSpeaker] {
+        try Task.checkCancellation()
+        guard qualification.attemptID == attemptID, qualification.epoch == epoch,
+              qualification.tokens.count <= MeetingSpeakerVoiceSamples.maximumProfiles,
+              qualification.tokens.allSatisfy({ $0.analysisEpochID == epoch && !$0.label.isEmpty }) else {
+            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+        }
+        let tokens = qualification.tokens.filter { token in
+            let id = Self.speakerID(attemptID: attemptID, token: token), cluster = Self.scopedClusterID(for: token)
+            // Do not resurrect a merged identity or replace conflicting/manual registry metadata.
+            return !priorSpeakers.contains { $0.id == id || $0.diarizationClusterID == cluster }
+        }
+        let admitted = self.makeSpeakers(attemptID: attemptID, trackKinds: [epoch.trackID: .microphone],
+            emitted: [], identityLinks: [], priorSpeakers: priorSpeakers,
+            useVoicedAdmission: true, qualifiedNativeTokens: tokens).map(\.speaker)
+        try Task.checkCancellation()
+        return admitted
+    }
+
+    /// Identity-only verification reuses the assembler's stable token mapping. It never mints
+    /// another participant, edits aliases or reattributes already protected words.
+    static func applyingLocalUserTokens(to speakers: [MeetingSessionSpeaker], attemptID: UUID,
+                                       tokens: Set<MeetingBackendSpeakerToken>,
+                                       speakerNameFormat: String = PichiLocalization.text("Speaker %lld")) -> [MeetingSessionSpeaker] {
+        let IDs = Set(tokens.map { Self.speakerID(attemptID: attemptID, token: $0) })
+        let updated = speakers.map { source in
+            var speaker = source
+            speaker.isLocalUser = IDs.contains(speaker.id)
+            return speaker
+        }
+        return MeetingSessionSpeaker.numberingGeneratedParticipants(updated, speakerNameFormat: speakerNameFormat)
     }
 
     private static func scopedClusterID(for token: MeetingBackendSpeakerToken) -> String {
         "\(token.analysisEpochID):\(token.label.precomposedStringWithCanonicalMapping)"
     }
 
-    private static func speakerID(attemptID: UUID, token: MeetingBackendSpeakerToken) -> SessionSpeakerID {
+    /// Reconciliation may validate an already admitted identity against this exact scope.
+    /// Product identities are still admitted and created only by this assembler.
+    static func speakerID(attemptID: UUID, token: MeetingBackendSpeakerToken) -> SessionSpeakerID {
         Self.stableUUID("speaker:\(attemptID.uuidString):\(Self.scopedClusterID(for: token))")
     }
 
@@ -944,16 +1025,54 @@ nonisolated enum MeetingPCMRecordingAttribution {
             }
             return unit.assigningSpeaker(assignment)
         }
+        func isManualSpeakerAssignment(_ segment: MeetingTranscriptSegment) -> Bool {
+            guard speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true,
+                  let id = segment.speakerID, segment.speakerAttribution == nil,
+                  segment.speakerAttributionInference == nil,
+                  segment.revision > 0 || segment.isUserTextEdited == true else { return false }
+            if segment.isUserTextEdited == true { return true }
+            guard case let .assigned(token) = segment.nativeSpeakerAssignment else { return true }
+            // A revision can come from privacy or prior automatic publication. An exact
+            // native UUID is not itself proof that the user reassigned this word.
+            return id != MeetingTranscriptAssembler.speakerID(attemptID: attemptID, token: token)
+        }
         // Preserve original publication safety before reconstructing final native units.
         // A bounded unsafe envelope blocks contextual targets and cue paths, while its
         // independently supported acoustic assignment remains available for display.
         let contextualBarriers = transcript.segments.compactMap { segment -> MeetingSpeakerAttributionContextBarrier? in
             guard segment.status != .final || segment.completeness != .complete
-                || segment.isEcho || segment.attributionState == .timingUncertain else { return nil }
+                || segment.isEcho || segment.attributionState == .timingUncertain
+                || isManualSpeakerAssignment(segment) else { return nil }
             return .init(analysisEpochID: epoch, interval: .init(
                 start: segment.nativeTiming?.start ?? segment.start.seconds,
                 end: segment.nativeTiming?.end ?? segment.end.seconds))
         }
+        // Canonical admission has the original publication/manual provenance here, before
+        // reconstructing plain native units. A safe short lexical emission may sponsor its
+        // actual voiced bout; an edited or conflicting source keeps only former envelope support.
+        let voicedAdmissionUnitIDs = Set(transcript.segments.enumerated().compactMap { index, segment -> String? in
+            guard segment.status == .final, segment.completeness == .complete, !segment.isEcho,
+                  segment.attributionState != .timingUncertain, segment.isUserTextEdited != true,
+                  segment.originalText == nil, segment.speakerAttributionInference == nil,
+                  segment.nativePrecision == .word, segment.nativeUnitID?.isEmpty == false,
+                  case let .assigned(nativeToken) = segment.nativeSpeakerAssignment,
+                  nativeToken.analysisEpochID == epoch, assignments[rawUnits[index].id] == .assigned(nativeToken)
+            else { return nil }
+            if let summary = segment.speakerAttribution {
+                guard summary.unitID == segment.nativeUnitID, summary.rawAssignment == segment.nativeSpeakerAssignment,
+                      summary.rule.isIndependentAcousticSelection, summary.selectedSpeakerID == segment.speakerID,
+                      let token = summary.selectedToken, summary.rawAssignment == .assigned(token),
+                      segment.speakerID.map({ $0 == MeetingTranscriptAssembler.speakerID(attemptID: attemptID, token: token) }) ?? true
+                else { return nil }
+            } else {
+                guard segment.revision == 0 else { return nil }
+                if let id = segment.speakerID {
+                    guard case let .assigned(token) = segment.nativeSpeakerAssignment,
+                          id == MeetingTranscriptAssembler.speakerID(attemptID: attemptID, token: token) else { return nil }
+                }
+            }
+            return rawUnits[index].id
+        })
         // Canonical media times round to milliseconds. The last accepted boundary can
         // exceed the physical frame duration by at most that rounding quantum.
         let assemblyDuration = max(duration, transcript.segments.map { $0.end.seconds }.max() ?? duration)
@@ -961,13 +1080,18 @@ nonisolated enum MeetingPCMRecordingAttribution {
             .assemblePCMWindow(attemptID: attemptID, epoch: epoch, offset: 0, duration: assemblyDuration,
                 units: units, priorSpeakers: transcript.speakers, confirmedLocalUserTokens: confirmedLocalUserTokens,
                 activity: activity, speakerAttributionPolicy: speakerAttributionPolicy,
-                contextualBarriers: contextualBarriers)
+                contextualBarriers: contextualBarriers, voicedAdmissionUnitIDs: voicedAdmissionUnitIDs)
         guard attributed.segments.count == transcript.segments.count else {
             throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
         }
         var result = transcript
         result.speakers = attributed.speakers
         for index in result.segments.indices {
+            if isManualSpeakerAssignment(transcript.segments[index]),
+               let id = transcript.segments[index].speakerID,
+               transcript.speakers.contains(where: { $0.id == id && $0.mergedIntoSpeakerID == nil }) {
+                continue
+            }
             result.segments[index].speakerID = attributed.segments[index].speakerID
             result.segments[index].overlap = attributed.segments[index].overlap
             result.segments[index].attributionState = transcript.segments[index].attributionState == .timingUncertain

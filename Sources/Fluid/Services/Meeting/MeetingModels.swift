@@ -828,6 +828,31 @@ nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Send
     /// Set when this speaker was merged into another; the speaker is kept (not removed) so
     /// embedding/cluster provenance survives for M3. Optional keeps older manifests decodable.
     var mergedIntoSpeakerID: SessionSpeakerID? = nil
+    /// Present only for assembler-generated names. Zero marks the confirmed owner, who
+    /// consumes no participant number. Nil preserves legacy names and manual aliases.
+    var generatedParticipantNumber: Int? = nil
+
+    /// Admission order is stable across windows. Recompute only generated labels when
+    /// acoustic owner evidence changes; names are never inspected to infer their origin.
+    static func numberingGeneratedParticipants(
+        _ speakers: [Self], speakerNameFormat: String
+    ) -> [Self] {
+        var number = 0
+        return speakers.map { source in
+            var speaker = source
+            guard speaker.mergedIntoSpeakerID == nil else { return speaker }
+            if speaker.isLocalUser {
+                if speaker.generatedParticipantNumber != nil { speaker.generatedParticipantNumber = 0 }
+            } else {
+                number += 1
+                if speaker.generatedParticipantNumber != nil {
+                    speaker.generatedParticipantNumber = number
+                    speaker.displayName = String(format: speakerNameFormat, Int64(number))
+                }
+            }
+            return speaker
+        }
+    }
 }
 
 /// Legacy archive metadata, retained for decoding and qualified display only. New attempts
@@ -911,6 +936,10 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     var text: String
     /// The initial ASR wording is retained when a user corrects this turn.
     var originalText: String? = nil
+    /// Durable manual provenance: privacy intentionally removes originalText, while automatic
+    /// speaker patches also increment revision. Neither can erase this reading boundary.
+    /// Optional so existing archives decode without inventing a correction history.
+    var isUserTextEdited: Bool? = nil
     var revision: Int
     var status: MeetingTranscriptStatus
     var overlap: MeetingTranscriptOverlap
@@ -1094,10 +1123,18 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         }
         guard self.speakers[index].displayName != trimmed else { return }
         self.speakers[index].displayName = trimmed
+        self.speakers[index].generatedParticipantNumber = nil
         self.updatedAt = Date()
     }
 
-    mutating func reassignSegment(id: MeetingTranscriptSegmentID, to speakerID: SessionSpeakerID) throws {
+    /// The reading projection can group a raw speaker into another participant's continuing
+    /// turn. Selecting the raw speaker again is then an explicit correction, not a no-op.
+    /// The same confirmation also resolves legacy uncertainty without modern provenance.
+    mutating func reassignSegment(
+        id: MeetingTranscriptSegmentID,
+        to speakerID: SessionSpeakerID,
+        replacingReadingSpeakerID: SessionSpeakerID? = nil
+    ) throws {
         guard let segmentIndex = self.transcriptSegments.firstIndex(where: { $0.id == id }) else {
             throw MeetingDomainError.segmentNotFound
         }
@@ -1108,7 +1145,10 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         }
         guard self.transcriptSegments[segmentIndex].speakerID != speakerID
             || self.transcriptSegments[segmentIndex].speakerAttribution != nil
-            || self.transcriptSegments[segmentIndex].speakerAttributionInference != nil else { return }
+            || self.transcriptSegments[segmentIndex].speakerAttributionInference != nil
+            || self.transcriptSegments[segmentIndex].attributionState.map({ $0 != .assigned }) == true
+            || self.transcriptSegments[segmentIndex].overlap != .none
+            || replacingReadingSpeakerID.map({ $0 != speakerID }) == true else { return }
         self.transcriptSegments[segmentIndex].speakerID = speakerID
         self.transcriptSegments[segmentIndex].speakerAttribution = nil
         self.transcriptSegments[segmentIndex].speakerAttributionInference = nil

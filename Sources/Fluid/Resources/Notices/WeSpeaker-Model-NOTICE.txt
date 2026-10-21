@@ -1,0 +1,38 @@
+Legacy WeSpeaker Core ML owner-voice model attribution
+
+Artifact: wespeaker_v2.mlmodelc
+Conversion repository: FluidInference/speaker-diarization-coreml
+Pinned revision: 7eab74f3463c736418d0eb10296261ae581146c9
+Pinned attribution and scope:
+https://huggingface.co/FluidInference/speaker-diarization-coreml/blob/7eab74f3463c736418d0eb10296261ae581146c9/NOTICE.md
+Pinned model card and citations:
+https://huggingface.co/FluidInference/speaker-diarization-coreml/blob/7eab74f3463c736418d0eb10296261ae581146c9/README.md
+
+Credit: WeSpeaker, pyannote, and Fluid Inference.
+Source checkpoint: pyannote/wespeaker-voxceleb-resnet34-LM @ 837717dd,
+wrapping WeSpeaker's VoxCeleb ResNet34-LM.
+https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM/tree/837717dd
+
+License: Creative Commons Attribution 4.0 International (CC-BY-4.0).
+License text and disclaimer of warranties:
+https://creativecommons.org/licenses/by/4.0/legalcode
+
+The pinned upstream notice identifies this as a legacy artifact, separate
+from the repository's Community-1 artifact set. Fluid Inference converted
+the checkpoint to Core ML with fixed input shapes, fused the fbank frontend
+into the embedding model, and palettized wespeaker_v2 weights to 8 bits.
+The original conversion scripts were not preserved; the source notice
+describes reconstructed lineage and output-parity evidence, not a fully
+attested reproducible conversion. Pichi Voice consumes this pinned compiled
+artifact through its existing voice-matching adapter and does not claim
+to have trained or converted it.
+
+Speaker embedding citation retained from the pinned model card:
+Hongji Wang, Chengdong Liang, Shuai Wang, Zhengyang Chen, Binbin Zhang,
+Xu Xiang, Yanlei Deng, and Yanmin Qian. "Wespeaker: A research and production
+oriented speaker embedding learning toolkit." ICASSP 2023, pages 1-5, IEEE.
+
+Model files are downloaded separately and are not in this source repository.
+Retain the source attribution, license link, warranty disclaimer and prior
+modification disclosure when sharing applicable model material. This notice
+does not assert endorsement by WeSpeaker, pyannote, or Fluid Inference.

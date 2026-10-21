@@ -350,13 +350,23 @@ extension SettingsStore {
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingSpeakerLabelsEnabled) }
     }
 
-    /// Explicit opt-in. Missing or future values keep the established processing schedule.
+    /// Settings displays the in-room preference. Capture admission passes its actual topology
+    /// below so an absent preference cannot enable a single-source runtime for an online call.
     var meetingSpeakerProcessingMode: MeetingSpeakerProcessingMode {
-        get {
-            self.defaults.string(forKey: Keys.meetingSpeakerProcessingMode)
-                .flatMap(MeetingSpeakerProcessingMode.init(rawValue:)) ?? .afterRecording
-        }
+        get { self.meetingSpeakerProcessingMode(for: .inRoom) }
         set { objectWillChange.send(); self.defaults.set(newValue.rawValue, forKey: Keys.meetingSpeakerProcessingMode) }
+    }
+
+    /// Only new requests without a stored choice prefer streaming when the selected backend
+    /// declares that capability. Explicit and unknown future values retain their prior meaning;
+    /// this never migrates encoded sessions, checkpoints or a running attempt's configuration.
+    func meetingSpeakerProcessingMode(for mode: MeetingCaptureMode) -> MeetingSpeakerProcessingMode {
+        if let stored = self.defaults.object(forKey: Keys.meetingSpeakerProcessingMode) {
+            return (stored as? String).flatMap(MeetingSpeakerProcessingMode.init(rawValue:)) ?? .afterRecording
+        }
+        let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.selectedSpeechModel.rawValue)
+        return mode == .inRoom && descriptor?.supportedSpeakerProcessingModes.contains(.streaming) == true
+            ? .streaming : .afterRecording
     }
 
     var meetingPIIRedactionEnabled: Bool {

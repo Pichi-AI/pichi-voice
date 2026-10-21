@@ -44,6 +44,13 @@ private final class DiagnosticProbe: @unchecked Sendable {
     var snapshot: [String] { lock.withLock { lines } }
 }
 
+private final class WindowFeedbackProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var feedback: [MeetingPCMWindowProcessingFeedback] = []
+    func record(_ value: MeetingPCMWindowProcessingFeedback) { self.lock.withLock { self.feedback.append(value) } }
+    var snapshot: [MeetingPCMWindowProcessingFeedback] { self.lock.withLock { self.feedback } }
+}
+
 /// Scalar-only observations: the stress harness must not retain the audio it checks.
 private final class LongRunProbe: @unchecked Sendable {
     private let lock = NSLock()
@@ -89,6 +96,24 @@ private final class ProgressiveProbe: @unchecked Sendable {
     func didReturn() { lock.withLock { returned += 1 } }
     func didFinish() { lock.withLock { finishReturned = true } }
     var snapshot: ([Update], [Double], Int, Int, Int, Bool) { lock.withLock { (updates, starts, checkpoints, failures, returned, finishReturned) } }
+}
+
+private struct StartupPrepared: MeetingPreparedStreamingPCMProcessing {
+    let probe: LongRunProbe
+    func recognize(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
+                   preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingStreamingPCMObservation {
+        var frames = 0
+        while let update = try await window.next() { frames += update.samples.count }
+        self.probe.recognized(frames, start: offset)
+        return .init(batch: .init(segments: [], speakers: []), activity: [],
+                     acceptedThroughSample: frames, processedThroughSample: frames,
+                     retainedFromSample: 0, isFinal: false)
+    }
+    func finishStreaming() async throws -> MeetingStreamingPCMObservation {
+        .init(batch: .init(segments: [], speakers: []), activity: [],
+              acceptedThroughSample: 0, processedThroughSample: 0, retainedFromSample: 0, isFinal: true)
+    }
+    func discardActivity(beforeSample: Int) async throws {}
 }
 
 @main
@@ -209,7 +234,9 @@ struct MeetingCapturePCMTransportTests {
     }
 
     static func main() async throws {
+        try await testCaptureStopBoundary()
         try await testDesktopWriterRejection()
+        try await testCaptureBeforePreparation()
 
         let gate = MeetingPCMIntakeGate(maximumBytes: 16_000 * 4, maximumSeconds: 1)
         let reservation = gate.reserve(frames: 12_000, channels: 1, sampleRate: 16_000)!
@@ -424,10 +451,63 @@ struct MeetingCapturePCMTransportTests {
         catch MeetingMemoryAudioError.invalidPCM { }
         try require(wrongFormatProbe.snapshot.2 == 1, "malformed PCM emits one terminal event")
         try await progressiveTransport()
+        try await postCheckpointWindowFeedback()
         try await checkpointReleasesPCM()
         try await longMeetingTransport()
         try await archivedRecordingSurvivesSlowLiveSpeech()
         print("Meeting PCM transport: admission, conversion, ownership, timeline, bounded inference, overload, joined finish and checkpoint failure passed.")
+    }
+
+    static func testCaptureBeforePreparation() async throws {
+        let preparation = Latch(), probe = LongRunProbe(), finishProbe = ProgressiveProbe()
+        let controller = MeetingStreamingPCMController.deferred { body in
+            await preparation.wait()
+            try await body(StartupPrepared(probe: probe))
+        }
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            chunkSeconds: 1, maximumPendingSeconds: 2, initialPreviewSeconds: 0.25, previewIntervalSeconds: 0.25,
+            recognize: { window, offset in try await controller.recognize(window: window, offset: offset).batch },
+            checkpoint: { _ in probe.checkpointed() },
+            finalize: { try await controller.finishStreaming().batch },
+            failure: { _ in probe.failed() })
+        try require(consumer.enqueue(try sample(frames: 4_000)), "Microphone PCM is admitted before either native model is ready")
+        try await awaitEntered(preparation, "First PCM window starts the deferred preparation owner")
+        for start in stride(from: 4_000, to: 24_000, by: 4_000) {
+            try require(consumer.enqueue(try sample(frames: 4_000, startFrame: Int64(start))),
+                        "Initial and subsequent microphone samples stay inside the existing bounded queue")
+        }
+        let finishing = Task { try await consumer.finish(); finishProbe.didFinish() }
+        for _ in 0..<50 { await Task.yield() }
+        try require(probe.snapshot.frames == 0 && !finishProbe.snapshot.5,
+                    "Early Stop retains all accepted PCM and joins pending native preparation")
+        await preparation.release()
+        try await finishing.value
+        try require(probe.snapshot.frames == 24_000 && probe.snapshot.windows == 2
+                    && probe.snapshot.contiguous && !probe.snapshot.rejected,
+                    "Every sample accepted during preparation is transcribed exactly once after readiness")
+
+        let slowPreparation = Latch(), boundedProbe = LongRunProbe(), boundedFinish = ProgressiveProbe()
+        let boundedController = MeetingStreamingPCMController.deferred { body in
+            await slowPreparation.wait()
+            try await body(StartupPrepared(probe: boundedProbe))
+        }
+        let bounded = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            chunkSeconds: 0.5, maximumPendingSeconds: 0.5, initialPreviewSeconds: 0.25, previewIntervalSeconds: 0.25,
+            recognize: { window, offset in try await boundedController.recognize(window: window, offset: offset).batch },
+            checkpoint: { _ in boundedProbe.checkpointed() }, failure: { _ in boundedProbe.failed() })
+        try require(bounded.enqueue(try sample(frames: 4_000)), "Initial preparation sample is inside budget")
+        try await awaitEntered(slowPreparation, "Slow native preparation is owned")
+        try require(bounded.enqueue(try sample(frames: 4_000, startFrame: 4_000)), "Exact preparation PCM budget remains accepted")
+        try require(!bounded.enqueue(try sample(frames: 1, startFrame: 8_000)), "Preparation does not create an unbounded second queue")
+        let closed = Task { try await bounded.finish(); boundedFinish.didFinish() }
+        for _ in 0..<50 { await Task.yield() }
+        try require(!boundedFinish.snapshot.5, "Overload still joins pending native preparation")
+        await slowPreparation.release()
+        do { try await closed.value; throw NSError(domain: "ExpectedStartupOverload", code: 1) }
+        catch MeetingMemoryAudioError.overload {}
+        try require(boundedProbe.snapshot.frames == 0 && boundedProbe.snapshot.rejected,
+                    "Overload cannot publish cancelled initial speech or silently drop its queue")
+        await boundedController.cancelAndWait()
     }
 
     private static func awaitEntered(_ latch: Latch, _ detail: String) async throws {
@@ -756,6 +836,51 @@ struct MeetingCapturePCMTransportTests {
             } catch MeetingMemoryAudioError.invalidBudget { }
         }
         print("Progressive PCM: growing windows, delta coalescing, empty seal, exact budget, waiter cancellation and joined cleanup passed.")
+    }
+
+    static func postCheckpointWindowFeedback() async throws {
+        let probe = ProgressiveProbe(), feedback = WindowFeedbackProbe()
+        let store = Latch(), scheduling = Latch()
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            chunkSeconds: 20, maximumPendingSeconds: 60, initialPreviewSeconds: 3, previewIntervalSeconds: 10,
+            recognize: { window, start in
+                probe.begin(start)
+                while let update = try await window.next() { probe.record(update, start: start) }
+                return .init(segments: [], speakers: [])
+            }, checkpoint: { _ in
+                if probe.snapshot.1.count == 1 { await store.wait() }
+                probe.checkpoint()
+            }, didProcessWindow: { value in
+                try require(probe.snapshot.2 > feedback.snapshot.count,
+                            "Scheduling feedback cannot run before protected persistence joins")
+                feedback.record(value)
+                if value.sourceStartSample == 0 { await scheduling.wait() }
+            }, failure: { _ in probe.failed() })
+        for frame in stride(from: 0, to: 320_000, by: 64_000) {
+            try require(consumer.enqueue(try sample(frames: 64_000, startFrame: Int64(frame))), "First source window accepted")
+        }
+        try await awaitEntered(store, "The canonical store owns the first completed window")
+        for frame in stride(from: 320_000, to: 896_000, by: 48_000) {
+            try require(consumer.enqueue(try sample(frames: 48_000, startFrame: Int64(frame))),
+                        "Thirty-six seconds of pressure stays below the real sixty-second admission budget")
+        }
+        try require(feedback.snapshot.isEmpty, "A blocked store cannot produce an early scheduling receipt")
+        await store.release()
+        try await awaitEntered(scheduling, "The joined store delivers its exact source and charged queue snapshot")
+        let first = feedback.snapshot[0]
+        try require(first.sourceStartSample == 0 && first.sourceFrameCount == 320_000
+            && first.chargedPendingFrames == 576_000 && first.maximumPendingFrames == 960_000,
+            "Feedback excludes released current PCM and reports actual remaining charged frames")
+        try require(probe.snapshot.1 == [0], "The next recognizer must join scheduling feedback too")
+        let finish = Task { try await consumer.finish() }
+        await scheduling.release()
+        try await finish.value
+        try require(feedback.snapshot.map(\.sourceStartSample) == [0, 320_000, 640_000]
+            && feedback.snapshot.map(\.sourceFrameCount) == [320_000, 320_000, 256_000]
+            && feedback.snapshot.last?.chargedPendingFrames == 0,
+            "Exactly one source-matched feedback follows every complete and finite-tail checkpoint")
+        try require(probe.snapshot.2 == 3 && probe.snapshot.3 == 0, "Pressure feedback cannot drop a checkpoint or reject accepted PCM")
+        print("PCM feedback: post-store ordering, exact source ranges, actual 36/60-second pressure and joined next-window admission passed.")
     }
 
 }

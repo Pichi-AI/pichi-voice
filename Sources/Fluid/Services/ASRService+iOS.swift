@@ -58,7 +58,7 @@ final class ASRService: ObservableObject {
     var availableMeetingModels: [SettingsStore.SpeechModel] {
         SettingsStore.SpeechModel.availableModels.filter {
             PichiMeetingProviderFactory.registeredBackendDescriptor(for: $0.rawValue) != nil
-        }
+        }.sorted { PichiMeetingProviderFactory.onboardingPriority(for: $0.rawValue) < PichiMeetingProviderFactory.onboardingPriority(for: $1.rawValue) }
     }
 
     var fileTranscriptionProvider: any TranscriptionProvider {
@@ -90,6 +90,7 @@ final class ASRService: ObservableObject {
     func shutdownForTermination() async {
         self.isTerminating = true
         self.residency.beginTermination()
+        await self.residency.retireIdlePreparation()
         let operation = self.modelOperation
         operation?.cancel()
         _ = await operation?.result
@@ -182,7 +183,7 @@ final class ASRService: ObservableObject {
             ownsLease = true
         }
         defer { if ownsLease { self.releaseExclusiveActivity(lease) } }
-        let admission = try self.residency.beginOperation(owner: "speech", modelID: model.id)
+        let admission = try await self.residency.beginOperationRetiringIdle(owner: "speech", modelID: model.id)
         defer { self.residency.endOperation(admission) }
         let provider = try self.provider(for: model)
         let id = UUID()
@@ -281,7 +282,7 @@ final class ASRService: ObservableObject {
     func importModel(_ model: SettingsStore.SpeechModel, from directory: URL) async throws {
         let lease = try self.acquireExclusiveActivity(.modelMaintenance)
         defer { self.releaseExclusiveActivity(lease) }
-        let admission = try self.residency.beginOperation(owner: "speech", modelID: model.id)
+        let admission = try await self.residency.beginOperationRetiringIdle(owner: "speech", modelID: model.id)
         defer { self.residency.endOperation(admission) }
         let provider = try self.provider(for: model)
         do { try await provider.importModel(from: directory) }
@@ -292,7 +293,7 @@ final class ASRService: ObservableObject {
     func clearModelCache(for model: SettingsStore.SpeechModel) async throws {
         let lease = try self.acquireExclusiveActivity(.modelMaintenance)
         defer { self.releaseExclusiveActivity(lease) }
-        let admission = try self.residency.beginOperation(owner: "speech", modelID: model.id)
+        let admission = try await self.residency.beginOperationRetiringIdle(owner: "speech", modelID: model.id)
         defer { self.residency.endOperation(admission) }
         self.deletingModelID = model.id
         defer { self.deletingModelID = nil }
@@ -334,7 +335,34 @@ final class ASRService: ObservableObject {
         try await self.residency.withExclusive(attemptID: attemptID, participants: [self.meetingResidencyParticipant()], acceptsCompletedCancellation: acceptsCompletedCancellation, work: work)
     }
 
+    var idleModelResidency: MeetingModelResidencyCoordinator? { self.residency }
+    func retireIdleSpeechResidency() async throws -> Bool {
+        guard activityLease == nil, modelOperation == nil, !scope.isActive,
+              !preparationOwner.isClaimed, !preparationOwner.isDraining, !isTerminating else { return false }
+        await executor.cancelAndAwaitPending()
+        try Task.checkCancellation()
+        guard activityLease == nil, modelOperation == nil else { return false }
+        await releaseResidentProvider()
+        try Task.checkCancellation()
+        return activityLease == nil && modelOperation == nil && !isTerminating
+    }
+    func withMeetingModelResidency<T>(attemptID: UUID, idleResourceIdentity: String,
+        acceptsCompletedCancellation: (T) -> Bool,
+        work: (MeetingIdlePreparedResourceClaim?) async throws -> T) async throws -> T {
+        try await residency.withExclusive(attemptID: attemptID, participants: [meetingResidencyParticipant()],
+            idleResourceIdentity: idleResourceIdentity, acceptsCompletedCancellation: acceptsCompletedCancellation, work: work)
+    }
+
     func withPreparedMeetingASR<T>(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration, body: @escaping (any TranscriptionProvider) async throws -> T) async throws -> T {
+        try await self.withPreparedMeetingASR(attemptID: attemptID, configuration: configuration,
+                                             preparedProvider: nil, body: body)
+    }
+
+    var supportsPreparedProviderAdoption: Bool { true }
+
+    func withPreparedMeetingASR<T>(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+                                  preparedProvider: MeetingASRPreparedProvider?,
+                                  body: @escaping (any TranscriptionProvider) async throws -> T) async throws -> T {
         guard let lease = self.activityLease, lease.activity == .meeting else { throw MeetingASRPreparationError.invalidActivityLease }
         defer { if let release = self.deferredRelease { self.releaseExclusiveActivity(release) } }
         #if DEBUG
@@ -342,7 +370,8 @@ final class ASRService: ObservableObject {
         #else
         let owner = self.preparationOwner
         #endif
-        return try await self.scope.run(lease: lease, attemptID: attemptID, configuration: configuration, owner: owner, isActiveLease: { [weak self] in self?.activityLease == $0 }, body: body)
+        return try await self.scope.run(lease: lease, attemptID: attemptID, configuration: configuration, owner: owner,
+            preparedProvider: preparedProvider, isActiveLease: { [weak self] in self?.activityLease == $0 }, body: body)
     }
 
     func transcribeMeetingSamples(_ samples: [Float], provider: any TranscriptionProvider, languageCode: String) async throws -> ASRTranscriptionResult {

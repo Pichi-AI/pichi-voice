@@ -7,6 +7,35 @@ import XCTest
 /// microphone lookup is controlled; the settings, coordinator, pipeline and store are real.
 @MainActor
 final class MobileConfigurationSnapshotTests: XCTestCase {
+    func testNewInRoomRequestsPreferRegisteredStreamingWithoutChangingLegacyChoices() throws {
+        let suite = "StreamingCapabilityDefaults.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .gigaam
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording)
+        XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode),
+                     "Reading a capability default must not write or migrate a preference")
+        settings.selectedSpeechModel = .whisperTiny
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
+        settings.selectedSpeechModel = .gigaam
+        settings.meetingSpeakerProcessingMode = .afterRecording
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        settings.meetingSpeakerProcessingMode = .streaming
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .streaming,
+                       "An explicit unsupported request is rejected by admission, not silently rewritten")
+        settings.selectedSpeechModel = .whisperTiny
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
+        defaults.set("future-mode", forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
+        settings.selectedSpeechModel = .gigaam
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        defaults.set(7, forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        XCTAssertEqual(MeetingFinalProcessingConfiguration().effectiveSpeakerProcessingMode, .afterRecording)
+    }
+
     func testPreferencesAreFrozenBeforeAwaitedMicrophoneLookup() async throws {
         let suiteName = "MobileConfigurationSnapshotTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -20,7 +49,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         let settings = SettingsStore(defaults: defaults)
         settings.selectedSpeechModel = .whisperTiny
         settings.meetingSaveAudio = false
-        settings.meetingSpeakerLabelsEnabled = false
+        settings.meetingSpeakerLabelsEnabled = true
         settings.meetingPIIRedactionEnabled = false
         settings.meetingRecordingDefaults = MeetingRecordingDefaults(
             isConfigured: true,
@@ -61,7 +90,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
             try await entered.wait()
             XCTAssertEqual(requestedUID, "initial-microphone")
             settings.meetingSaveAudio = true
-            settings.meetingSpeakerLabelsEnabled = true
+            settings.meetingSpeakerLabelsEnabled = false
             settings.meetingPIIRedactionEnabled = true
             var changedDefaults = settings.meetingRecordingDefaults
             changedDefaults.microphoneCaptureDeviceID = "replacement-microphone"
@@ -77,7 +106,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
             throw error
         }
         XCTAssertEqual(configuration.audioStorageMode, .memoryOnly)
-        XCTAssertEqual(configuration.speakerLabelsEnabled, false)
+        XCTAssertEqual(configuration.speakerLabelsEnabled, true)
         XCTAssertEqual(configuration.piiRedactionEnabled, false)
         XCTAssertEqual(configuration.microphone, microphone)
         XCTAssertEqual(configuration.languageCode, "ru")
@@ -240,6 +269,57 @@ final class MobilePCMAdmissionTests: XCTestCase {
         var asr = 0
         var dependencies = 0
         var runtime = 0
+    }
+
+    func testOldGigaAMTimingCheckpointIsRejectedBeforePreparationWithoutChangingSavedData() async throws {
+        let descriptor = try self.descriptor()
+        XCTAssertEqual(descriptor.version, "3")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DecoderVersion.\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var capture = self.captureConfiguration()
+        capture.audioStorageMode = .retainedFiles
+        capture.speakerLabelsEnabled = false
+        capture.piiRedactionEnabled = false
+        var session = MeetingSession(configuration: capture,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1,
+                            machTimebaseDenominator: 1, firstPresentationTime: nil))
+        // Metadata only. The version gate must run before opening source audio.
+        session.audioTracks = [.init(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+            sourceDisplayName: "Synthetic microphone", format: nil, timebase: session.timebase,
+            health: .waiting, chunks: [.init(id: UUID(), sequence: 0, relativeFilePath: "synthetic.caf",
+                presentationStart: .init(value: 0, timescale: 1000),
+                presentationEnd: .init(value: 1000, timescale: 1000), discontinuities: [],
+                sha256: String(repeating: "a", count: 64), byteCount: 1024, finalizationState: .finalized)])]
+        let source = session
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.gigaamModelID,
+            asrArtifactFingerprint: "synthetic-model-bytes", languageCode: "ru", speakerLabelsEnabled: false)
+        let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: session.id,
+            backendID: descriptor.id, backendVersion: "2", configuration: configuration,
+            piiRedactionEnabled: false, privacyFingerprint: nil)
+        let working = MeetingRetainedProcessingCheckpoint(sessionDirectory: directory)
+        let payload = Data("synthetic-old-timed-words".utf8)
+        try working.write(.init(pin: pin, inputFingerprint: "synthetic-input", ownerVoiceIdentity: nil,
+            runtimeFingerprint: nil, payload: payload), session: session)
+        let checkpointURL = directory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName)
+        let before = try Data(contentsOf: checkpointURL)
+        let probe = Probe()
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: {
+            probe.asr += 1; XCTFail("Incompatible decoder cannot prepare ASR"); return ASRService()
+        }, meetingRuntimeFactory: { _ in
+            probe.runtime += 1; throw RuntimeReached()
+        }, prepareDiarizationDependencies: { _ in probe.dependencies += 1 })
+        do {
+            _ = try await pipeline.process(session: session, sessionDirectory: directory,
+                progress: { _ in XCTFail("Incompatible decoder cannot begin processing") })
+            XCTFail("An old decoder checkpoint must require an explicit restart with retained audio")
+        } catch MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration {} catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+        XCTAssertEqual(probe.asr + probe.runtime + probe.dependencies, 0)
+        XCTAssertEqual(try Data(contentsOf: checkpointURL), before)
+        XCTAssertEqual(try working.read(session: session)?.payload, payload)
+        XCTAssertEqual(session, source)
     }
 
     private actor CaptureProbe: MeetingCaptureControlling {

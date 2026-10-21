@@ -257,7 +257,10 @@ builds/
 !/docs/development/local-russian-text-models.md
 !/docs/development/meeting-summary-strategy.md
 !/docs/development/meeting-speaker-attribution.md
+!/docs/development/owner-verification-diagnostics.md
+!/docs/development/mobile-first-run-setup.md
 !/docs/development/mobile-meetings.md
+!/docs/development/ipad-demo-install-via-mac.md
 !/scripts/
 /scripts/*
 !/scripts/dev/
@@ -266,6 +269,8 @@ builds/
 !/scripts/dev/check-localization.py
 !/scripts/dev/check-diarization-repeatability.py
 !/scripts/dev/check-xcode-build-settings.py
+!/scripts/dev/capture-mobile-frames.py
+!/scripts/dev/mobile-screen-stream.swift
 !/docs/development/upstream-sync-1.6.11.md
 !/scripts/dev/macos-regression.py
 !/scripts/dev/asr-baseline-inputs.py

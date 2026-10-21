@@ -19,7 +19,8 @@ start = contract.index('nonisolated protocol MeetingMemoryAudioConsuming:')
 root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia\n' + contract[start:] + '\n'
     + 'class MeetingProcessingPipeline {}\n'
     + 'final class DebugLogger: Sendable { static let shared = DebugLogger(); func info(_ message: String, source: String) {} }\n'
-    + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = [] }\n'
+    + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = []; var protectedSourceThroughSample: Int? = nil }\n'
+    + 'struct MeetingBackendSpeakerActivity: Sendable {}\n'
     + 'final class MeetingMemoryAudioArchive: @unchecked Sendable { private let lock = NSLock(); private var count = 0; var totalSampleCount: Int { lock.withLock { count } }; func append(_ samples: UnsafeBufferPointer<Float>) throws { lock.withLock { count += samples.count } }; func seal() throws {} }\n')
 source = pathlib.Path('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift').read_text()
 # Compile the complete production copier, without unrelated declarations appended later.
@@ -33,12 +34,41 @@ callbacks = '\n'.join(declaration(inroom, marker) for marker in [
     'func captureOutput(', 'private func failTranscription(', 'private func enqueueForTranscription('])
 probe = pathlib.Path('Tests/Support/MeetingMacCaptureTeeProbe.swift').read_text()
 root.joinpath('MacCaptureTee.swift').write_text(probe.replace('// PRODUCTION_CALLBACKS', callbacks))
+ios = pathlib.Path('Sources/Fluid/Services/Meeting/Platform/IOSMeetingCaptureEngine.swift').read_text()
+stop_probe = pathlib.Path('Tests/Support/MeetingCaptureStopProbe.swift').read_text()
+stop_probe = stop_probe.replace('// PRODUCTION_CAPTURE_ERROR', declaration(contract, 'nonisolated enum MeetingCaptureError:'))
+stop_probe = stop_probe.replace('// PRODUCTION_IOS_STOP', declaration(ios, 'func stop(sessionID:'))
+stop_probe = stop_probe.replace('// PRODUCTION_DESKTOP_STOP', declaration(engine, 'func stop(sessionID:'))
+coordinator = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift').read_text()
+stop_probe = stop_probe.replace('// PRODUCTION_STOP_TIMER', declaration(coordinator, 'var elapsedTime:'))
+stop_probe = stop_probe.replace('// PRODUCTION_PRESERVE_HANDOFF', declaration(coordinator, 'private func preserveCaptureStopHandoff('))
+stop_probe = stop_probe.replace('// PRODUCTION_TAKE_HANDOFF', declaration(coordinator, 'private func takeCaptureStopHandoff('))
+stop_probe = stop_probe.replace('// PRODUCTION_DISCARDED_CAPTURE_COMPLETENESS', declaration(coordinator, 'private static func markDiscardedMemoryCaptureIncomplete('))
+event_body = declaration(coordinator, 'private func handleCaptureEvent(')
+assert 'Self.markDiscardedMemoryCaptureIncomplete(&session, event: kind)' in event_body
+assert coordinator.count('Self.markDiscardedMemoryCaptureIncomplete(') == 1, 'Only fresh admitted capture events classify new loss'
+merge_body = declaration(coordinator, 'private func mergeLatestMemoryCheckpoint(')
+assert 'let wasIncomplete = session.transcriptIsComplete == false' in merge_body
+assert 'if wasIncomplete { session.transcriptIsComplete = false }' in merge_body
+process_body = declaration(coordinator, 'private func process(')
+assert 'session.transcriptIsComplete == false' in process_body and 'result.isComplete && !discardedMemoryPCM' in process_body
+stop_body = declaration(coordinator, 'private func performStopAndTranscribe(')
+assert stop_body.index('guard self.operationGeneration == generation') < stop_body.index('self.state = .stopping')
+assert 'if self.captureStopHandoff?.sessionID != session.id || self.captureStopHandoff?.generation != generation' in stop_body
+start_body = declaration(coordinator, 'private func performStartRecording(')
+retry_body = declaration(coordinator, 'private func beginProcessingRetry(')
+assert 'self.captureStopHandoff = nil' in start_body and 'self.captureStopHandoff = nil' in retry_body
+assert 'self.stopRequestedAt = (session.id, Date())' in coordinator
+mobile_ui = pathlib.Path('Sources/Mobile/MobileMeetingRoot.swift').read_text()
+assert 'Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))' in mobile_ui
+root.joinpath('CaptureStop.swift').write_text(stop_probe)
 PY
 xcrun swiftc -parse-as-library -swift-version 6 \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Sources/Fluid/Services/Meeting/Platform/MeetingCapturePCMTransport.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingPipeline+MemoryAudio.swift \
-    "$task_test_dir/Contracts.swift" "$task_test_dir/SampleCopy.swift" "$task_test_dir/MacCaptureTee.swift" \
+    Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift \
+    "$task_test_dir/Contracts.swift" "$task_test_dir/SampleCopy.swift" "$task_test_dir/MacCaptureTee.swift" "$task_test_dir/CaptureStop.swift" \
     Tests/MeetingCapturePCMTransportTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"

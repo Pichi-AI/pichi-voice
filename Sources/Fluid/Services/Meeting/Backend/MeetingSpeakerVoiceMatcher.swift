@@ -381,3 +381,41 @@ extension MeetingSpeakerVoiceSamples {
         return result
     }
 }
+
+
+extension MeetingSpeakerVoiceSamples {
+    /// Retained V2 uses the live V2 clean-range and signal-quality admission. Only native
+    /// speech ranges are read in one-second buffers; silence is skipped and PCM memory
+    /// stays bounded even when the archive spans hours. No owner/ASR model is loaded here.
+    /// Optional evidence reread failures keep the completed anonymous transcript usable.
+    nonisolated static func collectFirstAndLatest(
+        epoch: MeetingAnalysisEpochID, source: any MeetingPCMReplaySource,
+        segments: [MeetingNemotronSpeakerSegment]
+    ) async throws -> [Self] {
+        let groups = MeetingStreamingOwnerVoiceSamples.cleanRanges(activity: segments, lower: 0,
+            through: max(0, source.totalSampleCount - 2_560), sourceEnd: source.totalSampleCount)
+        var collector = MeetingStreamingOwnerVoiceSamples(epoch: epoch, useAdaptiveOwnerEvidence: true)
+        do {
+            for entry in groups {
+                for range in entry.ranges {
+                    var cursor = range.lowerBound
+                    while cursor < range.upperBound {
+                        try Task.checkCancellation()
+                        let end = min(range.upperBound, cursor + 16_000)
+                        let samples = try await source.readSamples(in: cursor..<end)
+                        guard samples.count == end - cursor, samples.allSatisfy(\.isFinite) else { return [] }
+                        collector.consumeCleanOwnerSamples(samples[...], slot: entry.slot)
+                        cursor = end
+                    }
+                }
+            }
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            try Task.checkCancellation()
+            return []
+        }
+        try Task.checkCancellation()
+        return collector.takeExcerpts()
+    }
+}

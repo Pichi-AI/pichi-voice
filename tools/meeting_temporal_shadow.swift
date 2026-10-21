@@ -58,7 +58,7 @@ struct MeetingTemporalShadow {
         // swiftlint:disable:next discouraged_optional_collection
         let speechModelHashes: [String: String]?
         let speechModelStatus: String
-        let speechAdapterVersion = "speech-shadow-b2-v1"
+        let speechAdapterVersion = MeetingSpeechActivityDetector<MeetingLocalSileroActivityModel>.version
         let speechFrameSampleRate = 16_000
         let speechFrameSamples = 4096
         let speechDiagnosticThreshold = 0.85

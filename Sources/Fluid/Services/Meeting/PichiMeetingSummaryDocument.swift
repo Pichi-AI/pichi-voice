@@ -187,11 +187,14 @@ nonisolated enum PichiMeetingSummaryInput {
     }
 
     static func turns(for session: MeetingSession) -> [PichiMeetingSummaryTurn] {
-        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        let presentations = MeetingTranscriptExporter.speakerPresentations(in: session)
         return session.transcriptSegments.filter { $0.status == .final && !$0.isEcho && !normalized($0.text).isEmpty }
             .sorted { $0.start < $1.start }
-            .map { .init(id: $0.id, seconds: $0.start.seconds,
-                         speaker: MeetingTranscriptExporter.speakerLabel(for: $0, in: session, speakerNames: names), text: $0.text) }
+            .map { segment in
+                let presentation = presentations[segment.id] ?? .init(identity: "unknown", label: .unknown)
+                return .init(id: segment.id, seconds: segment.start.seconds,
+                             speaker: MeetingTranscriptExporter.speakerLabel(for: presentation), text: segment.text)
+            }
     }
 
     static func fingerprint(_ session: MeetingSession) -> String {

@@ -17,6 +17,50 @@ final class MobileSharingCleanupTests: XCTestCase {
         fixtureRoot = nil
     }
 
+    func testTranscriptSharePreservesCyrillicFileNameAndBytes() throws {
+        let title = "Синтетическая проверка атрибуции Ёё"
+        let data = Data("{\"synthetic\":true}".utf8)
+        let payload = try MeetingSharePayload.transcript(data: data, title: title, fileExtension: "json")
+        defer { payload.cleanup() }
+        let url = try XCTUnwrap(payload.items.first as? URL)
+        XCTAssertEqual(url.lastPathComponent, title + ".json")
+        XCTAssertEqual(try Data(contentsOf: url), data)
+        XCTAssertEqual(url.deletingLastPathComponent(), payload.directory)
+    }
+
+    func testExportNameRejectsTraversalControlsAndHiddenComponents() {
+        let hazardous = "  ../Секрет/папка\\имя:\u{0000}\n\u{202E}. "
+        let result = MeetingAudioExporter.sanitizedExportName(hazardous)
+        XCTAssertFalse(result.hasPrefix("."))
+        XCTAssertFalse(result.contains("/"))
+        XCTAssertFalse(result.contains("\\"))
+        XCTAssertFalse(result.contains(":"))
+        XCTAssertFalse(result.contains("\u{202E}"))
+        XCTAssertFalse(result.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) })
+        XCTAssertTrue(result.contains("Секрет"))
+        for emptyComponent in ["", ".", "..", " ... "] {
+            let safe = MeetingAudioExporter.sanitizedExportName(emptyComponent)
+            XCTAssertFalse(safe.isEmpty)
+            XCTAssertFalse(safe.hasPrefix("."))
+        }
+    }
+
+    func testExportNameBoundsBytesWithoutSplittingUnicodeCharacters() throws {
+        let decomposed = "И\u{0306}ван Е\u{0308}лкин"
+        XCTAssertEqual(MeetingAudioExporter.sanitizedExportName(decomposed), "Йван Ёлкин")
+        let title = String(repeating: "会議Ё", count: 100)
+        let name = MeetingAudioExporter.sanitizedExportName(title)
+        XCTAssertLessThanOrEqual(name.utf8.count, 160)
+        XCTAssertTrue(title.hasPrefix(name))
+        XCTAssertLessThanOrEqual(name.count, 80)
+        // The longest existing staging suffix must still fit one file component.
+        let component = ".\(name) 999999.\(UUID().uuidString).export-tmp"
+        XCTAssertLessThan(component.utf8.count, 255)
+        let directory = temporaryRoot.appendingPathComponent(component, isDirectory: true)
+        try manager.createDirectory(at: directory, withIntermediateDirectories: false)
+        XCTAssertTrue(manager.fileExists(atPath: directory.path))
+    }
+
     func testCleanupRemovesOnlyOwnedUUIDDirectoriesAndIsIdempotent() throws {
         let owned = temporaryRoot.appendingPathComponent("meeting-share-\(UUID().uuidString)", isDirectory: true)
         let lowercaseOwned = temporaryRoot.appendingPathComponent("meeting-share-\(UUID().uuidString.lowercased())", isDirectory: true)

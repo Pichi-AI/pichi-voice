@@ -3,3 +3,6 @@
 
 # This helps prevent team ID conflicts by merging non-conflicting changes automatically
 # Contributors should still be careful not to commit team ID changes
+
+# The synthetic native presentation is a PDF, including fixed-width xref records.
+Tests/MobileUITests/Fixtures/SyntheticDemoPresentation.pdf binary

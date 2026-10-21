@@ -246,7 +246,7 @@ SHELL_PROBES = (
     "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export",
     "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
-    "local_text_model_catalog", "meeting_capture_pcm", "meeting_microphone_capture_contracts", "meeting_pending_speech", "native_window_appearance",
+    "local_text_model_catalog", "meeting_capture_pcm", "meeting_capture_activity", "meeting_microphone_capture_contracts", "meeting_pending_speech", "native_window_appearance",
     "meeting_summary_evidence", "onboarding",
     "page_presentation", "participant_input_contrast", "paste_key_cache", "private_ai_idle_unloader",
     "release_highlights", "settings_owned_copy", "settings_viewport", "speech_model_provider_presentation", "ui_contrast",
@@ -261,10 +261,14 @@ PROBES = tuple(sorted(
     [Probe(f"Tests/run_{name}_tests.sh", "sh") for name in SHELL_PROBES]
     + [Probe(f"Tests/run_{name}_tests.py", "python3") for name in PYTHON_PROBES]
     + [Probe("Tests/run_clipboard_backup_reproduction.sh", "sh"),
+       Probe("Tests/run_meeting_asr_prepared_provider_tests.sh", "bash"),
+       Probe("Tests/run_meeting_idle_prepared_resource_tests.sh", "bash"),
        Probe("Tests/run_meeting_privacy_context_tests.sh", "bash"),
        Probe("Tests/run_meeting_session_store_checkpoint_tests.sh", "bash"),
+       Probe("Tests/run_meeting_timeline_trace_tests.sh", "sh"),
        Probe("Tests/run_process_cpu_diagnostics_tests.sh", "bash"),
        Probe("Tests/run_transcript_privacy_tests.sh", "bash"),
+       Probe("Tests/run_privacy_idle_preparation_tests.sh", "bash"),
        Probe("Tests/run_upstream_sync_tests.sh", "bash"),
        Probe("Tests/run_update_prompt_tests.sh", "sh", requires_ui=True)],
     key=lambda probe: probe.name,

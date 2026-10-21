@@ -81,9 +81,15 @@ nonisolated protocol MeetingNemotronDiarizerFactory: Sendable {
 
 /// The attempt's prepared Parakeet ASR session, valid only inside the meeting preparation scope.
 nonisolated protocol MeetingParakeetASRSession: Sendable {
+    /// Optional growing-prefix work may be suppressed without deferring the sealed window.
+    func allowsIntermediatePCMObservations() async -> Bool
     func transcribeWithTimings(
         _ samples: [Float]
     ) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming])
+}
+
+extension MeetingParakeetASRSession {
+    nonisolated func allowsIntermediatePCMObservations() async -> Bool { true }
 }
 
 nonisolated struct MeetingNemotronPhaseResult: Sendable {
@@ -146,6 +152,9 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 /// (plan §6 D/E isolation). Concrete phase result types are deliberate: a generic scoped-closure
 /// witness across the app/test module boundary is not ABI-stable under MainActor-by-default.
 protocol MeetingParakeetNemotronRunning: Sendable {
+    nonisolated func prepareIdleResources(configuration: MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)?
+    nonisolated func adoptIdleResources(_ resource: any MeetingIdlePreparedResource,
+        configuration: MeetingFinalProcessingConfiguration) async throws
     nonisolated var supportsProgressivePCMInput: Bool { get }
     /// Optional continuous speaker processing. The caller owns one outer residency grant;
     /// the body must finish or cancel its joined worker before this resource scope returns.
@@ -193,6 +202,9 @@ protocol MeetingParakeetNemotronRunning: Sendable {
 }
 
 extension MeetingParakeetNemotronRunning {
+    nonisolated func prepareIdleResources(configuration: MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)? { nil }
+    nonisolated func adoptIdleResources(_ resource: any MeetingIdlePreparedResource,
+        configuration: MeetingFinalProcessingConfiguration) async throws { throw MeetingModelResidencyError.unsupportedProvider }
     nonisolated var supportsProgressivePCMInput: Bool { false }
     nonisolated var supportsStreamingPCMProcessing: Bool { false }
     nonisolated func withPreparedStreamingPCM(

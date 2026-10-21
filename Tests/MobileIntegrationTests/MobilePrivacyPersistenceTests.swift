@@ -16,6 +16,151 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 /// Synthetic text isolates data handling from probabilistic model accuracy.
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
+    func testNativeColdTranscriptEditAndUndoPreparePrivacyWithoutAudio() async throws {
+        guard ProcessInfo.processInfo.environment["PICHI_MOBILE_PRIVACY_EDIT_E2E"] == "1" else {
+            throw XCTSkip("Explicitly enable actual A1 cold transcript correction inference")
+        }
+        let assets = try MobileInferenceTestAssets.resolve()
+        let modelStore = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
+        guard await modelStore.isInstalled() else { throw XCTSkip("Stage the pinned public privacy artifact") }
+        let name = "ColdTranscriptEdit.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer { defaults.removePersistentDomain(forName: name); try? FileManager.default.removeItem(at: root) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.meetingAudioRetentionPolicy = .never
+        let store = MeetingSessionStore(rootDirectory: root)
+        var source = fixture()
+        let participant = MeetingSessionSpeaker(id: UUID(), displayName: "Иван Тестов", diarizationClusterID: "synthetic",
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        source.speakers = [participant]
+        source.speakerLabelsEnabled = true
+        source.transcriptSegments[0].speakerID = participant.id
+        source.transcriptSegments[0].text = "Сведения защищены."
+        source.transcriptSegments[0].originalText = nil
+        source.transcriptSegments[0].nativePrecision = .utterance
+        source.transcriptSegments[0].nativeUnitID = "synthetic-native-turn"
+        source.transcriptSegments[0].nativeTiming = .init(start: 0, end: 3)
+        try await store.create(source)
+        let privacy = PichiTranscriptPrivacyService(modelStore: modelStore)
+        let identity = privacy.checkpointIdentity
+        let services = AppServices(store: store, settings: settings, privacy: privacy)
+        let coordinator = services.meetingSessionCoordinator
+        do {
+            let readyBeforeEdit = await privacy.isReady
+            XCTAssertFalse(readyBeforeEdit, "The production correction entry point must prepare the cold model")
+            let editedAt = ProcessInfo.processInfo.systemUptime
+            let edited = try await coordinator.editTranscriptText(sessionID: source.id,
+                segmentID: source.transcriptSegments[0].id, text: "Телефон +7 999 123-45-67.",
+                expectedRevision: source.transcriptSegments[0].revision)
+            let editSeconds = ProcessInfo.processInfo.systemUptime - editedAt
+            let readyAfterEdit = await privacy.isReady
+            XCTAssertTrue(readyAfterEdit)
+            XCTAssertTrue(edited.transcriptSegments[0].text.contains("[ТЕЛЕФОН]"))
+            XCTAssertFalse(edited.transcriptSegments[0].text.contains("999"))
+            XCTAssertFalse(edited.transcriptSegments[0].text.contains("123-45-67"))
+            XCTAssertNil(edited.transcriptSegments[0].originalText)
+            XCTAssertEqual(edited.speakers, source.speakers, "An explicit participant name is outside speech redaction")
+            XCTAssertEqual(privacy.checkpointIdentity, identity)
+            try await privacy.unload()
+            let readyBeforeUndo = await privacy.isReady
+            XCTAssertFalse(readyBeforeUndo)
+            let undoneAt = ProcessInfo.processInfo.systemUptime
+            let undone = try await coordinator.undoTranscriptCorrection(sessionID: source.id)
+            let undoSeconds = ProcessInfo.processInfo.systemUptime - undoneAt
+            let readyAfterUndo = await privacy.isReady
+            XCTAssertTrue(readyAfterUndo)
+            XCTAssertEqual(undone.transcriptSegments, source.transcriptSegments,
+                           "Undo must preserve native IDs, exact timing and the protected voice text")
+            XCTAssertEqual(undone.speakers, source.speakers)
+            XCTAssertEqual(privacy.checkpointIdentity, identity)
+            let saved = try await store.load(id: source.id)
+            XCTAssertEqual(saved?.transcriptSegments, source.transcriptSegments)
+            XCTAssertEqual(saved?.speakers, source.speakers)
+            let paths = try FileManager.default.subpathsOfDirectory(atPath: root.path)
+            let audioPaths = paths.filter { ["wav", "caf", "m4a", "mp3", "aac"].contains(URL(fileURLWithPath: $0).pathExtension) }
+            XCTAssertTrue(audioPaths.isEmpty)
+            let report: [String: Any] = ["coldEditSeconds": editSeconds, "coldUndoSeconds": undoSeconds,
+                "privacyReadyBeforeEdit": readyBeforeEdit, "privacyReadyBeforeUndo": readyBeforeUndo,
+                "privacyReadyAfterEdit": readyAfterEdit, "privacyReadyAfterUndo": readyAfterUndo,
+                "nativeSourceRestored": undone.transcriptSegments == source.transcriptSegments,
+                "participantAliasPreserved": undone.speakers == source.speakers, "audioFileCount": audioPaths.count,
+                "scope": "Synthetic text correction and undo through the production coordinator using the actual pinned A1 model; isolated test store and preferences; no microphone or ASR."]
+            let evidence = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys, .prettyPrinted])
+            XCTContext.runActivity(named: "Actual A1 cold transcript correction") { activity in
+                let attachment = XCTAttachment(data: evidence, uniformTypeIdentifier: "public.json")
+                attachment.name = "cold-transcript-edit-privacy.json"
+                attachment.lifetime = .keepAlways
+                activity.add(attachment)
+            }
+            await coordinator.shutdownForTermination()
+            try await privacy.unload()
+        } catch {
+            await coordinator.shutdownForTermination()
+            try? await privacy.unload()
+            throw error
+        }
+    }
+
+    func testExplicitParticipantAliasSurvivesPrivacyPublicationAndCheckpointRoundTrip() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingSessionStore(rootDirectory: root)
+        var source = fixture()
+        source.audioStorageMode = .retainedFiles
+        source.speakerLabelsEnabled = true
+        let participant = MeetingSessionSpeaker(id: UUID(), displayName: "Speaker 1", diarizationClusterID: "synthetic",
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [.init(id: UUID(),
+                displayName: "Иван Тестов", source: "Иван Тестов", rejected: false, confirmedAt: nil)])
+        source.speakers = [participant]
+        source.transcriptSegments[0].speakerID = participant.id
+        try source.renameSpeaker(id: participant.id, to: "  Иван Тестов  ")
+
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: source, using: FixturePersonRedactor())
+        XCTAssertEqual(safe.title, source.title)
+        XCTAssertEqual(safe.selectedMicrophone, source.selectedMicrophone)
+        XCTAssertEqual(safe.audioTracks, source.audioTracks)
+        XCTAssertEqual(safe.speakers[0].displayName, "Иван Тестов")
+        XCTAssertEqual(safe.speakers[0].identityCandidates[0].displayName, "[PERSON]")
+        XCTAssertEqual(safe.speakers[0].identityCandidates[0].source, "[PERSON]")
+        XCTAssertEqual(safe.transcriptSegments[0].text, "Врач [PERSON] просит инструкцию. Метформин 500 мг.")
+        XCTAssertNil(safe.transcriptSegments[0].originalText)
+        try await store.create(safe)
+        let saved = try await store.load(id: safe.id)
+        let loaded = try XCTUnwrap(saved)
+        XCTAssertEqual(loaded.speakers[0].displayName, "Иван Тестов")
+
+        let directory = try await store.sessionDirectory(for: safe.id)
+        let working = MeetingRetainedProcessingCheckpoint(sessionDirectory: directory)
+        let configuration = MeetingFinalProcessingConfiguration(languageCode: safe.languageCode, speakerLabelsEnabled: true)
+        let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: safe.id,
+            backendID: .init(rawValue: "synthetic-alias"), backendVersion: "1", configuration: configuration,
+            piiRedactionEnabled: true, privacyFingerprint: "synthetic-person-detector")
+        try working.write(.init(pin: pin, inputFingerprint: "synthetic-source", ownerVoiceIdentity: nil,
+            runtimeFingerprint: nil, payload: JSONEncoder().encode(loaded)), session: loaded)
+        let checkpoint = try XCTUnwrap(working.read(session: loaded))
+        let resumed = try JSONDecoder().decode(MeetingSession.self, from: checkpoint.payload)
+        let republished = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: resumed, using: FixturePersonRedactor())
+        XCTAssertEqual(republished.speakers[0].displayName, "Иван Тестов")
+        XCTAssertEqual(republished.transcriptSegments, safe.transcriptSegments)
+        XCTAssertTrue(MeetingTranscriptExporter.text(for: republished).contains("Иван Тестов:"))
+        let exported = try XCTUnwrap(JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: republished)) as? [String: Any])
+        let exportedSpeakers = try XCTUnwrap(exported["speakers"] as? [[String: Any]])
+        let exportedSegments = try XCTUnwrap(exported["segments"] as? [[String: Any]])
+        XCTAssertEqual(exportedSpeakers[0]["displayName"] as? String, "Иван Тестов")
+        XCTAssertEqual(exportedSegments[0]["text"] as? String, safe.transcriptSegments[0].text)
+        XCTAssertNil(exportedSegments[0]["originalText"])
+
+        // A streaming/resumed batch can contain saved aliases. Strip voice/identity
+        // evidence as before while keeping the explicit name and protected speech.
+        let batch = try await MeetingTranscriptPrivacyPolicy.redactedBatch(
+            .init(segments: source.transcriptSegments, speakers: source.speakers), using: FixturePersonRedactor())
+        XCTAssertEqual(batch.speakers[0].displayName, "Иван Тестов")
+        XCTAssertTrue(batch.speakers[0].identityCandidates.isEmpty)
+        XCTAssertEqual(batch.segments, safe.transcriptSegments)
+        XCTAssertEqual(batch.mergingSpeakers(into: republished.speakers)[0].displayName, "Иван Тестов")
+    }
+
     func testNativeStablePCMHypothesisSurvivesNativeAndCoarseTimingPartitions() async throws {
         let assets = try MobileInferenceTestAssets.resolve()
         let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
@@ -154,7 +299,10 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
             ("телефон 273", ["55", "55 11 метотрексат 15 мг"], ["273", "55 11"], "метотрексат 15 мг"),
             ("дата рождения 12", ["мая", "мая 1980 инсулин 10 единиц"], ["12", "мая 1980"], "инсулин 10 единиц"),
             ("домашний адрес улица Примерная", ["дом", "дом 12 квартира 7 лизиноприл 10 мг"], ["Примерная", "квартира 7"], "лизиноприл 10 мг"),
-            ("карта 4111", ["1111", "1111 1111", "1111 1111 1111 508 рублей оземпик"], ["4111", "1111"], "508 рублей оземпик"),
+            ("карта 4111", ["1111", "1111 1111", "1111 1111 1111 500 рублей оземпик"], ["4111", "1111"], "500 рублей оземпик"),
+            // Appending 508 also produces a valid 19-digit PAN. Keep that
+            // ambiguous amount masked, preserving the following ordinary text.
+            ("карта 4111", ["1111", "1111 1111", "1111 1111 1111 508 рублей оземпик"], ["4111", "1111", "508"], "рублей оземпик"),
         ]
         for (initial, partials, privateWords, medication) in cases {
             let utterance = MeetingLiveUtterance(id: UUID(), speaker: .you, text: initial, start: 0, end: 1)
@@ -221,10 +369,10 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         XCTAssertTrue(joinedWords.contains("метформин 500 мг"))
         XCTAssertEqual(safeWords.segments.map(\.id), words.map(\.id))
         XCTAssertEqual(safeWords.segments.map(\.start), words.map(\.start))
-        let cardAndAmount = "карта 3782 822463 10005 1008 рублей метформин 500 мг"
+        let cardAndAmount = "карта 3782 822463 10005 1009 рублей метформин 500 мг"
         let amountWords = cardAndAmount.split(separator: " ").enumerated().map { segment(String($0.element), Int64($0.offset)) }
         let safeAmount = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: amountWords), using: privacy)
-        XCTAssertEqual(safeAmount.segments.suffix(5).map(\.text), ["1008", "рублей", "метформин", "500", "мг"])
+        XCTAssertEqual(safeAmount.segments.suffix(5).map(\.text), ["1009", "рублей", "метформин", "500", "мг"])
         for privatePart in ["3782", "822463", "10005"] {
             XCTAssertFalse(safeAmount.segments.map(\.text).joined(separator: " ").contains(privatePart))
         }
@@ -237,7 +385,7 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         XCTAssertEqual(safeAddress.segments.map(\.start), addressWords.map(\.start))
         original.transcriptSegments = [segment("телефон", 0), segment("273 55 11", 1),
             segment("дата рождения", 2), segment("12 мая 1980", 3), segment("домашний адрес", 4),
-            segment("улица Примерная дом 12", 5), segment("метформин 500 мг", 6)]
+            segment("улица Примерная дом 12", 5), segment("врач Иван Тестов", 6), segment("метформин 500 мг", 7)]
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: original, using: privacy)
         XCTAssertEqual(safe.transcriptSegments.map(\.id), original.transcriptSegments.map(\.id))
         XCTAssertEqual(safe.transcriptSegments.map(\.start), original.transcriptSegments.map(\.start))
@@ -245,9 +393,18 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         try await store.create(safe)
         let loadedValue = try await store.load(id: safe.id)
         let loaded = try XCTUnwrap(loadedValue)
-        for value in ["273 55 11", "12 мая 1980", "улица Примерная дом 12", "Иван Тестов"] {
+        for value in ["273 55 11", "12 мая 1980", "улица Примерная дом 12"] {
             XCTAssertFalse(String(decoding: try MeetingTranscriptExporter.json(for: loaded), as: UTF8.self).contains(value))
         }
+
+        // Names in explicit title/device metadata are user data, not speech.
+        // The same name occurs in recognized speech and must be masked there;
+        // a whole-JSON prohibition would also scrub permitted metadata.
+        XCTAssertEqual(loaded.title, original.title)
+        XCTAssertEqual(loaded.selectedMicrophone, original.selectedMicrophone)
+        XCTAssertEqual(loaded.audioTracks, original.audioTracks)
+        XCTAssertTrue(loaded.transcriptSegments.allSatisfy { $0.originalText == nil })
+        XCTAssertFalse(loaded.transcriptSegments.map(\.text).joined(separator: " ").contains("Иван Тестов"))
 
         // A possible first-half phone remains in bounded RAM, and both halves
         // are filtered before any strict checkpoint/export can observe them.
@@ -287,7 +444,13 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
             }
             XCTAssertEqual(strict.transcriptSegments.map(\.id), (cardA + cardB).map(\.id))
             XCTAssertEqual(strict.transcriptSegments.map(\.start), (cardA + cardB).map(\.start))
-            XCTAssertEqual(strict.transcriptSegments.suffix(3).map(\.text), [amount, "мг", "метформин500мг"])
+            XCTAssertEqual(strict.transcriptSegments.suffix(2).map(\.text), ["мг", "метформин500мг"])
+            if amount == "508" {
+                XCTAssertFalse(strict.transcriptSegments.map(\.text).joined(separator: " ").contains(amount),
+                               "A checksum-valid 19-digit PAN tail must remain masked")
+            } else {
+                XCTAssertEqual(strict.transcriptSegments.suffix(3).map(\.text), [amount, "мг", "метформин500мг"])
+            }
             XCTAssertTrue(strict.transcriptSegments.allSatisfy { $0.originalText == nil })
         }
 
@@ -330,7 +493,7 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         for case let url as URL in files {
             guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
             XCTAssertEqual(url.pathExtension, "json", url.lastPathComponent)
-            XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("Иван Тестов"))
+            XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("\"originalText\""))
         }
 
         for (data, ext) in [(Data(MeetingTranscriptExporter.text(for: loaded).utf8), "txt"),
@@ -338,7 +501,16 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
             let payload = try MeetingSharePayload.transcript(data: data, title: loaded.title, fileExtension: ext)
             defer { payload.cleanup() }
             let url = try XCTUnwrap(payload.items.first as? URL)
-            XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("Иван Тестов"))
+            let shared = try Data(contentsOf: url)
+            if ext == "txt" {
+                XCTAssertFalse(String(decoding: shared, as: UTF8.self).contains("Иван Тестов"))
+            } else {
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: shared) as? [String: Any])
+                XCTAssertEqual(json["title"] as? String, source.title, "Display metadata stays explicit user data")
+                let segments = try XCTUnwrap(json["segments"] as? [[String: Any]])
+                XCTAssertEqual(segments.first?["text"] as? String, loaded.transcriptSegments[0].text)
+                XCTAssertNil(segments.first?["originalText"])
+            }
             XCTAssertFalse(payload.includesAudio)
             let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
             #if targetEnvironment(simulator)
@@ -364,9 +536,14 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         XCTAssertTrue(source.title.contains("Иван Тестов"))
         XCTAssertTrue(source.transcriptSegments[0].text.contains("Иван Тестов"))
         XCTAssertNotNil(source.transcriptSegments[0].originalText)
-        XCTAssertFalse(safe.title.contains("Иван Тестов"))
+        XCTAssertEqual(safe.title, source.title)
+        XCTAssertEqual(safe.selectedMicrophone, source.selectedMicrophone)
+        XCTAssertEqual(safe.audioTracks, source.audioTracks)
         XCTAssertNil(safe.transcriptSegments[0].originalText)
-        XCTAssertFalse(String(decoding: try MeetingTranscriptExporter.json(for: safe), as: UTF8.self).contains("Иван Тестов"))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: safe)) as? [String: Any])
+        let segments = try XCTUnwrap(json["segments"] as? [[String: Any]])
+        XCTAssertEqual(segments[0]["text"] as? String, "Врач [PERSON] просит инструкцию. Метформин 500 мг.")
+        XCTAssertNil(segments[0]["originalText"])
     }
 
     private func fixture() -> MeetingSession {

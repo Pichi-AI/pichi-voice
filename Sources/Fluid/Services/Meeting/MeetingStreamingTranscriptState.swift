@@ -37,6 +37,8 @@ actor MeetingStreamingTranscriptState {
 
     struct Emission: Sendable {
         let safeBatch: MeetingPCMTranscriptBatch
+        let hasSpeakerIdentityChanges: Bool
+        let hasPreviewChanges: Bool
         /// Call the runtime eviction operation after its observation callback has returned.
         let retainActivityFromSample: Int
         let diagnostics: Diagnostics
@@ -67,6 +69,7 @@ actor MeetingStreamingTranscriptState {
     private var tail: MeetingStreamingProtectedWordTail
     private var pending: [MeetingTranscriptSegment] = []
     private var speakers: [MeetingSessionSpeaker]
+    private var confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken>?
     private var phase: Phase = .active
     private var isProcessing = false
     private var acceptedThroughSample = 0
@@ -74,8 +77,11 @@ actor MeetingStreamingTranscriptState {
     private var asrStableThroughSample = 0
     private var privacySafeThroughSample = 0
     private var privacySafeThroughTime: TimeInterval = 0
+    private var lastRawWordEndSample = 0
     private var acknowledgedThroughSample = 0
+    private var emittedProtectedSourceThroughSample = 0
     private var isComplete = true
+    private var preview: MeetingLivePartial?
     private(set) var metadataDiagnostics: Diagnostics?
     var retainActivityFromSample: Int { self.acknowledgedThroughSample }
 
@@ -118,6 +124,8 @@ actor MeetingStreamingTranscriptState {
         self.phase = .cancelled
         self.pending.removeAll(keepingCapacity: false)
         self.speakers.removeAll(keepingCapacity: false)
+        self.confirmedLocalUserTokens = nil
+        self.preview = nil
         self.tail.cancel()
     }
 
@@ -128,6 +136,15 @@ actor MeetingStreamingTranscriptState {
         defer { self.isProcessing = false }
         do {
             try self.validate(observation, final: final)
+            let priorIdentities = self.speakers
+            if let tokens = observation.confirmedLocalUserTokens {
+                guard tokens.count <= self.limits.tail.maximumSpeakers,
+                      tokens.allSatisfy({ $0.analysisEpochID == self.epoch && !$0.label.isEmpty }) else {
+                    throw Failure.invalidObservation
+                }
+                self.confirmedLocalUserTokens = tokens
+            }
+            let priorPreview = self.preview
             var privacyMilliseconds = 0.0
             let oldASRCursor = self.asrStableThroughSample
             if let asrCursor = observation.asrStableThroughSample { self.asrStableThroughSample = asrCursor }
@@ -135,6 +152,22 @@ actor MeetingStreamingTranscriptState {
             self.processedThroughSample = observation.processedThroughSample
             self.isComplete = self.isComplete && observation.batch.isComplete
 
+            // Legacy identity-only revisions still refine already admitted participants.
+            if observation.batch.segments.isEmpty, !observation.batch.speakers.isEmpty {
+                let existingIDs = Set(self.speakers.map(\.id))
+                guard observation.batch.speakers.allSatisfy({ existingIDs.contains($0.id) }),
+                      Set(observation.batch.speakers.map(\.id)).count == observation.batch.speakers.count else {
+                    throw Failure.invalidObservation
+                }
+                // This additive path can change owner flags on existing IDs only. New speaker
+                // metadata still enters through the ordinary speech privacy gate below.
+                var identity = MeetingPCMTranscriptBatch(segments: [], speakers: observation.batch.speakers)
+                for index in identity.speakers.indices {
+                    identity.speakers[index].diarizationEmbedding = nil
+                    identity.speakers[index].identityCandidates = []
+                }
+                try self.mergeSpeakers(identity, updatesOwnerIdentity: true)
+            }
             if !observation.batch.segments.isEmpty {
                 try self.validateRawWords(observation.batch, previousASRCursor: oldASRCursor)
                 var source = observation.batch
@@ -144,16 +177,49 @@ actor MeetingStreamingTranscriptState {
                 let safe: MeetingPCMTranscriptBatch
                 if let privacyContext = self.privacyContext {
                     let started = ContinuousClock.now
+                    MeetingTimelineTrace.shared?.record("privacy_begin", fields: ["attemptID": self.attemptID.uuidString,
+                        "operation": "canonical-redact", "inputWords": String(source.segments.count)])
                     safe = try await privacyContext.redact(source)
+                    MeetingTimelineTrace.shared?.record("privacy_end", fields: ["attemptID": self.attemptID.uuidString,
+                        "operation": "canonical-redact", "outputWords": String(safe.segments.count),
+                        "wallMilliseconds": String(Self.milliseconds(since: started))])
                     privacyMilliseconds += Self.milliseconds(since: started)
                 } else { safe = source }
                 try self.checkActive()
                 try self.mergeSpeakers(safe)
                 self.pending.append(contentsOf: safe.segments)
+                self.lastRawWordEndSample = max(self.lastRawWordEndSample,
+                    source.segments.compactMap { $0.nativeTiming?.end }.map(Self.ceilingSample).max() ?? 0)
+            }
+            // An actual sealed empty decoder result is a nonterminal speech boundary.
+            // Acoustic-only progress and incomplete/rejected prefixes cannot authorize it.
+            if !final, let range = observation.sealedEmptyASRRange,
+               observation.batch.isComplete, self.isComplete,
+               range.lowerBound >= self.lastRawWordEndSample,
+               self.processedThroughSample >= self.lastRawWordEndSample,
+               let privacyContext = self.privacyContext {
+                let started = ContinuousClock.now
+                MeetingTimelineTrace.shared?.record("privacy_begin", fields: ["attemptID": self.attemptID.uuidString,
+                    "operation": "speech-boundary"])
+                let settled = try await privacyContext.admitSpeechBoundary()
+                MeetingTimelineTrace.shared?.record("privacy_end", fields: ["attemptID": self.attemptID.uuidString,
+                    "operation": "speech-boundary", "outputWords": String(settled?.segments.count ?? 0),
+                    "wallMilliseconds": String(Self.milliseconds(since: started))])
+                privacyMilliseconds += Self.milliseconds(since: started)
+                try self.checkActive()
+                if let settled {
+                    try self.mergeSpeakers(settled)
+                    self.pending.append(contentsOf: settled.segments)
+                }
             }
             if final, let privacyContext = self.privacyContext {
                 let started = ContinuousClock.now
+                MeetingTimelineTrace.shared?.record("privacy_begin", fields: ["attemptID": self.attemptID.uuidString,
+                    "operation": "finish"])
                 let remainder = try await privacyContext.finish()
+                MeetingTimelineTrace.shared?.record("privacy_end", fields: ["attemptID": self.attemptID.uuidString,
+                    "operation": "finish", "outputWords": String(remainder?.segments.count ?? 0),
+                    "wallMilliseconds": String(Self.milliseconds(since: started))])
                 privacyMilliseconds += Self.milliseconds(since: started)
                 try self.checkActive()
                 if let remainder {
@@ -164,6 +230,7 @@ actor MeetingStreamingTranscriptState {
             }
             try self.checkActive()
             let heldStart = await self.privacyContext?.earliestHeldWordStart
+            let pendingPreview = await self.privacyContext?.pendingPreview
             try self.checkActive()
             try self.validatePending(checkTime: false)
 
@@ -213,6 +280,11 @@ actor MeetingStreamingTranscriptState {
             }
             var safe = MeetingPCMTranscriptBatch(segments: admitted, speakers: self.speakers,
                 isComplete: self.isComplete)
+            if let tokens = self.confirmedLocalUserTokens {
+                safe.speakers = MeetingTranscriptAssembler.applyingLocalUserTokens(to: safe.speakers,
+                    attemptID: self.attemptID, tokens: tokens, speakerNameFormat: self.tail.speakerNameFormat)
+                try self.mergeSpeakers(safe, updatesOwnerIdentity: true)
+            }
             safe.speechObservationIdentity = .init(attemptID: self.attemptID, epochID: self.epoch)
             let marks = MeetingStreamingProtectedWordTail.Watermarks(asrStableThrough: asrSeconds,
                 diarizationProcessedThrough: diarizationSeconds,
@@ -246,17 +318,40 @@ actor MeetingStreamingTranscriptState {
                     activityAvailableFrom: Double(observation.retainedFromSample) / 16_000)
             }
             let attributionMilliseconds = Self.milliseconds(since: attributionStarted)
-            var batch = MeetingPCMTranscriptBatch(segments: updated.inserted, speakers: updated.speakers,
+            let identities = self.confirmedLocalUserTokens.map {
+                MeetingTranscriptAssembler.applyingLocalUserTokens(to: updated.speakers,
+                    attemptID: self.attemptID, tokens: $0, speakerNameFormat: self.tail.speakerNameFormat)
+            } ?? updated.speakers
+            var batch = MeetingPCMTranscriptBatch(segments: updated.inserted, speakers: identities,
                 isComplete: self.isComplete)
+            batch.speakerNameFormat = self.tail.speakerNameFormat
             batch.speakerRevisions = updated.revisions
-            // Never copy a raw source label or a provisional privacy preview into canonical
-            // publication. Only the redacted batch's words and lightweight identities leave.
+            batch.sourceTrack = self.track
+            // Physical coverage can retire estimates spanning native word gaps, but only
+            // after the protected checkpoint joins. It never derives from a preview end.
+            let protectedThrough = min(self.asrStableThroughSample,
+                self.processedThroughSample, self.privacySafeThroughSample)
+            if self.isComplete, protectedThrough > self.emittedProtectedSourceThroughSample {
+                batch.protectedSourceThroughSample = protectedThrough
+                self.emittedProtectedSourceThroughSample = protectedThrough
+            }
+            // Only the privacy actor's already approved lexical-tail display can leave
+            // separately from canonical words. It is in-memory UI metadata, not a word,
+            // checkpoint transcript or permission to advance the privacy-safe cursor.
+            self.preview = final ? nil : pendingPreview
+            batch.livePreview = self.preview
             let retain = Self.floorSample(min(updated.retainActivityFrom,
                 heldStart ?? updated.retainActivityFrom, pendingStart ?? updated.retainActivityFrom))
             guard retain >= self.acknowledgedThroughSample else { throw Failure.regressedCursor }
             self.acknowledgedThroughSample = retain
-            try self.mergeSpeakers(batch)
-            if final { self.phase = .finished; self.speakers.removeAll(keepingCapacity: false) }
+            try self.mergeSpeakers(batch, updatesOwnerIdentity: self.confirmedLocalUserTokens != nil)
+            batch.speakers = self.speakers
+            let hasSpeakerIdentityChanges = self.speakers != priorIdentities
+            if final {
+                self.phase = .finished
+                self.speakers.removeAll(keepingCapacity: false)
+                self.confirmedLocalUserTokens = nil
+            }
             try Task.checkCancellation()
             let diagnostics = Diagnostics(acceptedThroughSample: self.acceptedThroughSample,
                     asrStableThroughSample: self.asrStableThroughSample,
@@ -267,8 +362,26 @@ actor MeetingStreamingTranscriptState {
                     retainedAttributionWords: updated.retainedWordCount,
                     insertedWords: updated.inserted.count, revisedWords: updated.revisions.count,
                     privacyMilliseconds: privacyMilliseconds, attributionMilliseconds: attributionMilliseconds, isFinal: final)
+            MeetingTimelineTrace.shared?.record("protected_admission", fields: ["attemptID": self.attemptID.uuidString,
+                "acceptedThroughSample": String(self.acceptedThroughSample), "asrStableThroughSample": String(self.asrStableThroughSample),
+                "diarizationProcessedThroughSample": String(self.processedThroughSample), "privacySafeThroughSample": String(safeSample),
+                "protectedThroughSample": String(protectedThrough), "pendingProtectedWords": String(self.pending.count),
+                "insertedWords": String(updated.inserted.count), "speakerRevisedWords": String(updated.revisions.count),
+                "privacyMilliseconds": String(privacyMilliseconds), "attributionMilliseconds": String(attributionMilliseconds),
+                "isFinal": String(final)], text: batch.segments.map(\.text).joined(separator: " "),
+                words: batch.segments.map { .init(text: $0.text, start: $0.start.seconds, end: $0.end.seconds,
+                    wordID: String(describing: $0.id), speakerID: $0.speakerID.map { String(describing: $0) }) })
+            if let trace = MeetingTimelineTrace.shared {
+                for revision in batch.speakerRevisions {
+                    trace.record("speaker_revision", fields: ["attemptID": self.attemptID.uuidString,
+                        "wordID": String(describing: revision.segmentID),
+                        "speakerID": revision.speakerID.map { String(describing: $0) } ?? "unassigned"])
+                }
+            }
             self.metadataDiagnostics = diagnostics
-            return .init(safeBatch: batch, retainActivityFromSample: retain, diagnostics: diagnostics)
+            return .init(safeBatch: batch, hasSpeakerIdentityChanges: hasSpeakerIdentityChanges,
+                hasPreviewChanges: self.preview != priorPreview,
+                retainActivityFromSample: retain, diagnostics: diagnostics)
         } catch {
             // Privacy may have consumed an admitted lexical tail before a later check fails.
             // Retrying it could duplicate words or weaken the safe prefix. Fail this attempt
@@ -276,6 +389,8 @@ actor MeetingStreamingTranscriptState {
             if case .cancelled = self.phase {} else { self.phase = .failed }
             self.pending.removeAll(keepingCapacity: false)
             self.speakers.removeAll(keepingCapacity: false)
+            self.confirmedLocalUserTokens = nil
+            self.preview = nil
             self.tail.cancel()
             throw error
         }
@@ -301,6 +416,14 @@ actor MeetingStreamingTranscriptState {
         } else {
             guard observation.batch.segments.isEmpty, !final else { throw Failure.invalidObservation }
         }
+        if let range = observation.sealedEmptyASRRange {
+            guard !final, observation.batch.segments.isEmpty, observation.batch.isComplete,
+                  let cursor = observation.asrStableThroughSample,
+                  range.lowerBound == self.asrStableThroughSample,
+                  range.upperBound == cursor, range.upperBound > range.lowerBound else {
+                throw Failure.invalidObservation
+            }
+        }
         if let identity = observation.batch.speechObservationIdentity {
             guard identity.attemptID == self.attemptID, identity.epochID.trackID == self.track.id else {
                 throw Failure.staleObservation
@@ -321,7 +444,7 @@ actor MeetingStreamingTranscriptState {
                 guard count <= self.limits.maximumPendingTextBytes - bytes else { throw Failure.pendingTextLimit }
                 bytes += count
             }
-            guard let timing = word.nativeTiming, word.nativePrecision == .word,
+            guard let timing = word.nativeTiming, (word.nativePrecision == .word || word.nativePrecision == .utterance),
                   let nativeID = word.nativeUnitID, !nativeID.isEmpty else { throw Failure.unsupportedNativeTiming }
             guard word.sourceTrackID == self.track.id,
                   MeetingEvidenceInterval.isValid(start: timing.start, end: timing.end),
@@ -343,7 +466,7 @@ actor MeetingStreamingTranscriptState {
         var previous = -1.0
         var IDs = Set<MeetingTranscriptSegmentID>()
         for word in self.pending {
-            guard let timing = word.nativeTiming, word.nativePrecision == .word else { throw Failure.unsupportedNativeTiming }
+            guard let timing = word.nativeTiming, (word.nativePrecision == .word || word.nativePrecision == .utterance) else { throw Failure.unsupportedNativeTiming }
             guard timing.start >= previous, IDs.insert(word.id).inserted else { throw Failure.invalidObservation }
             previous = timing.start
             for count in [word.text.utf8.count, word.originalText?.utf8.count ?? 0] {
@@ -368,11 +491,23 @@ actor MeetingStreamingTranscriptState {
         }
     }
 
-    private func mergeSpeakers(_ batch: MeetingPCMTranscriptBatch) throws {
+    private func mergeSpeakers(_ batch: MeetingPCMTranscriptBatch, updatesOwnerIdentity: Bool = false) throws {
         guard Set(self.speakers.map(\.id)).union(batch.speakers.map(\.id)).count <= self.limits.tail.maximumSpeakers else {
             throw Failure.speakerLimit
         }
-        self.speakers = Self.identityOnly(batch.mergingSpeakers(into: self.speakers))
+        var identities = batch
+        if !updatesOwnerIdentity {
+            // Raw ASR and a delayed privacy lexical tail carry the earlier anonymous flags.
+            // Only the separate verified-identity publication can promote/revoke an owner.
+            let ownerFlags = Dictionary(uniqueKeysWithValues: self.speakers.map { ($0.id, $0.isLocalUser) })
+            for index in identities.speakers.indices {
+                if let isLocalUser = ownerFlags[identities.speakers[index].id] {
+                    identities.speakers[index].isLocalUser = isLocalUser
+                }
+            }
+        }
+        self.speakers = Self.identityOnly(identities.mergingSpeakers(into: self.speakers,
+            speakerNameFormat: self.tail.speakerNameFormat))
     }
 
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {
@@ -386,6 +521,10 @@ actor MeetingStreamingTranscriptState {
             speaker.diarizationEmbedding = nil
             return speaker
         }
+    }
+
+    private static func ceilingSample(_ seconds: TimeInterval) -> Int {
+        Int((seconds * 16_000 - 1e-7).rounded(.up))
     }
 
     private static func floorSample(_ seconds: TimeInterval) -> Int {

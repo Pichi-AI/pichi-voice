@@ -1,14 +1,41 @@
 import Foundation
 
+/// Bind the adapter's opaque resource to the registry and full immutable configuration.
+/// The ordinary runtime receives the inner resource only after both bindings still match.
+nonisolated struct MeetingBackendIdlePreparedResource: MeetingIdlePreparedResource {
+    let backendID: MeetingBackendID
+    let configuration: MeetingFinalProcessingConfiguration
+    let resource: any MeetingIdlePreparedResource
+    var releaseAdditionalResources: (@Sendable () async -> Void)? = nil
+    var configurationIdentity: String { Self.identity(backendID: backendID, configuration: configuration) }
+    static func identity(backendID: MeetingBackendID, configuration: MeetingFinalProcessingConfiguration) -> String {
+        MeetingConfigFingerprintEncoding.encode([("backend", backendID.rawValue),
+            ("configuration", configuration.identityFingerprint),
+            ("artifactDirectory", configuration.asrArtifactDirectory?.absoluteString ?? "")])
+    }
+    func cleanup() async { await resource.cleanup(); await releaseAdditionalResources?() }
+}
+
+/// Optional prefix resources retain the same admission even when the selected backend
+/// has no native pair capability. A cancelled pair never starts an unadmitted fallback.
+nonisolated struct MeetingIdlePrefixResource: MeetingIdlePreparedResource {
+    let configurationIdentity: String
+    let release: @Sendable () async -> Void
+    func cleanup() async { await release() }
+}
+
 @MainActor
 final class MeetingMemoryProcessingAttempt {
     let request: MeetingBackendRequest
     let descriptor: MeetingBackendDescriptor
     let runtime: any MeetingParakeetNemotronRunning
     let redactor: (any TranscriptTextRedacting)?
+    private let redactorIdentity: String?
+    private var privacyPreparation: Task<Void, Error>?
     let privacyContext: MeetingTranscriptPrivacyContext?
     let checkpoint: @MainActor (MeetingPCMTranscriptBatch) async throws -> Void
     let preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?
+    let confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?
     let speechPreviewID = UUID()
     let archive: MeetingMemoryAudioArchive
     var consumer: (any MeetingMemoryAudioConsuming)?
@@ -20,15 +47,102 @@ final class MeetingMemoryProcessingAttempt {
          archive: MeetingMemoryAudioArchive,
          redactor: (any TranscriptTextRedacting)?,
          checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
-         preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?) {
+         preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?,
+         confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil) {
         self.request = request; self.descriptor = descriptor; self.runtime = runtime; self.archive = archive
         self.redactor = redactor; self.checkpoint = checkpoint
+        self.redactorIdentity = redactor?.checkpointIdentity
         self.privacyContext = redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) }
         self.preview = preview
+        self.confidentlyNonSpeech = confidentlyNonSpeech
+    }
+
+    /// Only recognized text needs NER readiness. The single PCM worker owns this joined
+    /// preparation after capture starts; no raw text can enter its preview or checkpoint
+    /// before it returns. Replay reuses the same immutable resource identity and outcome.
+    func preparePrivacy() async throws {
+        try Task.checkCancellation()
+        guard let redactor else { return }
+        guard redactor.checkpointIdentity == self.redactorIdentity else {
+            throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+        }
+        let task: Task<Void, Error>
+        if let existing = self.privacyPreparation { task = existing }
+        else {
+            let identity = self.redactorIdentity
+            task = Task {
+                guard redactor.checkpointIdentity == identity else {
+                    throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+                }
+                try await redactor.prepareForMeeting()
+                try Task.checkCancellation()
+                guard redactor.checkpointIdentity == identity else {
+                    throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+                }
+            }
+            self.privacyPreparation = task
+        }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        guard !task.isCancelled else { throw CancellationError() }
+        try Task.checkCancellation()
     }
 }
 
 extension MeetingProcessingPipeline {
+    /// Foreground idle preparation is metadata-only until a registered adapter explicitly
+    /// opens installed resources. It creates no session, audio lease or microphone identity.
+    func prepareSelectedIdleResources(
+        prepareFirst: @escaping @MainActor @Sendable () async throws -> (@Sendable () async -> Void)? = { nil }
+    ) async throws -> MeetingIdlePreparationToken? {
+        let modelID = settings.selectedSpeechModel.rawValue
+        guard let owner = idlePreparedResourceOwner else {
+            MeetingTimelineTrace.shared?.record("idle_preparation_selection", fields: ["hasOwner": "false"])
+            return nil
+        }
+        let speakerMode = settings.meetingSpeakerProcessingMode(for: .inRoom)
+        let nativePairEnabled = PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: modelID) == true
+            && settings.meetingSpeakerLabelsEnabled && speakerMode == .streaming && idleResourcePreparation != nil
+        MeetingTimelineTrace.shared?.record("idle_preparation_selection", fields: ["hasOwner": "true",
+            "nativePairEnabled": String(nativePairEnabled), "streaming": String(speakerMode == .streaming),
+            "speakerLabels": String(settings.meetingSpeakerLabelsEnabled), "hasIdleFactory": String(idleResourcePreparation != nil)])
+        let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
+        let language = settings.meetingRecordingDefaults.languageCode.flatMap { supported.contains($0) ? $0 : nil }
+            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
+        let backendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
+            selectedModelID: modelID, savedBackendID: settings.meetingTranscriptionBackendID)
+        let configuration = PichiMeetingProviderFactory.configuration(backendID: backendID, languageCode: language,
+            diarizationEnabled: settings.meetingSpeakerLabelsEnabled, speakerProcessingMode: speakerMode)
+        let backend = try backendRegistry.makeBackend(id: backendID, context: .init(legacyExecutor: { _, _ in
+            throw MeetingModelResidencyError.unsupportedProvider
+        }, idleResourcePreparation: idleResourcePreparation))
+        let identity = MeetingBackendIdlePreparedResource.identity(backendID: backendID, configuration: configuration)
+        return try await owner.prepare(identity: identity) {
+            let releaseFirst = try await prepareFirst()
+            do {
+                try Task.checkCancellation()
+                if !nativePairEnabled {
+                    return releaseFirst.map { MeetingIdlePrefixResource(configurationIdentity: identity, release: $0) }
+                }
+                guard let resource = try await backend.prepareIdleResources(configuration: configuration) else {
+                    return releaseFirst.map { MeetingIdlePrefixResource(configurationIdentity: identity, release: $0) }
+                }
+                guard resource.configurationIdentity == configuration.identityFingerprint else {
+                    await resource.cleanup()
+                    throw MeetingModelResidencyError.staleGrant
+                }
+                return MeetingBackendIdlePreparedResource(backendID: backendID, configuration: configuration,
+                    resource: resource, releaseAdditionalResources: releaseFirst)
+            } catch {
+                if !Task.isCancelled, !(error is CancellationError), let releaseFirst {
+                    return MeetingIdlePrefixResource(configurationIdentity: identity, release: releaseFirst)
+                }
+                await releaseFirst?()
+                throw error
+            }
+        }
+    }
+
+    func releaseIdleResources(_ token: MeetingIdlePreparationToken) async { await idlePreparedResourceOwner?.cancel(token) }
     /// Pure capability admission can run before download owners, permission prompts and the
     /// audio lease. The actual session request is frozen and bound separately at preparation.
     func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {
@@ -70,9 +184,14 @@ extension MeetingProcessingPipeline {
 
     private func prepareMemoryAudioAttempt(session: MeetingSession, sessionDirectory: URL,
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
-                            preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?) async throws {
+                            preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
+                            frozenPrivacyProvider: (@MainActor () throws -> (any TranscriptTextRedacting)?)? = nil) async throws {
         guard session.audioStorageMode == .memoryOnly || session.effectiveSpeakerProcessingMode == .streaming,
               self.memoryAttempts[session.id] == nil else { throw MeetingMemoryAudioError.invalidBudget }
+        // Freeze local publication rules before backend discovery can suspend.
+        let redactor = session.piiRedactionEnabled == true ? try (frozenPrivacyProvider ?? self.privacyRedactorProvider)() : nil
+        if session.piiRedactionEnabled == true, redactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
         let backendID = session.recordingBackendID.map(MeetingBackendID.init(rawValue:)) ?? .productionDefault
         let attemptID = UUID()
         let admissionContext = self.pcmAdmissionContextProvider(session.piiRedactionEnabled == true)
@@ -120,43 +239,52 @@ extension MeetingProcessingPipeline {
         try descriptor.validateSpeakerProcessingMode(configuration: request.configuration,
             mode: session.mode)
         try backend.validatePCMInput(configuration: request.configuration, mode: session.mode, admissionContext: admissionContext)
-        let redactor = session.piiRedactionEnabled == true ? try self.privacyRedactorProvider() : nil
-        if session.piiRedactionEnabled == true, redactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
-        if let redactor {
-            let identity = redactor.checkpointIdentity
-            try Task.checkCancellation()
-            try await redactor.prepareForMeeting()
-            try Task.checkCancellation()
-            guard redactor.checkpointIdentity == identity else { throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration }
-        }
         let runtime = try backend.makePCMRuntime(request)
         let configuration = request.configuration
         if configuration.effectiveSpeakerProcessingMode == .streaming, !runtime.supportsStreamingPCMProcessing {
             throw MeetingPCMInputError.unsupportedRuntime
         }
-        // Validate/prepare the pinned provider before microphone admission. All ownership is
-        // returned before capture, then each bounded window takes the same shared resource gate.
+        // Pin offline resources without a throwaway ASR load/unload. The first bounded
+        // window already owns its prepared provider scope. Streaming opens both native
+        // engines only after capture supplies PCM; its controller owns joined preparation.
         let service = self.asrServiceProvider()
-        try await DebugLogger.$pipelineID.withValue(request.attemptID.uuidString) {
-            let started = ProcessInfo.processInfo.systemUptime
-            var prepared = false
-            DebugLogger.shared.info("prepare_started session=\(session.id) backend=\(backendID.rawValue) model=\(configuration.asrModel)", source: "MeetingMemoryAudio")
-            defer {
-                let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
-                DebugLogger.shared.info("prepare_finished success=\(prepared) elapsedMs=\(elapsed)", source: "MeetingMemoryAudio")
-            }
-            try await service.withMeetingModelResidency(attemptID: request.attemptID, acceptsCompletedCancellation: { _ in false }) {
-                try await runtime.preparePCMResources(attemptID: request.attemptID, configuration: configuration)
-                if configuration.effectiveSpeakerProcessingMode != .streaming {
-                    _ = try await runtime.withPreparedASR(attemptID: request.attemptID, configuration: configuration) { _ in MeetingParakeetPhaseResult() }
+        if configuration.effectiveSpeakerProcessingMode != .streaming {
+            try await DebugLogger.$pipelineID.withValue(request.attemptID.uuidString) {
+                let started = ProcessInfo.processInfo.systemUptime
+                var prepared = false
+                DebugLogger.shared.info("prepare_started session=\(session.id) backend=\(backendID.rawValue) model=\(configuration.asrModel)", source: "MeetingMemoryAudio")
+                defer {
+                    let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+                    DebugLogger.shared.info("prepare_finished success=\(prepared) elapsedMs=\(elapsed)", source: "MeetingMemoryAudio")
                 }
+                try await service.withMeetingModelResidency(attemptID: request.attemptID, acceptsCompletedCancellation: { _ in false }) {
+                    try await runtime.preparePCMResources(attemptID: request.attemptID, configuration: configuration)
+                }
+                prepared = true
             }
-            prepared = true
         }
         try Task.checkCancellation()
         self.memoryAttempts[session.id] = MeetingMemoryProcessingAttempt(request: request, descriptor: descriptor,
             runtime: runtime, archive: try MeetingMemoryAudioArchive(), redactor: redactor,
-            checkpoint: checkpoint, preview: preview)
+            checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech)
+    }
+
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory,
+            checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech)
+    }
+
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory,
+            checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech,
+            frozenPrivacyProvider: { privacyRedactor })
     }
 
     func memoryConsumer(for sessionID: UUID, track: MeetingAudioTrack,
@@ -182,7 +310,8 @@ extension MeetingProcessingPipeline {
                 let partial: MeetingLivePartial?
                 let admission: String
                 if let privacyContext {
-                    partial = try await privacyContext.previewSpeech(speech)
+                    partial = try await privacyContext.previewSpeech(speech,
+                        preservingPendingPreview: configuration.effectiveSpeakerProcessingMode == .streaming)
                     admission = await privacyContext.speechAdmissionDiagnosticFields
                 } else {
                     admission = "privacy=false"
@@ -237,7 +366,8 @@ extension MeetingProcessingPipeline {
                 chunkSeconds: windowSeconds,
                 initialPreviewSeconds: policy.initialSeconds, previewIntervalSeconds: policy.intervalSeconds,
                 recognize: { window, offset in
-                    try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
+                    try await attempt.preparePrivacy()
+                    return try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
                         let started = ProcessInfo.processInfo.systemUptime
                         let batch = try await DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
                             try await runtime.recognizePCM(window: window, offset: offset, trackID: trackID,
@@ -252,7 +382,8 @@ extension MeetingProcessingPipeline {
             // preference does not falsely grant an unimplemented runtime capability.
             consumer = try Self.makeMemoryAudioConsumer(chunkSeconds: windowSeconds, initialChunkSeconds: 3,
                 recognize: { samples, offset in
-                    try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
+                    try await attempt.preparePrivacy()
+                    return try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
                         let started = ProcessInfo.processInfo.systemUptime
                         let batch = try await DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
                             try await runtime.recognizePCM(samples: samples, offset: offset, trackID: trackID,
@@ -376,6 +507,7 @@ extension MeetingProcessingPipeline {
     private func replayMemorySpeech(attempt: MeetingMemoryProcessingAttempt,
                                     track: MeetingAudioTrack) async throws -> MeetingPCMTranscriptBatch {
         let service = self.asrServiceProvider()
+        try await attempt.preparePrivacy()
         let privacy = attempt.redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) }
         var output = MeetingPCMTranscriptBatch(segments: [])
         var indices: [UUID: Int] = [:]

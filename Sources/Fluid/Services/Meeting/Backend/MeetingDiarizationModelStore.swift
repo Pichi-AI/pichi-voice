@@ -54,6 +54,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var voiceMatchingReady = false
+    nonisolated let supportsOwnerVoiceVerification: Bool
     private var attempt: Task<MeetingNemotronModelArtifact, Error>?
     private var voiceAttempt: Task<Void, Error>?
     private let validateVoice: @Sendable () throws -> Void
@@ -63,6 +64,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
     private let install: Install
 
     init(
+        supportsOwnerVoiceVerification: Bool = true,
         canDownload: @escaping @Sendable () -> Bool = MeetingDiarizationModelStore.usesDefaultLocation,
         validate: @escaping Validate = {
             let package = MeetingNemotronModelLocator().resolvedPackageURL()
@@ -75,6 +77,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
         validateVoice: @escaping @Sendable () throws -> Void = MeetingSpeakerVoiceModelArtifacts.validate,
         installVoice: @escaping @Sendable (@escaping @Sendable (Double) -> Void) async throws -> Void = MeetingSpeakerVoiceModelArtifacts.ensureInstalled
     ) {
+        self.supportsOwnerVoiceVerification = supportsOwnerVoiceVerification
         self.canDownload = canDownload
         self.validate = validate
         self.install = install
@@ -86,6 +89,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
     /// with production setup. No user preference or default store is changed by creating one.
     convenience init(profile: MeetingNemotronModelProfile) {
         self.init(
+            supportsOwnerVoiceVerification: profile.supportsOwnerVoiceVerification,
             canDownload: { MeetingNemotronModelLocator(profile: profile).resolvedPackageURL().standardizedFileURL
                 == MeetingNemotronModelLocator.defaultPackageURL(profile: profile).standardizedFileURL },
             validate: {
@@ -136,6 +140,8 @@ final class MeetingDiarizationModelStore: ObservableObject {
             let prior = self.state
             self.state = .downloading(fraction: 0)
             do {
+                let admission = try await MeetingModelResidencyCoordinator.shared.beginOperationRetiringIdle(owner: "speaker-resources", modelID: "voice-matching")
+                defer { MeetingModelResidencyCoordinator.shared.endOperation(admission) }
                 try await self.installVoice { fraction in
                     Task { @MainActor [weak self] in
                         guard let self, self.voiceAttempt != nil, !self.voiceMatchingReady,
@@ -185,7 +191,11 @@ final class MeetingDiarizationModelStore: ObservableObject {
         }
 
         self.state = .downloading(fraction: 0)
+        // A valid installed readiness check never retires a matching recording preload.
+        // Actual artifact mutation yields the idle lease before touching installed storage.
         do {
+            let admission = try await MeetingModelResidencyCoordinator.shared.beginOperationRetiringIdle(owner: "speaker-resources", modelID: "speaker-separation")
+            defer { MeetingModelResidencyCoordinator.shared.endOperation(admission) }
             let installed = try await self.install { fraction in
                 Task { @MainActor [weak self] in
                     guard let self, case .downloading = self.state else { return }

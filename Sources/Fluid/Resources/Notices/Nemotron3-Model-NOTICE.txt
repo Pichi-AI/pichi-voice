@@ -1,0 +1,34 @@
+Nemotron 3 Diarization Core ML model attribution
+
+Base model: NVIDIA Nemotron-3-Diarization
+https://huggingface.co/nvidia/Nemotron-3-Diarization
+Core ML conversion, conversion pipeline and benchmarks: Fluid Inference
+https://huggingface.co/FluidInference
+
+Converted model repository: FluidInference/nemotron-3-diarization-coreml
+Pinned revision: 25a90f97f254428d4b30374b76af9c74fdee8327
+Pinned model card and attribution:
+https://huggingface.co/FluidInference/nemotron-3-diarization-coreml/blob/25a90f97f254428d4b30374b76af9c74fdee8327/README.md
+
+The pinned conversion card identifies the NVIDIA model as the source and
+licenses the converted weights under OpenMDW License Agreement version 1.1.
+The full agreement is included in OpenMDW-1.1-LICENSE.txt.
+https://openmdw.ai/license/1-1/
+
+Pichi Voice's registered streaming profile uses the fixed-shape FP16 Core ML
+conversion at monolithic/v2/Nemotron3Diarizer_fast128.mlmodelc and its
+learnable_sil_emb.bin auxiliary artifact. It requests CPU-only execution.
+The after-recording profile separately uses the converted and quantized
+split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc, learnable_sil_emb.bin and
+pre_encode_proj_t.bin. These are modified conversions of the NVIDIA model,
+not a claim that Pichi Voice trained the original weights.
+
+Reference: Streaming Sortformer
+https://arxiv.org/abs/2507.18446
+
+The separately licensed Swift runtime is recorded in FluidAudio-Nemotron3.txt.
+Its Apache-2.0 license does not replace the model weights' OpenMDW-1.1 license.
+Weights are downloaded separately; this source repository does not contain
+the model artifacts. Preserve this attribution and the model agreement with
+any distribution that includes applicable model materials. This attribution
+does not assert endorsement by NVIDIA or Fluid Inference.

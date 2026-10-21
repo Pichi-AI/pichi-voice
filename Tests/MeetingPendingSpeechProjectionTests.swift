@@ -4,6 +4,7 @@ import Foundation
 
 // Headless test context for the production live-model file. No app host, audio hardware,
 // model weights, transcript store or privacy service is constructed by this probe.
+typealias SessionSpeakerID = UUID
 nonisolated enum MeetingAudioTrackKind: Sendable { case microphone, applicationAudio }
 nonisolated enum MeetingEchoDetector {
     static func isLikelyEcho(micText: String, remoteText: String) -> Bool { false }
@@ -26,6 +27,9 @@ struct MeetingPendingSpeechProjectionTests {
     }
     static func speech(_ time: Double) -> Float { 0.018 + 0.011 * Float(sin(time * 2 * .pi * 3)) }
     static func main() throws {
+        try testReadableParticipantContinuity()
+        try testReadableParticipantCorrectionsAndSources()
+        try testElapsedParticipantTurnTimes()
         var speech = MeetingPendingSpeechProjection()
         var first: Double?
         for frame in 0..<400 {
@@ -38,6 +42,88 @@ struct MeetingPendingSpeechProjectionTests {
         try require(Set(speech.snapshot.tokens.map(\.id)).count == speech.snapshot.tokens.count, "Token IDs remain unique")
         try require(Set(speech.snapshot.tokens.map(\.widthHint)).count > 3, "Variable widths are deterministic")
         print("PASS speech onset, cadence and identity")
+        func confirmedSpeech(_ projection: inout MeetingPendingSpeechProjection, from: Double, seconds: Double) {
+            for frame in 0..<Int((seconds / 0.02).rounded()) {
+                let start = from + Double(frame) * 0.02
+                projection.observeSpeechActivity(source: .you, start: start, end: start + 0.02, activity: .speech)
+            }
+        }
+        var processed = MeetingPendingSpeechProjection()
+        confirmedSpeech(&processed, from: 0, seconds: 20)
+        let queuedSpeech = processed.snapshot.tokens
+        for frame in 0..<1_000 {
+            let start = 20 + Double(frame) * 0.02
+            processed.observeSpeechActivity(source: .you, start: start, end: start + 0.02, activity: .nonSpeech)
+        }
+        try require(processed.snapshot.tokens == queuedSpeech, "Quiet cannot hide outstanding speech before processing")
+        var protected = MeetingLiveTranscriptSnapshot.empty
+        protected.revision = 1
+        processed.reconcile(visible: protected)
+        processed.acknowledgeProtectedSource(source: .them, throughSample: 640_000, transcriptRevision: 1)
+        try require(processed.snapshot.tokens == queuedSpeech, "Another source cannot retire microphone waves")
+        processed.acknowledgeProtectedSource(source: .you, throughSample: 3_200, transcriptRevision: 1)
+        try require(processed.snapshot.tokens.first?.id == queuedSpeech.first?.id
+            && processed.snapshot.tokens.first?.start == 0.2,
+            "A partial acknowledged prefix must trim its token and preserve identity")
+        processed.acknowledgeProtectedSource(source: .you, throughSample: 640_000, transcriptRevision: 0)
+        try require(!processed.snapshot.tokens.isEmpty, "A stale transcript cannot acknowledge processed audio")
+        processed.acknowledgeProtectedSource(source: .you, throughSample: 640_000, transcriptRevision: 1)
+        try require(processed.snapshot.tokens.isEmpty, "Joined protected progress must retire every processed speech estimate")
+        processed.acknowledgeProtectedSource(source: .you, throughSample: 0, transcriptRevision: 1)
+        confirmedSpeech(&processed, from: 40, seconds: 2)
+        try require(!processed.snapshot.tokens.isEmpty
+            && processed.snapshot.tokens.allSatisfy { $0.start >= 40 && !queuedSpeech.map(\.id).contains($0.id) },
+            "New speech must mint new IDs after complete quiet catch-up")
+        var delayed = MeetingPendingSpeechProjection()
+        delayed.reconcile(visible: protected)
+        delayed.acknowledgeProtectedSource(source: .you, throughSample: 640_000, transcriptRevision: 1)
+        confirmedSpeech(&delayed, from: 0, seconds: 40)
+        try require(delayed.snapshot.tokens.isEmpty, "Delayed detector output cannot recreate already processed speech")
+        var bounded = MeetingPendingSpeechProjection()
+        confirmedSpeech(&bounded, from: 0, seconds: 30)
+        let boundedIDs = bounded.snapshot.tokens.map(\.id)
+        confirmedSpeech(&bounded, from: 30, seconds: 30)
+        try require(bounded.snapshot.tokens.count == MeetingPendingSpeechProjection.maximumTokens
+            && bounded.snapshot.tokens.map(\.id) == boundedIDs
+            && bounded.snapshot.tokens.last!.end > 59,
+            "A full wave budget must extend an existing source range without dropping later queued audio")
+        bounded.reconcile(visible: protected)
+        let lastID = bounded.snapshot.tokens.last!.id
+        bounded.acknowledgeProtectedSource(source: .you, throughSample: 640_000, transcriptRevision: 1)
+        try require(bounded.snapshot.tokens.count == 1 && bounded.snapshot.tokens[0].id == lastID
+            && bounded.snapshot.tokens[0].start == 40 && bounded.snapshot.tokens[0].end > 59,
+            "Partial progress must preserve the unprocessed suffix of a coalesced range")
+        print("PASS20s speech/20s quiet protected-prefix retirement, trim, stale/source guards, delayed VAD and64-token coalescing")
+        func timedProjection(spacing: Double) -> (MeetingPendingSpeechProjection, MeetingLiveTranscriptSnapshot) {
+            var projection = MeetingPendingSpeechProjection()
+            confirmedSpeech(&projection, from: 0, seconds: 8)
+            var visible = MeetingLiveTranscriptSnapshot.empty
+            visible.revision = 1
+            visible.utterances = (0..<8).map { index in
+                .init(id: UUID(), speaker: .you, text: "слово", start: Double(index) * spacing,
+                      end: Double(index) * spacing + 0.15)
+            }
+            projection.reconcile(visible: visible)
+            return (projection, visible)
+        }
+        var (fast, timed) = timedProjection(spacing: 0.256)
+        var (slow, _) = timedProjection(spacing: 0.75)
+        var repeated = fast
+        timed.revision = 2
+        repeated.reconcile(visible: timed)
+        let fastCount = fast.snapshot.tokens.count, slowCount = slow.snapshot.tokens.count
+        confirmedSpeech(&fast, from: 8, seconds: 4)
+        confirmedSpeech(&slow, from: 8, seconds: 4)
+        confirmedSpeech(&repeated, from: 8, seconds: 4)
+        try require(fast.snapshot.tokens.count - fastCount > slow.snapshot.tokens.count - slowCount,
+                    "New native word spacing adapts visual cadence to faster and slower speech")
+        try require(fast.snapshot.tokens == repeated.snapshot.tokens,
+                    "A higher metadata revision cannot train twice from the same native words")
+        let beforeCadencePause = fast.snapshot.tokens
+        fast.observeSpeechActivity(source: .you, start: 12, end: 12.256, activity: .nonSpeech)
+        try require(fast.snapshot.tokens == beforeCadencePause && fast.snapshot.animatedTokenIDs.isEmpty,
+                    "A learned fast cadence still cannot mint or animate speech in a pause")
+        print("PASS native timing adapts cadence once without creating speech during pauses")
         for (name, level, crossing, crest) in [("silence", Float(0), Float(0), Float(0)),
             ("steady fan", 0.02, 0.12, 3), ("steady tone", 0.02, 0.04, 1.5), ("broadband hiss", 0.02, 0.5, 3)] {
             var projection = MeetingPendingSpeechProjection()
@@ -175,8 +261,189 @@ struct MeetingPendingSpeechProjectionTests {
         feed(&sources, start: 4, duration: 4, rms: Self.speech)
         try require(sources.snapshot.tokens.isEmpty && !sources.snapshot.isCapturing, "Stopped generations cannot resurrect progress")
         print("PASS invalid PTS, duplicates and terminal intake")
+        try testActivityEvidence()
         try testDelayedReplacementDiagnostics()
         try testCaptureTee()
+    }
+
+    static func testReadableParticipantContinuity() throws {
+        let name = MeetingSpeakerPresentation.Name(displayName: "Участник 1", isLocalUser: false)
+        let first = MeetingSpeakerPresentation(identity: "first", label: .identified(name), participantID: UUID())
+        let second = MeetingSpeakerPresentation(identity: "second", label: .identified(name), participantID: UUID())
+        let unknown = MeetingSpeakerPresentation(identity: "unresolved", label: .unknown)
+        let candidates = MeetingSpeakerPresentation(identity: "candidates", label: .candidates([name, nil], relation: .conflict))
+        func snapshot(_ participants: [MeetingSpeakerPresentation?]) -> MeetingLiveTranscriptSnapshot {
+            var value = MeetingLiveTranscriptSnapshot.empty
+            value.utterances = participants.enumerated().map { index, participant in
+                .init(id: UUID(), speaker: .you, text: index == 1 ? "А" : "слово\(index)",
+                      start: Double(index), end: Double(index) + 0.1, participant: participant)
+            }
+            return value
+        }
+        let initial = snapshot([nil, unknown, candidates])
+        let initialRows = MeetingLiveBubbleComposer.rows(for: initial)
+        try require(initialRows.allSatisfy { !$0.showsLabel && $0.participant == nil },
+                    "Initial unresolved text has neither a fake speaker identity nor a source header")
+        for participants in [[first, unknown, first], [first, nil, first], [first, candidates, first]] {
+            let value = snapshot(participants)
+            let original = value
+            let rows = MeetingLiveBubbleComposer.rows(for: value)
+            try require(rows.map(\.showsLabel) == [true, false, false]
+                        && rows.allSatisfy { $0.participant?.identity == first.identity },
+                        "An unresolved letter, nil owner or candidate set continues the known readable turn")
+            try require(rows[1].participant?.isEstimated == true,
+                        "Carried reading ownership remains an internal estimate rather than new speaker evidence")
+            try require(value == original && rows.map(\.id) == value.utterances.map(\.id)
+                        && rows.map(\.text) == value.utterances.map(\.text)
+                        && rows.map(\.start) == value.utterances.map(\.start),
+                        "Composition preserves raw uncertainty, row IDs, text order and native start times")
+        }
+        var value = snapshot([first, unknown, second])
+        let partialID = UUID()
+        value.partials[.you] = .init(id: partialID, text: "продолжение", start: 3, end: 3.5)
+        let original = value
+        let rows = MeetingLiveBubbleComposer.rows(for: value)
+        try require(rows.map(\.showsLabel) == [true, false, true, false]
+                    && rows.map { $0.participant?.identity } == [first.identity, first.identity, second.identity, second.identity],
+                    "Only an actual new participant splits a turn; an unassigned partial follows that participant")
+        try require(rows.last?.id == partialID && rows.last?.isPartial == true && value == original,
+                    "A source-only growing partial retains its ID and original evidence while continuing the readable turn")
+        print("PASS live unresolved letters, nil/candidate ownership, initial anonymity and known participant switches")
+    }
+
+    static func testReadableParticipantCorrectionsAndSources() throws {
+        let owner = UUID(), other = UUID()
+        let first = MeetingSpeakerPresentation(identity: "participant-a", label: .identified(.init(displayName: "Same alias", isLocalUser: false)), participantID: owner)
+        let second = MeetingSpeakerPresentation(identity: "participant-b", label: .identified(.init(displayName: "Same alias", isLocalUser: false)), participantID: other)
+        let unknown = MeetingSpeakerPresentation(identity: "unknown", label: .unknown)
+        var value = MeetingLiveTranscriptSnapshot.empty
+        value.revision = 1
+        value.utterances = [
+            .init(id: UUID(), speaker: .you, text: "первое", start: 7, end: 7.4, participant: first),
+            .init(id: UUID(), speaker: .them, text: "другая дорожка", start: 8, end: 8.4, participant: unknown),
+            .init(id: UUID(), speaker: .you, text: "продолжение", start: 9, end: 9.4, participant: nil),
+            .init(id: UUID(), speaker: .them, text: "ответ", start: 10, end: 10.4, participant: second),
+        ]
+        let before = MeetingLiveBubbleComposer.rows(for: value)
+        try require(before.map { $0.participant?.identity } == [first.identity, nil, first.identity, second.identity]
+                    && before.map(\.showsLabel) == [true, false, true, true],
+                    "Unresolved ownership never leaks across capture sources or collapses distinct equal-name identities")
+        try require(before[2].readingTurnStart == 7 && before[3].readingTurnStart == 10,
+                    "Resumed source headers retain their readable turn origin; the new participant uses its own first word")
+        value.revision = 2
+        value.utterances[2].participant = second
+        let corrected = MeetingLiveBubbleComposer.rows(for: value)
+        try require(corrected[2].participant == second && corrected[2].readingTurnStart == 9
+                    && corrected.map(\.id) == before.map(\.id) && corrected.map(\.text) == before.map(\.text),
+                    "A higher revision with unchanged row IDs replaces provisional reading ownership with actual corrected identity")
+        value.revision = 3
+        value.utterances[2].participant = .init(identity: second.identity,
+            label: .identified(.init(displayName: "Ручное имя", isLocalUser: false)), participantID: other)
+        try require(MeetingLiveBubbleComposer.rows(for: value)[2].participant == value.utterances[2].participant,
+                    "Manual participant names are refreshed without translated-name comparisons or stale identity caches")
+        print("PASS independent source ownership, equal aliases, same-ID speaker corrections and manual names")
+    }
+
+    static func testElapsedParticipantTurnTimes() throws {
+        for (seconds, expected) in [(0.0, "00:00"), (7.9, "00:07"), (59, "00:59"), (60, "01:00"),
+                                    (755, "12:35"), (3599, "59:59"), (3600, "1:00:00"), (3755, "1:02:35")] {
+            try require(MeetingTranscriptExporter.timestampText(seconds) == expected,
+                        "Elapsed timestamp format is stable at minute/hour boundaries and uses the first word's whole second")
+        }
+        for seconds in [-1.0, -Double.infinity, Double.infinity, Double.nan, Double.greatestFiniteMagnitude] {
+            try require(MeetingTranscriptExporter.timestampText(seconds) == "00:00",
+                        "Invalid, negative and unrepresentable elapsed values are handled before integer conversion")
+        }
+        let participant = MeetingSpeakerPresentation(identity: "speaker", label: .identified(.init(displayName: "Участник", isLocalUser: false)))
+        var value = MeetingLiveTranscriptSnapshot.empty
+        value.utterances = [
+            .init(id: UUID(), speaker: .you, text: "Начало\n", start: 7.8, end: 8, participant: participant),
+            .init(id: UUID(), speaker: .you, text: String(repeating: "слово ", count: 200), start: 20, end: 40, participant: participant),
+        ]
+        value.partials[.you] = .init(id: UUID(), text: "ожидаю", start: 50)
+        let before = MeetingLiveBubbleComposer.rows(for: value)
+        value.revision += 1
+        value.partials[.you]?.text += " новые слова"
+        value.partials[.you]?.end = 55
+        let after = MeetingLiveBubbleComposer.rows(for: value)
+        try require(before.allSatisfy { $0.readingTurnStart == 7.8 }
+                    && after.allSatisfy { $0.readingTurnStart == 7.8 }
+                    && after.map(\.showsLabel) == [true, false, false],
+                    "Explicit newline, long layout paragraphs, pending growth and revisions cannot replace a turn's first-word time")
+        print("PASS finite elapsed timestamp boundaries and stable first-word turn anchors")
+    }
+
+    static func testActivityEvidence() throws {
+        func feedEvidence(_ projection: inout MeetingPendingSpeechProjection, source: MeetingLiveSpeaker = .you,
+                          start: Double, duration: Double, activity: MeetingSpeechActivity) {
+            for frame in 0..<Int((duration / 0.02).rounded()) {
+                let time = start + Double(frame) * 0.02
+                projection.observeSpeechActivity(source: source, start: time, end: time + 0.02,
+                    activity: activity)
+            }
+        }
+        var projection = MeetingPendingSpeechProjection()
+        feedEvidence(&projection, start: 0, duration: 2, activity: .speech)
+        let first = projection.snapshot
+        try require(first.tokens.count == 5 && first.activityBySource[.you] == .speech,
+                    "Confirmed speech bypasses energy and modulation heuristics")
+        try require(first.animatedTokenIDs == Set(first.tokens.suffix(3).map(\.id)),
+                    "Only the last three waves of an active source animate")
+        feedEvidence(&projection, start: 2, duration: 8, activity: .nonSpeech)
+        let quiet = projection.snapshot
+        try require(quiet.tokens == first.tokens && quiet.animatedTokenIDs.isEmpty,
+                    "Confirmed pause immediately freezes all retained speech without losing its IDs")
+        try require(quiet.revision == first.revision + 1,
+                    "Hundreds of non-speech decisions publish only one activity transition")
+        feedEvidence(&projection, start: 10, duration: 8, activity: .unknown)
+        let unknown = projection.snapshot
+        try require(unknown.activityBySource[.you] == .unknown && unknown.tokens == quiet.tokens
+                    && unknown.animatedTokenIDs.isEmpty && unknown.revision == quiet.revision + 1,
+                    "Missing VAD evidence stays unknown and cannot claim silence, erase audio or churn revisions")
+        var held = MeetingLiveTranscriptSnapshot.empty
+        held.revision = 1
+        held.utterances = [.init(id: UUID(), speaker: .you, text: "Approved prefix only", start: 0, end: 2,
+            hasIncompleteTextCoverage: true)]
+        projection.reconcile(visible: held)
+        try require(projection.snapshot == unknown,
+                    "PII-held finalized suffix keeps every uncovered pending interval and remains frozen")
+        feedEvidence(&projection, start: 18, duration: 1, activity: .speech)
+        let resumed = projection.snapshot
+        try require(resumed.tokens.starts(with: first.tokens) && !resumed.animatedTokenIDs.isEmpty,
+                    "Confirmed resumed speech preserves history and restarts only bounded recent waves")
+        feedEvidence(&projection, source: .them, start: 0, duration: 2, activity: .speech)
+        let both = projection.snapshot
+        try require(both.animatedTokenIDs.count == 6,
+                    "Independent simultaneous sources each animate at most their own last three waves")
+        feedEvidence(&projection, start: 19, duration: 1, activity: .nonSpeech)
+        let otherOnly = projection.snapshot
+        let otherIDs = Set(otherOnly.tokens.filter { $0.source == .them }.suffix(3).map(\.id))
+        try require(otherOnly.animatedTokenIDs == otherIDs,
+                    "A microphone pause cannot freeze the independently active other source")
+        projection.observeSpeechActivity(source: .you, start: 18, end: 18.02, activity: .speech)
+        projection.observeSpeechActivity(source: .them, start: 0, end: 0.02, activity: .nonSpeech)
+        projection.observeSpeechActivity(source: .you, start: .nan, end: 21, activity: .speech)
+        try require(projection.snapshot == otherOnly,
+                    "Stale, cross-source reordered and invalid detector decisions cannot revive or freeze waves")
+        feed(&projection, start: 20, duration: 2, rms: Self.speech)
+        try require(projection.snapshot.activityBySource[.you] == .speech,
+                    "The heuristic fallback remains usable after unknown decisions without model residency")
+        let retained = projection.snapshot.tokens
+        feed(&projection, start: 22, duration: 5, rms: { _ in 0 })
+        try require(projection.snapshot.tokens == retained && projection.snapshot.activityBySource[.you] == .nonSpeech
+                    && projection.snapshot.animatedTokenIDs == otherIDs,
+                    "Heuristic pauses also freeze their own source after bounded hangover")
+        let settledRevision = projection.snapshot.revision
+        feed(&projection, start: 27, duration: 5, rms: { _ in 0 })
+        try require(projection.snapshot.revision == settledRevision,
+                    "Settled heuristic silence cannot invalidate UI at PCM cadence")
+        projection.stop()
+        let stopped = projection.snapshot
+        projection.stop()
+        feedEvidence(&projection, start: 32, duration: 2, activity: .speech)
+        try require(stopped == projection.snapshot && stopped.tokens.isEmpty && stopped.animatedTokenIDs.isEmpty,
+                    "Stop clears animation and capture once; repeated stop and late evidence are inert")
+        print("PASS speech/pause/resume, unknown evidence, PII hold, per-source animation and transition-only revisions")
     }
 
     static func testDelayedReplacementDiagnostics() throws {
@@ -191,14 +458,16 @@ struct MeetingPendingSpeechProjectionTests {
         feed(&projection, duration: 2, rms: Self.speech)
         let original = projection.snapshot
         feed(&projection, start: 2, duration: 18, rms: { _ in 0.001 })
-        try require(projection.snapshot == original, "Even an 18-second ASR delay cannot erase earlier speech during silence")
+        let quietSnapshot = projection.snapshot
+        try require(quietSnapshot.tokens == original.tokens && quietSnapshot.animatedTokenIDs.isEmpty,
+                    "Even an 18-second ASR delay preserves earlier speech while freezing quiet waves")
         let quiet = receipt.values()
         try require(quiet.filter { $0.kind == .quietWaiting }.count == 1, "One quiet transition produces one diagnostic, not a PCM-frame log flood")
         try require(!quiet.contains { $0.kind == .replaced }, "Quiet is never logged as replacement")
         var held = MeetingLiveTranscriptSnapshot.empty
         held.revision = 1
         projection.reconcile(visible: held)
-        try require(projection.snapshot == original, "An empty/privacy-held update cannot remove pending audio")
+        try require(projection.snapshot == quietSnapshot, "An empty/privacy-held update cannot remove pending audio or restart animation")
         held.revision = 2
         held.partials[.you] = .init(id: UUID(), text: "SYNTHETIC_CONTENT_MUST_NOT_ENTER_DIAGNOSTICS", start: 0, end: 2)
         projection.reconcile(visible: held)

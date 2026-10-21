@@ -264,10 +264,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
             "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
         ],
         downloadSize: "~460.9 MiB",
-        cardDescription: "Fast multilingual transcription. Supports Bulgarian, Croatian, Czech, Danish, " +
-            "Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, " +
-            "Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, " +
-            "Slovenian, Spanish, Swedish, and Ukrainian.",
+        cardDescription: "Multilingual recognition, including mixed speech.",
         performanceRatings: .init(speedRating: 5, accuracyRating: 5, speedPercent: 0.99, accuracyPercent: 0.92)
     )
     static let mini = Descriptor(

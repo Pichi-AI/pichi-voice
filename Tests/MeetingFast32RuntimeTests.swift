@@ -62,11 +62,45 @@ nonisolated struct MeetingFast32RuntimeTests {
         try self.testDetailedProfiling(config: config, samples: samples)
         try await self.testProfileLogTransport(config: config)
         try self.testThreeMinuteFrontendGeometry(config: config)
+        try self.testShortFrontendClockMatrix()
         try self.testIncrementalClock()
         try self.testIncrementalClockPartitions(config: config, samples: samples)
+        try self.testIncrementalClockAllFinalFramePhases(config: config)
         try self.testIncrementalIntervals()
         try await self.testIncrementalSessionLifecycle(config: config)
         print("PASS fast32 geometry, intervals, cancellation, frontend parity, exact checkpoint continuation, bounded metadata-only profiling, profile log transport and incremental session ownership")
+    }
+
+    private static func testShortFrontendClockMatrix() throws {
+        // Below a hop, below the first full FFT window, below model warmup, then
+        // one/five seconds. Both registered graph geometries share exact source clocks.
+        for profileName in ["fast32-split-w8a8", "fast128"] {
+            guard let profile = Nemotron3Config.preset(named: profileName) else {
+                throw NSError(domain: "MissingSyntheticProfile", code: 1)
+            }
+            for count in [0, 1, 47, 48, 159, 160, 255, 256, 399, 400, 511, 512, 16_000, 80_000] {
+                var frontend = Nemotron3StreamingFrontend(config: profile)
+                var clock = MeetingIncrementalDiarizationClock()
+                var frames = 0, source = 0
+                while source < count {
+                    let delta = min(1_013, count - source)
+                    frontend.append(Array(repeating: 0, count: delta))
+                    while let chunk = frontend.nextChunk(final: false) {
+                        frames += chunk.length - chunk.leftOffset - chunk.rightOffset
+                    }
+                    try clock.accept(sampleCount: delta, sourceStartSample: source, outputFrameCount: frames)
+                    source += delta
+                }
+                while let chunk = frontend.nextChunk(final: true) {
+                    frames += chunk.length - chunk.leftOffset - chunk.rightOffset
+                }
+                let expectedFrames = count == 0 ? 0 : 1 + (count + 112) / 160
+                try require(frames == expectedFrames, "Short frontend emitted a different real centered STFT frame count")
+                try clock.finish(totalSamples: count, outputFrameCount: frames)
+                try require(clock.isFinal && clock.processedThroughSample == count,
+                            "Sub-hop or pre-warmup Stop must clip padding to exact captured PCM")
+            }
+        }
     }
 
     private static func testIncrementalClock() throws {
@@ -166,6 +200,55 @@ nonisolated struct MeetingFast32RuntimeTests {
                         "Acknowledgement evicts only released closed intervals, retaining open voice anchors and fractional clipping")
             try require(compact.retainedIntervalCount <= 5, "Activity metadata remains bounded through a long stream")
         }
+    }
+
+    private static func testIncrementalClockAllFinalFramePhases(config: Nemotron3Config) throws {
+        // Hardware capture stops at arbitrary PCM samples. A centered 400-sample STFT
+        // inside a 512-sample FFT emits a second extra frame for 112 of the 160 phases.
+        // Exercise the production frontend, rather than rounding a mocked clock to 10 ms.
+        for remainder in 0..<160 {
+            let sampleCount = 5_120 + remainder
+            var frontend = Nemotron3StreamingFrontend(config: config)
+            var clock = MeetingIncrementalDiarizationClock()
+            var cursor = 0
+            var frames = 0
+            while cursor < sampleCount {
+                let count = min(1_013, sampleCount - cursor)
+                frontend.append(Array(repeating: 0, count: count))
+                while let chunk = frontend.nextChunk(final: false) {
+                    frames += chunk.length - chunk.leftOffset - chunk.rightOffset
+                }
+                try clock.accept(sampleCount: count, sourceStartSample: cursor, outputFrameCount: frames)
+                cursor += count
+            }
+            while let chunk = frontend.nextChunk(final: true) {
+                frames += chunk.length - chunk.leftOffset - chunk.rightOffset
+            }
+            try clock.finish(totalSamples: sampleCount, outputFrameCount: frames)
+            try require(clock.isFinal && clock.processedThroughSample == sampleCount,
+                        "Every physical Stop sample phase flushes without exposing STFT padding")
+            try clock.discard(beforeSample: sampleCount)
+
+            var invalid = MeetingIncrementalDiarizationClock()
+            try invalid.accept(sampleCount: sampleCount, sourceStartSample: 0, outputFrameCount: 0)
+            do {
+                try invalid.finish(totalSamples: sampleCount, outputFrameCount: frames + 1)
+                throw NSError(domain: "ExpectedExcessPaddingRejection", code: 1)
+            } catch MeetingIncrementalDiarizationError.invalidWatermark { }
+        }
+
+        // The reported device Stop ended at this scalar cursor, with no dropped PCM.
+        // Replay its clock only; no private audio, transcript or voice profile is a fixture.
+        let deviceSampleCount = 14_502_328
+        var deviceClock = MeetingIncrementalDiarizationClock()
+        while deviceClock.acceptedThroughSample < deviceSampleCount {
+            let start = deviceClock.acceptedThroughSample
+            let count = min(320_000, deviceSampleCount - start)
+            try deviceClock.accept(sampleCount: count, sourceStartSample: start, outputFrameCount: start / 160)
+        }
+        try deviceClock.finish(totalSamples: deviceSampleCount, outputFrameCount: 90_641)
+        try require(deviceClock.processedThroughSample == deviceSampleCount,
+                    "Physical device scalar Stop cursor accepts the complete native flush")
     }
 
     private static func testIncrementalSessionLifecycle(config: Nemotron3Config) async throws {

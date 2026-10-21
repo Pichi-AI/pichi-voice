@@ -58,6 +58,72 @@ final class MeetingOwnerVoiceProfileTests: XCTestCase {
         XCTAssertEqual(MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.snapshot(), profiles: [first, later], identityLinks: [link]), [first.token, later.token])
         XCTAssertTrue(MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.snapshot(), profiles: [first, later]).isEmpty)
     }
+    @MainActor
+    func testLegacyAnonymousStreamingCheckpointKeepsItsRecipeAndNoOwnerAfterEnrollment() throws {
+        let store = try self.privateStore()
+        let directory = store.fileURL.deletingLastPathComponent()
+        let capture = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic legacy stream", languageCode: "ru",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone"),
+            audioStorageMode: .retainedFiles, speakerLabelsEnabled: true,
+            speakerProcessingMode: .streaming, piiRedactionEnabled: false)
+        let session = MeetingSession(configuration: capture,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        let old = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.gigaamModelID,
+            asrArtifactFingerprint: "synthetic-asr", languageCode: "ru",
+            diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint,
+            speakerProcessingMode: .streaming)
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let originalIdentity = old.identityFingerprint
+        let originalRecipe = try encoder.encode(old)
+        let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: session.id,
+            backendID: .gigaam, backendVersion: "1", configuration: old,
+            piiRedactionEnabled: false, privacyFingerprint: nil)
+        let checkpoint = MeetingRetainedProcessingCheckpoint(sessionDirectory: directory)
+        try checkpoint.write(.init(pin: pin, inputFingerprint: "synthetic-input", ownerVoiceIdentity: nil,
+            runtimeFingerprint: "synthetic-runtime", payload: Data("synthetic-resume-state".utf8)), session: session)
+        let saved = try XCTUnwrap(checkpoint.read(session: session))
+        let locator = try PichiMeetingProviderFactory.modelLocator(for: saved.pin.configuration)
+        XCTAssertFalse(locator.supportsOwnerVoiceVerification)
+        let enrolled = self.snapshot()
+        let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: {
+            XCTFail("Checkpoint compatibility must not prepare native ASR")
+            return ASRService()
+        }, modelLocator: locator, ownerVoiceProfileSnapshot: enrolled)
+        XCTAssertNil(runtime.ownerVoiceProfileSnapshot, "Current enrollment must not change an anonymous resumed attempt")
+        XCTAssertNil(saved.ownerVoiceIdentity)
+        XCTAssertEqual(saved.pin.configuration.identityFingerprint, originalIdentity)
+        XCTAssertEqual(try encoder.encode(saved.pin.configuration), originalRecipe)
+        XCTAssertEqual(saved.payload, Data("synthetic-resume-state".utf8))
+        let current = MeetingFinalProcessingConfiguration(asrModel: old.asrModel,
+            asrArtifactFingerprint: old.asrArtifactFingerprint, languageCode: old.languageCode,
+            diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.streamingImplementationFingerprint,
+            speakerProcessingMode: .streaming)
+        let currentRuntime = MeetingParakeetNemotronRuntime(asrServiceProvider: {
+            XCTFail("Capability selection must not prepare native ASR")
+            return ASRService()
+        }, modelLocator: try PichiMeetingProviderFactory.modelLocator(for: current), ownerVoiceProfileSnapshot: enrolled)
+        XCTAssertEqual(currentRuntime.ownerVoiceProfileSnapshot, enrolled)
+        XCTAssertNotEqual(current.identityFingerprint, originalIdentity)
+    }
+
+    func testStreamingOwnerV2PolicyIsSeparateFromLegacyClusteringAndRejectsAmbiguity() {
+        let track = UUID()
+        let reference = self.snapshot()
+        let crossRecording = self.profile(track: track, slot: 0, angle: 1)
+        XCTAssertTrue(MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: [crossRecording]).isEmpty)
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: [crossRecording], policy: .streamingV2), [crossRecording.token])
+        XCTAssertEqual(MeetingSpeakerVoiceMatcher.maximumDistance, 0.25)
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.Policy.legacy.maximumReferenceDistance, 0.25)
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.Policy.legacy.maximumQuerySelfDistance, 0.25)
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.Policy.streamingV2.maximumReferenceDistance, 0.65)
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.Policy.streamingV2.maximumQuerySelfDistance, 0.45)
+        let competitor = self.profile(track: track, slot: 1, angle: 1.05)
+        XCTAssertTrue(MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: [crossRecording, competitor], policy: .streamingV2).isEmpty)
+        XCTAssertTrue(MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: [crossRecording, crossRecording], policy: .streamingV2).isEmpty)
+        let reused = MeetingSpeakerVoiceProfile(token: crossRecording.token, embeddings: [self.vector(0), self.vector(.pi / 2)])
+        XCTAssertTrue(MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: [reused], policy: .streamingV2).isEmpty)
+    }
+
     func testLocalStoreRoundTripPersistsOnlyBoundedEmbeddingsAndDeletionKeepsFrozenSnapshot() throws {
         let store = try self.privateStore()
         XCTAssertNil(try store.load())

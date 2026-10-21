@@ -23,34 +23,122 @@ nonisolated enum MeetingOwnerVoiceProfileError: Error {
     case invalidAudio, insufficientSpeech, inconsistentVoice, invalidProfile, staleDraft, busy
 }
 
-/// Conservative verification against an explicitly enrolled reference. Existing attempt-local
-/// clustering thresholds are reused unchanged; two voices proposing the owner stay unknown.
+/// Explicit owner identity is a cross-recording decision, separate from anonymous within-
+/// meeting clustering. Saved recipes retain their original strict policy; two plausible
+/// owner identities still remain unconfirmed under either policy.
 nonisolated enum MeetingOwnerVoiceVerifier {
+    nonisolated enum Policy: Equatable, Sendable {
+        case legacy
+        case streamingV2
+        var maximumReferenceDistance: Float { self == .legacy ? 0.25 : 0.65 }
+        var maximumQuerySelfDistance: Float { self == .legacy ? 0.25 : 0.45 }
+        var ambiguityMargin: Float { 0.10 }
+    }
+
+    /// Attempt-local scalar evidence only. Never includes tokens, profile metadata or vectors.
+    /// The callback is synchronous and optional so callers keep the existing decision API.
+    nonisolated struct Diagnostics: Sendable {
+        nonisolated enum Outcome: String, Sendable {
+            case missingOwner, invalidOwner, duplicateTokens, invalidLinks
+            case noValidCandidates, referenceDistance, winnerMargin, confirmed
+        }
+        nonisolated struct Query: Sendable {
+            nonisolated enum Gate: String, Sendable { case invalidQuery, querySelfDistance, invalidReferenceDistance, measured }
+            let ordinal: Int
+            let selfDistance: Float?
+            let referenceDistance: Float?
+            let gate: Gate
+        }
+        let policy: Policy
+        let profileCount: Int
+        var outcome: Outcome = .noValidCandidates
+        var validProfileCount = 0
+        var rejectedProfileCount = 0
+        var validGroupCount = 0
+        var rejectedGroupCount = 0
+        var queries: [Query] = []
+        var bestReferenceDistance: Float?
+        var runnerReferenceDistance: Float?
+        var winnerMargin: Float?
+
+        /// At most 128 evaluated observations, identified only by their input-array ordinal.
+        /// Skipped observations were not measured after an earlier linked observation failed.
+        var diagnosticFields: String {
+            func scalar(_ value: Float?) -> String { value.map { String(format: "%.4f", locale: Locale(identifier: "en_US_POSIX"), Double($0)) } ?? "unavailable" }
+            let rows = self.queries.sorted { $0.ordinal < $1.ordinal }.map {
+                "\($0.ordinal):\($0.gate.rawValue):self=\(scalar($0.selfDistance)):reference=\(scalar($0.referenceDistance))"
+            }.joined(separator: ",")
+            return "policy=\(self.policy == .legacy ? "legacy" : "streamingV2") outcome=\(self.outcome.rawValue)"
+                + " profileCount=\(self.profileCount) validProfiles=\(self.validProfileCount) rejectedProfiles=\(self.rejectedProfileCount)"
+                + " skippedProfiles=\(self.profileCount - self.validProfileCount - self.rejectedProfileCount)"
+                + " validGroups=\(self.validGroupCount) rejectedGroups=\(self.rejectedGroupCount)"
+                + " reportedQueries=\(self.queries.count) omittedQueries=\(self.validProfileCount + self.rejectedProfileCount - self.queries.count)"
+                + " querySelfLimit=\(scalar(self.policy.maximumQuerySelfDistance)) referenceLimit=\(scalar(self.policy.maximumReferenceDistance))"
+                + " marginLimit=\(scalar(self.policy.ambiguityMargin)) bestReference=\(scalar(self.bestReferenceDistance))"
+                + " runnerReference=\(scalar(self.runnerReferenceDistance)) winnerMargin=\(scalar(self.winnerMargin)) queries=[\(rows)]"
+        }
+    }
+
     static func confirmedTokens(
         owner: MeetingOwnerVoiceProfileSnapshot?, profiles: [MeetingSpeakerVoiceProfile],
-        identityLinks: [MeetingSpeakerIdentityLink] = []
+        identityLinks: [MeetingSpeakerIdentityLink] = [], policy: Policy = .legacy
     ) -> Set<MeetingBackendSpeakerToken> {
-        guard let owner, MeetingOwnerVoiceProfileStore.isValid(owner) else { return [] }
+        self.confirmedTokens(owner: owner, profiles: profiles, identityLinks: identityLinks, policy: policy, diagnostics: nil)
+    }
+
+    static func confirmedTokens(
+        owner: MeetingOwnerVoiceProfileSnapshot?, profiles: [MeetingSpeakerVoiceProfile],
+        identityLinks: [MeetingSpeakerIdentityLink] = [], policy: Policy = .legacy,
+        diagnostics: ((Diagnostics) -> Void)?
+    ) -> Set<MeetingBackendSpeakerToken> {
+        var report = Diagnostics(policy: policy, profileCount: profiles.count)
+        func finish(_ outcome: Diagnostics.Outcome, tokens: Set<MeetingBackendSpeakerToken> = []) -> Set<MeetingBackendSpeakerToken> {
+            if let diagnostics { report.outcome = outcome; diagnostics(report) }
+            return tokens
+        }
+        func measure(_ ordinal: Int, _ consistency: Float?, _ distance: Float?, _ gate: Diagnostics.Query.Gate) {
+            if gate == .measured { report.validProfileCount += 1 } else { report.rejectedProfileCount += 1 }
+            if diagnostics != nil, report.queries.count < MeetingSpeakerVoiceSamples.maximumProfiles {
+                report.queries.append(.init(ordinal: ordinal, selfDistance: consistency, referenceDistance: distance, gate: gate))
+            }
+        }
+        guard let owner else { return finish(.missingOwner) }
+        guard MeetingOwnerVoiceProfileStore.isValid(owner) else { return finish(.invalidOwner) }
+        if policy == .streamingV2 {
+            let tokens = Set(profiles.map(\.token))
+            guard tokens.count == profiles.count else { return finish(.duplicateTokens) }
+            guard MeetingSpeakerVoiceMatcher.validLinks(identityLinks, allowedTokens: tokens) else { return finish(.invalidLinks) }
+        }
         let canonicalByToken = Dictionary(identityLinks.map { ($0.token, $0.canonicalToken) }, uniquingKeysWith: { a, _ in a })
-        let groups = Dictionary(grouping: profiles) { canonicalByToken[$0.token] ?? $0.token }
+        let groups = Dictionary(grouping: profiles.enumerated()) { canonicalByToken[$0.element.token] ?? $0.element.token }
         var measures: [(MeetingBackendSpeakerToken, Float)] = []
         for (canonical, observations) in groups {
             var worst: Float = 0
             var valid = true
-            for observation in observations {
-                guard let consistency = MeetingSpeakerVoiceMatcher.distance(observation, observation),
-                      consistency <= MeetingSpeakerVoiceMatcher.maximumDistance,
-                      let distance = MeetingSpeakerVoiceMatcher.distance(
-                        observation, MeetingSpeakerVoiceProfile(token: observation.token, embeddings: owner.embeddings)
-                      ) else { valid = false; break }
+            for (ordinal, observation) in observations {
+                guard let consistency = MeetingSpeakerVoiceMatcher.distance(observation, observation) else {
+                    measure(ordinal, nil, nil, .invalidQuery); valid = false; break
+                }
+                guard consistency <= policy.maximumQuerySelfDistance else {
+                    measure(ordinal, consistency, nil, .querySelfDistance); valid = false; break
+                }
+                guard let distance = MeetingSpeakerVoiceMatcher.distance(
+                    observation, MeetingSpeakerVoiceProfile(token: observation.token, embeddings: owner.embeddings)
+                ) else { measure(ordinal, consistency, nil, .invalidReferenceDistance); valid = false; break }
+                measure(ordinal, consistency, distance, .measured)
                 worst = max(worst, distance)
             }
-            if valid { measures.append((canonical, worst)) }
+            if valid { measures.append((canonical, worst)) } else { report.rejectedGroupCount += 1 }
         }
         measures.sort { $0.1 < $1.1 }
-        guard let winner = measures.first, winner.1 <= MeetingSpeakerVoiceMatcher.maximumDistance,
-              measures.count == 1 || measures[1].1 - winner.1 >= MeetingSpeakerVoiceMatcher.ambiguityMargin else { return [] }
-        return Set(profiles.filter { (canonicalByToken[$0.token] ?? $0.token) == winner.0 }.map(\.token))
+        report.validGroupCount = measures.count
+        report.bestReferenceDistance = measures.first?.1
+        report.runnerReferenceDistance = measures.dropFirst().first?.1
+        if measures.count > 1 { report.winnerMargin = measures[1].1 - measures[0].1 }
+        guard let winner = measures.first else { return finish(.noValidCandidates) }
+        guard winner.1 <= policy.maximumReferenceDistance else { return finish(.referenceDistance) }
+        guard measures.count == 1 || measures[1].1 - winner.1 >= policy.ambiguityMargin else { return finish(.winnerMargin) }
+        return finish(.confirmed, tokens: Set(profiles.filter { (canonicalByToken[$0.token] ?? $0.token) == winner.0 }.map(\.token)))
     }
 }
 

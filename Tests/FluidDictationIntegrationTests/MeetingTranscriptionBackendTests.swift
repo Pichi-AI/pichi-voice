@@ -1423,7 +1423,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             languageCode: "ru", artifactFingerprintOverride: "synthetic-export", speakerProcessingMode: .streaming)
         XCTAssertEqual(selected.asrModel, PichiMeetingProviderFactory.gigaamModelID)
         XCTAssertEqual(selected.effectiveSpeakerProcessingMode, .streaming)
-        XCTAssertEqual(selected.diarizationFingerprint, MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint)
+        XCTAssertEqual(selected.diarizationFingerprint, MeetingNemotronModelProfile.experimentalFast128FP16CPU.streamingImplementationFingerprint)
         XCTAssertEqual(try PichiMeetingProviderFactory.modelLocator(for: selected).profile, .experimentalFast128FP16CPU)
         let admission = PichiMeetingProviderFactory.validationConfiguration(backendID: .gigaam,
             languageCode: "ru", diarizationEnabled: true, artifactFingerprintOverride: "synthetic-export",
@@ -1439,21 +1439,67 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertThrowsError(try PichiMeetingProviderFactory.modelLocator(for: wrongProfile))
         for model in [PichiMeetingProviderFactory.whisperTinyModelID, PichiMeetingProviderFactory.parakeetV3ModelID] {
             let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model))
-            XCTAssertFalse(descriptor.supportedSpeakerProcessingModes.contains(.streaming))
-            XCTAssertNil(PichiMeetingProviderFactory.speakerModelStore(for: model, speakerProcessingMode: .streaming))
+            XCTAssertTrue(descriptor.supportedSpeakerProcessingModes.contains(.streaming))
+            XCTAssertNotNil(PichiMeetingProviderFactory.speakerModelStore(for: model, speakerProcessingMode: .streaming))
+            let configuration = PichiMeetingProviderFactory.configuration(asrModel: model, languageCode: "auto",
+                artifactFingerprintOverride: "synthetic-export", speakerProcessingMode: .streaming)
+            XCTAssertEqual(configuration.asrModel, model)
+            XCTAssertEqual(configuration.diarizationFingerprint,
+                MeetingNemotronModelProfile.experimentalFast128FP16CPU.streamingImplementationFingerprint)
+            XCTAssertEqual(try PichiMeetingProviderFactory.modelLocator(for: configuration).profile, .experimentalFast128FP16CPU)
+            XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(configuration, isAppleSilicon: true))
         }
         let store = try XCTUnwrap(PichiMeetingProviderFactory.speakerModelStore(
             for: selected.asrModel, speakerProcessingMode: .streaming))
         XCTAssertTrue(store === MeetingDiarizationModelStore.shared(for: .experimentalFast128FP16CPU))
+        XCTAssertTrue(store.supportsOwnerVoiceVerification)
+        XCTAssertTrue(selected.diarizationFingerprint.contains(";owner-stream=first-latest-3to5s-v2;owner-ref=0.65;owner-self=0.45;owner-margin=0.10"))
+        let oldAnonymous = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
+            diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint,
+            speakerProcessingMode: .streaming)
+        let frozenIdentity = oldAnonymous.identityFingerprint
+        let frozenBytes = try JSONEncoder().encode(oldAnonymous)
+        let legacyLocator = try PichiMeetingProviderFactory.modelLocator(for: oldAnonymous)
+        XCTAssertEqual(legacyLocator.profile, .experimentalFast128FP16CPU)
+        XCTAssertFalse(legacyLocator.supportsOwnerVoiceVerification,
+                       "Resuming an anonymous recipe must not introduce a current enrolled owner or change its checkpoint identity")
+        XCTAssertTrue(try PichiMeetingProviderFactory.modelLocator(for: selected).supportsOwnerVoiceVerification)
+        XCTAssertEqual(oldAnonymous.identityFingerprint, frozenIdentity)
+        XCTAssertEqual(try JSONDecoder().decode(MeetingFinalProcessingConfiguration.self, from: frozenBytes), oldAnonymous)
+        XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(oldAnonymous, isAppleSilicon: true))
+        let ownerV1 = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
+            diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.legacyOwnerStreamingImplementationFingerprint,
+            speakerProcessingMode: .streaming)
+        let ownerV1Identity = ownerV1.identityFingerprint
+        XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(ownerV1, isAppleSilicon: true))
+        XCTAssertTrue(try PichiMeetingProviderFactory.modelLocator(for: ownerV1).supportsOwnerVoiceVerification)
+        XCTAssertFalse(MeetingNemotronModelProfile.experimentalFast128FP16CPU.usesAdaptiveStreamingOwnerEvidence(
+            implementationFingerprint: ownerV1.diarizationFingerprint))
+        XCTAssertEqual(ownerV1.identityFingerprint, ownerV1Identity)
+        XCTAssertEqual(ownerV1.diarizationFingerprint, MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint
+            + ";voice=wespeaker@" + MeetingSpeakerVoiceModelArtifacts.revision + ";owner-stream=bounded-two-3s-v1")
+        for invalid in [oldAnonymous.diarizationFingerprint + ";voice=unknown",
+                        selected.diarizationFingerprint + ";changed=true"] {
+            let unregistered = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
+                diarizationFingerprint: invalid, speakerProcessingMode: .streaming)
+            XCTAssertThrowsError(try PichiMeetingProviderFactory.modelLocator(for: unregistered))
+        }
     }
 
-    func testSpeakerProcessingPreferenceDefaultsOffAndDoesNotChangePrivacy() throws {
+    func testSpeakerProcessingPreferenceUsesRegisteredTopologyAndDoesNotChangePrivacy() throws {
         let suite = "SpeakerModeSettings.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = SettingsStore(defaults: defaults)
         let originalSaveAudio = settings.meetingSaveAudio
         let originalPrivacy = settings.meetingPIIRedactionEnabled
+        settings.selectedSpeechModel = .whisperTiny
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
+        settings.selectedSpeechModel = .gigaam
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording)
+        XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode))
+        settings.meetingSpeakerProcessingMode = .afterRecording
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
         settings.meetingSpeakerProcessingMode = .streaming
         XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)

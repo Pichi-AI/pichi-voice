@@ -53,6 +53,10 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     /// Ephemeral, conservatively filtered held text. This is not a canonical
     /// segment and must never enter storage, search, summaries or exports.
     var livePreview: MeetingLivePartial? = nil
+    /// Ephemeral source-clock acknowledgement. The streaming owner sets this only
+    /// through joined ASR, acoustic and privacy admission. Apply after publishing its
+    /// protected history; never serialize it as a word or use it for speaker identity.
+    var protectedSourceThroughSample: Int? = nil
     /// Ephemeral ASR observation metadata. True only after this audio window seals.
     var speechObservationIsFinal = false
     /// Ephemeral only. Neither this identity nor unfiltered speech enters a session.
@@ -85,10 +89,15 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
         self.isComplete = isComplete
     }
 
+    /// Trusted presentation template frozen by the producing attempt. Ephemeral metadata
+    /// lets a durable merge preserve the same generated labels after an interface change.
+    var speakerNameFormat: String? = nil
+
     /// Identity evidence can refine the owner marker after a speaker was first checkpointed.
     /// Reuse this merge in the runtime and durable checkpoint so promotion and revocation agree;
     /// an automatic observation never replaces user aliases, merges or identity corrections.
-    func mergingSpeakers(into existing: [MeetingSessionSpeaker]) -> [MeetingSessionSpeaker] {
+    func mergingSpeakers(into existing: [MeetingSessionSpeaker],
+                         speakerNameFormat: String? = nil) -> [MeetingSessionSpeaker] {
         var result = existing
         var indices = Dictionary(existing.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
         for speaker in self.speakers {
@@ -99,6 +108,9 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
                 result.append(speaker)
             }
         }
-        return result
+        // Apply numbering against the latest canonical aliases and owner flags. Delayed raw
+        // observations may contain earlier generated numbers and must never restore them.
+        return MeetingSessionSpeaker.numberingGeneratedParticipants(result,
+            speakerNameFormat: speakerNameFormat ?? self.speakerNameFormat ?? PichiLocalization.text("Speaker %lld"))
     }
 }

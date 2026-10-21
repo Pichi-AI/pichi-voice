@@ -56,13 +56,26 @@ final class MeetingSpeechActivityDetectorTests: XCTestCase {
         XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: 0.512, session: self.session, epoch: 0, route: "a").unknown, .contextWarmup)
     }
 
-    func testBudgetFailuresDisableContribution() {
+    func testBudgetFailuresCoolDownAndRecoverWithFreshContext() {
         var time = 0.0
-        var detector = MeetingSpeechActivityDetector(model: Fake(p: 0.9), clock: { time += 1; return time })
+        var duration = 1.0
+        var detector = MeetingSpeechActivityDetector(model: Fake(p: 0.9), clock: { time += duration; return time })
         for i in 0..<3 {
-            XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: Double(i) * 0.256, session: self.session, epoch: 0, route: "a").unknown, .overBudget)
+            let frame = detector.process(samples: self.samples, valid: self.valid, start: Double(i) * 0.256,
+                                         session: self.session, epoch: 0, route: "a")
+            XCTAssertTrue(frame.budgetExceeded)
+            if i == 0 { XCTAssertEqual(frame.unknown, .contextWarmup); XCTAssertNil(frame.probability) }
+            else { XCTAssertNil(frame.unknown); XCTAssertEqual(frame.probability, 0.9) }
         }
-        XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: 0.768, session: self.session, epoch: 0, route: "a").unknown, .disabled)
+        for i in 3..<11 {
+            XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: Double(i) * 0.256,
+                                            session: self.session, epoch: 0, route: "a").unknown, .budgetCooldown)
+        }
+        duration = 0.005
+        XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: 11 * 0.256,
+                                       session: self.session, epoch: 0, route: "a").unknown, .contextWarmup)
+        XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: 12 * 0.256,
+                                       session: self.session, epoch: 0, route: "a").probability, 0.9)
     }
 
     func testCombinedPolicyNeverTreatsActivityAsNearEndOrAbsenceProof() {
@@ -77,7 +90,7 @@ final class MeetingSpeechActivityDetectorTests: XCTestCase {
         XCTAssertThrowsError(try MeetingLocalSileroActivityModel(modelURL: URL(fileURLWithPath: "/private/tmp/fv-missing-vad-artifact.mlmodelc")))
     }
 
-    func testNewSessionAndUnknownFramesResetFailureAllowance() {
+    func testNewSessionAndUnknownFramesResetTransientBudgetAllowance() {
         var time = 0.0
         var detector = MeetingSpeechActivityDetector(model: Fake(p: 0.9), clock: { time += 1; return time })
         for i in 0..<2 {
@@ -86,10 +99,24 @@ final class MeetingSpeechActivityDetectorTests: XCTestCase {
         var masked = self.valid; masked[0] = false
         _ = detector.process(samples: self.samples, valid: masked, start: 0.512, session: self.session, epoch: 0, route: "a")
         for i in 3..<6 {
-            XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: Double(i) * 0.256, session: self.session, epoch: 0, route: "a").unknown, .overBudget)
+            XCTAssertTrue(detector.process(samples: self.samples, valid: self.valid, start: Double(i) * 0.256,
+                                          session: self.session, epoch: 0, route: "a").budgetExceeded)
         }
-        XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: 1.536, session: self.session, epoch: 0, route: "a").unknown, .disabled)
-        XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: 0, session: UUID(), epoch: 0, route: "a").unknown, .overBudget)
+        XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: 1.536, session: self.session, epoch: 0, route: "a").unknown, .budgetCooldown)
+        let restarted = detector.process(samples: self.samples, valid: self.valid, start: 0, session: UUID(), epoch: 0, route: "a")
+        XCTAssertEqual(restarted.unknown, .contextWarmup); XCTAssertTrue(restarted.budgetExceeded)
+    }
+
+    func testInvalidOutputsStillDisableUntilNewSession() {
+        var detector = MeetingSpeechActivityDetector(model: Fake(p: .nan, probabilityOnReset: .nan))
+        for i in 0..<3 {
+            XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: Double(i) * 0.256,
+                                            session: self.session, epoch: 0, route: "a").unknown, .modelFailure)
+        }
+        XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: 0.768,
+                                       session: self.session, epoch: 1, route: "b").unknown, .disabled)
+        XCTAssertEqual(detector.process(samples: self.samples, valid: self.valid, start: 0,
+                                       session: UUID(), epoch: 0, route: "a").unknown, .modelFailure)
     }
 
     private func temporal(_ start: Double, supported: Bool, epoch: UInt64 = 0) -> MeetingPlaybackDuplicateDetector.Result {

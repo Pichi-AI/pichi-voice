@@ -321,7 +321,7 @@ extension SettingsStore {
         /// One-line description for the card UI
         var cardDescription: String {
             switch self {
-            case .gigaam: return "Local Russian recognition with GigaAM. Download the compact model or import a verified local export."
+            case .gigaam: return "On-device recognition for Russian speech."
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
                 return self.parakeetDescriptor?.cardDescription ?? ""
             case .parakeetRealtime:
@@ -341,7 +341,7 @@ extension SettingsStore {
             case .appleSpeechAnalyzer:
                 return "Advanced and modern on-device recognition for newer macOS devices."
             case .whisperTiny:
-                return "Minimal resource usage. Best for older devices or battery life."
+                return "Compact multilingual model. Recognition can be less accurate, especially for mixed speech."
             case .whisperBase:
                 return "Good balance of speed and accuracy. Works on any Mac."
             case .whisperSmall:
