@@ -79,7 +79,7 @@ struct MeetingRecordingCanvas: View {
         Text(self.isStopping
             ? PichiLocalization.text("Saving your recording before transcription begins.")
             : PichiLocalization.text(self.session.effectiveSpeakerProcessingMode == .streaming
-                ? "Speaker labels update during recording. A short delay is expected."
+                ? "Speaker labels appear after enough speech has been collected."
                 : "Speaker labels are added after recording."))
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)

@@ -53207,6 +53207,23 @@
           }
         }
       }
+    },
+    "Speaker labels appear after enough speech has been collected.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker labels appear after enough speech has been collected."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Метки участников появляются после накопления достаточного объёма речи."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

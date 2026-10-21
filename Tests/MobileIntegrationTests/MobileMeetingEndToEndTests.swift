@@ -68,10 +68,19 @@ private final class SyntheticPrivacyReplayDiagnostics: TranscriptTextRedacting {
 
     init(wrapping wrapped: any TranscriptTextRedacting) { self.wrapped = wrapped }
     nonisolated var checkpointIdentity: String? { wrapped.checkpointIdentity }
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { wrapped.supportsSpeechBoundaryAdmission }
     @MainActor func prepareForMeeting() async throws { try await wrapped.prepareForMeeting() }
 
     @MainActor func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
-        let result = try await wrapped.redactWithSpans(text)
+        try await redact(text, speechBoundary: false)
+    }
+    @MainActor func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        try await redact(text, speechBoundary: true)
+    }
+    @MainActor private func redact(_ text: String, speechBoundary: Bool) async throws -> TranscriptTextRedaction {
+        let result: TranscriptTextRedaction
+        if speechBoundary { result = try await wrapped.redactSpeechBoundaryWithSpans(text) }
+        else { result = try await wrapped.redactWithSpans(text) }
         if UIApplication.shared.applicationState == .background {
             backgroundSuccessfulCalls += 1
             if !result.spans.isEmpty { backgroundRedactedCalls += 1 }
@@ -1026,6 +1035,12 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         XCTAssertEqual(observation.observed, [0])
         XCTAssertEqual(observation.fullyMasked, [0])
         XCTAssertEqual(observation.unmaskedPublishableObservations, 0)
+        let replay = SyntheticPrivacyReplayDiagnostics(wrapping: SyntheticSpeechBoundaryRedactor())
+        XCTAssertTrue(replay.supportsSpeechBoundaryAdmission)
+        let replayResult = try await replay.redactSpeechBoundaryWithSpans("Иван Тестов")
+        XCTAssertEqual(replayResult.text, "[ИМЯ]")
+        let evidence = try XCTUnwrap(JSONSerialization.jsonObject(with: replay.attachmentData()) as? [String: Any])
+        XCTAssertEqual((evidence["observations"] as? [[String: Any]])?.count, 1)
     }
 
     /// No audio, preparation, or model downloads occur without this separate gate.

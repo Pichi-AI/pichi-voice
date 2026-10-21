@@ -394,7 +394,7 @@ struct MobileMeetingRoot: View {
                 .accessibilityIdentifier("meeting.liveTranscript")
             if !compactHeight, session.speakerLabelsEnabled != false {
                 Text(PichiLocalization.text(session.effectiveSpeakerProcessingMode == .streaming
-                    ? "Speaker labels update during recording. A short delay is expected."
+                    ? "Speaker labels appear after enough speech has been collected."
                     : "Speaker labels are added after recording."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
