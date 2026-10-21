@@ -160,7 +160,7 @@ struct OnboardingAIEnhancementStepView: View {
                                 .buttonStyle(.plain)
                                 .foregroundStyle(self.theme.palette.secondaryText)
                                 .disabled(!self.canNavigate)
-                            self.action(id: "practice-next", title: self.practice.isLast ? "Finish setup" : "Next example", tone: .primary, width: 180, isEnabled: self.practice.result != nil) {
+                            self.action(id: "practice-next", title: self.practice.isLast ? "Continue" : "Next example", tone: .primary, width: 180, isEnabled: self.practice.result != nil) {
                                 guard self.canNavigate, self.practice.result != nil else { return }
                                 if self.practice.isLast {
                                     self.onFinishSetup()
