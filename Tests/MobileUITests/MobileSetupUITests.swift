@@ -151,9 +151,9 @@ final class MobileSetupUITests: XCTestCase {
 
     private func reveal(_ identifier: String, in app: XCUIApplication) {
         let button = app.buttons[identifier]
-        for _ in 0..<6 where !button.isHittable {
+        for step in 0..<6 where !button.isHittable {
             app.swipeUp()
-            capture("dictionary-scroll-\(identifier)")
+            capture("dictionary-scroll-\(identifier)-\(step)")
         }
         XCTAssertTrue(button.isHittable)
     }
@@ -186,11 +186,17 @@ final class MobileSetupUITests: XCTestCase {
         attachment.name = "setup-\(step)-\(revision)"
         attachment.lifetime = .keepAlways
         add(attachment)
-        // Simulator-only review gates let each real UI step be inspected before the
-        // next action. This changes no production flow and never opens a microphone.
+        reviewNativeScreenshotIfRequested(step, namePrefix: "setup", revision: revision)
+    }
+}
+
+/// Shared by opt-in simulator acceptance cases so each real UI action is reviewed
+/// against its native frame before the next action. No production behavior changes.
+func reviewNativeScreenshotIfRequested(_ step: String, namePrefix: String, revision: String) {
+    #if targetEnvironment(simulator)
         if let directory = ProcessInfo.processInfo.environment["PICHI_SETUP_STEP_REVIEW_DIRECTORY"] {
             let root = URL(fileURLWithPath: directory, isDirectory: true)
-            let name = "setup-\(step)-\(revision)"
+            let name = "\(namePrefix)-\(step)-\(revision)-\(UUID().uuidString.prefix(8))"
             let frame = root.appendingPathComponent(name + ".png")
             let acknowledgement = root.appendingPathComponent(name + ".continue")
             do {
@@ -208,5 +214,5 @@ final class MobileSetupUITests: XCTestCase {
                               "The exact native frame must be reviewed before the next step")
             } catch { XCTFail("Native review evidence could not be saved") }
         }
-    }
+    #endif
 }

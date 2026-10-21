@@ -1600,5 +1600,6 @@ final class MobileNavigationUITests: XCTestCase {
         attachment.name = "\(name)-\(step)-\(revision)"
         attachment.lifetime = .keepAlways
         add(attachment)
+        reviewNativeScreenshotIfRequested(step, namePrefix: "navigation", revision: revision)
     }
 }
