@@ -235,7 +235,9 @@ extension MeetingSessionStoreCheckpointTests {
         check(MeetingTranscriptExporter.text(for: session).contains("Ручное новое имя"),
               "A recovered participant follows the current persisted manual alias")
 
-        let gap = word("фрагмент", 15, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
+        var gap = word("фрагмент", 15, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
+        gap.end = .init(value: 15_200, timescale: 1_000)
+        gap.nativeTiming = .init(start: 15, end: 15.2) // Outside the tiny residual convention.
         let returning = word("Возврат.", 22, raw: ta, selected: ta, owner: a, map: both)
         session.transcriptSegments = [first, gap, returning]
         let full = MeetingTranscriptExporter.displayParagraphs(for: session.transcriptSegments, in: session)
@@ -269,5 +271,172 @@ extension MeetingSessionStoreCheckpointTests {
             check(reading.last?.segments == [next] && session == unchanged,
                   "Residual typography preserves the next independent participant and all canonical evidence")
         }
+
+        session.speakers[0].isLocalUser = true
+        session.transcriptSegments = [unknown, incoming]
+        for custom in [nil, false, true] as [Bool?] {
+            session.speakers[0].usesCustomDisplayName = custom
+            for language in [PichiInterfaceLanguage.english, .russian] {
+                let expected = custom == true ? session.speakers[0].displayName
+                    : PichiLocalization.text("You", language: language)
+                check(MeetingTranscriptExporter.speakerDisplayName(session.speakers[0], language: language) == expected,
+                      "An explicit owner alias replaces the localized owner marker without inspecting the name")
+                let presentation = MeetingTranscriptExporter.speakerPresentation(for: incoming, in: session)
+                check(MeetingTranscriptExporter.speakerLabel(for: presentation, language: language) == expected,
+                      "Direct participant labels honor the explicit owner alias")
+                if case let .identified(name) = presentation.label {
+                    check(name.isLocalUser, "A custom owner alias preserves the presentation's owner identity")
+                } else { check(false, "The independent owner word remains identified") }
+                let projected = MeetingTranscriptExporter.displayParagraphs(for: session.transcriptSegments, in: session)[0]
+                check(MeetingTranscriptExporter.speakerLabel(for: projected, in: session,
+                    speakerNames: names, language: language) == expected,
+                      "Estimated reading paragraphs use the same owner alias as independent words")
+                check(MeetingTranscriptExporter.captionLabel(for: projected, in: session,
+                    speakerNames: names, language: language) == expected,
+                      "Live and saved captions share the custom owner label")
+            }
+        }
+        let ownerJSON = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: session)) as! [String: Any]
+        let ownerRows = ownerJSON["speakers"] as! [[String: Any]]
+        check(ownerRows.first(where: { $0["id"] as? String == a.uuidString })?["usesCustomDisplayName"] as? Bool == true,
+              "Canonical speaker export retains explicit custom-name provenance")
+        try self.checkTinyUnsupportedReadingResidual(check)
+    }
+
+    private static func checkTinyUnsupportedReadingResidual(_ check: (Bool, String) -> Void) throws {
+        let track = UUID(), owner = UUID(), other = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "synthetic-owner")
+        let otherToken = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "synthetic-other")
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic residual reading",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic source")),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        session.state = .completed; session.endedAt = session.startedAt.addingTimeInterval(100)
+        session.piiRedactionEnabled = true; session.audioStorageMode = .memoryOnly
+        session.transcriptIsComplete = true
+        session.speakers = [(owner, "Synthetic owner"), (other, "Synthetic reply")].map {
+            .init(id: $0.0, displayName: $0.1, diarizationClusterID: nil, trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        func word(_ text: String, _ start: Double, _ end: Double,
+                  speaker: UUID?, native: MeetingBackendSpeakerToken?) -> MeetingTranscriptSegment {
+            .init(id: UUID(), start: .init(value: Int64((start * 1_000).rounded()), timescale: 1_000),
+                end: .init(value: Int64((end * 1_000).rounded()), timescale: 1_000), sourceTrackID: track,
+                speakerID: speaker, text: text, revision: 0, status: .final, overlap: .none, completeness: .complete,
+                attributionState: speaker == nil ? .unassigned : .assigned, nativePrecision: .word,
+                nativeUnitID: "synthetic-residual:\(UUID())", nativeSpeakerAssignment: native.map { .assigned($0) } ?? .unassigned,
+                nativeTiming: .init(start: start, end: end))
+        }
+        func fixture(beforeEnd: Double = 7.28, start: Double = 40, end: Double = 40.04,
+                     incomingStart: Double = 47.12) -> MeetingSession {
+            var value = session
+            value.transcriptSegments = [word("Первая реплика.", max(0, beforeEnd - 0.36), beforeEnd, speaker: owner, native: token),
+                word("А", start, end, speaker: nil, native: nil),
+                word("продолжение.", incomingStart, incomingStart + 0.12, speaker: owner, native: token)]
+            return value
+        }
+        func residualOwner(_ value: MeetingSession) -> UUID? {
+            MeetingTranscriptExporter.speakerPresentations(in: value)[value.transcriptSegments[1].id]?.participantID
+        }
+        for shape in [(7.28, 40.0, 40.04, 47.12), (51.72, 80.0, 80.04, 86.72)] {
+            let base = fixture(beforeEnd: shape.0, start: shape.1, end: shape.2, incomingStart: shape.3)
+            for state in [MeetingSessionState.recording, .completed] {
+                var value = base; value.state = state
+                let original = value, canonical = try MeetingTranscriptExporter.json(for: value)
+                let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: value.transcriptSegments, in: value)
+                check(paragraphs.count == 1 && paragraphs[0].segments == value.transcriptSegments
+                    && paragraphs[0].text == "Первая реплика. А продолжение.",
+                      "A tiny unsupported island between the same independent voice stays in its reading phrase across silence")
+                let presentations = MeetingTranscriptExporter.speakerPresentations(in: value)
+                check(presentations.values.allSatisfy { $0.participantID == owner },
+                      "Every reading member, including the unsupported island, shares the established participant")
+                let startLabel = MeetingTranscriptExporter.timestampText(value.transcriptSegments[0].start.seconds)
+                check(MeetingTranscriptExporter.text(for: value) == "[\(startLabel)] Synthetic owner: Первая реплика. А продолжение.",
+                      "Plain export uses the same joined phrase as live and saved reading")
+                if state == .completed {
+                    let portable = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: value)) as! [String: Any]
+                    let rows = portable["segments"] as! [[String: Any]]
+                    check(rows.count == 1 && rows[0]["speakerID"] as? String == owner.uuidString
+                        && rows[0]["text"] as? String == paragraphs[0].text,
+                          "Protected export shares the joined reading phrase and its existing participant UUID")
+                }
+                let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(value))
+                check(restored == original && MeetingTranscriptExporter.speakerPresentations(in: restored)
+                    == presentations, "Production archive round-trip preserves the same reading result")
+                let repeatedCanonical = try MeetingTranscriptExporter.json(for: value)
+                check(value == original && repeatedCanonical == canonical
+                    && value.transcriptSegments[1].nativeSpeakerAssignment == .unassigned
+                    && value.transcriptSegments[1].speakerID == nil,
+                      "Reading attachment preserves raw ownership, IDs, native timestamps, revisions and canonical JSON")
+            }
+        }
+        check(residualOwner(fixture(end: 40.08)) == owner,
+              "The existing 80 ms residual boundary is inclusive without extending the acoustic policy")
+        check(residualOwner(fixture(end: 40.080_001)) == nil,
+              "A residual above the existing cap cannot bridge arbitrary pauses")
+        var multiple = fixture(end: 40.04)
+        multiple.transcriptSegments.insert(word("ё", 40.04, 40.08, speaker: nil, native: nil), at: 2)
+        check(MeetingTranscriptExporter.displayParagraphs(for: multiple.transcriptSegments, in: multiple).count == 1,
+              "A tiny multiword residual uses its total native span rather than per-word caps")
+
+        for kind in 0..<23 {
+            var blocked = fixture()
+            switch kind {
+            case 0: blocked.transcriptSegments[1].nativePrecision = .utterance
+            case 1: blocked.transcriptSegments[0].nativePrecision = .utterance
+            case 2: blocked.transcriptSegments[2].nativePrecision = .utterance
+            case 3: blocked.transcriptSegments[1].overlap = .ambiguous
+            case 4: blocked.transcriptSegments[2].overlap = .ambiguous
+            case 5: blocked.transcriptSegments[1].isUserTextEdited = true
+            case 6: blocked.transcriptSegments[0].isUserSpeakerAssigned = true
+            case 7: blocked.transcriptSegments[1].isUserSpeakerAssigned = true
+            case 8: blocked.transcriptSegments[2].isUserSpeakerAssigned = true
+            case 9: blocked.transcriptSegments[1].attributionState = .timingUncertain
+            case 10: blocked.transcriptSegments[1].completeness = .incompleteTrack
+            case 11: blocked.transcriptSegments[1].status = .provisional
+            case 12: blocked.transcriptSegments[1].originalText = "Synthetic manual original"
+            case 13: blocked.transcriptSegments[0].revision = 1 // Absent explicit provenance retains the legacy guard.
+            case 14: blocked.transcriptSegments[2].nativeSpeakerAssignment = .assigned(otherToken)
+            case 15: blocked.transcriptSegments[2].speakerID = other
+            case 16:
+                let newToken = MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: track, ordinal: 1), label: token.label)
+                blocked.transcriptSegments[2].nativeSpeakerAssignment = .assigned(newToken)
+            case 17: blocked.transcriptSegments[2].sourceTrackID = UUID()
+            case 18: blocked.transcriptSegments[1].start = .init(value: 40_020, timescale: 1_000)
+            case 19: blocked.transcriptCoverageGaps = [.init(trackID: track, start: 20, end: 21, reason: .processingFailed)]
+            case 20: blocked.transcriptCoverageGaps = [.init(trackID: track, start: 43, end: 44, reason: .processingFailed)]
+            case 21:
+                var excluded = word("Synthetic excluded evidence", 43, 44, speaker: nil, native: nil)
+                excluded.isLikelyEcho = true
+                blocked.transcriptSegments.insert(excluded, at: 2)
+            default:
+                let id = blocked.transcriptSegments[1].nativeUnitID!
+                let candidate = MeetingSpeakerAttributionCandidateSupport(token: otherToken,
+                    intervals: [.init(start: 40, end: 40.04)], supportSeconds: 0.04, isSuppressed: false)
+                let decision = MeetingSpeakerAttributionDecision(unitID: id, rawAssignment: .unassigned,
+                    candidates: [candidate], activeSupportSeconds: 0.04, simultaneousIntervals: [], relation: .single,
+                    selectedToken: nil, rule: .insufficientSupport, cueUnitIDs: [], backgroundTokens: [],
+                    policyVersion: 2, policyFingerprint: "synthetic-other-candidate")
+                blocked.transcriptSegments[1].speakerAttribution = .init(decision: decision, speakerIDs: [:])
+            }
+            check(residualOwner(blocked) == nil,
+                  "Manual, competing, overlapping, imprecise or discontinuous evidence blocks tiny residual reading (\(kind))")
+        }
+        var leading = fixture(); leading.transcriptSegments.removeFirst()
+        check(MeetingTranscriptExporter.speakerPresentations(in: leading)[leading.transcriptSegments[0].id]?.participantID == nil,
+              "The pause exception never assigns a leading fragment without two independent anchors")
+        var trailing = fixture(); trailing.transcriptSegments.removeLast()
+        check(residualOwner(trailing) == nil,
+              "The pause exception never assigns a terminal lexical fragment without an incoming anchor")
+        var nextTurn = fixture()
+        nextTurn.transcriptSegments.append(word("Другой ответ.", 95, 96, speaker: other, native: otherToken))
+        let turns = MeetingTranscriptExporter.displayParagraphs(for: nextTurn.transcriptSegments, in: nextTurn)
+        check(turns.count == 2 && turns[0].segments.count == 3 && turns[1].segments.count == 1,
+              "Joining the residual preserves the next independent participant's paragraph break")
+        var explicit = fixture()
+        explicit.transcriptSegments[1].isUserSpeakerAssigned = true
+        let object = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: explicit)) as! [String: Any]
+        check((object["segments"] as! [[String: Any]])[1]["isUserSpeakerAssigned"] as? Bool == true,
+              "Canonical export preserves the explicit participant-assignment boundary")
     }
 }

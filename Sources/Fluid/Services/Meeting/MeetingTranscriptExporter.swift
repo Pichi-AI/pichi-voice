@@ -7,7 +7,8 @@ nonisolated enum MeetingTranscriptExporter {
     static func speakerDisplayName(_ speaker: MeetingSessionSpeaker,
                                    language: PichiInterfaceLanguage = .english,
                                    bundle: Bundle = .main) -> String {
-        speaker.isLocalUser ? PichiLocalization.text("You", language: language, bundle: bundle) : speaker.displayName
+        speaker.isLocalUser && speaker.usesCustomDisplayName != true
+            ? PichiLocalization.text("You", language: language, bundle: bundle) : speaker.displayName
     }
 
     static func text(for session: MeetingSession, includeEchoes: Bool = false,
@@ -119,7 +120,8 @@ nonisolated enum MeetingTranscriptExporter {
         language: PichiInterfaceLanguage, bundle: Bundle
     ) -> String {
         func name(_ value: MeetingSpeakerPresentation.Name) -> String {
-            value.isLocalUser ? PichiLocalization.text("You", language: language, bundle: bundle) : value.displayName
+            value.isLocalUser && value.usesCustomDisplayName != true
+                ? PichiLocalization.text("You", language: language, bundle: bundle) : value.displayName
         }
         switch label {
         case .unknown:
@@ -175,7 +177,8 @@ nonisolated enum MeetingTranscriptExporter {
         guard let speakerID else { return nil }
         let resolvedID = self.resolvedAliasID(speakerID, in: session)
         if let owner = session.activeSpeakers.first(where: { $0.id == resolvedID && $0.isLocalUser }) {
-            return .init(displayName: owner.displayName, isLocalUser: true)
+            return .init(displayName: owner.displayName, isLocalUser: true,
+                usesCustomDisplayName: owner.usesCustomDisplayName)
         }
         return speakerNames[resolvedID].map { .init(displayName: $0, isLocalUser: false) }
     }
@@ -259,9 +262,9 @@ nonisolated enum MeetingTranscriptExporter {
     ) -> String {
         if let projected = paragraph.projectedSpeakerID {
             let resolved = self.resolvedAliasID(projected, in: session)
-            if let speaker = session.activeSpeakers.first(where: { $0.id == resolved }),
-               let displayName = speakerNames[resolved] {
-                return self.speakerLabel(for: .estimated(.init(displayName: displayName, isLocalUser: speaker.isLocalUser)),
+            if session.activeSpeakers.contains(where: { $0.id == resolved }),
+               let name = self.speakerName(resolved, in: session, speakerNames: speakerNames) {
+                return self.speakerLabel(for: .estimated(name),
                     language: language, bundle: bundle)
             }
         }
@@ -322,7 +325,8 @@ nonisolated enum MeetingTranscriptExporter {
             let automaticRevision = value.nativePrecision == .word && value.nativeUnitID != nil
                 && value.speakerAttribution.map { $0.unitID == value.nativeUnitID
                     && $0.rawAssignment == value.nativeSpeakerAssignment } == true
-            return (value.revision == 0 || automaticRevision) && value.originalText == nil && value.isUserTextEdited != true && value.status == .final
+            return (value.revision == 0 || automaticRevision) && value.originalText == nil
+                && value.isUserTextEdited != true && value.isUserSpeakerAssigned != true && value.status == .final
                 && value.completeness == .complete && !value.isEcho && value.attributionState != .timingUncertain
                 && value.speakerAttribution?.relation != .conflict && value.speakerAttribution?.rule != .barrier
                 && value.speakerAttribution?.rule != .conflict
@@ -396,7 +400,7 @@ nonisolated enum MeetingTranscriptExporter {
         let active = Set(session.activeSpeakers.map(\.id))
         func safeNative(_ segment: MeetingTranscriptSegment) -> Bool {
             guard segment.status == .final, segment.completeness == .complete, !segment.isEcho,
-                  segment.originalText == nil, segment.isUserTextEdited != true,
+                  segment.originalText == nil, segment.isUserTextEdited != true, segment.isUserSpeakerAssigned != true,
                   segment.attributionState != .timingUncertain,
                   segment.speakerAttributionInference == nil, segment.revision >= 0,
                   segment.start.seconds.isFinite, segment.end.seconds.isFinite,
@@ -528,19 +532,41 @@ nonisolated enum MeetingTranscriptExporter {
             guard incomingPosition < segments.count, let token = anchors[incomingPosition],
                   let id = identities[token]?.first else { continue }
             let scopeStart: Int
+            var isTinySameSpeakerResidual = false
             if first == 0 {
                 guard positions[segments[first].id] == 0 else { continue }
                 scopeStart = first
             } else {
-                guard let previous = anchors[first - 1], previous.analysisEpochID == token.analysisEpochID,
-                      intervals[first].start - intervals[first - 1].end > policy.maximumNeighborGapSeconds + policy.comparisonTolerance
-                else { continue }
+                guard let previous = anchors[first - 1], previous.analysisEpochID == token.analysisEpochID else { continue }
+                // A tiny unsupported word can sit at an ASR window edge far from the
+                // surrounding voiced words. Matching independent original voices on both
+                // sides keep this residual in the same reading turn across silence. Reuse
+                // the existing residual cap, without extending acoustic neighbor inference
+                // or changing the unsupported word's native assignment or timestamp.
+                let range = (first - 1)...incomingPosition
+                isTinySameSpeakerResidual = previous == token
+                    && intervals[incomingPosition - 1].end - intervals[first].start
+                        <= policy.maximumBoundaryResidualSeconds + policy.comparisonTolerance
+                    && (first..<incomingPosition).allSatisfy {
+                        segments[$0].text.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+                    }
+                    && range.allSatisfy { index in
+                        let word = segments[index]
+                        return word.overlap == .none
+                            && (word.speakerAttribution.map { $0.relation == .none || $0.relation == .single } ?? true)
+                            && abs(intervals[index].start - word.start.seconds) <= 0.001
+                            && abs(intervals[index].end - word.end.seconds) <= 0.001
+                    }
+                guard isTinySameSpeakerResidual
+                    || intervals[first].start - intervals[first - 1].end
+                        > policy.maximumNeighborGapSeconds + policy.comparisonTolerance else { continue }
                 scopeStart = first - 1
             }
             let head = segments[scopeStart], incoming = segments[incomingPosition]
             let range = scopeStart...incomingPosition
             guard let sourceStart = positions[head.id],
-                  intervals[incomingPosition].start - intervals[first].start <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance,
+                  isTinySameSpeakerResidual || intervals[incomingPosition].start - intervals[first].start
+                    <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance,
                   range.allSatisfy({ positions[segments[$0].id] == sourceStart + $0 - scopeStart
                       && !blocked.contains(sourceStart + $0 - scopeStart) && segments[$0].sourceTrackID == head.sourceTrackID }),
                   !(session.transcriptCoverageGaps ?? []).contains(where: {
@@ -594,7 +620,7 @@ nonisolated enum MeetingTranscriptExporter {
         let active = Set(session.activeSpeakers.map(\.id))
         func safe(_ word: MeetingTranscriptSegment, allowsRevisedCompactTiming: Bool = false) -> Bool {
             guard word.revision >= 0, !word.text.isEmpty, word.status == .final, word.completeness == .complete, !word.isEcho,
-                  word.originalText == nil, word.isUserTextEdited != true,
+                  word.originalText == nil, word.isUserTextEdited != true, word.isUserSpeakerAssigned != true,
                   word.attributionState != .timingUncertain, word.overlap == .none,
                   word.nativePrecision == .word, word.nativeUnitID?.isEmpty == false,
                   let timing = word.nativeTiming, timing.start.isFinite, timing.end.isFinite,
@@ -713,7 +739,8 @@ nonisolated enum MeetingTranscriptExporter {
         }, tolerance: MeetingSpeakerAttributionPolicy.standard.comparisonTolerance, checkpoint: { _ in })
         let active = Set(session.activeSpeakers.map(\.id))
         func untouched(_ segment: MeetingTranscriptSegment) -> Bool {
-            segment.revision == 0 && segment.originalText == nil && segment.isUserTextEdited != true && segment.status == .final
+            segment.revision == 0 && segment.originalText == nil && segment.isUserTextEdited != true
+                && segment.isUserSpeakerAssigned != true && segment.status == .final
                 && segment.completeness == .complete && !segment.isEcho
                 && segment.nativePrecision == nil && segment.nativeTiming == nil && segment.nativeUnitID == nil
                 && segment.nativeSpeakerAssignment == nil && segment.speakerAttribution == nil
@@ -854,7 +881,8 @@ nonisolated enum MeetingTranscriptExporter {
 
     static func json(for session: MeetingSession) throws -> Data {
         let speakers = session.activeSpeakers.map {
-            ExportedSpeaker(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser)
+            ExportedSpeaker(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser,
+                usesCustomDisplayName: $0.usesCustomDisplayName)
         }
         let activeSpeakerIDs = Set(speakers.map(\.id))
         let segments = session.transcriptSegments
@@ -871,6 +899,7 @@ nonisolated enum MeetingTranscriptExporter {
                     ),
                     text: $0.text,
                     isUserTextEdited: $0.isUserTextEdited,
+                    isUserSpeakerAssigned: $0.isUserSpeakerAssigned,
                     revision: $0.revision,
                     status: $0.status.rawValue,
                     overlap: $0.overlap.rawValue,
@@ -1053,6 +1082,7 @@ private struct ExportedSpeaker: Codable {
     var id: SessionSpeakerID
     var displayName: String
     var isLocalUser: Bool
+    var usesCustomDisplayName: Bool?
 }
 
 /// A separate DTO is necessary because the full JSON export intentionally preserves
@@ -1098,6 +1128,7 @@ private struct ExportedSegment: Codable {
     var speakerID: SessionSpeakerID?
     var text: String
     var isUserTextEdited: Bool?
+    var isUserSpeakerAssigned: Bool?
     var revision: Int
     var status: String
     var overlap: String
