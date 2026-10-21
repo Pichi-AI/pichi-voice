@@ -165,14 +165,7 @@ private struct MobileVoiceEngineSettings: View {
                         Text(PichiLocalization.text(model.cardDescription)).font(theme.typography.bodySmall)
                         Text(PichiLocalization.text(model.languageSupport)).font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
                         Text(model.downloadSize).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                        if let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.id) {
-                            DisclosureGroup(PichiLocalization.text("About the model")) {
-                                ForEach(descriptor.knownLimits, id: \.self) { limitation in
-                                    Text(PichiLocalization.text(limitation)).font(theme.typography.caption)
-                                        .foregroundStyle(theme.palette.secondaryText)
-                                }
-                            }
-                        }
+                        MobileModelDetails(modelID: model.id)
                         if asr.downloadingModelId == model.id {
                             if let progress = asr.downloadProgress { ProgressView(value: progress) } else { ProgressView() }
                             Button(PichiLocalization.text("Cancel")) { asr.cancelModelDownload() }

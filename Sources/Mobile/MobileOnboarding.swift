@@ -62,6 +62,7 @@ struct MobileOnboarding: View {
             Text(PichiLocalization.text("Choose a local speech model. You can change it later in Settings. Speed and memory use depend on your device."))
                 .font(theme.typography.body)
             ForEach(asr.availableMeetingModels, id: \.id) { model in
+                VStack(alignment: .leading, spacing: 8) {
                 Button { selected = model } label: {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -78,6 +79,8 @@ struct MobileOnboarding: View {
                 }.buttonStyle(.plain).disabled(advancing)
                     .accessibilityIdentifier("onboarding.model.\(model.id)")
                     .accessibilityAddTraits(selected == model ? .isSelected : [])
+                    MobileModelDetails(modelID: model.id).padding(.horizontal, 16)
+                }
             }
             if advancing { MobileASRPreparationStatus(asr: asr) }
         case 2:
@@ -262,5 +265,22 @@ struct MobilePrivacyActivationControls: View {
             Text(PichiLocalization.text("Locally hides Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets. Detection can miss data. Review before sharing."))
                 .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
         }.accessibilityIdentifier("privacy.activation")
+    }
+}
+
+/// The same registered limitations are available at selection time and in model settings.
+struct MobileModelDetails: View {
+    let modelID: String
+    @Environment(\.theme) private var theme
+    var body: some View {
+        if let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: modelID) {
+            DisclosureGroup(PichiLocalization.text("About the model")) {
+                ForEach(descriptor.knownLimits, id: \.self) { limitation in
+                    Text(PichiLocalization.text(limitation)).font(theme.typography.caption)
+                        .foregroundStyle(theme.palette.secondaryText)
+                }
+            }.font(theme.typography.captionStrong)
+                .accessibilityIdentifier("model.details.\(modelID)")
+        }
     }
 }

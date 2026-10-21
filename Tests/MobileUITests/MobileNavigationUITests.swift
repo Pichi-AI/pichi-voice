@@ -752,28 +752,30 @@ final class MobileNavigationUITests: XCTestCase {
     }
 
     func testStreamingSpeakerSettingsInBothLanguagesAndThemes() throws {
-        for (language, settingsTitle, appearance, title) in [
-            ("en", "Settings", "light", "Identify speakers during recording"),
-            ("ru", "Настройки", "dark", "Определять говорящих во время записи")
+        for (language, settingsTitle, appearance) in [
+            ("en", "Settings", "light"), ("ru", "Настройки", "dark")
         ] {
             app.terminate()
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
-                "-SelectedSpeechModel", "gigaam-v3-eou", "-MeetingSpeakerLabelsEnabled", "YES",
-                "-MeetingSpeakerProcessingMode", "afterRecording"]
+                "-SelectedSpeechModel", "gigaam-v3-eou", "-MobileSetupVersion", "1"]
             XCUIDevice.shared.orientation = .portrait
             app.launch()
             waitForOrientation(portrait: true)
             capture("streaming-settings-\(language)-ready")
             openNavigation("settings", title: settingsTitle)
             app.buttons["settings.recording"].tap()
-            let toggle = app.switches["recording.streamingDiarization"]
-            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
-            XCTAssertEqual(toggle.value as? String, "0")
-            XCTAssertTrue(toggle.label.contains(title))
+            let status = app.descendants(matching: .any)["recording.requiredResources"].firstMatch
+            XCTAssertTrue(status.waitForExistence(timeout: 10))
+            for identifier in ["recording.diarization", "recording.streamingDiarization"] {
+                XCTAssertFalse(app.switches[identifier].exists, "Speaker identification is automatic")
+            }
+            for identifier in ["recording.downloadSpeakerModel", "recording.downloadSpeechActivity"] {
+                XCTAssertFalse(app.buttons[identifier].exists, "Required resources use automatic preparation")
+            }
             capture("streaming-settings-\(language)-\(appearance)-portrait")
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)
-            XCTAssertTrue(toggle.exists)
+            XCTAssertTrue(status.exists)
             capture("streaming-settings-\(language)-\(appearance)-landscape")
         }
     }
