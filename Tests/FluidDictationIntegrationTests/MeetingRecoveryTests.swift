@@ -466,25 +466,12 @@ final class MeetingRecoveryTests: XCTestCase {
             XCTAssertEqual(arbiter.releaseCount, attempt, "Stop joins each audio handback exactly once")
             XCTAssertFalse(coordinator.isRecording)
             XCTAssertFalse(coordinator.isProcessing)
-            XCTAssertFalse(coordinator.isQuiescent, "Held maintenance must keep the mutation gate closed")
+            // Retention decodes manifests before its mutation gate, so a held read never holds Start.
+            XCTAssertTrue(coordinator.isQuiescent, "A held retention read must leave the mutation gate open")
             await store.openGate(startSweep)
             await self.fulfillment(of: [loadEntered[stopSweep - 1]], timeout: 2)
-            XCTAssertFalse(coordinator.isQuiescent, "Post-processing maintenance is still held")
-            let quiescent = self.expectation(description: "Maintenance releases the real quiescence gate")
-            var observing = true
-            let subscription = coordinator.objectWillChange.sink { _ in
-                // ObservableObject sends in willSet. Inspect on the next MainActor job,
-                // after the setter commits the gate's new value.
-                Task { @MainActor in
-                    guard observing, coordinator.isQuiescent else { return }
-                    observing = false
-                    quiescent.fulfill()
-                }
-            }
+            XCTAssertTrue(coordinator.isQuiescent, "Post-processing retention reads stay outside the mutation gate")
             await store.openGate(stopSweep)
-            await self.fulfillment(of: [quiescent], timeout: 2)
-            observing = false
-            subscription.cancel()
             XCTAssertTrue(coordinator.isQuiescent)
             XCTAssertEqual(arbiter.releaseCount, attempt)
         }
@@ -5734,6 +5721,109 @@ final class MeetingRecoveryTests: XCTestCase {
         }
     }
 
+    /// A long history is decoded before the mutation gate: Start stays available, a correction made
+    /// during the read survives the later deletion, and a request during the read gets one follow-up.
+    func testRetentionReadLeavesTheMutationGateOpenAndSignalsCommittedDeletions() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let realStore = MeetingSessionStore(rootDirectory: dir)
+        func expired(_ session: MeetingSession) -> MeetingSession {
+            var expired = session
+            expired.startedAt = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+            expired.endedAt = expired.startedAt
+            return expired
+        }
+        let first = expired(self.makeCorrectionSession(state: .completed).session)
+        try await realStore.create(first)
+        let entered = (1...2).map { self.expectation(description: "Retention read \($0) entered") }
+        let store = GatedLoadAllStore(inner: realStore, readsBeforeHolding: true) { index in
+            guard entered.indices.contains(index - 1) else { return XCTFail("Unexpected retention read \(index)") }
+            entered[index - 1].fulfill()
+        }
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        try await self.withRetentionPolicy(.days7) {
+            let sweep = Task { await coordinator.sweepExpiredAudio() }
+            await self.fulfillment(of: [entered[0]], timeout: 2)
+            XCTAssertTrue(coordinator.isQuiescent, "Decoding stored manifests must not hold Start")
+            _ = try await coordinator.renameSession(sessionID: first.id, to: "Renamed during the read")
+            let second = expired(self.makeCorrectionSession(state: .completed).session)
+            try await realStore.create(second)
+            await coordinator.sweepExpiredAudio() // Coalesced into one follow-up after this read.
+
+            await store.openGate(1)
+            await sweep.value
+            let swept = try await realStore.load(id: first.id)
+            XCTAssertNotNil(swept?.retention.audioDeletedAt)
+            XCTAssertEqual(swept?.title, "Renamed during the read", "Deletion must revalidate the current manifest")
+            XCTAssertEqual(coordinator.retentionSweepRevision, 1)
+            let notYetRead = try await realStore.load(id: second.id)
+            XCTAssertNil(notYetRead?.retention.audioDeletedAt)
+
+            await self.fulfillment(of: [entered[1]], timeout: 2)
+            await store.openGate(2)
+            for _ in 0..<200 where coordinator.retentionSweepRevision < 2 {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertEqual(coordinator.retentionSweepRevision, 2)
+            let followUp = try await realStore.load(id: second.id)
+            XCTAssertNotNil(followUp?.retention.audioDeletedAt)
+            XCTAssertTrue(coordinator.isQuiescent)
+        }
+    }
+
+    /// Recording admission preempts maintenance: a sweep whose read finishes during a pending Start
+    /// leaves the gate to Start and re-arms itself instead of failing Start as maintenance.
+    func testPendingStartPreemptsRetentionSweepAndReArmsIt() async throws {
+        let dir = self.makeTempDirectory()
+        let realStore = MeetingSessionStore(rootDirectory: dir)
+        var session = self.makeCorrectionSession(state: .completed).session
+        session.startedAt = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+        session.endedAt = session.startedAt
+        try await realStore.create(session)
+        let readEntered = self.expectation(description: "Retention read entered")
+        let store = GatedLoadAllStore(inner: realStore) { index in if index == 1 { readEntered.fulfill() } }
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        let permission = PermissionPreflightGate()
+        let preflightReached = self.expectation(description: "Start waits in its permission prompt")
+        capture.onPreflight = {
+            preflightReached.fulfill()
+            await permission.wait()
+        }
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        self.addTeardownBlock { @MainActor in
+            await permission.open()
+            await store.openAllGates()
+            await coordinator.shutdownForTermination()
+            try? FileManager.default.removeItem(at: dir)
+        }
+
+        try await self.withRetentionPolicy(.days7) {
+            let sweep = Task { await coordinator.sweepExpiredAudio() }
+            await self.fulfillment(of: [readEntered], timeout: 2)
+            let start = Task { try await coordinator.startRecording(configuration: self.makeConfiguration(title: "Preempts")) }
+            await self.fulfillment(of: [preflightReached], timeout: 2)
+            XCTAssertTrue(coordinator.hasPendingStart)
+
+            await store.openGate(1)
+            await sweep.value
+            let deferred = try await realStore.load(id: session.id)
+            XCTAssertNil(deferred?.retention.audioDeletedAt, "Maintenance must not take the gate from a pending Start")
+            XCTAssertTrue(coordinator.hasScheduledRetentionSweep, "The deferred sweep must re-arm itself")
+            XCTAssertEqual(coordinator.retentionSweepRevision, 0)
+
+            await permission.open()
+            let started = try await start.value
+            XCTAssertEqual(started.title, "Preempts")
+            XCTAssertTrue(coordinator.isRecording)
+        }
+    }
+
     func testDeleteAudioLeavesSessionFailingTheFreshLoadExportGuard() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -7207,16 +7297,18 @@ private actor GatedRecoverableStore: MeetingSessionStoring {
 
 /// Holds each real retention `loadAll` until the test releases that exact invocation.
 /// Other storage operations remain real, so capture and audio handback can finish while held.
+/// `readsBeforeHolding` returns the snapshot taken when the call entered, as a slow decode would.
 private actor GatedLoadAllStore: MeetingSessionStoring {
     private let inner: MeetingSessionStore
     private let entered: @Sendable (Int) -> Void
+    private let readsBeforeHolding: Bool
     private var nextIndex = 0
     private var openIndices = Set<Int>()
     private var allOpen = false
     private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
 
-    init(inner: MeetingSessionStore, entered: @escaping @Sendable (Int) -> Void) {
-        self.inner = inner; self.entered = entered
+    init(inner: MeetingSessionStore, readsBeforeHolding: Bool = false, entered: @escaping @Sendable (Int) -> Void) {
+        self.inner = inner; self.readsBeforeHolding = readsBeforeHolding; self.entered = entered
     }
 
     func openGate(_ index: Int) {
@@ -7234,12 +7326,14 @@ private actor GatedLoadAllStore: MeetingSessionStoring {
     func loadAll() async throws -> [MeetingSession] {
         self.nextIndex += 1
         let index = self.nextIndex
+        let snapshot = self.readsBeforeHolding ? try await self.inner.loadAll() : nil
         if !self.allOpen, !self.openIndices.contains(index) {
             await withCheckedContinuation { continuation in
                 self.continuations[index] = continuation
                 self.entered(index)
             }
         }
+        if let snapshot { return snapshot }
         return try await self.inner.loadAll()
     }
 

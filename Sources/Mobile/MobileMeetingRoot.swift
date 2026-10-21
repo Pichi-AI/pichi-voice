@@ -180,10 +180,11 @@ struct MobileMeetingRoot: View {
         } message: { item in Text(PichiLocalization.text(item.message)) }
         .task {
             await coordinator.ensureRestored()
-            await coordinator.sweepExpiredAudio()
             await refreshHistory()
             await refreshMicrophones()
         }
+        // The app's UI-ready signal owns the launch sweep; its committed deletions reload History.
+        .onChange(of: coordinator.retentionSweepRevision) { _, _ in Task { await refreshHistory() } }
         .onChange(of: coordinator.state) { _, state in
             if coordinator.isRecording { playback.stop() }
             updateRecordingScreenAwake()
@@ -198,7 +199,7 @@ struct MobileMeetingRoot: View {
             updateRecordingScreenAwake(isVisible: false)
         }
         .onChange(of: settings.meetingAudioRetentionPolicy) { _, _ in
-            Task { await coordinator.sweepExpiredAudio(); await refreshHistory() }
+            Task { await coordinator.sweepExpiredAudio() }
         }
     }
 

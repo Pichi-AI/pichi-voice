@@ -75,16 +75,16 @@ final class ASRService: ObservableObject {
         return model.isInstalled
     }
 
-    private func provider(for model: SettingsStore.SpeechModel) throws -> any TranscriptionProvider {
+    /// Installed weights are hashed off the main actor before the provider binds that identity.
+    private func provider(for model: SettingsStore.SpeechModel) async throws -> any TranscriptionProvider {
         #if DEBUG
         if let injected = self.modelProvidersForTesting[model] { return injected }
         #endif
         guard let language = PichiMeetingProviderFactory.defaultLanguageCode(for: model.rawValue) else {
             throw MeetingModelResidencyError.unsupportedProvider
         }
-        return try PichiMeetingProviderFactory.make(
-            PichiMeetingProviderFactory.configuration(asrModel: model.rawValue, languageCode: language)
-        )
+        let configuration = try await PichiMeetingProviderFactory.frozenConfiguration(asrModel: model.rawValue, languageCode: language)
+        return try PichiMeetingProviderFactory.make(configuration)
     }
 
     func shutdownForTermination() async {
@@ -185,7 +185,8 @@ final class ASRService: ObservableObject {
         defer { if ownsLease { self.releaseExclusiveActivity(lease) } }
         let admission = try await self.residency.beginOperationRetiringIdle(owner: "speech", modelID: model.id)
         defer { self.residency.endOperation(admission) }
-        let provider = try self.provider(for: model)
+        let provider = try await self.provider(for: model)
+        try Task.checkCancellation()
         let id = UUID()
         self.operationID = id
         self.downloadingModelId = model.id
@@ -284,7 +285,7 @@ final class ASRService: ObservableObject {
         defer { self.releaseExclusiveActivity(lease) }
         let admission = try await self.residency.beginOperationRetiringIdle(owner: "speech", modelID: model.id)
         defer { self.residency.endOperation(admission) }
-        let provider = try self.provider(for: model)
+        let provider = try await self.provider(for: model)
         do { try await provider.importModel(from: directory) }
         catch { await provider.releaseResidency(); throw error }
         await provider.releaseResidency()
@@ -297,8 +298,12 @@ final class ASRService: ObservableObject {
         defer { self.residency.endOperation(admission) }
         self.deletingModelID = model.id
         defer { self.deletingModelID = nil }
-        let provider = self.residentModelID == model.id ? self.residentProvider : nil
-        let target = try provider ?? self.provider(for: model)
+        let target: any TranscriptionProvider
+        if self.residentModelID == model.id, let resident = self.residentProvider {
+            target = resident
+        } else {
+            target = try await self.provider(for: model)
+        }
         await self.executor.cancelAndAwaitPending()
         await target.releaseResidency()
         try await target.clearCache()

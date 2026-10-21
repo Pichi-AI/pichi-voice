@@ -110,7 +110,7 @@ extension MeetingProcessingPipeline {
             ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
         let backendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
             selectedModelID: modelID, savedBackendID: settings.meetingTranscriptionBackendID)
-        let configuration = PichiMeetingProviderFactory.configuration(backendID: backendID, languageCode: language,
+        let configuration = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: backendID, languageCode: language,
             diarizationEnabled: settings.meetingSpeakerLabelsEnabled, speakerProcessingMode: speakerMode)
         let backend = try backendRegistry.makeBackend(id: backendID, context: .init(legacyExecutor: { _, _ in
             throw MeetingModelResidencyError.unsupportedProvider
