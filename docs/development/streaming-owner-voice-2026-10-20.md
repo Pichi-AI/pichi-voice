@@ -1,5 +1,7 @@
 # Live owner voice verification
 
+The later [V4 full-evidence follow-up](owner-v4-full-evidence-2026-10-21.md) records human-confirmed negative controls, the evidence gate and remaining native/accuracy limitations. Measurements below retain their original revisions and scope.
+
 ## Status
 
 The saved owner can now be identified during an ongoing streaming meeting. Positive native simulator integration is verified. False-owner and physical-device acceptance remain open.
