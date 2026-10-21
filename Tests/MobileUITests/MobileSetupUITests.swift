@@ -146,6 +146,8 @@ final class MobileSetupUITests: XCTestCase {
     private func tapNativeSwitch(_ identifier: String, in app: XCUIApplication) throws {
         let row = app.switches[identifier]
         let bounds = row.frame
+        let previousValue = row.value as? String
+        print("Native setup switch \(identifier): bounds=\(bounds), children=\(app.switches.allElementsBoundByIndex.map { $0.frame })")
         if let control = app.switches.allElementsBoundByIndex.first(where: {
             bounds.contains($0.frame) && $0.frame.width > 0 && $0.frame.width < bounds.width / 2
         }) {
@@ -155,8 +157,12 @@ final class MobileSetupUITests: XCTestCase {
             // A standalone Toggle can expose the native switch itself as the identified
             // element. Its trailing control is visible in the gated native screenshot.
             XCTAssertTrue(row.isHittable)
-            row.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            row.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
         }
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (row.value as? String) != previousValue
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed)
     }
 
     private func capture(_ step: String) {
@@ -175,6 +181,7 @@ final class MobileSetupUITests: XCTestCase {
             do {
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
                 try XCUIScreen.main.screenshot().pngRepresentation.write(to: frame, options: .atomic)
+                try XCUIApplication().debugDescription.write(to: root.appendingPathComponent(name + ".accessibility.txt"), atomically: true, encoding: .utf8)
                 let marker = ["step": step, "revision": revision, "screenshot": frame.path,
                               "acknowledgement": acknowledgement.path]
                 try JSONEncoder().encode(marker).write(to: root.appendingPathComponent("current-step.json"), options: .atomic)
