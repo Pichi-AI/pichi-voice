@@ -18,6 +18,25 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         physicalMemory >= self.minimumPhysicalMemoryBytes
     }
 
+    enum CaptionRoute: Equatable {
+        case buffered(modelID: String)
+        case englishStreaming
+        case unavailable(reason: String)
+    }
+
+    /// Caption admission reads registered capabilities only; it never substitutes another model.
+    /// Unregistered models keep the upstream English streaming captions.
+    static func captionRoute(languageCode: String, modelID: String?) -> CaptionRoute {
+        if let modelID, let supportedLanguages = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) {
+            return supportedLanguages.contains(languageCode)
+                ? .buffered(modelID: modelID)
+                : .unavailable(reason: "The selected model does not support live captions in this meeting language.")
+        }
+        return languageCode == "en"
+            ? .englishStreaming
+            : .unavailable(reason: "Live captions support English only. Your transcript will be generated after recording.")
+    }
+
     private let stateLock = NSLock()
     private let diagnosticsEnabled: Bool = {
         #if DEBUG
@@ -73,21 +92,15 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
 
     func start(mode: MeetingCaptureMode, languageCode: String = "en", modelID: String? = nil, artifactFingerprint: String? = nil) {
         guard !self.stateLock.withLock({ self.isStopped }) else { return }
-        if let modelID, let supportedLanguages = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) {
-            guard supportedLanguages.contains(languageCode) else {
-                self.publish { $0.settingAvailability(.unavailable(reason: "The selected model does not support live captions in this meeting language.")) }
-                return
-            }
+        switch Self.captionRoute(languageCode: languageCode, modelID: modelID) {
+        case let .buffered(modelID):
             self.startBuffered(mode: mode, languageCode: languageCode, modelID: modelID, artifactFingerprint: artifactFingerprint)
             return
-        }
-        if languageCode != "en" {
-            #if arch(arm64)
-            self.startBuffered(mode: mode, languageCode: languageCode, modelID: "parakeet-tdt")
-            #else
-            self.publish { $0.settingAvailability(.unavailable(reason: "Live captions for this language on Intel require a compatible local model. Your recording is preserved.")) }
-            #endif
+        case let .unavailable(reason):
+            self.publish { $0.settingAvailability(.unavailable(reason: reason)) }
             return
+        case .englishStreaming:
+            break
         }
         #if arch(arm64)
         guard Self.isMemorySufficient(physicalMemory: ProcessInfo.processInfo.physicalMemory) else {
@@ -176,7 +189,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         #endif
     }
 
-    private func startBuffered(mode: MeetingCaptureMode, languageCode: String, modelID: String, artifactFingerprint: String? = nil) {
+    private func startBuffered(mode: MeetingCaptureMode, languageCode: String, modelID: String, artifactFingerprint: String?) {
         let admission = PichiMeetingProviderFactory.registeredLiveAdmission(for: modelID)
         let requiredMemory = admission?.minimumPhysicalMemoryBytes ?? Self.minimumPhysicalMemoryBytes
         let trackCount = mode == .onlineCall ? 2 : 1
