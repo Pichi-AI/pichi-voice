@@ -70,6 +70,7 @@ struct MobileRecordingSettings: View {
     var isPresentedAsSheet = false
     @ObservedObject var required: MobileRequiredResources
     @ObservedObject private var settings = SettingsStore.shared
+    @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
 
     private var selectedMicrophone: Binding<String> {
