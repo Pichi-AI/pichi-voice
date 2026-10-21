@@ -316,6 +316,7 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         let firstID = try XCTUnwrap(initial.segments.first?.speakerID)
         let firstIndex = try XCTUnwrap(initial.speakers.firstIndex(where: { $0.id == firstID }))
         initial.speakers[firstIndex].displayName = "Synthetic custom alias"
+        initial.speakers[firstIndex].generatedParticipantNumber = nil
         try await processing.checkpoint(initial)
         let promoted = try self.ownerBatch(current: [profile(track: track.id, epoch: 1, angle: 0.8)],
             attempt: attempt, state: state)
