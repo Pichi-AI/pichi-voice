@@ -58,7 +58,6 @@ final nonisolated class MeetingPCMIntakeGate: @unchecked Sendable {
         }
     }
 
-    var isAccepting: Bool { self.lock.withLock { self.accepting } }
     var retainedBytes: Int { self.lock.withLock { self.queuedBytes } }
 }
 

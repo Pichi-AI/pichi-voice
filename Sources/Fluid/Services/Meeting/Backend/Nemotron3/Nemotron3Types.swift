@@ -44,8 +44,6 @@ public nonisolated struct Nemotron3Config: Sendable, Encodable {
     public var spkcacheSilFramesPerSpk: Int = 1
     public let maxIndex: Int = 99999
 
-    public var debugMode: Bool = false
-
     /// Model file name inside the models directory, e.g. `Nemotron3Diarizer_low.mlmodelc`.
     public var modelFileName: String
 
@@ -73,9 +71,6 @@ public nonisolated struct Nemotron3Config: Sendable, Encodable {
         spkcacheLen + fifoLen + chunkEncFrames
     }
 
-    /// Output frame duration for high-resolution predictions (10 ms).
-    public var outputFrameSeconds: Float { 0.01 }
-
     /// Seconds of audio consumed per streaming step (the chunk core).
     public var chunkSeconds: Double {
         Double(chunkLen * subsamplingFactor) * 0.01
@@ -85,13 +80,6 @@ public nonisolated struct Nemotron3Config: Sendable, Encodable {
     public var latencySeconds: Double {
         Double((chunkLen + chunkRightContext) * subsamplingFactor) * 0.01
     }
-
-    /// Subdirectory of `FluidInference/nemotron-3-diarization-coreml` holding this preset's bundle.
-    ///
-    /// Monolithic presets load from `monolithic/v2/`: fp16-I/O, gather-free re-exports that
-    /// compile for the ANE on M3-class chips (#951). The originals stay in `monolithic/` for
-    /// older releases.
-    public var hubSubdirectory: String { splitGraph ? "split" : "monolithic/v2" }
 
     // MARK: Presets (model card recommended profiles)
 
