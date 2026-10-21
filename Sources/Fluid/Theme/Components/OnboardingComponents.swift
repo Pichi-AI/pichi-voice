@@ -176,8 +176,14 @@ struct FluidOnboardingLandingBackdrop: View {
                            center: .center, startRadius: 0, endRadius: 520)
         }
         .onAppear {
-            guard !self.reduceMotion else { self.isBreathing = true; return }
-            withAnimation(FluidOnboardingMotion.breath) { self.isBreathing = true }
+            withAnimation(self.reduceMotion ? .linear(duration: 0) : FluidOnboardingMotion.breath) {
+                self.isBreathing = !self.reduceMotion
+            }
+        }
+        .onChange(of: self.reduceMotion) { _, reduced in
+            withAnimation(reduced ? .linear(duration: 0) : FluidOnboardingMotion.breath) {
+                self.isBreathing = !reduced
+            }
         }
         // A crisp card edge: the old feathered mask let the window's rectangle show through
         // the fade, which read as a second, uglier boundary on light desktops.
@@ -552,8 +558,14 @@ private struct FluidOnboardingAppIconMark: View {
         .frame(width: 360, height: 176)
         .accessibilityHidden(true)
         .onAppear {
-            guard !self.reduceMotion else { return }
-            withAnimation(FluidOnboardingMotion.breath) { self.isBreathing = true }
+            withAnimation(self.reduceMotion ? .linear(duration: 0) : FluidOnboardingMotion.breath) {
+                self.isBreathing = !self.reduceMotion
+            }
+        }
+        .onChange(of: self.reduceMotion) { _, reduced in
+            withAnimation(reduced ? .linear(duration: 0) : FluidOnboardingMotion.breath) {
+                self.isBreathing = !reduced
+            }
         }
     }
 }

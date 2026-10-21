@@ -6927,6 +6927,36 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
     }
 
+    func testRenameLocatedSessionToStoredTitleBecomesExplicitAndSurvivesReload() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        session.mode = .inRoom
+        session.defaultTitleBase = "Meeting"
+        session.location = self.makeSyntheticMeetingLocation()
+        let requestedTitle = session.title
+        XCTAssertNotEqual(session.displayTitle(language: .english), requestedTitle)
+        XCTAssertNotEqual(session.displayTitle(language: .russian), requestedTitle)
+        try await store.create(session)
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        let renamed = try await coordinator.renameSession(sessionID: session.id, to: requestedTitle)
+        XCTAssertNil(renamed.defaultTitleBase)
+        let saved = try await store.load(id: session.id)
+        let reloaded = try XCTUnwrap(saved)
+        XCTAssertNil(reloaded.defaultTitleBase)
+        XCTAssertEqual(reloaded.location, session.location)
+        XCTAssertEqual(reloaded.displayTitle(language: .english), requestedTitle)
+        XCTAssertEqual(reloaded.displayTitle(language: .russian), requestedTitle)
+        let exported = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: MeetingTranscriptExporter.json(for: reloaded)) as? [String: Any])
+        XCTAssertEqual(exported["title"] as? String, requestedTitle)
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
     func testRenameSessionNoOpWhenTitleIsIdentical() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

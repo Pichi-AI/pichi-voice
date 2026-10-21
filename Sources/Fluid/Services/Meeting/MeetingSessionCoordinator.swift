@@ -1449,7 +1449,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
-        guard target.title != trimmed, target.displayTitle != trimmed else { return target }
+        guard target.displayTitle != trimmed else { return target }
 
         target.title = trimmed
         target.defaultTitleBase = nil
