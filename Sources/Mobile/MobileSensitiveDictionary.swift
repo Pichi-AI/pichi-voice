@@ -76,12 +76,19 @@ struct MobileSensitiveDictionaryEditor: View {
                     }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.delete")
                 }
             }.navigationTitle(PichiLocalization.text(entry == nil ? "Add word or phrase" : "Edit word or phrase"))
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button(PichiLocalization.text("Cancel")) { dismiss() }
+                        Button { dismiss() } label: {
+                            Text(PichiLocalization.text("Cancel")).font(theme.typography.body)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.cancel")
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button(PichiLocalization.text("Save")) { save() }
+                        Button { save() } label: {
+                            Text(PichiLocalization.text("Save")).font(theme.typography.body)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }.buttonStyle(.plain)
                             .disabled(phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             .accessibilityIdentifier("privacy.dictionary.save")
                     }
