@@ -88,7 +88,8 @@ final class MobileSetupTransactionTests: XCTestCase {
             for await _ in release { break }
             voice.finish()
         })
-        let resources = MobileRequiredResources(prepareSpeech: {}, voiceStore: canonical, speakerStore: { _ in selected })
+        var speechChecks = 0
+        let resources = MobileRequiredResources(prepareSpeech: { speechChecks += 1 }, voiceStore: canonical, speakerStore: { _ in selected })
         let background = Task { try await resources.prepare(modelID: "synthetic") }
         var events = started.makeAsyncIterator()
         _ = await events.next()
@@ -98,6 +99,8 @@ final class MobileSetupTransactionTests: XCTestCase {
         try await background.value
         try await enrollment.value
         XCTAssertEqual(resources.phase, .ready)
+        try await resources.prepare(modelID: "synthetic")
+        XCTAssertEqual(speechChecks, 1, "Onboarding and Start must reuse the completed job without retiring idle warmup")
         XCTAssertTrue(canonical.voiceMatchingReady)
         XCTAssertEqual(voice.starts, 1)
         XCTAssertFalse(selected.voiceMatchingReady, "Profile-specific installation must not own the shared encoder")

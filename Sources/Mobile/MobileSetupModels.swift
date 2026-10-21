@@ -92,6 +92,7 @@ final class MobileRequiredResources: ObservableObject {
             if current.modelID == requested { return }
             return try await prepare(modelID: requested)
         }
+        if modelID == requested, phase == .ready { return }
         // The existing stores validate and join installs, including enrollment/capture.
         // Cancelling a foreground waiter leaves the app-owned background job intact.
         modelID = requested
