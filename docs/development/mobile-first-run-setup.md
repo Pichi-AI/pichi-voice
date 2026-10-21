@@ -64,11 +64,13 @@ VAD is a small MIT-licensed bundling candidate. The 198.473 MiB mandatory kit ca
 
 ## Completed verification
 
-Application source was independently reviewed through `e63eec9e7bae3aa61192b64a7bc3de5c785764c4`. Material findings were fixed and affected checks repeated. The review covered extension-point reuse, immutable model/rules selection, cancellation, resource ownership, locale-stable speaker numbering, privacy publication and upstream impact. The last source delta is an explicit conditional Combine import required by the macOS compiler; behavior is unchanged from the native runtime revision below.
+Functional implementation was independently reviewed through `e63eec9e7bae3aa61192b64a7bc3de5c785764c4`. Material findings were fixed and affected checks repeated. The review covered extension-point reuse, immutable model/rules selection, cancellation, resource ownership, locale-stable speaker numbering, privacy publication and upstream impact. That revision adds an explicit conditional Combine import required by the macOS compiler; behavior is unchanged from the native runtime revision below.
+
+The subsequent presentation-only revision `ec1d3d4782d5135f2658c7c8641e7ed3ee17c1f9` was independently reviewed without material findings. GigaAM and Parakeet v3 card descriptions now summarize Russian and multilingual/mixed speech. Existing detailed import information and the full language list moved into registered backend metadata, displayed by the existing About the model disclosure. Tiny's accuracy warning remains unchanged. No inference, admission capability, artifact fingerprint or common model-specific UI branch changed.
 
 | Check | Result and scope |
 | --- | --- |
-| Repository/setup, localization, plist/project syntax, diff whitespace | PASS. English/Russian catalog contains 3,081 complete keys. |
+| Repository/setup, localization, plist/project syntax, diff whitespace | PASS at the functional checkpoint. Its English/Russian catalog contained 3,081 complete keys. |
 | Shared privacy/dictionary policy | PASS, including Unicode source offsets, boundaries, overlapping masks, immutable rules and sparse speech tails. |
 | Streaming policy probes | PASS: protected tail 28,990 assertions; registry 133; admission 175; state 3,244. |
 | Prepared runtime and runtime voice verification | PASS; prepared runtime covers 19 contract groups. |
@@ -78,8 +80,11 @@ Application source was independently reviewed through `e63eec9e7bae3aa61192b64a7
 | Native layout review | All six Russian setup pages in light/dark on iPad and iPhone passed. Recording preferences passed English/light and Russian/dark in portrait/landscape on `a2a561ea811e430e48682203642a642871a76516`. |
 | Real registered streaming composition | Parakeet and Tiny passed paced PCM, actual A1, fast128 speaker inference, protected publication before Stop, persistence and no full-recording replay on `a98a6fd3`. See limits below. |
 | macOS Debug build-for-testing and focused regressions | PASS on `e63eec9e`: 25/25 tests in configuration, privacy publication and privacy readiness lifecycle. A separate test bundle namespace and disabled audio-service startup protected the installed Mac app's preferences and audio devices. The full upstream suite was not run. |
+| Final model-card copy | PASS on `ec1d3d47`: 3,083 complete English/Russian catalog keys, signed arm64 mobile build-for-testing, and two scoped native UI cases with zero failures/skips. Four gated model-choice screenshots cover Russian light/dark on iPad and iPhone. No model/accuracy/macOS regression rerun was needed for this text-only change. |
 
 The native application was copied to immutable ignored test storage, signed with an existing valid development identity and verified before each interactive acceptance revision. Source revision, file sizes and SHA-256 hashes were recorded. Tests did not rebuild or re-sign the running copy. This is Debug simulator evidence, not an IPA or physical-device performance claim.
+
+The final `ec1d3d47` frozen app's 67 files, totaling 109,018,814 logical bytes, retained their recorded SHA-256 hashes and valid signature after both scoped UI cases. The original four screenshot PNGs and a source/hash manifest were copied to the local user-review artifact folder.
 
 First-run cache inspection on both simulators found exactly 17 public resource files, totaling 433,009,358 bytes for GigaAM plus the required kit, and no TextPrivacy files before privacy activation. Parakeet/Tiny public cache copies used for separate inference cases were hash-checked and were not part of that first-run measurement.
 
@@ -122,5 +127,7 @@ Ignored artifacts are under `.build/settings-onboarding/`, with per-case xcresul
 | iPhone setup layouts | 344 | 127 | 75 | 0 | 0 |
 
 Every gated native screen was inspected before its next action. An independent visual review also inspected all 25 contact sheets covering 268 unique decoded frames from these five cases and found no additional persistent material layout, contrast or Cyrillic issues in the saved coverage. Capture uses the simulator screenshot fallback and does not establish complete one-second coverage. Every saved frame, error and missed slot was retained. Earlier unsuccessful acceptance runs are preserved and are not counted as final passes.
+
+The bounded `ec1d3d47` model-choice followup saved 42 iPad frames (17 changed, 15 unique, 38 missed slots, two capture errors) and 73 iPhone frames (15 changed, 13 unique, three missed slots, zero capture errors). The parent inspected all four full-size gated screenshots and both contact sheets covering the 28 unique decoded frames. No additional material visual issue was found. These captures also have incomplete one-second coverage.
 
 Physical tests were not started. Native screenshots are the review stage required before a physical install. No TestFlight upload, distribution archive, main merge or change to the prepared distribution build was performed.
