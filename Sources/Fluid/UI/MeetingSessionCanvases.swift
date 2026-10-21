@@ -504,7 +504,7 @@ struct MeetingResultCanvas: View {
                                         }
                                     },
                                     isLocalUser: row.speaker?.isLocalUser == true,
-                                    reassignTargets: activeSpeakers.filter { $0.id != row.presentation.participantID },
+                                    reassignTargets: self.session.activeSpeakers.filter { $0.id != row.presentation.participantID },
                                     isQuiescent: self.isQuiescent,
                                     onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) },
                                     canPlayAudio: self.session.retention.audioDeletedAt == nil && self.session.hasFinalizedAudio && self.isQuiescent,
@@ -1179,7 +1179,7 @@ private struct MeetingTranscriptSegmentRow: View {
                 Button("Rename Speaker", systemImage: "person.crop.circle", action: onRenameSpeakerTapped)
                     .disabled(!self.isQuiescent)
             }
-            Menu("Reassign to") {
+            Menu(PichiLocalization.text("Reassign to")) {
                 ForEach(self.reassignTargets) { target in
                     Button(MeetingTranscriptExporter.speakerDisplayName(target, language: PichiLocalization.language)) {
                         self.onReassign(target.id)

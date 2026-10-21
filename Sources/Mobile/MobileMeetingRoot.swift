@@ -34,6 +34,7 @@ struct MobileMeetingRoot: View {
     @State private var showRecordingSettings = false
     @State private var microphoneSnapshot = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
     @State private var edit: MeetingEditDraft?
+    @State private var speakerAssignment: MeetingSpeakerAssignmentDraft?
     @State private var deletion: Deletion?
     @State private var share: MeetingSharePayload?
     @State private var showPresentationPicker = false
@@ -137,6 +138,22 @@ struct MobileMeetingRoot: View {
         .sheet(item: $share) { payload in
             MobileActivitySheet(items: payload.items) { share = nil }
                 .onDisappear { payload.cleanup() }
+        }
+        .sheet(item: $speakerAssignment) { draft in
+            MeetingSpeakerAssignmentSheet(draft: draft, cancel: { speakerAssignment = nil }) { segmentIDs, speakerID in
+                guard coordinator.isQuiescent, !isBusy else { return }
+                speakerAssignment = nil
+                run {
+                    let result: MeetingSession
+                    if let segmentID = segmentIDs.first, segmentIDs.count == 1 {
+                        result = try await coordinator.reassignSegment(sessionID: draft.session.id, segmentID: segmentID, to: speakerID)
+                    } else {
+                        result = try await coordinator.reassignSegments(sessionID: draft.session.id, segmentIDs: segmentIDs, to: speakerID)
+                    }
+                    acceptCommittedSession(result)
+                }
+            }
+            .disabled(!coordinator.isQuiescent || isBusy)
         }
         .fileImporter(isPresented: $showPresentationPicker, allowedContentTypes: [.pdf]) { result in
             showPresentationPicker = false
@@ -596,7 +613,8 @@ struct MobileMeetingRoot: View {
                                     let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
                                     acceptCommittedSession(updated)
                                 }
-                            }
+                            }.disabled(!coordinator.isQuiescent || isBusy)
+                                .accessibilityIdentifier("transcript.undo")
                         }
                         Button(PichiLocalization.text("Delete Meeting"), role: .destructive) { deletion = .meeting(session) }
                     } label: { Label(PichiLocalization.text("More"), systemImage: "ellipsis").frame(minHeight: 44) }
@@ -679,6 +697,14 @@ struct MobileMeetingRoot: View {
                         .padding(.top, theme.metrics.spacing.sm)
                 }
                 Spacer(minLength: 0)
+                Button {
+                    speakerAssignment = MeetingSpeakerAssignmentDraft(session: session, segments: paragraph.segments)
+                } label: {
+                    Image(systemName: "person.2")
+                        .frame(minWidth: 44, minHeight: 44)
+                }.disabled(!coordinator.isQuiescent || isBusy || session.activeSpeakers.isEmpty)
+                    .accessibilityLabel(PichiLocalization.text("Change speaker"))
+                    .accessibilityIdentifier("transcript.reassign.\(segment.id)")
                 if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
                     Button {
                         if isAudioExpanded { playback.stop() }
@@ -813,26 +839,115 @@ private struct MeetingEditSheet: View {
     let draft: MeetingEditDraft
     let cancel: () -> Void
     let save: (MeetingEditDraft.Kind, String) -> Void
-    @Environment(\.theme) private var theme
     var body: some View {
         NavigationStack {
             if case .paragraph(let segments) = draft.kind {
-                List(segments) { segment in
-                    NavigationLink {
+                List {
+                    MeetingTranscriptMemberLinks(segments: segments, identifierPrefix: "transcript.edit.fragment") { segment in
                         MeetingEditTextForm(kind: .segment(segment), text: segment.text, cancel: cancel, save: save)
-                    } label: {
-                        VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
-                            Text(MeetingTranscriptExporter.timestampText(segment.start.seconds))
-                                .font(theme.typography.codeCaption).foregroundStyle(theme.palette.secondaryText)
-                            Text(segment.text).font(theme.typography.body)
-                        }.frame(minHeight: 44)
-                    }.accessibilityIdentifier("transcript.edit.fragment.\(segment.id)")
+                    }
                 }.navigationTitle(PichiLocalization.text("Transcript text"))
                     .accessibilityIdentifier("transcript.edit.fragments")
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button(PichiLocalization.text("Cancel"), action: cancel) } }
             } else {
                 MeetingEditTextForm(kind: draft.kind, text: draft.text, cancel: cancel, save: save)
             }
+        }
+    }
+}
+
+/// The reading paragraph keeps its original members for both text and speaker corrections.
+/// Choosing a member never applies a change to another paragraph or participant's other turns.
+private struct MeetingTranscriptMemberLinks<Destination: View>: View {
+    let segments: [MeetingTranscriptSegment]
+    let identifierPrefix: String
+    @ViewBuilder let destination: (MeetingTranscriptSegment) -> Destination
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        ForEach(segments) { segment in
+            NavigationLink {
+                destination(segment)
+            } label: {
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                    Text(MeetingTranscriptExporter.timestampText(segment.start.seconds))
+                        .font(theme.typography.codeCaption).foregroundStyle(theme.palette.secondaryText)
+                    Text(segment.text).font(theme.typography.body)
+                }.frame(minHeight: 44)
+            }.accessibilityIdentifier("\(identifierPrefix).\(segment.id)")
+        }
+    }
+}
+
+private struct MeetingSpeakerAssignmentDraft: Identifiable {
+    let id = UUID()
+    let session: MeetingSession
+    let segments: [MeetingTranscriptSegment]
+}
+
+private struct MeetingSpeakerAssignmentSheet: View {
+    let draft: MeetingSpeakerAssignmentDraft
+    let cancel: () -> Void
+    let assign: ([MeetingTranscriptSegmentID], SessionSpeakerID) -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if draft.segments.count > 1 {
+                    List {
+                        Section {
+                            NavigationLink {
+                                participantList(for: draft.segments)
+                            } label: {
+                                Label(PichiLocalization.text("Whole fragment"), systemImage: "text.alignleft")
+                                    .font(theme.typography.body)
+                                    .frame(minHeight: 44)
+                            }.accessibilityIdentifier("transcript.reassign.whole")
+                        } footer: {
+                            Text(PichiLocalization.text("Change the speaker for this visible fragment only."))
+                                .font(theme.typography.caption)
+                        }
+                        Section(PichiLocalization.text("Individual words or parts")) {
+                            MeetingTranscriptMemberLinks(segments: draft.segments, identifierPrefix: "transcript.reassign.fragment") { segment in
+                                participantList(for: [segment])
+                            }
+                        }
+                    }
+                    .navigationTitle(PichiLocalization.text("Change speaker"))
+                    .accessibilityIdentifier("transcript.reassign.scope")
+                } else {
+                    participantList(for: draft.segments)
+                }
+            }.toolbar { cancellation }
+        }
+    }
+
+    private func participantList(for segments: [MeetingTranscriptSegment]) -> some View {
+        List {
+            Section {
+                ForEach(draft.session.activeSpeakers) { speaker in
+                    Button {
+                        assign(segments.map(\.id), speaker.id)
+                    } label: {
+                        Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language),
+                              systemImage: "person.crop.circle")
+                            .font(theme.typography.body)
+                            .frame(minHeight: 44)
+                    }.accessibilityIdentifier("transcript.reassign.target.\(speaker.id)")
+                }
+            } footer: {
+                Text(PichiLocalization.text("Only the selected text changes speaker. Other fragments keep their speakers."))
+                    .font(theme.typography.caption)
+            }
+        }
+        .navigationTitle(PichiLocalization.text("Select a speaker"))
+        .accessibilityIdentifier("transcript.reassign.targets")
+    }
+
+    @ToolbarContentBuilder private var cancellation: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button(PichiLocalization.text("Cancel"), action: cancel)
         }
     }
 }
