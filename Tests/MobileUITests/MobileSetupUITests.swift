@@ -271,7 +271,7 @@ final class MobileSetupUITests: XCTestCase {
         if appeared {
             capture("location-settings-system-permission")
             let deny = alert.buttons.matching(NSPredicate(format: "label IN %@",
-                ["Don’t Allow", "Don't Allow", "Don’t allow", "Don't allow", "Не разрешать"])).firstMatch
+                ["Don’t Allow", "Don't Allow", "Don’t allow", "Don't allow", "Не разрешать", "Запретить"])).firstMatch
             XCTAssertTrue(deny.exists, "Only deny location in the task-owned simulator")
             deny.tap()
             capture("location-settings-permission-denied")
