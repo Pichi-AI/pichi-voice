@@ -44,6 +44,8 @@ public nonisolated struct Nemotron3Config: Sendable, Encodable {
     public var spkcacheSilFramesPerSpk: Int = 1
     public let maxIndex: Int = 99999
 
+    public var debugMode: Bool = false
+
     /// Model file name inside the models directory, e.g. `Nemotron3Diarizer_low.mlmodelc`.
     public var modelFileName: String
 

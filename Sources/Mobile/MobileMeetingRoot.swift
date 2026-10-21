@@ -24,8 +24,8 @@ struct MobileMeetingRoot: View {
     @State private var privacyPreparationTask: Task<Void, Never>?
     @StateObject private var historySnapshot: MeetingHistorySnapshot
     private var sessions: [MeetingSession] { historySnapshot.sessions }
-    // The snapshot owns committed sessions; navigation keeps only the identity it pushed.
-    @State private var selectedHistoryID: MeetingSessionID?
+    // The snapshot owns committed sessions; History's own path keeps only pushed identities.
+    @State private var historyPath: [MeetingSessionID] = []
     @State private var copiedSessionID: MeetingSessionID?
     @State private var search = ""
     @State private var isBusy = false
@@ -169,7 +169,7 @@ struct MobileMeetingRoot: View {
                     switch item {
                     case .meeting(let session):
                         try await coordinator.deleteSession(id: session.id)
-                        if selectedHistoryID == session.id { selectedHistoryID = nil }
+                        if historyPath.contains(session.id) { historyPath.removeAll() }
                         await refreshHistory()
                     case .audio(let session):
                         acceptCommittedSession(try await coordinator.deleteAudio(sessionID: session.id))
@@ -178,8 +178,8 @@ struct MobileMeetingRoot: View {
             }
         } message: { item in Text(PichiLocalization.text(item.message)) }
         .task {
-            // The app's UI-ready signal owns the startup retention sweep; restore is joined.
             await coordinator.ensureRestored()
+            await coordinator.sweepExpiredAudio()
             await refreshHistory()
             await refreshMicrophones()
         }
@@ -191,7 +191,7 @@ struct MobileMeetingRoot: View {
         .onAppear { updateRecordingScreenAwake() }
         .onChange(of: scenePhase) { _, _ in updateRecordingScreenAwake() }
         .onChange(of: destination) { _, _ in playback.stop(); presentationLoader.cancel() }
-        .onChange(of: selectedHistoryID) { _, _ in playback.stop(); presentationLoader.cancel() }
+        .onChange(of: historyPath) { _, _ in playback.stop(); presentationLoader.cancel() }
         .onDisappear {
             presentationLoader.cancel()
             updateRecordingScreenAwake(isVisible: false)
@@ -262,7 +262,7 @@ struct MobileMeetingRoot: View {
         if destination == item {
             switch item {
             case .settings: settingsPath.removeAll()
-            case .history: selectedHistoryID = nil
+            case .history: historyPath.removeAll()
             case .meetings: break // Its root is the current meeting, including an active recording.
             }
         } else {
@@ -271,8 +271,8 @@ struct MobileMeetingRoot: View {
     }
 
     @ViewBuilder private func navigation(for item: Destination) -> some View {
-        // Each section owns its stack. A settings push must never cover another section,
-        // and its explicit path survives switching sections or the adaptive layout.
+        // Each section owns its stack. A settings or history push must never cover another
+        // section, and its explicit path survives switching sections or the adaptive layout.
         switch item {
         case .settings:
             NavigationStack(path: $settingsPath) {
@@ -281,7 +281,7 @@ struct MobileMeetingRoot: View {
         case .meetings:
             NavigationStack { sectionRoot(for: item) }
         case .history:
-            NavigationStack { sectionRoot(for: item) }
+            NavigationStack(path: $historyPath) { sectionRoot(for: item) }
         }
     }
 
@@ -510,7 +510,7 @@ struct MobileMeetingRoot: View {
                 || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
         }
         return List(matches) { session in
-            Button { selectedHistoryID = session.id } label: {
+            Button { historyPath = [session.id] } label: {
                 VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
                     Text(session.title).font(theme.typography.bodyStrong)
                     Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
@@ -531,7 +531,7 @@ struct MobileMeetingRoot: View {
         }
         .searchable(text: $search, prompt: PichiLocalization.text("Search meetings"))
         .refreshable { await refreshHistory() }.accessibilityIdentifier("history.list")
-        .navigationDestination(item: $selectedHistoryID) { id in
+        .navigationDestination(for: MeetingSessionID.self) { id in
             if let session = sessions.first(where: { $0.id == id }) {
                 Group {
                     if session.state == .failed || session.state == .interrupted { recovery(session) } else { transcript(session) }
@@ -742,7 +742,7 @@ struct MobileMeetingRoot: View {
     private func refreshHistory() async {
         await historySnapshot.refresh()
         if let message = historySnapshot.errorMessage { error = message; showError = true; return }
-        if let id = selectedHistoryID, !sessions.contains(where: { $0.id == id }) { selectedHistoryID = nil }
+        if let id = historyPath.last, !sessions.contains(where: { $0.id == id }) { historyPath.removeAll() }
     }
     private func refreshMicrophones() async {
         do { microphoneSnapshot = try await microphones() } catch { report(error) }

@@ -35,7 +35,7 @@ struct MobileSettingsRoot: View {
                 }.accessibilityIdentifier("settings.privacy")
             } footer: {
                 Text(PichiLocalization.text("Audio recordings and transcripts are stored on this device."))
-                    .font(theme.typography.caption)
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
         }.listStyle(.insetGrouped).accessibilityIdentifier("settings.root")
             .navigationDestination(for: MobileSettingsDestination.self) { destination in
@@ -158,7 +158,8 @@ struct MobileRecordingSettings: View {
                 if settings.meetingSpeakerLabelsEnabled {
                     Text(PichiLocalization.text(settings.meetingSpeakerProcessingMode == .streaming
                         ? "Speaker labels update during recording. A short delay is expected."
-                        : "Speaker labels are added after recording.")).font(theme.typography.caption)
+                        : "Speaker labels are added after recording."))
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 }
             }
             Section(PichiLocalization.text("My voice")) {
@@ -209,9 +210,10 @@ private struct MobileSpeakerResourcesSettings: View {
         }.disabled(isPreparing || isBusy).accessibilityIdentifier("recording.downloadSpeakerModel") }
     }
 
+    /// Everything Download would install is present.
     private var isReady: Bool {
         guard case .ready = store.state else { return false }
-        return processingMode == .streaming || store.allSpeakerResourcesReady
+        return store.voiceMatchingReady || !store.supportsOwnerVoiceVerification
     }
 
     @ViewBuilder private var diarizationState: some View {
@@ -371,7 +373,7 @@ private struct MobilePrivacySettings: View {
                 Text(PichiLocalization.text(settings.meetingSaveAudio
                     ? "Applies to past meetings too. Transcripts are always kept."
                     : "When disabled, audio is never written to files, including temporary files. Only the transcript is saved."))
-                    .font(theme.typography.caption)
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
             Section {
                 Toggle(PichiLocalization.text("Redact sensitive data"), isOn: Binding(
@@ -404,7 +406,7 @@ private struct MobilePrivacySettings: View {
                     if settings.meetingSaveAudio {
                         Text(PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."))
                     }
-                }.font(theme.typography.caption)
+                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
         }.navigationTitle(PichiLocalization.text("Privacy")).accessibilityIdentifier("settings.privacy.detail")
     }
