@@ -113,9 +113,8 @@ struct MobileOnboarding: View {
                 .font(theme.typography.sectionTitle).foregroundStyle(theme.palette.success)
             Text(PichiLocalization.text("Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings."))
                 .font(theme.typography.body)
-            if advancing {
-                if asr.modelPreparationPhase != nil { MobileASRPreparationStatus(asr: asr) }
-                else { ProgressView(PichiLocalization.text("Checking setup…")) }
+            if advancing && asr.modelPreparationPhase == nil {
+                ProgressView(PichiLocalization.text("Checking setup…"))
             }
         }
     }

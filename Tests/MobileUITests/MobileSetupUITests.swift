@@ -18,7 +18,11 @@ final class MobileSetupUITests: XCTestCase {
     func testFirstRunPreparesActualResourcesSkipsMicrophoneAndEntersApp() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light"]
-        app.launch()
+        if ProcessInfo.processInfo.environment["PICHI_SETUP_ATTACH_EXISTING"] == "1" {
+            XCTAssertTrue(app.state == .runningForeground || app.state == .runningBackground,
+                          "Attach only to the normal application launched on the owned simulator")
+            app.activate()
+        } else { app.launch() }
         XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 15),
                       "This test requires a fresh application container")
         capture("flow-00-welcome")
