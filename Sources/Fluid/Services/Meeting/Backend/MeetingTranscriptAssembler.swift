@@ -921,6 +921,7 @@ nonisolated struct MeetingTranscriptAssembler {
         }
         var batch = MeetingPCMTranscriptBatch(segments: segments,
             speakers: speakers.map(\.speaker))
+        batch.speakerNameFormat = self.speakerNameFormat
         batch.speakers = batch.mergingSpeakers(into: reconciledPriorSpeakers, speakerNameFormat: self.speakerNameFormat)
         return batch
     }

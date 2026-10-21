@@ -306,6 +306,19 @@ struct MeetingPrivacyContextTests {
     }
 
     static func main() async throws {
+        do {
+            let context = MeetingTranscriptPrivacyContext(redactor: StructuredPrivacyRedactor())
+            let track = UUID()
+            var batch = MeetingPCMTranscriptBatch(segments: [segment("Обычная синтетическая реплика.", track: track, start: 0)])
+            batch.speakerNameFormat = "Frozen %lld"
+            let held = try await context.redact(batch)
+            try check(held.speakerNameFormat == "Frozen %lld", "Privacy hold lost the attempt's speaker template")
+            let sealed = try await context.admitSpeechBoundary()
+            try check(sealed?.speakerNameFormat == "Frozen %lld", "Speech boundary lost the frozen speaker template")
+            _ = try await context.redact(.init(segments: [segment("Продолжение обычной реплики.", track: track, start: 2)]))
+            let final = try await context.finish()
+            try check(final?.speakerNameFormat == "Frozen %lld", "Final privacy tail replaced the frozen speaker template")
+        }
         try await speechBoundaryAdmissionSuite()
         try completedSpeechBoundaryPrecisionSuite()
         try await completedSpeechBoundaryContextSuite(using: StructuredPrivacyRedactor())
