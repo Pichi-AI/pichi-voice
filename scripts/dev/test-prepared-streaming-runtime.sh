@@ -5,8 +5,9 @@ cd "$pichi_root"
 bash scripts/dev/assert-worktree.sh
 pichi_build="$pichi_root/.build/prepared-streaming-runtime"
 mkdir -p "$pichi_build"
-python3 - "$pichi_build/ActualPCMWindow.swift" "$pichi_build/ActualASRLoop.swift" <<'PY'
+python3 - "$pichi_build/ActualPCMWindow.swift" "$pichi_build/ActualASRLoop.swift" "$pichi_build/ActualOwnerVerifier.swift" <<'PY'
 from pathlib import Path
+import re
 import sys
 source = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipeline+MemoryAudio.swift').read_text()
 start = source.index('nonisolated enum MeetingMemoryAudioError')
@@ -101,9 +102,31 @@ streamingWitnesses = r'''
         guard let scope = self.scope else { return [] }
         if scope.failEncoder { throw StreamingScopeFailure.encoder }
         await scope.waitForEncoderRelease()
-        return samples.map { .init(token: $0.token) }
+        return try scope.profilesForCall(samples)
     }
 '''
+# Reuse the actual scorer, validity rules and observer. Only native encoder/model scopes
+# remain witnesses, so this harness cannot manufacture owner acceptance from nonempty input.
+def declaration(text, marker):
+    first = text.index(marker)
+    cursor = text.index('{', first) + 1
+    depth = 1
+    while depth:
+        depth += (text[cursor] == '{') - (text[cursor] == '}')
+        cursor += 1
+    return text[first:cursor] + '\n'
+owner = Path('Sources/Fluid/Services/Meeting/Backend/MeetingOwnerVoiceProfile.swift').read_text()
+index = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipeline.swift').read_text()
+pure = declaration(owner, 'nonisolated enum MeetingOwnerVoiceVerifier {')
+pure += 'nonisolated enum MeetingSpeakerEmbeddingIndex {\n' + declaration(index, '    static func cosineDistance(') + '}\n'
+pure += 'nonisolated enum MeetingSpeakerVoiceMatcher {\n'
+pure += re.search(r'    static let maximumDistance:[^\n]+', matcher).group(0) + '\n'
+pure += re.search(r'    static let ambiguityMargin:[^\n]+', matcher).group(0) + '\n'
+pure += declaration(matcher, '    static func distance(') + declaration(matcher, '    static func validLinks(') + '}\n'
+pure += 'nonisolated enum MeetingPCMRuntimeDiagnostics {\n'
+pure += re.search(r'    static let detailedProfilingEnabled[^\n]+', runtime).group(0) + '\n'
+pure += declaration(runtime, '    static func ownerVerificationObserver(') + '}\n'
+Path(sys.argv[3]).write_text('import Foundation\n' + pure)
 provider = Path('Sources/Fluid/Services/TranscriptionProvider.swift').read_text()
 word_start = provider.index('nonisolated struct ASRWordTiming:')
 word_end = provider.index('/// A provider', word_start)
@@ -118,11 +141,11 @@ Path(sys.argv[2]).write_text('import Foundation\n' + provider[word_start:word_en
 PY
 swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
     -module-cache-path "$pichi_build/ModuleCache" \
-    "$pichi_build/ActualPCMWindow.swift" "$pichi_build/ActualASRLoop.swift" \
+    "$pichi_build/ActualPCMWindow.swift" "$pichi_build/ActualASRLoop.swift" "$pichi_build/ActualOwnerVerifier.swift" \
     Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingParakeetNemotronRuntime.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingIncrementalNemotronDiarizerSession.swift \
     Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingPreparedStreamingRuntime.swift \
     Tests/MeetingPreparedStreamingRuntimeTests.swift -o "$pichi_build/tests"
-"$pichi_build/tests"
+PICHI_MEETING_DETAILED_PROFILE=1 "$pichi_build/tests"
