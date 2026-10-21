@@ -8,6 +8,7 @@ The saved owner can now be identified during an ongoing streaming meeting. Posit
 - Branch: `codex/owner-voice-streaming-20261020`.
 - Reviewed application revision: `0695937c3e76ef9b52cf19629d6a24544365c654`.
 - Native identity/UI regression revision: `e80a49bf7e6654a171ea21923c466971da3da545`. Application sources are identical to `0695937c`; this revision only marks a custom fixture alias as manual metadata.
+- Later candidate: `629a04d344254ea3c13ad226111f078794242698`. It adds enrollment resource admission, frozen participant-label metadata and the shared-source manifest correction described below. Native verification of these later changes is pending in the settings/onboarding integration; earlier measurements do not validate them.
 - No physical installation, microphone test, main merge, TestFlight modification or update to PR25 was performed.
 
 ## Cause and change
@@ -42,6 +43,13 @@ Idle preparation primes the same validated encoder on synthetic silence through 
 
 Encoder failure preserves anonymous transcription and stops repeated optional attempts in that recording. Cancellation joins the current native call before cleanup and resource restoration. Model selection, profile and artifact paths remain fixed for the attempt.
 
+Independent integration review found that enrollment's audio lease alone could leave optional idle voice preparation running: a meeting may adopt idle resources, while enrollment creates its own encoder. Enrollment now calls the existing `beginOperationRetiringIdle` before microphone selection or capture construction and holds the ordinary model-operation token through capture, encoding and cleanup. It releases that token before returning the audio lease. This joins active idle retirement and rejects a queued idle load during enrollment. Three native regressions cover joined cancellation, queued idle rejection and admission failure without constructing capture hardware. Those new regressions have not yet completed native execution.
+
+- `Sources/Fluid/UI/MeetingOwnerVoiceSettings.swift:140`: enrollment admission and cleanup order.
+- `Tests/MobileIntegrationTests/MeetingOwnerVoiceEnrollmentCaptureTests.swift:13`: isolated real residency-owner regressions with a capture factory that throws before hardware access.
+
+The mobile shared-source manifest now includes the existing `MeetingTimelineTrace.swift`. The checked-in project already included this source; project regeneration previously dropped its membership.
+
 ## Participant names and compatibility
 
 The previous ordinal allocation counted the owner in `priorSpeakers.count`. Later setting `isLocalUser` therefore left a gap in participant numbering.
@@ -53,6 +61,8 @@ New automatically named identities carry optional `generatedParticipantNumber` m
 - `Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift:208`: rename undo metadata.
 
 Protected word IDs, timestamps, privacy admission, audio source acknowledgements and the existing bounded word tail remain under their existing owners. Identity updates do not rewrite earlier raw inference evidence or introduce source labels as participant names.
+
+The producing attempt now carries its frozen participant-label template in ephemeral `MeetingPCMTranscriptBatch.speakerNameFormat` metadata. Privacy holds, speech-boundary flushes, final tails and durable speaker merges retain that template. An interface-language change during recording cannot replace generated labels with the current global format. Explicit aliases remain untouched; this adds no translated-label parsing or persisted template field. This follow-up originated in the settings/onboarding integration and is included in the later candidate above.
 
 ## Native measurements
 
@@ -97,7 +107,7 @@ The main coordinating chat owns the human identity questions and subsequent phys
 | Check | Result and scope |
 | --- | --- |
 | Worktree guard | Passed in isolated task worktree at the requested base |
-| Portable repository checks | Passed; initial setup's runner timing failure did not reproduce on the complete rerun |
+| Portable repository checks | Passed again after the later candidate and report update; initial setup's runner timing failure did not reproduce on the complete rerun |
 | Prepared streaming actual-source harness | 19 contract groups passed, including pre-Stop decision, retry cadence, optional failure, scope ownership and joined cancellation |
 | Protected tail / registry / admission / state probes | 28,990 / 133 / 175 / 3,197 checks passed |
 | Voice verifier actual-source probe | Passed under absent, `1` and `true` diagnostic gates; synthetic vectors and immutable recipe compatibility |
@@ -107,6 +117,7 @@ The main coordinating chat owns the human identity questions and subsequent phys
 | Native settings UI, English/light and Russian/dark, portrait/landscape | 1 passed, 0 failed/skipped on each simulator at `e80a49bf` |
 | Real 45-second positive streaming integration | Passed on both simulators at `0695937c` |
 | Real scheduled 94-second mixed/pause replay | Runtime passed on iPad Simulator at `e80a49bf`; identity accuracy remains unaccepted |
+| Later enrollment admission and frozen-label regressions | Independent source review complete; combined native execution pending in settings/onboarding integration |
 | macOS application regression | Not executed in this session; queued for combined integration after native resource-slot handoff |
 | Physical device/microphone acceptance | Not executed; requires simulator review and the remaining identity gate |
 
@@ -114,6 +125,6 @@ The original short speech/silence probe incorrectly required a nonzero immutable
 
 An initial native contract run also exposed a manually named fixture retaining the new generated-name marker and two English fixture assertions running under a forced Russian test locale. The fixture now marks its alias explicitly, and the contract suite runs under its normal English test locale. Production rename operations already clear the marker and preserve it in undo.
 
-Independent automated code review covered the integrated revisions through `e80a49bf`, including existing extension points, absence of model/brand/language switches in common orchestration, bounds, profile immutability, ambiguity/revocation, cancellation, resource ownership, persistence and upstream impact. Its protected-tail formatter finding was fixed: every tail merge now passes its frozen format. A subsequent combined-integration review identified two additional default-format callers in `MeetingPCMIdentityState.commit` and `checkpointMemoryTranscript`. The settings/onboarding integration owns the follow-up that freezes their format per attempt and its regression. That follow-up is not included in the owner branch revisions above. Independent evidence review separately verified frozen hashes, source composition, simulator reports, counts, timing definitions and frame indexes.
+Independent automated code review covered the integrated revisions through `e80a49bf`, including existing extension points, absence of model/brand/language switches in common orchestration, bounds, profile immutability, ambiguity/revocation, cancellation, resource ownership, persistence and upstream impact. Its protected-tail formatter finding was fixed: every tail merge now passes its frozen format. Subsequent review identified two default-format callers in `MeetingPCMIdentityState.commit` and `checkpointMemoryTranscript` and the enrollment/idle-preparation overlap. Both fixes are included in the later candidate above. A final independent read-only review of exact `629a04d344254ea3c13ad226111f078794242698` found no material actionable issues; it did not run compilers, inference or UI. Independent evidence review separately verified frozen hashes, source composition, simulator reports, counts, timing definitions and frame indexes. The later code review is separate from native acceptance of those changes.
 
 All raw evidence remains in ignored local task storage. This report intentionally contains no private source paths, audio hashes, profile metadata, embeddings, transcripts or private distance measurements. Do not merge, ship or claim false-owner acceptance from the positive/runtime passes alone.
