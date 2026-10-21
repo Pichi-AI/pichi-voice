@@ -157,6 +157,7 @@ struct MeetingStreamingTranscriptStateTests {
         catch { check(false, "Expected \(error), got \(error)") }
     }
     static func main() async throws {
+        try await growingSpeechCannotEraseProtectedPendingWords()
         try await speechBoundaryCancellationAndProofGuards()
         try await speechThenSealedEmptyWindowDrainsWhileCapturing()
         try await protectedSpeechDisplaysBeforeDelayedDiarization()
@@ -184,6 +185,41 @@ struct MeetingStreamingTranscriptStateTests {
         try await guardsAndLimits()
         try await cancellationAndReentry()
         print("Streaming transcript state: \(checks) checks passed")
+    }
+
+    static func growingSpeechCannotEraseProtectedPendingWords() async throws {
+        let value = try state(privacy: .init(redactor: SyntheticMaskingRedactor()))
+        _ = try await value.observe(observation([word(0, start: 0.1, end: 0.4, text: "базу")],
+            accepted: 1, processed: 0, asr: 1))
+        let settled = try await value.observe(observation(accepted: 2, processed: 0, asr: 2,
+            emptyASR: 16_000..<32_000))
+        check(settled.safeBatch.livePreview?.text == "базу")
+        let previewID = settled.safeBatch.livePreview?.id
+        var growing = MeetingPCMTranscriptBatch(segments: [])
+        growing.speechObservationIdentity = .init(attemptID: attempt,
+            epochID: .init(trackID: trackID, ordinal: 32_000))
+        let empty = try await value.observeSpeechPreview(growing)
+        check(empty?.text == "базу" && empty?.id == previewID,
+            "An empty growing hypothesis cannot erase safe words waiting for diarization")
+        growing.segments = [word(1, start: 2.1, end: 2.4, text: "новое"),
+            word(2, start: 2.5, end: 2.8, text: "слово.")]
+        _ = try await value.observeSpeechPreview(growing)
+        let stable = try await value.observeSpeechPreview(growing)
+        check(stable?.text == "базу новое слово." && stable?.id == previewID)
+        let acoustic = try await value.observe(observation(accepted: 3, processed: 0))
+        check(acoustic.safeBatch.livePreview == stable,
+            "Acoustic-only updates retain the richer current protected hypothesis")
+        _ = try await value.observe(observation(growing.segments, accepted: 3, processed: 0, asr: 3))
+        let quiet = try await value.observe(observation(accepted: 4, processed: 0, asr: 4,
+            emptyASR: 48_000..<64_000))
+        check(quiet.safeBatch.livePreview?.text == "базу новое слово.",
+            "Sealing replaces the growing preview without duplicating its words")
+        let scored = try await value.observe(observation(accepted: 4, processed: 4))
+        check(scored.safeBatch.segments.map(\.text) == ["базу", "новое", "слово."]
+            && scored.safeBatch.livePreview == nil)
+        _ = try await value.finish(observation(accepted: 4, processed: 4, asr: 4, final: true,
+            retained: scored.retainActivityFromSample))
+        await expect(.alreadyFinished) { _ = try await value.observeSpeechPreview(growing) }
     }
 
     static func speechBoundaryCancellationAndProofGuards() async throws {
