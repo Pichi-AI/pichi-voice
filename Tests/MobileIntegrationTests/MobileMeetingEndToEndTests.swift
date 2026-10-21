@@ -1164,7 +1164,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name); try? FileManager.default.removeItem(at: root) }
         let settings = SettingsStore(defaults: defaults)
         settings.selectedSpeechModel = asrModel
-        settings.meetingRecordingDefaults.languageCode = "ru"
+        settings.meetingRecordingDefaults.languageCode = environment["PICHI_COMBINED_MEETING_LANGUAGE"] ?? "ru"
         settings.meetingSaveAudio = saveAudio
         settings.meetingSpeakerLabelsEnabled = true
         settings.meetingSpeakerProcessingMode = streaming ? .streaming : .afterRecording

@@ -53173,6 +53173,23 @@
           }
         }
       }
+    },
+    "Checking setup…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking setup…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка настройки…"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

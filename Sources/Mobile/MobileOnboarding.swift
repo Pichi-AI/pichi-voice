@@ -111,6 +111,10 @@ struct MobileOnboarding: View {
                 .font(theme.typography.sectionTitle).foregroundStyle(theme.palette.success)
             Text(PichiLocalization.text("Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings."))
                 .font(theme.typography.body)
+            if advancing {
+                if asr.modelPreparationPhase != nil { MobileASRPreparationStatus(asr: asr) }
+                else { ProgressView(PichiLocalization.text("Checking setup…")) }
+            }
         }
     }
 
@@ -153,6 +157,12 @@ struct MobileOnboarding: View {
                     try await asr.activateModel(selected)
                 case 2: try await required.prepare(modelID: settings.selectedSpeechModel.rawValue)
                 case 3: try await privacy.waitUntilReadyIfRequested()
+                case 5:
+                    // A restored final page cannot assume cache files survived an interruption.
+                    let model = settings.selectedSpeechModel
+                    if !(try await asr.modelIsInstalled(model)) { try await asr.downloadModel(model) }
+                    try await required.prepare(modelID: model.rawValue)
+                    try await privacy.waitUntilReadyIfRequested()
                 default: break
                 }
                 try Task.checkCancellation()
