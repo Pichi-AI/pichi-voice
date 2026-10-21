@@ -451,6 +451,7 @@ private actor ScheduledOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession 
     }
 
     static func main() async throws {
+        try await integerClockOwnsTranscriptOffsets()
         try await shortAndEmptyFinalizationMatrix()
         try await asyncNonSpeechAdmission()
         try await lifecyclePreviewAdmission()
@@ -564,7 +565,7 @@ private actor ScheduledOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession 
         try await v4CachedMetadataAndShortCompetitors()
         try await v4ReplacementRevocationAndBoundedCache()
         try await v4JoinedCancellation()
-        print("24 prepared streaming runtime contract groups passed")
+        print("25 prepared streaming runtime contract groups passed")
     }
 
     private nonisolated static var ownerDecisionLines: [String] {
@@ -799,6 +800,24 @@ private actor ScheduledOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession 
         try require(scope.snapshot.contains("speaker-scope-closed") && scope.snapshot.contains("asr-scope-closed"),
             "V4 cancellation joins both prepared owners before returning")
         print("PASS V4 cancelled short evidence joins native owners without internal or emitted confirmation")
+    }
+
+    private static func integerClockOwnsTranscriptOffsets() async throws {
+        let recorder = Recorder(), runtime = make(recorder)
+        _ = try await runtime.recognize(window: .fixture(samples: Array(repeating: 0.1, count: 292_800), final: true),
+            offset: 0, preview: nil)
+        try await runtime.recordWindowProcessing(.init(sourceStartSample: 0, sourceFrameCount: 292_800,
+            chargedPendingFrames: 0, maximumPendingFrames: 960_000))
+        let noisyOffset = 18.299999999999997
+        let result = try await runtime.recognize(window: .fixture(samples: Array(repeating: 0.1, count: 67_200), final: true),
+            offset: noisyOffset, preview: nil)
+        try require(result.batch.segments.first?.start == Double(292_800) / 16_000,
+            "The admitted integer source clock must own a word beginning at local zero")
+        try await runtime.recordWindowProcessing(.init(sourceStartSample: 292_800, sourceFrameCount: 67_200,
+            chargedPendingFrames: 0, maximumPendingFrames: 960_000))
+        _ = try await runtime.finishStreaming()
+        await runtime.cleanup()
+        print("PASS integer source-clock offsets preserve words at fractional window starts")
     }
 
     private nonisolated static func liveOwnerBeforeStopAndJoinedCancellation() async throws {

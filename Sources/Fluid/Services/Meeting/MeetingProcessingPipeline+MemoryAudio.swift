@@ -38,6 +38,7 @@ extension MeetingProcessingPipeline {
         initialPreviewSeconds: Double = 3,
         previewIntervalSeconds: Double = 3,
         confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
+        pauseEndpointSilenceSeconds: Double? = nil,
         recognize: @escaping @Sendable (MeetingPCMProgressiveWindow, TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
         didProcessWindow: (@Sendable (MeetingPCMWindowProcessingFeedback) async throws -> Void)? = nil,
@@ -49,6 +50,7 @@ extension MeetingProcessingPipeline {
                                               maximumPendingSeconds: maximumPendingSeconds,
                                               initialChunkSeconds: initialPreviewSeconds,
                                               confidentlyNonSpeech: confidentlyNonSpeech,
+                                              pauseEndpointSilenceSeconds: pauseEndpointSilenceSeconds,
                                               recognition: .progressive(intervalSeconds: previewIntervalSeconds, recognize),
                                               checkpoint: checkpoint, didProcessWindow: didProcessWindow,
                                               finalize: finalize, diagnostic: diagnostic, failure: failure)
@@ -90,6 +92,9 @@ nonisolated struct MeetingPCMWindowUpdate: Sendable {
     var samples: [Float]
     let totalFrames: Int
     let isFinal: Bool
+    /// Present only when complete measured quiet coverage sealed this exact delivered prefix.
+    /// Stop and fixed-size boundaries do not establish speech endpoint evidence.
+    let speechBoundarySample: Int?
 }
 
 /// A single growing PCM window, used only underneath the existing memory transport. It holds
@@ -100,19 +105,30 @@ nonisolated final class MeetingPCMProgressiveWindow: @unchecked Sendable {
     private let initialFrames: Int
     private let intervalFrames: Int
     private let nonSpeechQuery: MeetingConfidentNonSpeechQuery?
+    private let pauseEndpointSilenceFrames: Int?
+    private let sealAtSpeechBoundary: (@Sendable (MeetingPCMProgressiveWindow, Int, TimeInterval) -> Bool)?
     private var pending: [Float] = []
     private var acceptedFrames = 0
+    private var deliveredFrames = 0
     private var deliveredAny = false
     private var sealed = false
     private var deliveredFinal = false
+    private var speechBoundarySample: Int?
     private var terminalError: Error?
     private var waiter: CheckedContinuation<MeetingPCMWindowUpdate?, Error>?
 
     fileprivate init(initialFrames: Int, intervalFrames: Int,
-                     confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil) {
+                     confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
+                     pauseEndpointSilenceFrames: Int? = nil,
+                     pending: [Float] = [],
+                     sealAtSpeechBoundary: (@Sendable (MeetingPCMProgressiveWindow, Int, TimeInterval) -> Bool)? = nil) {
         self.initialFrames = initialFrames
         self.intervalFrames = intervalFrames
         self.nonSpeechQuery = confidentlyNonSpeech
+        self.pauseEndpointSilenceFrames = pauseEndpointSilenceFrames
+        self.sealAtSpeechBoundary = sealAtSpeechBoundary
+        self.pending = pending
+        self.acceptedFrames = pending.count
     }
 
     func confidentlyNonSpeech(start: TimeInterval, end: TimeInterval) async -> Bool {
@@ -121,6 +137,23 @@ nonisolated final class MeetingPCMProgressiveWindow: @unchecked Sendable {
         guard let nonSpeechQuery else { return false }
         let result = await nonSpeechQuery(start, end)
         return !Task.isCancelled && self.lock.withLock({ self.terminalError == nil }) && result
+    }
+
+    var usesPauseEndpoint: Bool { self.pauseEndpointSilenceFrames != nil }
+
+    /// The recognizer calls this sequentially after consuming a nonfinal update. Evidence
+    /// covers the entire trailing pause through that immutable prefix, including its right
+    /// edge. Capture can keep appending while the query awaits; the consumer atomically moves
+    /// all not-yet-delivered suffix PCM to the next window before sealing this exact prefix.
+    func sealAtSpeechBoundaryIfConfident(totalFrames: Int, offset: TimeInterval) async -> Bool {
+        guard let silenceFrames = self.pauseEndpointSilenceFrames,
+              let sealAtSpeechBoundary, totalFrames >= silenceFrames,
+              offset.isFinite, offset >= 0, !Task.isCancelled,
+              self.lock.withLock({ self.canSealDeliveredPrefixLocked(totalFrames) }) else { return false }
+        let end = offset + Double(totalFrames) / 16_000
+        guard await self.confidentlyNonSpeech(start: end - Double(silenceFrames) / 16_000, end: end),
+              !Task.isCancelled else { return false }
+        return sealAtSpeechBoundary(self, totalFrames, offset)
     }
 
     /// Call sequentially, after the prior inference has joined. Cancellation closes this window
@@ -163,6 +196,25 @@ nonisolated final class MeetingPCMProgressiveWindow: @unchecked Sendable {
         if let (continuation, result) = delivery { continuation.resume(with: result) }
     }
 
+    /// Caller holds the consumer lock, preserving its existing consumer-to-window lock order.
+    /// Moving this array transfers suffix ownership without copying the delivered prefix.
+    fileprivate func detachSuffixAndSeal(totalFrames: Int, boundarySample: Int) -> [Float]? {
+        self.lock.withLock {
+            guard self.canSealDeliveredPrefixLocked(totalFrames) else { return nil }
+            let suffix = self.pending
+            self.pending = []
+            self.acceptedFrames = totalFrames
+            self.sealed = true
+            self.speechBoundarySample = boundarySample
+            return suffix
+        }
+    }
+
+    private func canSealDeliveredPrefixLocked(_ totalFrames: Int) -> Bool {
+        self.terminalError == nil && !self.sealed && !self.deliveredFinal
+            && self.deliveredAny && self.deliveredFrames == totalFrames && self.waiter == nil
+    }
+
     fileprivate func cancel(_ error: Error) {
         let continuation = self.lock.withLock { () -> CheckedContinuation<MeetingPCMWindowUpdate?, Error>? in
             guard self.terminalError == nil else { return nil }
@@ -182,9 +234,11 @@ nonisolated final class MeetingPCMProgressiveWindow: @unchecked Sendable {
         if self.deliveredFinal { return .success(nil) }
         let threshold = self.deliveredAny ? self.intervalFrames : self.initialFrames
         guard self.sealed || self.pending.count >= threshold else { return nil }
-        let update = MeetingPCMWindowUpdate(samples: self.pending, totalFrames: self.acceptedFrames, isFinal: self.sealed)
+        let update = MeetingPCMWindowUpdate(samples: self.pending, totalFrames: self.acceptedFrames,
+                                           isFinal: self.sealed, speechBoundarySample: self.speechBoundarySample)
         self.pending = []
         self.deliveredAny = true
+        self.deliveredFrames = self.acceptedFrames
         self.deliveredFinal = self.sealed
         return .success(update)
     }
@@ -233,6 +287,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private let recognition: Recognition
     private let previewIntervalFrames: Int?
     private let nonSpeechQuery: MeetingConfidentNonSpeechQuery?
+    private let pauseEndpointSilenceFrames: Int?
     private var openProgressiveWindow: MeetingPCMProgressiveWindow?
     private var openProgressiveStart: TimeInterval = 0
     private var openProgressiveScheduled = false
@@ -249,7 +304,9 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private var jobs: [Job] = []
     private var pendingFrames = 0
     private var peakPendingFrames = 0
-    private var origin: CMTime?
+    // Source offsets share the admitted PCM clock, including after fractional pause splits.
+    // Converting once avoids accumulating seconds just below an already closed sample prefix.
+    private var acceptedSourceFrames = 0
     private var expectedPTS: CMTime?
     private var worker: Task<Void, Never>?
     private var finishTask: Task<Void, Error>?
@@ -260,6 +317,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
 
     init(chunkSeconds: Double, maximumPendingSeconds: Double, initialChunkSeconds: Double?,
          confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
+         pauseEndpointSilenceSeconds: Double? = nil,
          recognition: Recognition,
          checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
          didProcessWindow: (@Sendable (MeetingPCMWindowProcessingFeedback) async throws -> Void)? = nil,
@@ -280,6 +338,14 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         self.maximumPendingFrames = Int((maximumPendingSeconds * 16_000).rounded())
         self.recognition = recognition
         self.nonSpeechQuery = confidentlyNonSpeech
+        if let silence = pauseEndpointSilenceSeconds {
+            guard silence.isFinite, silence >= 0.25, silence <= chunkSeconds else {
+                throw MeetingMemoryAudioError.invalidBudget
+            }
+            self.pauseEndpointSilenceFrames = Int((silence * 16_000).rounded(.up))
+        } else {
+            self.pauseEndpointSilenceFrames = nil
+        }
         switch recognition {
         case .sealed: self.previewIntervalFrames = nil
         case .progressive(let interval, _):
@@ -324,22 +390,25 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                 rejected = MeetingMemoryAudioError.timelineDiscontinuity
                 return false
             }
-            if self.origin == nil { self.origin = pts }
-            let start = CMTimeGetSeconds(pts - (self.origin ?? pts))
+            guard frameCount <= Int.max - self.acceptedSourceFrames else {
+                rejected = MeetingMemoryAudioError.invalidPCM
+                return false
+            }
+            let sourceStartFrame = self.acceptedSourceFrames
             guard (0..<frameCount).allSatisfy({ data[$0].isFinite }) else {
                 rejected = MeetingMemoryAudioError.invalidPCM
                 return false
             }
             self.expectedPTS = pts + CMTime(value: Int64(frameCount), timescale: 16_000)
+            self.acceptedSourceFrames += frameCount
             self.pendingFrames += frameCount
             self.peakPendingFrames = max(self.peakPendingFrames, self.pendingFrames)
             var position = 0
             while position < frameCount {
                 if let intervalFrames = self.previewIntervalFrames {
                     if self.openProgressiveWindow == nil {
-                        self.openProgressiveWindow = MeetingPCMProgressiveWindow(initialFrames: self.initialChunkFrames,
-                            intervalFrames: intervalFrames, confidentlyNonSpeech: self.nonSpeechQuery)
-                        self.openProgressiveStart = start + Double(position) / 16_000
+                        self.openProgressiveWindow = self.makeProgressiveWindow(intervalFrames: intervalFrames)
+                        self.openProgressiveStart = Double(sourceStartFrame + position) / 16_000
                         self.openProgressiveScheduled = false
                     }
                     let window = self.openProgressiveWindow!
@@ -355,7 +424,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                     if isFinal { self.openProgressiveWindow = nil }
                 } else {
                     let windowFrames = self.emittedInitialWindow ? self.chunkFrames : self.initialChunkFrames
-                    if self.tail.isEmpty { self.tailStart = start + Double(position) / 16_000 }
+                    if self.tail.isEmpty { self.tailStart = Double(sourceStartFrame + position) / 16_000 }
                     let count = min(windowFrames - self.tail.count, frameCount - position)
                     self.tail.append(contentsOf: UnsafeBufferPointer(start: data.advanced(by: position), count: count))
                     position += count
@@ -372,6 +441,40 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         }
         if let rejected { self.fail(rejected) }
         return accepted
+    }
+
+    // Only the consumer mutates capture window ownership. Endpointing adds no worker or
+    // per-packet task, and every suffix frame remains charged to the same pending budget.
+    private func makeProgressiveWindow(intervalFrames: Int, pending: [Float] = []) -> MeetingPCMProgressiveWindow {
+        MeetingPCMProgressiveWindow(initialFrames: self.initialChunkFrames,
+            intervalFrames: intervalFrames, confidentlyNonSpeech: self.nonSpeechQuery,
+            pauseEndpointSilenceFrames: self.pauseEndpointSilenceFrames, pending: pending,
+            sealAtSpeechBoundary: { [weak self] window, frames, offset in
+                self?.sealDeliveredSpeechBoundary(window: window, frames: frames, offset: offset) ?? false
+            })
+    }
+
+    private func sealDeliveredSpeechBoundary(window: MeetingPCMProgressiveWindow, frames: Int, offset: TimeInterval) -> Bool {
+        self.lock.withLock {
+            guard self.accepting, self.terminalError == nil,
+                  self.openProgressiveWindow === window, self.openProgressiveStart == offset,
+                  let intervalFrames = self.previewIntervalFrames else { return false }
+            let boundarySample = Int((offset * 16_000).rounded()) + frames
+            guard let suffix = window.detachSuffixAndSeal(totalFrames: frames,
+                boundarySample: boundarySample) else { return false }
+            self.openProgressiveWindow = nil
+            self.openProgressiveScheduled = false
+            if !suffix.isEmpty {
+                let successor = self.makeProgressiveWindow(intervalFrames: intervalFrames, pending: suffix)
+                self.openProgressiveWindow = successor
+                self.openProgressiveStart = Double(boundarySample) / 16_000
+                if suffix.count >= self.initialChunkFrames {
+                    self.jobs.append(.progressive(successor, self.openProgressiveStart))
+                    self.openProgressiveScheduled = true
+                }
+            }
+            return true
+        }
     }
 
     /// Closing is synchronous, then the finite tail and already accepted work are joined. A

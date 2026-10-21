@@ -933,12 +933,29 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             if samples.isEmpty { samples = update.samples }
             else { samples.append(contentsOf: update.samples) }
             update.samples = []
+            // A pause closes exactly this delivered prefix. Capture may have advanced
+            // while its VAD evidence arrived; the transport transfers that untouched
+            // suffix to the next window, preserving the immutable inference input.
+            if !update.isFinal,
+               await window.sealAtSpeechBoundaryIfConfident(totalFrames: update.totalFrames, offset: offset) {
+                try Task.checkCancellation()
+                MeetingTimelineTrace.shared?.record("asr_pause_endpoint", fields: [
+                    "attemptID": attemptID.uuidString, "windowOrdinal": String(epoch.ordinal),
+                    "sourceEndSample": String(Int((offset * 16_000).rounded()) + samples.count)])
+                // The following empty final marker runs final ASR once, even below
+                // the optional preview cadence or when headroom suppresses previews.
+                continue
+            }
             let sessionAllowsObservations = await session.allowsIntermediatePCMObservations()
             try Task.checkCancellation()
             // Consume every delta regardless of optional observations. Lifecycle changes
             // cannot let an empty final marker reuse an older, shorter inferred prefix.
+            // Subsecond PCM delivery serves VAD and the incremental diarizer. Buffered
+            // providers re-decode a complete prefix, so do not repeat batch inference
+            // on every such delivery. Final endpoints always bypass this cadence.
+            let previewIsDue = !window.usesPauseEndpoint || samples.count - inferredSampleCount >= 48_000
             let shouldInfer = update.isFinal ? inferredSampleCount != samples.count
-                : MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM, isFinal: false,
+                : previewIsDue && MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM, isFinal: false,
                     permitsIntermediateObservations: permitsIntermediateObservations && sessionAllowsObservations)
             if shouldInfer {
                 let inferenceStarted = ProcessInfo.processInfo.systemUptime

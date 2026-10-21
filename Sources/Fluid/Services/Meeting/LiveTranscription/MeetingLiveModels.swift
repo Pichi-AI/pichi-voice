@@ -1053,9 +1053,10 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
         return query.result
     }
 
-    /// A growing ASR window can arrive just before its last VAD frame completes.
-    /// Wait only for that one missing right-edge frame after an entirely measured quiet
-    /// prefix. Unknown, interior gaps and speech never become silence through waiting.
+    /// A growing ASR window can arrive with one capture block still queued and a partial
+    /// 256ms VAD frame. Allow up to two right-edge frames to catch up within the existing
+    /// 350ms wait, after an entirely measured quiet prefix. Unknown, interior gaps and speech
+    /// never become silence through waiting; acceptance still requires complete measured coverage.
     func awaitConfidentNonSpeech(start: Double, end: Double) async -> Bool {
         let began = ProcessInfo.processInfo.systemUptime
         var query = self.nonSpeechAssessment(start: start, end: end)
@@ -1098,7 +1099,7 @@ final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable 
                 cursor = max(cursor, item.end); overlaps += 1
             }
             if cursor >= end - 0.000_001 { return result(true, "complete-nonspeech") }
-            let mayAwait = overlaps > 0 && end - cursor <= 0.256 + 0.000_001
+            let mayAwait = overlaps > 0 && end - cursor <= 2 * 0.256 + 0.000_001
             return result(false, "unscored-tail", mayAwait: mayAwait)
         }
     }

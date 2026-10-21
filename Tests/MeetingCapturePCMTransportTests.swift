@@ -87,15 +87,27 @@ private final class ProgressiveProbe: @unchecked Sendable {
     private var failures = 0
     private var returned = 0
     private var finishReturned = false
+    private var boundaries: [Int?] = []
     func begin(_ start: Double) { lock.withLock { starts.append(start) } }
     func record(_ update: MeetingPCMWindowUpdate, start: Double) {
-        lock.withLock { updates.append(Update(start: start, delta: update.samples.count, total: update.totalFrames, final: update.isFinal)) }
+        lock.withLock {
+            updates.append(Update(start: start, delta: update.samples.count, total: update.totalFrames, final: update.isFinal))
+            boundaries.append(update.speechBoundarySample)
+        }
     }
     func checkpoint() { lock.withLock { checkpoints += 1 } }
     func failed() { lock.withLock { failures += 1 } }
     func didReturn() { lock.withLock { returned += 1 } }
     func didFinish() { lock.withLock { finishReturned = true } }
     var snapshot: ([Update], [Double], Int, Int, Int, Bool) { lock.withLock { (updates, starts, checkpoints, failures, returned, finishReturned) } }
+    var speechBoundaries: [Int] { lock.withLock { boundaries.compactMap { $0 } } }
+}
+
+private final class PauseQueryProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ranges: [(Double, Double)] = []
+    func record(_ start: Double, _ end: Double) { lock.withLock { ranges.append((start, end)) } }
+    var snapshot: [(Double, Double)] { lock.withLock { ranges } }
 }
 
 private struct StartupPrepared: MeetingPreparedStreamingPCMProcessing {
@@ -139,6 +151,13 @@ struct MeetingCapturePCMTransportTests {
     static func sample(frames: Int, startFrame: Int64 = 0) throws -> CMSampleBuffer {
         try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm(frames: frames),
                                                    presentationTime: CMTime(value: 1_600_000 + startFrame, timescale: 16_000))
+    }
+
+    static func sequenceSample(frames: Int, startFrame: Int64 = 0) throws -> CMSampleBuffer {
+        let buffer = pcm(frames: frames)
+        for frame in 0..<frames { buffer.floatChannelData![0][frame] = Float(startFrame + Int64(frame)) / 32_000 }
+        return try MeetingCapturePCMConverter.sampleBuffer(buffer: buffer,
+            presentationTime: CMTime(value: 1_600_000 + startFrame, timescale: 16_000))
     }
 
     /// Native-rate source buffers exercise the desktop callback without opening a microphone.
@@ -451,6 +470,8 @@ struct MeetingCapturePCMTransportTests {
         catch MeetingMemoryAudioError.invalidPCM { }
         try require(wrongFormatProbe.snapshot.2 == 1, "malformed PCM emits one terminal event")
         try await progressiveTransport()
+        try await pauseEndpointTransport()
+        try await fractionalSourceClockTransport()
         try await postCheckpointWindowFeedback()
         try await checkpointReleasesPCM()
         try await longMeetingTransport()
@@ -514,6 +535,15 @@ struct MeetingCapturePCMTransportTests {
         let deadline = ProcessInfo.processInfo.systemUptime + 5
         while ProcessInfo.processInfo.systemUptime < deadline {
             if await latch.entered { return }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        try require(false, detail)
+    }
+
+    private static func awaitCheckpoints(_ probe: ProgressiveProbe, count: Int, _ detail: String) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if probe.snapshot.2 == count { return }
             try await Task.sleep(for: .milliseconds(1))
         }
         try require(false, detail)
@@ -836,6 +866,305 @@ struct MeetingCapturePCMTransportTests {
             } catch MeetingMemoryAudioError.invalidBudget { }
         }
         print("Progressive PCM: growing windows, delta coalescing, empty seal, exact budget, waiter cancellation and joined cleanup passed.")
+    }
+
+    static func pauseEndpointTransport() async throws {
+        // VAD can lag behind capture. Seal exactly the delivered prefix it examined while
+        // moving a short, not-yet-delivered suffix into the next source-contiguous window.
+        let probe = ProgressiveProbe(), evidence = PauseQueryProbe(), query = Latch()
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            initialPreviewSeconds: 0.5, previewIntervalSeconds: 0.5,
+            confidentlyNonSpeech: { start, end in
+                evidence.record(start, end)
+                if end == 1 { await query.wait() }
+                return true
+            }, pauseEndpointSilenceSeconds: 0.768,
+            recognize: { window, start in
+                probe.begin(start)
+                var frames = 0
+                while let update = try await window.next() {
+                    for (index, value) in update.samples.enumerated() {
+                        try require(value == Float(Int((start * 16_000).rounded()) + frames + index) / 32_000,
+                                    "detached suffix preserves exact captured sample content and order")
+                    }
+                    frames += update.samples.count
+                    try require(frames == update.totalFrames, "pause split forwards every prefix frame once")
+                    probe.record(update, start: start)
+                    if !update.isFinal {
+                        try require(!(await window.sealAtSpeechBoundaryIfConfident(totalFrames: update.totalFrames - 1, offset: start)),
+                                    "endpoint rejects a prefix that was never delivered")
+                        let sealed = await window.sealAtSpeechBoundaryIfConfident(totalFrames: update.totalFrames, offset: start)
+                        try require(sealed, "full measured pause seals the current delivered prefix")
+                        try require(!(await window.sealAtSpeechBoundaryIfConfident(totalFrames: update.totalFrames, offset: start)),
+                                    "a speech boundary cannot seal twice")
+                    } else if update.speechBoundarySample != nil {
+                        try require(update.samples.isEmpty, "VAD final marker does not absorb unmeasured pending suffix")
+                    }
+                }
+                return .init(segments: [], speakers: [])
+            }, checkpoint: { _ in probe.checkpoint() }, failure: { _ in probe.failed() })
+        try require(consumer.enqueue(try sequenceSample(frames: 16_000)), "one-second delivered prefix accepted")
+        try await awaitEntered(query, "VAD owns complete trailing pause query")
+        try require(consumer.enqueue(try sequenceSample(frames: 4_000, startFrame: 16_000)), "capture appends sub-preview suffix during awaited VAD")
+        await query.release()
+        try await awaitCheckpoints(probe, count: 1, "first VAD endpoint checkpoints")
+        try require(probe.snapshot.2 == 1 && probe.speechBoundaries == [16_000], "pause checkpoints before fixed cap or Stop")
+        try require(probe.snapshot.0.last == .init(start: 0, delta: 0, total: 16_000, final: true),
+                    "first final marker seals exactly the VAD-covered delivered frame")
+        try require(consumer.enqueue(try sequenceSample(frames: 12_000, startFrame: 20_000)), "detached quarter-second suffix grows normally")
+        try await awaitCheckpoints(probe, count: 2, "silent successor checkpoints")
+        try require(probe.snapshot.2 == 2, "whole silent successor closes naturally at one second below old three-second preview")
+        try await consumer.finish()
+        try require(probe.snapshot.1 == [0, 1] && probe.snapshot.3 == 0, "one worker preserves absolute source starts after VAD split")
+        try require(probe.snapshot.0.map(\.delta).reduce(0, +) == 32_000 && probe.speechBoundaries == [16_000, 32_000],
+                    "VAD suffix transfer neither drops nor duplicates accepted PCM")
+        try require(evidence.snapshot.count == 2 && abs(evidence.snapshot[0].0 - 0.232) < 0.000001
+                    && evidence.snapshot[0].1 == 1 && abs(evidence.snapshot[1].0 - 1.232) < 0.000001
+                    && evidence.snapshot[1].1 == 2, "quiet evidence includes every sample through the delivered right edge")
+
+        // Missing/uncertain VAD evidence and the default opt-out preserve the complete window.
+        for mode in 0..<3 {
+            let preserved = ProgressiveProbe(), reached = Latch(), queries = PauseQueryProbe()
+            let measuredQuery: MeetingConfidentNonSpeechQuery = { start, end in
+                queries.record(start, end)
+                return mode == 2
+            }
+            let noBoundary = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+                initialPreviewSeconds: 0.5, previewIntervalSeconds: 0.5, confidentlyNonSpeech: mode == 0 ? nil : measuredQuery,
+                pauseEndpointSilenceSeconds: mode == 2 ? nil : 0.768,
+                recognize: { window, start in
+                    preserved.begin(start)
+                    while let update = try await window.next() {
+                        preserved.record(update, start: start)
+                        if !update.isFinal {
+                            try require(!(await window.sealAtSpeechBoundaryIfConfident(totalFrames: update.totalFrames, offset: start)),
+                                        "unmeasured, uncertain or disabled evidence cannot truncate speech")
+                            await reached.wait()
+                        }
+                    }
+                    return .init(segments: [], speakers: [])
+                }, checkpoint: { _ in preserved.checkpoint() }, failure: { _ in preserved.failed() })
+            try require(noBoundary.enqueue(try sample(frames: 16_000)), "unmeasured prefix accepted")
+            try await awaitEntered(reached, "unmeasured evidence leaves recognizer running")
+            try require(noBoundary.enqueue(try sample(frames: 4_000, startFrame: 16_000)), "unmeasured short tail remains owned")
+            let finish = Task { try await noBoundary.finish() }
+            for _ in 0..<50 { await Task.yield() }
+            await reached.release()
+            try await finish.value
+            try require(preserved.snapshot.0.last == .init(start: 0, delta: 4_000, total: 20_000, final: true)
+                        && preserved.speechBoundaries.isEmpty, "uncertain coverage retains every tail frame through Stop")
+            try require(queries.snapshot.count == (mode == 1 ? 1 : 0), "disabled endpoint never consults VAD")
+        }
+
+        // Ongoing speech vetoes repeated timer cutoffs. Only a fully quiet trailing interval
+        // allows the third update to close, without waiting for a twelve-second attribution cap.
+        let speaking = ProgressiveProbe(), visited = [Latch(), Latch()], speechQueries = PauseQueryProbe()
+        let speakingConsumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            initialPreviewSeconds: 0.5, previewIntervalSeconds: 0.5,
+            confidentlyNonSpeech: { start, end in speechQueries.record(start, end); return start >= 2 },
+            pauseEndpointSilenceSeconds: 0.768,
+            recognize: { window, start in
+                speaking.begin(start)
+                while let update = try await window.next() {
+                    speaking.record(update, start: start)
+                    if !update.isFinal {
+                        if update.totalFrames > 16_000 {
+                            try require(!(await window.sealAtSpeechBoundaryIfConfident(totalFrames: 16_000, offset: start)),
+                                        "an older delivered prefix cannot seal after a newer prefix was delivered")
+                        }
+                        let sealed = await window.sealAtSpeechBoundaryIfConfident(totalFrames: update.totalFrames, offset: start)
+                        try require(sealed == (update.totalFrames == 48_000), "speech cannot be cut by the endpoint timer")
+                        if update.totalFrames <= 32_000 { await visited[update.totalFrames / 16_000 - 1].wait() }
+                    }
+                }
+                return .init(segments: [], speakers: [])
+            }, checkpoint: { _ in speaking.checkpoint() }, failure: { _ in speaking.failed() })
+        _ = speakingConsumer.enqueue(try sample(frames: 16_000))
+        try await awaitEntered(visited[0], "first speech update remains open")
+        _ = speakingConsumer.enqueue(try sample(frames: 16_000, startFrame: 16_000))
+        await visited[0].release()
+        try await awaitEntered(visited[1], "second speech update remains open")
+        _ = speakingConsumer.enqueue(try sample(frames: 16_000, startFrame: 32_000))
+        await visited[1].release()
+        try await awaitCheckpoints(speaking, count: 1, "speech endpoint checkpoints")
+        try require(speaking.snapshot.2 == 1 && speaking.speechBoundaries == [48_000] && speechQueries.snapshot.count == 3,
+                    "only complete trailing non-speech evidence finalizes ongoing speech")
+        try await speakingConsumer.finish()
+
+        // Stop and the fixed cap can win while VAD is awaiting coverage. Neither boundary
+        // inherits stale pause evidence; canceled finish callers still join the query.
+        for capWins in [false, true] {
+            let racing = ProgressiveProbe(), vad = Latch()
+            let racingConsumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+                chunkSeconds: 2, maximumPendingSeconds: 4, initialPreviewSeconds: 0.5, previewIntervalSeconds: 0.5,
+                confidentlyNonSpeech: { _, _ in await vad.wait(); return true }, pauseEndpointSilenceSeconds: 0.768,
+                recognize: { window, start in
+                    racing.begin(start)
+                    let first = try await window.next()!
+                    racing.record(first, start: start)
+                    try require(!(await window.sealAtSpeechBoundaryIfConfident(totalFrames: first.totalFrames, offset: start)),
+                                "Stop or cap supersedes awaited endpoint evidence")
+                    while let update = try await window.next() { racing.record(update, start: start) }
+                    return .init(segments: [], speakers: [])
+                }, checkpoint: { _ in racing.checkpoint() }, failure: { _ in racing.failed() })
+            _ = racingConsumer.enqueue(try sample(frames: 16_000))
+            try await awaitEntered(vad, "terminal race begins awaiting VAD")
+            let suffix = capWins ? 16_000 : 4_000
+            _ = racingConsumer.enqueue(try sample(frames: suffix, startFrame: 16_000))
+            let finish = Task { try await racingConsumer.finish(); racing.didFinish() }
+            finish.cancel()
+            for _ in 0..<50 { await Task.yield() }
+            try require(!racing.snapshot.5, "Stop retains ownership until in-flight VAD joins")
+            await vad.release()
+            try await finish.value
+            try require(racing.snapshot.0.last == .init(start: 0, delta: suffix, total: 16_000 + suffix, final: true)
+                        && racing.speechBoundaries.isEmpty && racing.snapshot.2 == 1,
+                        "Stop/cap preserves full pending suffix and does not forge speech endpoint proof")
+        }
+
+        // Failure cancellation during a suspended query keeps its PCM charged and joins it
+        // before finish returns; no endpoint or checkpoint can escape the canceled worker.
+        let overloaded = ProgressiveProbe(), vad = Latch(), diagnostics = DiagnosticProbe()
+        let bounded = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            chunkSeconds: 2, maximumPendingSeconds: 2, initialPreviewSeconds: 0.5, previewIntervalSeconds: 0.5,
+            confidentlyNonSpeech: { _, _ in await vad.wait(); return true }, pauseEndpointSilenceSeconds: 0.768,
+            recognize: { window, start in
+                let first = try await window.next()!
+                try require(!(await window.sealAtSpeechBoundaryIfConfident(totalFrames: first.totalFrames, offset: start)),
+                            "canceled VAD result cannot seal a window")
+                _ = try await window.next()
+                return .init(segments: [], speakers: [])
+            }, checkpoint: { _ in overloaded.checkpoint() }, diagnostic: { diagnostics.record($0) },
+            failure: { _ in overloaded.failed() })
+        _ = bounded.enqueue(try sample(frames: 16_000))
+        try await awaitEntered(vad, "overload race owns initial prefix")
+        try require(bounded.enqueue(try sample(frames: 16_000, startFrame: 16_000)), "VAD does not release in-flight PCM budget")
+        try require(!bounded.enqueue(try sample(frames: 1, startFrame: 32_000)), "same exact frame budget rejects one extra frame during VAD")
+        let finish = Task {
+            defer { overloaded.didFinish() }
+            try await bounded.finish()
+        }
+        for _ in 0..<50 { await Task.yield() }
+        try require(!overloaded.snapshot.5, "overload joins awaited VAD cancellation")
+        await vad.release()
+        do { try await finish.value; throw NSError(domain: "ExpectedPauseOverload", code: 1) }
+        catch MeetingMemoryAudioError.overload { }
+        try require(overloaded.snapshot.2 == 0 && overloaded.snapshot.3 == 1
+                    && diagnostics.snapshot.first?.contains("pendingFrames=32000") == true,
+                    "failed endpoint preserves bounded ownership and cannot checkpoint canceled PCM")
+
+        for invalid in [Double.nan, 0.1, 13] {
+            do {
+                _ = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(pauseEndpointSilenceSeconds: invalid,
+                    recognize: { _, _ in .init(segments: [], speakers: []) }, checkpoint: { _ in }, failure: { _ in })
+                throw NSError(domain: "ExpectedPauseBudgetError", code: 1)
+            } catch MeetingMemoryAudioError.invalidBudget { }
+        }
+        print("Pause endpoint PCM: full VAD coverage, short-tail suffix races, quiet successors, speech veto, Stop/cap, opt-out and joined overload cancellation passed.")
+    }
+
+    static func fractionalSourceClockTransport() async throws {
+        // This measured sequence formerly accumulated 7.1 + 1.2 + ten 1s pauses into
+        // 18.299999999999997. A local word beginning at zero then preceded the closed prefix.
+        let sizes = [113_600, 19_200] + Array(repeating: 16_000, count: 10) + [67_200]
+        let starts = sizes.dropLast().reduce(into: [0]) { $0.append($0.last! + $1) }
+        let ends = zip(starts, sizes).map(+)
+        let reads = sizes.map { _ in Latch() }, queries = sizes.map { _ in Latch() }
+        let probe = ProgressiveProbe(), feedback = WindowFeedbackProbe()
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            chunkSeconds: 20, maximumPendingSeconds: 60, initialPreviewSeconds: 0.5, previewIntervalSeconds: 0.5,
+            confidentlyNonSpeech: { _, end in
+                let endSample = Int((end * 16_000).rounded())
+                guard let index = ends.firstIndex(of: endSample) else { return false }
+                await queries[index].wait()
+                return true
+            }, pauseEndpointSilenceSeconds: 0.768,
+            recognize: { window, start in
+                let ordinal = probe.snapshot.1.count
+                try require(ordinal < sizes.count, "fractional pause sequence has no extra window")
+                probe.begin(start)
+                try require(start == Double(starts[ordinal]) / 16_000,
+                            "every source offset equals the admitted integer PCM clock exactly")
+                await reads[ordinal].wait()
+                var frames = 0
+                while let update = try await window.next() {
+                    for (index, value) in update.samples.enumerated() {
+                        try require(value == Float(starts[ordinal] + frames + index) / 32_000,
+                                    "fractional rotations preserve every admitted sample in order")
+                    }
+                    frames += update.samples.count
+                    probe.record(update, start: start)
+                    if !update.isFinal {
+                        try require(frames == sizes[ordinal] && update.totalFrames == frames,
+                                    "the endpoint examines exactly the scheduled physical prefix")
+                        try require(await window.sealAtSpeechBoundaryIfConfident(totalFrames: frames, offset: start),
+                                    "fully measured fractional pause closes its exact delivered prefix")
+                    } else {
+                        try require(update.speechBoundarySample == ends[ordinal],
+                                    "speech boundary receipt and successor share one integer source clock")
+                    }
+                }
+                return .init(segments: [], speakers: [])
+            }, checkpoint: { _ in probe.checkpoint() }, didProcessWindow: { feedback.record($0) },
+            failure: { _ in probe.failed() })
+        var admitted = 0
+        for index in sizes.indices {
+            while admitted < ends[index] {
+                let frames = min(64_000, ends[index] - admitted)
+                try require(consumer.enqueue(try sequenceSample(frames: frames, startFrame: Int64(admitted))),
+                            "fractional source-clock fixture is accepted as normalized 16k PCM")
+                admitted += frames
+            }
+            try await awaitEntered(reads[index], "fractional recognizer owns its source window")
+            await reads[index].release()
+            try await awaitEntered(queries[index], "fractional pause query owns the delivered prefix")
+            if index < sizes.count - 1 {
+                // Force every successor through the pending suffix transfer path.
+                try require(consumer.enqueue(try sequenceSample(frames: 1_600, startFrame: Int64(admitted))),
+                            "sub-preview suffix stays owned while VAD completes")
+                admitted += 1_600
+            }
+            await queries[index].release()
+            try await awaitCheckpoints(probe, count: index + 1, "fractional pause checkpoints before its successor")
+        }
+        try await consumer.finish()
+        try require(probe.snapshot.1 == starts.map { Double($0) / 16_000 } && probe.snapshot.1.last == 18.3,
+                    "a zero-local-time last word cannot precede the already closed source prefix")
+        try require(probe.snapshot.0.map(\.delta).reduce(0, +) == sizes.reduce(0, +)
+                    && probe.speechBoundaries == ends && probe.snapshot.3 == 0,
+                    "pause rotations preserve complete PCM and exact boundary receipts without rejection")
+        try require(feedback.snapshot.map(\.sourceStartSample) == starts
+                    && feedback.snapshot.map(\.sourceFrameCount) == sizes
+                    && feedback.snapshot.last?.chargedPendingFrames == 0,
+                    "checkpoint feedback retains exact integer source ranges and releases every frame")
+
+        // One packet crosses a 0.3s cap after an earlier 0.1s packet. Both transport modes
+        // must derive the within-packet successor from sample 4800, rather than 0.1 + 0.2.
+        for progressive in [false, true] {
+            let offsets = ProgressiveProbe()
+            let packetConsumer: any MeetingMemoryAudioConsuming
+            if progressive {
+                packetConsumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+                    chunkSeconds: 0.3, maximumPendingSeconds: 1, initialPreviewSeconds: 0.25, previewIntervalSeconds: 0.25,
+                    recognize: { window, start in
+                        offsets.begin(start)
+                        while let update = try await window.next() { offsets.record(update, start: start) }
+                        return .init(segments: [], speakers: [])
+                    }, checkpoint: { _ in offsets.checkpoint() }, failure: { _ in offsets.failed() })
+            } else {
+                packetConsumer = try MeetingProcessingPipeline.makeMemoryAudioConsumer(chunkSeconds: 0.3, maximumPendingSeconds: 1,
+                    recognize: { samples, start in
+                        offsets.begin(start)
+                        return .init(segments: [], speakers: [])
+                    }, checkpoint: { _ in offsets.checkpoint() }, failure: { _ in offsets.failed() })
+            }
+            try require(packetConsumer.enqueue(try sequenceSample(frames: 1_600)), "fractional packet prefix accepted")
+            try require(packetConsumer.enqueue(try sequenceSample(frames: 8_000, startFrame: 1_600)), "crossing fractional packet accepted")
+            try await packetConsumer.finish()
+            try require(offsets.snapshot.1 == [0, Double(4_800) / 16_000] && offsets.snapshot.2 == 2 && offsets.snapshot.3 == 0,
+                        "new windows inside a packet use exact cumulative source frames in both transport modes")
+        }
+        print("PCM source clock: fractional pause rotations, pending suffixes, exact feedback and within-packet starts passed.")
     }
 
     static func postCheckpointWindowFeedback() async throws {

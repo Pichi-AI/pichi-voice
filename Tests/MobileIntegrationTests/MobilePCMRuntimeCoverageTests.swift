@@ -8,6 +8,45 @@ import XCTest
 /// transport are real; no model downloads, app activation or microphone are used.
 @MainActor
 final class MobilePCMRuntimeCoverageTests: XCTestCase {
+    func testMeasuredPauseSealsShortSpeechWithoutRunningBatchASROnEverySmallDelta() async throws {
+        for hasMeasuredPause in [true, false] {
+            let fixture = try self.makeNativePCMPreviewFixture()
+            addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+            fixture.provider.timedResponses = [24_000: ("базу", [.init(text: "базу", start: 0.1, end: 0.4)])]
+            let observed = PCMPreviewObservation(), attempt = UUID(), track = UUID()
+            try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+            let checkpoint = expectation(description: "Short speech sealed by measured pause")
+            let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+                chunkSeconds: 20, initialPreviewSeconds: 0.5, previewIntervalSeconds: 0.5,
+                confidentlyNonSpeech: { start, _ in hasMeasuredPause && start >= 0.4 },
+                pauseEndpointSilenceSeconds: 0.768,
+                recognize: { window, offset in
+                    try await fixture.runtime.recognizePCM(window: window, offset: offset, trackID: track,
+                        attemptID: attempt, configuration: fixture.configuration, preview: nil)
+                }, checkpoint: { batch in
+                    await MainActor.run { observed.checkpoints.append(batch) }
+                    checkpoint.fulfill()
+                }, failure: { _ in XCTFail("Pause endpoint cannot interrupt capture") })
+            for index in 0..<3 {
+                XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 8_000, start: Int64(index * 8_000))))
+                // Let each delivered prefix reach the actual loop instead of coalescing it.
+                try await Task.sleep(for: .milliseconds(20))
+                if index < 2 { XCTAssertTrue(fixture.provider.timedSampleCounts.isEmpty) }
+            }
+            if hasMeasuredPause {
+                await fulfillment(of: [checkpoint], timeout: 3)
+                XCTAssertEqual(fixture.provider.timedSampleCounts, [24_000], "Final ASR bypasses the optional three-second cadence")
+            } else {
+                XCTAssertTrue(fixture.provider.timedSampleCounts.isEmpty, "Unknown VAD cannot seal or trigger subsecond batch ASR")
+            }
+            try await consumer.finish()
+            if !hasMeasuredPause { await fulfillment(of: [checkpoint], timeout: 3) }
+            XCTAssertEqual(fixture.provider.timedSampleCounts, [24_000])
+            XCTAssertEqual(observed.checkpoints.flatMap(\.segments).map(\.text), ["базу"])
+            XCTAssertEqual(observed.checkpoints.first?.segments.first?.nativeTiming?.end ?? -1, 0.4, accuracy: 0.0001)
+        }
+    }
+
     func testConfidentNonSpeechSkipsASRWithFullPhysicalCoverageAndUnknownFailsOpen() async throws {
         for confidentlyQuiet in [true, false] {
             let fixture = try self.makeNativePCMPreviewFixture()

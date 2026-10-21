@@ -285,6 +285,7 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
     private var factory: IOSMeetingCaptureEngine.MemoryConsumerFactory?
     private var consumer: (any MeetingMemoryAudioConsuming)?
     private var retainedWriter: MeetingAudioChunkWriter?
+    private var liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     private var active: (MeetingSessionID, MeetingAudioTrack)?
     func setFactory(_ factory: IOSMeetingCaptureEngine.MemoryConsumerFactory?) { self.factory = factory }
     func preflightPermissions() async throws { }
@@ -310,6 +311,7 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
             throw error
         }
         active = (session.id, track)
+        self.liveAudioHandler = liveAudioHandler
         return .init(tracks: [track], firstPresentationTime: nil)
     }
     func deliver(_ samples: [Float], startingAt sampleOffset: Int = 0) throws {
@@ -324,16 +326,19 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
             for frame in start..<end { target[frame - start] = samples[frame] }
             let buffer = try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm,
                 presentationTime: CMTime(value: Int64(sampleOffset + start), timescale: 16_000))
+            // Match production capture's live tee: VAD and pending-wave projection
+            // must observe the same source clock as the strict PCM consumer.
             if let retainedWriter, !retainedWriter.enqueue(buffer) { throw MeetingMemoryAudioError.overload }
             guard consumer.enqueue(buffer) else { throw MeetingMemoryAudioError.overload }
+            self.liveAudioHandler?(.microphone, buffer)
         }
     }
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
         guard let (id, original) = active, id == sessionID else { throw MeetingCaptureError.wrongActiveSession }
+        defer { active = nil; consumer = nil; retainedWriter = nil; liveAudioHandler = nil }
         var track = if let retainedWriter { await retainedWriter.stop() } else { original }
         try await consumer?.finish()
         track.health.status = .stopped
-        active = nil; consumer = nil; retainedWriter = nil
         return .init(tracks: [track], stoppedAt: Date())
     }
     func shutdownForTermination() async {
@@ -1894,6 +1899,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 1_600))
             var offset = 0
             var firstProtectedTextSeconds: Double?
+            var firstVisibleAnchorSeconds: [Int: Double] = [:]
             var nextAudioInventorySample = 15.0
             var previousProtectedIDs: Set<MeetingTranscriptSegmentID> = []
             // Bounded file reads and real-time delivery preserve backpressure. No
@@ -1909,6 +1915,16 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     let live = coordinator.liveTranscript
                     if live.utterances.contains(where: { !$0.text.isEmpty }) || live.partials.values.contains(where: { !$0.text.isEmpty }) {
                         firstProtectedTextSeconds = ProcessInfo.processInfo.systemUptime - captureStart
+                    }
+                }
+                if streaming, firstVisibleAnchorSeconds.count < reference.textAnchors.count {
+                    let live = coordinator.liveTranscript
+                    let visible = ((coordinator.activeSession?.transcriptSegments.map(\.text) ?? [])
+                        + live.utterances.map(\.text) + live.partials.values.map(\.text)).joined(separator: " ")
+                    for (index, anchor) in reference.textAnchors.enumerated()
+                    where firstVisibleAnchorSeconds[index] == nil
+                        && visible.range(of: anchor, options: [.caseInsensitive]) != nil {
+                        firstVisibleAnchorSeconds[index] = ProcessInfo.processInfo.systemUptime - captureStart
                     }
                 }
                 if streaming, let current = coordinator.activeSession {
@@ -2064,6 +2080,11 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 streamingEvidence["expectedSourceAudioFrames"] = streamingOptions?.expectedSourceFrames
                 streamingEvidence["recognizedSpeechAssertionsApplied"] = requiresRecognizedSpeech
                 streamingEvidence["preStopOutputAssertionsApplied"] = streamingOptions?.requiresPreStopOutput == true && requiresRecognizedSpeech
+                streamingEvidence["firstVisibleTextAnchorSeconds"] = reference.textAnchors.indices.map { index in
+                    ["referenceAnchorIndex": index,
+                     "captureSeconds": firstVisibleAnchorSeconds[index].map { $0 as Any } ?? NSNull()] as [String: Any]
+                }
+                streamingEvidence["textAnchorClockScope"] = "First protected coordinator publication polled after paced PCM delivery, including canonical text and ephemeral previews; not a rendered-frame or microphone measurement."
                 observedNewAudioPaths.formUnion(try CombinedStreamingAudioInventory.paths(in: containerRoot).subtracting(existingAudioPaths))
                 XCTAssertTrue(CombinedStreamingAudioInventory.onlyAllowed(observedNewAudioPaths, retainedRoot: saveAudio ? root : nil))
                 streamingEvidence["newPersistentAudioOrMediaPathsObserved"] = observedNewAudioPaths.count

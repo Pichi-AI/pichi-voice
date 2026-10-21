@@ -75,6 +75,9 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
             throw MeetingIncrementalDiarizationError.nonContiguousInput
         }
         let epoch = MeetingAnalysisEpochID(trackID: self.trackID, ordinal: self.update.acceptedThroughSample)
+        // Admission accepts sub-sample floating-point representation noise. Derive
+        // transcript times from the frozen integer clock, never that noisy spelling.
+        let sourceOffset = Double(epoch.ordinal) / 16_000
         let timing = MeetingPCMWindowComputeTiming()
         // A sealed window immediately enters the canonical protected transcript below.
         // Sending it through the optional speech preview first repeats the same NER work
@@ -88,7 +91,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
             }
         } else { growingPreview = nil }
         let phase = try await self.runtime.recognizeProgressivePCMPhase(session: self.asr, window: window,
-            offset: offset, epoch: epoch, attemptID: self.attemptID, timing: timing,
+            offset: sourceOffset, epoch: epoch, attemptID: self.attemptID, timing: timing,
             permitsIntermediateObservations: self.pacing.permitsIntermediateObservations, preview: growingPreview,
             consumePCM: { samples, start in
                 try Task.checkCancellation()
@@ -142,7 +145,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         // Keep ASR-native word identities based on the physical window. Speaker identity uses
         // the one global epoch below; changing the ASR epoch would duplicate word IDs.
         var raw = try await self.runtime.attributePCMSpeech(samples: phase.boundedPCMSamples, output: output,
-            epoch: epoch, offset: offset, attemptID: self.attemptID, configuration: self.configuration,
+            epoch: epoch, offset: sourceOffset, attemptID: self.attemptID, configuration: self.configuration,
             priorProfiles: [], priorSpeakers: self.speakers)
         if output.sampleCount < physicalCount {
             raw.isComplete = false

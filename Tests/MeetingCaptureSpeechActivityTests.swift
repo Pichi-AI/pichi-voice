@@ -366,6 +366,50 @@ struct MeetingCaptureSpeechActivityTests {
         }
         print("PASS async negative proof waits for one delayed real frame and rejects speech/unknown")
 
+        // One queued capture block plus the partial neural frame can leave more than one
+        // 256ms frame unscored. Waiting never grants proof until both real frames arrive.
+        for tailProbability in [Float(0), 0.99, 0.5] {
+            let events = Events()
+            let worker = MeetingCaptureSpeechActivityWorker(factory: { Fake() }, publish: events.add)
+            for index in 0..<4 {
+                let start = Double(index) * 0.256
+                worker.offer(try input(0, start: start), start: start)
+                try await wait(events, count: index + 1)
+            }
+            try require(worker.confidentlyNonSpeech(start: 0.768, end: 1.024), "measured quiet prefix is eligible for a bounded right-tail wait")
+            try require(!worker.confidentlyNonSpeech(start: 0.768, end: 1.36), "336ms missing right tail cannot supply negative proof")
+            let delayed = Task {
+                try await Task.sleep(for: .milliseconds(40))
+                worker.offer(try input(0, start: 1.024), start: 1.024)
+                try await wait(events, count: 5)
+                try require(!worker.confidentlyNonSpeech(start: 0.768, end: 1.36), "first arriving frame still leaves an unscored right edge")
+                try await Task.sleep(for: .milliseconds(40))
+                worker.offer(try input(tailProbability, start: 1.28), start: 1.28)
+            }
+            let began = ProcessInfo.processInfo.systemUptime
+            let accepted = await worker.awaitConfidentNonSpeech(start: 0.768, end: 1.36)
+            let elapsed = ProcessInfo.processInfo.systemUptime - began
+            try await delayed.value
+            try require(accepted == (tailProbability == 0), "two delayed frames complete proof only if the entire right tail is measured quiet")
+            try require(elapsed >= 0.06 && elapsed < 0.35, "two-frame right tail resolves inside the unchanged 350ms budget")
+            worker.stop(); await worker.join()
+        }
+        print("PASS bounded negative proof waits across capture-block and partial-frame lag, rejecting new speech/unknown")
+
+        let missingEvents = Events()
+        let missingWorker = MeetingCaptureSpeechActivityWorker(factory: { Fake() }, publish: missingEvents.add)
+        for index in 0..<4 {
+            let start = Double(index) * 0.256
+            missingWorker.offer(try input(0, start: start), start: start)
+            try await wait(missingEvents, count: index + 1)
+        }
+        let missingBegan = ProcessInfo.processInfo.systemUptime
+        try require(!(await missingWorker.awaitConfidentNonSpeech(start: 0.768, end: 1.36)),
+                    "two-frame eligibility never turns a missing tail into measured silence")
+        let missingElapsed = ProcessInfo.processInfo.systemUptime - missingBegan
+        try require(missingElapsed >= 0.34 && missingElapsed < 1.5, "missing two-frame tail retains the 350ms timeout")
+        missingWorker.stop(); await missingWorker.join()
+
         let events = Events()
         let worker = MeetingCaptureSpeechActivityWorker(factory: { Fake() }, publish: events.add)
         for index in 0..<3 {
@@ -389,8 +433,8 @@ struct MeetingCaptureSpeechActivityTests {
             try await wait(timeoutEvents, count: index + 1)
         }
         let tooLarge = ProcessInfo.processInfo.systemUptime
-        try require(!(await timeoutWorker.awaitConfidentNonSpeech(start: 0.256, end: 1.024)),
-                    "an entirely quiet prefix cannot wait for more than one missing frame")
+        try require(!(await timeoutWorker.awaitConfidentNonSpeech(start: 0.256, end: 1.025)),
+                    "an entirely quiet prefix cannot wait for more than two missing frames")
         try require(ProcessInfo.processInfo.systemUptime - tooLarge < 0.2, "oversized quiet tail returns without polling")
         let began = ProcessInfo.processInfo.systemUptime
         try require(!(await timeoutWorker.awaitConfidentNonSpeech(start: 0.256, end: 0.768)), "unreceived tail times out without false skip")

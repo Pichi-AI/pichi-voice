@@ -33,6 +33,26 @@ private struct SyntheticCueMaskingRedactor: TranscriptTextRedacting {
     }
 }
 
+private struct BoundaryOnlyMaskingRedactor: TranscriptTextRedacting {
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { true }
+    func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        try await self.redactWithSpans(text)
+    }
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let safe = try await SyntheticMaskingRedactor().redactWithSpans(text)
+        return .init(text: safe.text, spans: safe.spans)
+    }
+}
+
+private struct PartialUtterancePreviewRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let source = text as NSString
+        let marker = source.range(of: "shown ")
+        let limit = marker.location == NSNotFound ? source.length : marker.location + 5
+        return .init(text: text, spans: [], provisionalSafeUTF16: limit)
+    }
+}
+
 private actor BlockedRedactor: TranscriptTextRedacting {
     let started: AsyncStream<Void>.Continuation
     var waiter: CheckedContinuation<Void, Never>?
@@ -137,8 +157,14 @@ struct MeetingStreamingTranscriptStateTests {
         catch { check(false, "Expected \(error), got \(error)") }
     }
     static func main() async throws {
+        try await integerSourceClockPreservesStrictPrivacyWatermarks()
+        try await growingSpeechCannotEraseProtectedPendingWords()
         try await speechBoundaryCancellationAndProofGuards()
         try await speechThenSealedEmptyWindowDrainsWhileCapturing()
+        try await protectedSpeechDisplaysBeforeDelayedDiarization()
+        try await pendingAndLexicalPreviewStayOrderedAndBounded()
+        try await pendingPreviewPreservesPartialEndpoint()
+        try await uncertainProgressKeepsLexicalTailPrivate()
         try await nativeUtteranceTimingAndPrivacy()
         try await sparseDictionaryStreamPreservesNativeIntervals()
         try await shortRecordingAndSilenceMatrix()
@@ -160,6 +186,63 @@ struct MeetingStreamingTranscriptStateTests {
         try await guardsAndLimits()
         try await cancellationAndReentry()
         print("Streaming transcript state: \(checks) checks passed")
+    }
+
+    static func integerSourceClockPreservesStrictPrivacyWatermarks() async throws {
+        for start in [Double(292_800) / 16_000, 18.299999999999997] {
+            let value = try state(privacy: .init(redactor: SyntheticMaskingRedactor()))
+            _ = try await value.observe(observation(accepted: 18.3, asr: 18.3,
+                emptyASR: 0..<292_800))
+            let words = [word(0, start: start, end: start + 1.44, text: "Пылесос"),
+                word(1, start: 19.9, end: 19.94, text: "на"),
+                word(2, start: 20.06, end: 20.34, text: "базу.")]
+            let speech = observation(words, accepted: 22.5, processed: 20.48, asr: 22.5)
+            if start < 18.3 {
+                await expect(.regressedCursor) { _ = try await value.observe(speech) }
+            } else {
+                _ = try await value.observe(speech)
+                let quiet = try await value.observe(observation(accepted: 23.5, processed: 20.48, asr: 23.5,
+                    emptyASR: 360_000..<376_000))
+                check(quiet.safeBatch.segments.map(\.text) == words.map(\.text))
+                check(quiet.safeBatch.segments.map(\.nativeTiming) == words.map(\.nativeTiming),
+                    "The integer source origin preserves genuine local word intervals")
+            }
+        }
+    }
+
+    static func growingSpeechCannotEraseProtectedPendingWords() async throws {
+        let value = try state(privacy: .init(redactor: SyntheticMaskingRedactor()))
+        _ = try await value.observe(observation([word(0, start: 0.1, end: 0.4, text: "базу")],
+            accepted: 1, processed: 0, asr: 1))
+        let settled = try await value.observe(observation(accepted: 2, processed: 0, asr: 2,
+            emptyASR: 16_000..<32_000))
+        check(settled.safeBatch.livePreview?.text == "базу")
+        let previewID = settled.safeBatch.livePreview?.id
+        var growing = MeetingPCMTranscriptBatch(segments: [])
+        growing.speechObservationIdentity = .init(attemptID: attempt,
+            epochID: .init(trackID: trackID, ordinal: 32_000))
+        let empty = try await value.observeSpeechPreview(growing)
+        check(empty?.text == "базу" && empty?.id == previewID,
+            "An empty growing hypothesis cannot erase safe words waiting for diarization")
+        growing.segments = [word(1, start: 2.1, end: 2.4, text: "новое"),
+            word(2, start: 2.5, end: 2.8, text: "слово.")]
+        _ = try await value.observeSpeechPreview(growing)
+        let stable = try await value.observeSpeechPreview(growing)
+        check(stable?.text == "базу новое слово." && stable?.id == previewID)
+        let acoustic = try await value.observe(observation(accepted: 3, processed: 0))
+        check(acoustic.safeBatch.livePreview == stable,
+            "Acoustic-only updates retain the richer current protected hypothesis")
+        _ = try await value.observe(observation(growing.segments, accepted: 3, processed: 0, asr: 3))
+        let quiet = try await value.observe(observation(accepted: 4, processed: 0, asr: 4,
+            emptyASR: 48_000..<64_000))
+        check(quiet.safeBatch.livePreview?.text == "базу новое слово.",
+            "Sealing replaces the growing preview without duplicating its words")
+        let scored = try await value.observe(observation(accepted: 4, processed: 4))
+        check(scored.safeBatch.segments.map(\.text) == ["базу", "новое", "слово."]
+            && scored.safeBatch.livePreview == nil)
+        _ = try await value.finish(observation(accepted: 4, processed: 4, asr: 4, final: true,
+            retained: scored.retainActivityFromSample))
+        await expect(.alreadyFinished) { _ = try await value.observeSpeechPreview(growing) }
     }
 
     static func speechBoundaryCancellationAndProofGuards() async throws {
@@ -213,6 +296,107 @@ struct MeetingStreamingTranscriptStateTests {
         check(nextQuiet.safeBatch.protectedSourceThroughSample == 1_280_000)
         let stopped = try await value.finish(observation(accepted: 80, asr: 80, final: true))
         check(stopped.safeBatch.segments.isEmpty, "Stop duplicated the nonterminal admitted tail")
+    }
+
+    static func protectedSpeechDisplaysBeforeDelayedDiarization() async throws {
+        for text in ["базу", "private@example.test"] {
+            let privacy = MeetingTranscriptPrivacyContext(redactor: BoundaryOnlyMaskingRedactor())
+            let value = try state(privacy: privacy)
+            let source = word(0, start: 0, end: 0.4, text: text)
+            let speech = try await value.observe(observation([source], accepted: 1, processed: 0, asr: 1))
+            check(speech.safeBatch.livePreview == nil && speech.safeBatch.segments.isEmpty)
+            let quiet = try await value.observe(observation(accepted: 2, processed: 0, asr: 2,
+                emptyASR: 16_000..<32_000))
+            check(quiet.safeBatch.livePreview?.text == (text == "базу" ? text : "<EMAIL>"),
+                "Protected final speech waited for participant scoring after a complete quiet window")
+            check(quiet.safeBatch.livePreview?.start == 0 && quiet.safeBatch.livePreview?.end == 0.4)
+            check(quiet.safeBatch.segments.isEmpty && quiet.safeBatch.protectedSourceThroughSample == nil)
+            check(quiet.diagnostics.privacySafeThroughSample == 0 && quiet.diagnostics.committedThroughSample == 0)
+            check(quiet.diagnostics.pendingProtectedWords == 1 && quiet.retainActivityFromSample == 0)
+            check(await privacy.earliestHeldWordStart == nil)
+            let repeated = try await value.observe(observation(accepted: 3, processed: 0))
+            check(repeated.safeBatch.livePreview == quiet.safeBatch.livePreview && !repeated.hasPreviewChanges)
+            let scored = try await value.observe(observation(accepted: 3, processed: 3))
+            check(scored.safeBatch.segments.map(\.id) == [source.id])
+            check(scored.safeBatch.segments.map(\.text) == [text == "базу" ? text : "<EMAIL>"])
+            check(scored.safeBatch.segments.allSatisfy { $0.originalText == nil })
+            check(scored.safeBatch.livePreview == nil && scored.hasPreviewChanges)
+            let final = try await value.finish(observation(accepted: 3, processed: 3, asr: 3, final: true))
+            check(final.safeBatch.segments.isEmpty && final.safeBatch.livePreview == nil,
+                "Stop duplicated speech already admitted after acoustic scoring")
+        }
+    }
+
+    static func pendingAndLexicalPreviewStayOrderedAndBounded() async throws {
+        let privacy = MeetingTranscriptPrivacyContext(redactor: SyntheticMaskingRedactor())
+        let value = try state(privacy: privacy)
+        let words = (0..<40).map { word($0, text: $0 == 2 || $0 == 39 ? "private@example.test" : nil) }
+        let expected = words.map { $0.text == "private@example.test" ? "<EMAIL>" : $0.text }
+        let first = try await value.observe(observation(words, accepted: 20, processed: 0, asr: 20))
+        check(first.safeBatch.segments.isEmpty && first.diagnostics.pendingProtectedWords == 8)
+        check(first.safeBatch.livePreview?.text == expected.joined(separator: " "),
+            "Canonical-safe pending words were missing or duplicated beside the lexical preview")
+        let previewID = first.safeBatch.livePreview?.id
+        let boundary = try await value.observe(observation(accepted: 21, processed: 0, asr: 21,
+            emptyASR: 320_000..<336_000))
+        check(boundary.safeBatch.livePreview == first.safeBatch.livePreview && !boundary.hasPreviewChanges,
+            "Moving the protected lexical tail into acoustic waiting changed its display")
+        check(boundary.diagnostics.pendingProtectedWords == words.count)
+        check(boundary.safeBatch.protectedSourceThroughSample == nil)
+        let partial = try await value.observe(observation(accepted: 21, processed: 10))
+        check(partial.safeBatch.segments.map(\.id) == words.prefix(20).map(\.id))
+        check(partial.safeBatch.livePreview?.id == previewID)
+        check(partial.safeBatch.livePreview?.text == expected.suffix(20).joined(separator: " "))
+        check(partial.safeBatch.livePreview?.start == 10 && partial.safeBatch.livePreview?.end == 19.9)
+        let rest = try await value.observe(observation(accepted: 21, processed: 21))
+        check(rest.safeBatch.segments.map(\.id) == words.suffix(20).map(\.id))
+        check(rest.safeBatch.livePreview == nil)
+        let all = partial.safeBatch.segments + rest.safeBatch.segments
+        check(all.map(\.id) == words.map(\.id) && Set(all.map(\.id)).count == words.count)
+        check(all.map(\.text) == expected && all.map(\.nativeTiming) == words.map(\.nativeTiming))
+        _ = try await value.finish(observation(accepted: 21, asr: 21, final: true))
+    }
+
+    static func pendingPreviewPreservesPartialEndpoint() async throws {
+        let text = "shown " + Array(repeating: "unfinished", count: 31).joined(separator: " ")
+        let value = try state(privacy: .init(redactor: PartialUtterancePreviewRedactor()))
+        let utterance = word(0, start: 0, end: 1, text: text, precision: .utterance)
+        let onlyTail = try await value.observe(observation([utterance], accepted: 1, processed: 0, asr: 1))
+        check(onlyTail.safeBatch.livePreview?.text == "shown" && onlyTail.safeBatch.livePreview?.end == nil,
+            "A partially approved utterance acquired an invented endpoint")
+        let mixed = try state(privacy: .init(redactor: PartialUtterancePreviewRedactor()))
+        let prior = (0..<40).map { word($0) }
+        _ = try await mixed.observe(observation(prior, accepted: 20, processed: 0, asr: 20))
+        let next = word(40, start: 20, end: 21, text: text, precision: .utterance)
+        let joined = try await mixed.observe(observation([next], accepted: 21, processed: 0, asr: 21))
+        check(joined.safeBatch.livePreview?.text == (prior.map(\.text) + ["shown"]).joined(separator: " "))
+        check(joined.safeBatch.livePreview?.end == prior.last?.end.seconds,
+            "An unlocated lexical suffix extended the complete pending fragments' endpoint")
+        _ = try await value.finish(observation(accepted: 1, asr: 1, final: true))
+        _ = try await mixed.finish(observation(accepted: 21, asr: 21, final: true))
+    }
+
+    static func uncertainProgressKeepsLexicalTailPrivate() async throws {
+        for complete in [true, false] {
+            let privacy = MeetingTranscriptPrivacyContext(redactor: BoundaryOnlyMaskingRedactor())
+            let value = try state(privacy: privacy)
+            _ = try await value.observe(observation([word(0, start: 0, end: 0.4, text: "private@example.test")],
+                accepted: 1, processed: 0, asr: 1, complete: complete))
+            let acoustic = try await value.observe(observation(accepted: 2, processed: 2))
+            check(acoustic.safeBatch.livePreview == nil && acoustic.safeBatch.segments.isEmpty,
+                "Acoustic-only progress released an unapproved lexical tail")
+            let noProof = try await value.observe(observation(accepted: 3, processed: 2, asr: 3))
+            check(noProof.safeBatch.livePreview == nil && noProof.safeBatch.segments.isEmpty,
+                "ASR cursor metadata without sealed empty decoder proof released the lexical tail")
+            if !complete {
+                let quiet = try await value.observe(observation(accepted: 4, processed: 2, asr: 4,
+                    emptyASR: 48_000..<64_000))
+                check(quiet.safeBatch.livePreview == nil && quiet.safeBatch.segments.isEmpty)
+                check(await privacy.earliestHeldWordStart == 0,
+                    "Incomplete accepted speech became a complete speech-boundary proof")
+            }
+            _ = try await value.finish(observation(accepted: 4, asr: 4, final: true))
+        }
     }
 
     /// Short captures can end before any acoustic activity is admitted. They still
@@ -443,7 +627,8 @@ struct MeetingStreamingTranscriptStateTests {
         var empty = MeetingPCMTranscriptBatch(segments: [])
         empty.speechObservationIdentity = .init(attemptID: attempt,
             epochID: .init(trackID: trackID, ordinal: 320_000))
-        check(try await privacy.previewSpeech(empty, preservingPendingPreview: true) == preview)
+        let lexicalPreview = await privacy.pendingPreview
+        check(try await privacy.previewSpeech(empty, preservingPendingPreview: true) == lexicalPreview)
         var foreign = empty
         foreign.speechObservationIdentity = .init(attemptID: attempt,
             epochID: .init(trackID: UUID(), ordinal: 320_000))
@@ -452,7 +637,7 @@ struct MeetingStreamingTranscriptStateTests {
         var unstable = MeetingPCMTranscriptBatch(segments: [word(100, start: 621, text: "new-hypothesis")])
         unstable.speechObservationIdentity = empty.speechObservationIdentity
         unstable.speechObservationIsFinal = false
-        check(try await privacy.previewSpeech(unstable, preservingPendingPreview: true) == preview)
+        check(try await privacy.previewSpeech(unstable, preservingPendingPreview: true) == lexicalPreview)
         check(await redactor.calls == 1, "An unaccepted hypothesis entered NER")
         let final = try await value.finish(observation(accepted: 620, asr: 620, final: true))
         check(final.safeBatch.livePreview == nil && final.hasPreviewChanges,

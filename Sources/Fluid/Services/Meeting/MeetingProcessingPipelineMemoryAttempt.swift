@@ -328,7 +328,7 @@ extension MeetingProcessingPipeline {
         } else { observeSpeech = nil }
         if configuration.effectiveSpeakerProcessingMode == .streaming {
             return try await self.makeStreamingMemoryConsumer(attempt: attempt, track: track,
-                service: service, observeSpeech: observeSpeech)
+                service: service)
         }
         DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
             DebugLogger.shared.info("strict_capture session=\(sessionID) track=\(trackID) backend=\(attempt.descriptor.id.rawValue) model=\(configuration.asrModel) speakers=\(configuration.speakerLabelsEnabled) privacy=\(privacyContext != nil)", source: "MeetingMemoryAudio")

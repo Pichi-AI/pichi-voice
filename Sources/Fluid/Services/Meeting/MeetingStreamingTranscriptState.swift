@@ -81,6 +81,8 @@ actor MeetingStreamingTranscriptState {
     private var acknowledgedThroughSample = 0
     private var emittedProtectedSourceThroughSample = 0
     private var isComplete = true
+    private let previewID = UUID()
+    private var speechPreview: MeetingLivePartial?
     private var preview: MeetingLivePartial?
     private(set) var metadataDiagnostics: Diagnostics?
     var retainActivityFromSample: Int { self.acknowledgedThroughSample }
@@ -114,6 +116,32 @@ actor MeetingStreamingTranscriptState {
         try await self.consume(observation, final: false)
     }
 
+    /// The streaming state is the sole owner of the displayed protected composition.
+    /// A growing hypothesis cannot replace earlier safe words waiting for speaker scoring.
+    func observeSpeechPreview(_ speech: MeetingPCMTranscriptBatch) async throws -> MeetingLivePartial? {
+        try self.checkActive()
+        guard !self.isProcessing else { throw Failure.concurrentOperation }
+        if let identity = speech.speechObservationIdentity {
+            guard identity.attemptID == self.attemptID, identity.epochID.trackID == self.track.id else {
+                throw Failure.staleObservation
+            }
+        }
+        self.isProcessing = true
+        defer { self.isProcessing = false }
+        var source = speech
+        source.sourceTrack = self.track
+        let protected: MeetingLivePartial?
+        if let privacyContext = self.privacyContext {
+            protected = try await privacyContext.previewSpeech(source, preservingPendingPreview: true)
+        } else {
+            protected = source.speechPreview(id: self.previewID)
+        }
+        try self.checkActive()
+        self.speechPreview = protected
+        self.preview = self.protectedPendingPreview(tail: protected)
+        return self.preview
+    }
+
     /// The runtime must join ASR and flush its acoustic right context first. This drains only
     /// the original privacy lexical tail and bounded protected attribution tail, exactly once.
     func finish(_ observation: MeetingStreamingPCMObservation) async throws -> Emission {
@@ -125,6 +153,7 @@ actor MeetingStreamingTranscriptState {
         self.pending.removeAll(keepingCapacity: false)
         self.speakers.removeAll(keepingCapacity: false)
         self.confirmedLocalUserTokens = nil
+        self.speechPreview = nil
         self.preview = nil
         self.tail.cancel()
     }
@@ -145,6 +174,7 @@ actor MeetingStreamingTranscriptState {
                 self.confirmedLocalUserTokens = tokens
             }
             let priorPreview = self.preview
+            if observation.asrStableThroughSample != nil { self.speechPreview = nil }
             var privacyMilliseconds = 0.0
             let oldASRCursor = self.asrStableThroughSample
             if let asrCursor = observation.asrStableThroughSample { self.asrStableThroughSample = asrCursor }
@@ -193,10 +223,11 @@ actor MeetingStreamingTranscriptState {
             }
             // An actual sealed empty decoder result is a nonterminal speech boundary.
             // Acoustic-only progress and incomplete/rejected prefixes cannot authorize it.
+            // Text privacy can settle before speaker scoring; its protected words still
+            // wait below for their complete acoustic envelopes before canonical insertion.
             if !final, let range = observation.sealedEmptyASRRange,
                observation.batch.isComplete, self.isComplete,
                range.lowerBound >= self.lastRawWordEndSample,
-               self.processedThroughSample >= self.lastRawWordEndSample,
                let privacyContext = self.privacyContext {
                 let started = ContinuousClock.now
                 MeetingTimelineTrace.shared?.record("privacy_begin", fields: ["attemptID": self.attemptID.uuidString,
@@ -335,10 +366,10 @@ actor MeetingStreamingTranscriptState {
                 batch.protectedSourceThroughSample = protectedThrough
                 self.emittedProtectedSourceThroughSample = protectedThrough
             }
-            // Only the privacy actor's already approved lexical-tail display can leave
-            // separately from canonical words. It is in-memory UI metadata, not a word,
-            // checkpoint transcript or permission to advance the privacy-safe cursor.
-            self.preview = final ? nil : pendingPreview
+            // Privacy-approved words can be visible while their acoustic envelopes await
+            // speaker scoring. The lexical-tail display is disjoint from these canonical-safe
+            // pending words. Neither display changes canonical admission or its safe cursor.
+            self.preview = final ? nil : self.protectedPendingPreview(tail: self.speechPreview ?? pendingPreview)
             batch.livePreview = self.preview
             let retain = Self.floorSample(min(updated.retainActivityFrom,
                 heldStart ?? updated.retainActivityFrom, pendingStart ?? updated.retainActivityFrom))
@@ -390,6 +421,7 @@ actor MeetingStreamingTranscriptState {
             self.pending.removeAll(keepingCapacity: false)
             self.speakers.removeAll(keepingCapacity: false)
             self.confirmedLocalUserTokens = nil
+            self.speechPreview = nil
             self.preview = nil
             self.tail.cancel()
             throw error
@@ -479,6 +511,18 @@ actor MeetingStreamingTranscriptState {
         if checkTime, let start = self.pending.first?.nativeTiming?.start,
            let end = self.pending.compactMap({ $0.nativeTiming?.end }).max(),
            end - start > self.limits.maximumPendingSeconds { throw Failure.pendingTimeLimit }
+    }
+
+    private func protectedPendingPreview(tail: MeetingLivePartial?) -> MeetingLivePartial? {
+        let pendingText = self.pending.map(\.text).joined(separator: " ")
+        let text = [pendingText, tail?.text ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+        guard !text.isEmpty else { return nil }
+        let starts = self.pending.map { $0.start.seconds } + (tail.map { [$0.start] } ?? [])
+        guard let start = starts.min() else { return nil }
+        // A partial lexical tail can have approved text without an approved endpoint.
+        // In that case only complete pending fragments contribute audio coverage.
+        let ends = self.pending.map { $0.end.seconds } + (tail?.end.map { [$0] } ?? [])
+        return MeetingLivePartial(id: self.previewID, text: text, start: start, end: ends.max())
     }
 
     private func checkActive() throws {
