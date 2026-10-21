@@ -21571,19 +21571,19 @@
         }
       }
     },
-    "Models with meeting captions show them in their supported languages. Other models show live captions in English only.": {
+    "Models with meeting captions show them in their supported languages. Other models show English live captions on Apple Silicon only.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Models with meeting captions show them in their supported languages. Other models show live captions in English only."
+            "value": "Models with meeting captions show them in their supported languages. Other models show English live captions on Apple Silicon only."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Модели с субтитрами встреч показывают их на поддерживаемых языках. Остальные модели показывают субтитры только на английском."
+            "value": "Модели с субтитрами встреч показывают их на поддерживаемых языках. Остальные модели показывают субтитры только на английском и только на Apple Silicon."
           }
         }
       }
@@ -32345,23 +32345,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "По умолчанию русский. Языки распознавания и итогов встречи настраиваются отдельно."
-          }
-        }
-      }
-    },
-    "Russian live captions on Intel require selecting GigaAM. Your recording is preserved.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Russian live captions on Intel require selecting GigaAM. Your recording is preserved."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для русских субтитров на Intel выберите GigaAM. Аудиозапись сохраняется."
           }
         }
       }
