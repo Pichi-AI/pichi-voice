@@ -2802,7 +2802,7 @@ private final nonisolated class StubModelLocator: MeetingNemotronModelLocating, 
         entryMetadataSHA256: "stub"
     )
 
-    init(error: (any Error)? = nil, artifact: MeetingNemotronModelArtifact = Self.artifact) {
+    init(error: (any Error)? = nil, artifact: MeetingNemotronModelArtifact = StubModelLocator.artifact) {
         self.error = error
         self.selectedArtifact = artifact
     }
