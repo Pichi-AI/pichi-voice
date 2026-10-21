@@ -23,7 +23,7 @@ struct MobileSensitiveDictionarySettings: View {
                         Spacer()
                         Image(systemName: "pencil").foregroundStyle(theme.palette.secondaryText)
                     }
-                }.accessibilityIdentifier("privacy.dictionary.entry.\(entry.id)")
+                }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.entry.\(entry.id)")
                     .swipeActions {
                         Button(PichiLocalization.text("Delete"), role: .destructive) {
                             do { try settings.removeSensitiveDataDictionaryPhrase(id: entry.id) }
@@ -31,9 +31,13 @@ struct MobileSensitiveDictionarySettings: View {
                         }
                     }
             }
-            Button(PichiLocalization.text("Add word or phrase"), systemImage: "plus") {
+            Button {
                 phrase = ""; error = nil; adding = true
-            }.accessibilityIdentifier("privacy.dictionary.add")
+            } label: {
+                Label(PichiLocalization.text("Add word or phrase"), systemImage: "plus")
+                    .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                    .foregroundStyle(theme.palette.accentText)
+            }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.add")
             if let error { Text(error).font(theme.typography.caption).foregroundStyle(theme.palette.warning) }
         }
         .sheet(isPresented: Binding(get: { adding || editing != nil }, set: { if !$0 { close() } })) {
