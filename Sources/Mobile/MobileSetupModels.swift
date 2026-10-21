@@ -58,12 +58,12 @@ final class MobileRequiredResources: ObservableObject {
     private let speech: MeetingSpeechActivityResources
     private let prepareSpeech: () async throws -> Void
     private let voiceStore: MeetingDiarizationModelStore
-    private let speakerStore: (String) -> MeetingDiarizationModelStore?
+    private let speakerStore: @MainActor (String) -> MeetingDiarizationModelStore?
 
     init(speech: MeetingSpeechActivityResources = .shared,
          prepareSpeech: (() async throws -> Void)? = nil,
          voiceStore: MeetingDiarizationModelStore = .shared,
-         speakerStore: @escaping (String) -> MeetingDiarizationModelStore? = {
+         speakerStore: @escaping @MainActor (String) -> MeetingDiarizationModelStore? = {
              PichiMeetingProviderFactory.speakerModelStore(for: $0, speakerProcessingMode: .streaming)
          }) {
         self.speech = speech; self.speakerStore = speakerStore; self.voiceStore = voiceStore

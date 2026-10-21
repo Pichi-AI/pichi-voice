@@ -171,3 +171,5 @@ Sources/Fluid/Services/Meeting/MeetingSpeechActivityResources.swift
 
 Sources/Fluid/Services/Privacy/TranscriptSensitiveDictionary.swift
 Sources/Fluid/Persistence/SettingsStore+SensitiveDataDictionary.swift
+
+Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift
