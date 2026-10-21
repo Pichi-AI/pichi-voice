@@ -73,13 +73,19 @@ def main() -> None:
     factory_source = (ROOT / "Sources/Fluid/Services/Meeting/PichiMeetingProviderFactory.swift").read_text()
     factory = factory_source[factory_source.index("enum PichiMeetingProviderFactory {"):
                              factory_source.index("    static func validateRecordingConfiguration(")] + "}\n"
-    for field in ("providerFactory", "configurationSnapshot", "modelsExistOnDisk", "admissionArtifactFingerprint"):
+    for field in ("providerFactory", "configurationSnapshot", "modelsExistOnDisk",
+                  "admissionArtifactFingerprint", "installedArtifactFingerprint"):
         factory = "\n".join(line for line in factory.splitlines()
-                            if not line.strip().startswith(f"let {field}:"))
+                            if not line.strip().startswith((f"let {field}:", f"var {field}:")))
         while f"{field}: {{" in factory:
             clause = declaration(factory, f"{field}: {{")
             factory = factory.replace(clause + ",", "").replace(clause, "")
     factory = factory.replace(declaration(factory, "    static func registeredModelsExistOnDisk("), "")
+    factory = factory.replace(declaration(factory, "    private nonisolated static var whisperArtifactDirectory:"), "")
+    # Runtime profile wiring is not read by setup/default-language restoration.
+    # Keep descriptor capabilities below, without importing inference model locators.
+    factory = "\n".join(line for line in factory.splitlines()
+                        if not line.strip().startswith(("let speakerProcessingProfiles:", "speakerProcessingProfiles:")))
     # Strict PCM/device admission is not consulted by these backup UI handlers.
     # Omit its stored restriction payload as well as its callbacks, rather than
     # introducing fake artifact identities, display names or admission validators.
@@ -99,7 +105,8 @@ def main() -> None:
     ))
     # PCM admission is exercised by the native backend tests, not these UI handlers.
     # Keep UI metadata fields/initializer; omit strict-PCM payload and validators below.
-    for marker in ("    func validatePCMInput(configuration:", "    func validatePCMInput(_ request:"):
+    for marker in ("    func validatePCMInput(configuration:", "    func validatePCMInput(_ request:",
+                   "    func validateSpeakerProcessingMode(configuration:"):
         while marker in metadata:
             metadata = metadata.replace(declaration(metadata, marker), "")
     metadata = "\n".join(line for line in metadata.splitlines() if not any(
@@ -124,11 +131,12 @@ def main() -> None:
     metadata += parakeet_policy + "\n}\n"
     metadata += "\n" + declaration((ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text(),
                                    "nonisolated enum MeetingAudioTrackKind:")
-    metadata += "\n" + declaration((ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift").read_text(),
+    metadata += "\n" + declaration((ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingCanonicalEvidenceTypes.swift").read_text(),
                                    "nonisolated enum MeetingTextUnitPrecision:") + "\n"
     models = (ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text()
     model_declarations = "\n".join(declaration(models, marker) for marker in (
         "nonisolated enum MeetingCaptureMode:",
+        "nonisolated enum MeetingSpeakerProcessingMode:",
         "nonisolated enum MeetingApplicationAudioScope:",
         "nonisolated enum MeetingMicrophoneRole:",
         "nonisolated struct MeetingRecordingDefaults:",

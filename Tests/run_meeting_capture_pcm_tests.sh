@@ -15,8 +15,17 @@ from run_meeting_backup_refresh_tests import declaration
 
 root = pathlib.Path(sys.argv[1])
 contract = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingCaptureControlling.swift').read_text()
+models = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingModels.swift').read_text()
+evidence = pathlib.Path('Sources/Fluid/Services/Meeting/Backend/MeetingCanonicalEvidenceTypes.swift').read_text()
+# The streaming observation carries real epoch-scoped owner tokens. Keep their
+# production value declarations even though this transport probe supplies no owners.
+speaker_contract = next(line for line in models.splitlines() if line.startswith('typealias MeetingAudioTrackID =')) + '\n'
+speaker_contract += '\n'.join(declaration(evidence, marker) for marker in (
+    'nonisolated struct MeetingAnalysisEpochID:',
+    'nonisolated struct MeetingBackendSpeakerToken:',
+))
 start = contract.index('nonisolated protocol MeetingMemoryAudioConsuming:')
-root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia\n' + contract[start:] + '\n'
+root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia\n' + speaker_contract + '\n' + contract[start:] + '\n'
     + 'class MeetingProcessingPipeline {}\n'
     + 'final class DebugLogger: Sendable { static let shared = DebugLogger(); func info(_ message: String, source: String) {} }\n'
     + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = []; var protectedSourceThroughSample: Int? = nil }\n'
