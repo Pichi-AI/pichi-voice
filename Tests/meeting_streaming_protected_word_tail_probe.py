@@ -111,19 +111,9 @@ full += section("Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatch
                 "nonisolated struct MeetingSpeakerVoiceProfile:", "/// Explicit identity evidence across resets.")
 full += "nonisolated enum MeetingParakeetNemotronRuntimeError: Error { case invalidPCMWindow }\n"
 full += "nonisolated enum MeetingAssemblyError: Error { case invalidCoverageReceiptInterval(receiptID: String) }\n"
-# The parent native runtime owns the additive optional ASR prefix field. This explicit inert
-# fixture supports isolated tests until its separately implemented observation change integrates.
-full += """nonisolated struct MeetingStreamingPCMObservation: Sendable {
-    var batch: MeetingPCMTranscriptBatch
-    let activity: [MeetingBackendSpeakerActivity]
-    let acceptedThroughSample: Int
-    let processedThroughSample: Int
-    let retainedFromSample: Int
-    let isFinal: Bool
-    let asrStableThroughSample: Int?
-    var sealedEmptyASRRange: Range<Int>? = nil
-}
-"""
+# Compile the actual observation contract so additive runtime metadata cannot drift.
+full += declaration((meeting / "MeetingStreamingPCMController.swift").read_text(),
+                    "struct MeetingStreamingPCMObservation")
 (BUILD / "StreamingStateContracts.swift").write_text(full)
 subprocess.run([
     "xcrun", "swiftc", "-O", "-swift-version", "6", "-strict-concurrency=complete",

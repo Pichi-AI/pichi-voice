@@ -211,7 +211,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         }
         guard safeWords.speakers.count <= self.limits.maximumSpeakers,
               Set(safeWords.speakers.map(\.id)).count == safeWords.speakers.count else { throw Failure.speakerLimit }
-        let merged = safeWords.mergingSpeakers(into: self.speakers)
+        let merged = safeWords.mergingSpeakers(into: self.speakers, speakerNameFormat: self.speakerNameFormat)
         guard Set(self.speakers.map(\.id)).union(safeWords.speakers.map(\.id)).count <= self.limits.maximumSpeakers else {
             throw Failure.speakerLimit
         }
@@ -281,7 +281,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 if let isLocalUser = ownerFlags[speaker.id] { speaker.isLocalUser = isLocalUser }
                 return speaker
             }
-            self.speakers = Self.identityOnly(identities.mergingSpeakers(into: self.speakers))
+            self.speakers = Self.identityOnly(identities.mergingSpeakers(into: self.speakers,
+                speakerNameFormat: self.speakerNameFormat))
             let admittedIDs = Set(self.speakers.map(\.id))
             guard result.segments.allSatisfy({ $0.speakerID.map { admittedIDs.contains($0) } ?? true }) else {
                 // The existing product merge has a global profile cap. Surface its exclusion
@@ -440,7 +441,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         guard Set(self.speakers.map(\.id)).union(admitted.map(\.id)).count <= self.limits.maximumSpeakers else {
             throw Failure.speakerLimit
         }
-        self.speakers = Self.identityOnly(MeetingPCMTranscriptBatch(segments: [], speakers: admitted).mergingSpeakers(into: self.speakers))
+        self.speakers = Self.identityOnly(MeetingPCMTranscriptBatch(segments: [], speakers: admitted)
+            .mergingSpeakers(into: self.speakers, speakerNameFormat: self.speakerNameFormat))
     }
 
     private func canReuseAutomaticIdentity(original: MeetingTranscriptSegment,

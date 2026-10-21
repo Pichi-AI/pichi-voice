@@ -517,7 +517,13 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
             try await controller.recordWindowProcessing(.init(sourceStartSample: 0, sourceFrameCount: 320_000,
                 chargedPendingFrames: 0, maximumPendingFrames: 384_000))
             _ = try await controller.recognize(window: .fixture(samples: [Float](repeating: 0, count: 320_000), final: true), offset: 20)
-            try require(scope.snapshot.filter { $0 == "voice-encode" }.count == encodes,
+            let afterSettling = scope.snapshot.filter { $0 == "voice-encode" }.count
+            try require(afterSettling <= encodes + (failEncoder ? 0 : 1),
+                "Silence can settle the preceding speech horizon once, but cannot repeatedly rescore it")
+            try await controller.recordWindowProcessing(.init(sourceStartSample: 320_000, sourceFrameCount: 320_000,
+                chargedPendingFrames: 0, maximumPendingFrames: 384_000))
+            _ = try await controller.recognize(window: .fixture(samples: [Float](repeating: 0, count: 320_000), final: true), offset: 40)
+            try require(scope.snapshot.filter { $0 == "voice-encode" }.count == afterSettling,
                 "Long silence cannot trigger repeated inference on unchanged evidence")
             _ = try await controller.finishStreaming()
             try require(scope.snapshot.last == "asr-scope-closed", "Finish joins all native owners after final evidence")
@@ -532,7 +538,10 @@ private actor LaggedOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
         }
         let audio = (0..<128_000).map { 0.1 * sin(Float($0) * 0.031) }
         let recognize = Task { try await controller.recognize(window: .fixture(samples: audio, final: true), offset: 0) }
-        for _ in 0..<10_000 { if scope.snapshot.contains("voice-encode") { break }; await Task.yield() }
+        for _ in 0..<5_000 {
+            if scope.snapshot.contains("voice-encode") { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
         try require(scope.snapshot.contains("voice-encode"), "Live encoder must start before cancellation")
         let joined = Task { await controller.cancelAndWait(); scope.event("cancel-joined") }
         for _ in 0..<20 { await Task.yield() }

@@ -49,6 +49,7 @@ swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/Backend/MeetingNemotronModelLocator.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingModelInstaller.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingNemotronCompiledModelOwner.swift \
+    Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift \
     "$pichi_build/ActualVoiceAdmission.swift" Tests/MeetingRuntimeVoiceVerificationContractTests.swift \
     -o "$pichi_build/tests"
 env -u PICHI_MEETING_DETAILED_PROFILE "$pichi_build/tests"

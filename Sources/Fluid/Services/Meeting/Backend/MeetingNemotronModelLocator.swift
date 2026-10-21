@@ -21,7 +21,7 @@ nonisolated enum MeetingNemotronModelProfile: String, CaseIterable, Sendable {
     var isExperimental: Bool { self != .fast32SplitW8A8 }
     /// The selected composite profile includes the optional owner verifier only when its
     /// fingerprint and resource preparation include voice matching. The registered continuous
-    /// profile collects bounded evidence and verifies it only after its speaker/ASR scopes close.
+    /// profile's exact recipe fixes whether verification runs live or after model cleanup.
     var supportsOwnerVoiceVerification: Bool { self == .fast32SplitW8A8 || self == .experimentalFast128FP16CPU }
     var computePreference: ComputePreference { self.isExperimental ? .cpuOnly : .devicePreferred }
     var presetName: String {
