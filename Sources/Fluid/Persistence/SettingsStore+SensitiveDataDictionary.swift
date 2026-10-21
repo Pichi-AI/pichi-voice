@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Combine)
+import Combine
+#endif
 
 extension SettingsStore {
     private static let sensitiveDataDictionaryDefaultsKey = "SensitiveDataDictionaryEntries"
