@@ -58,7 +58,7 @@ final class ASRService: ObservableObject {
     var availableMeetingModels: [SettingsStore.SpeechModel] {
         SettingsStore.SpeechModel.availableModels.filter {
             PichiMeetingProviderFactory.registeredBackendDescriptor(for: $0.rawValue) != nil
-        }
+        }.sorted { PichiMeetingProviderFactory.onboardingPriority(for: $0.rawValue) < PichiMeetingProviderFactory.onboardingPriority(for: $1.rawValue) }
     }
 
     var fileTranscriptionProvider: any TranscriptionProvider {

@@ -21,6 +21,7 @@ enum PichiMeetingProviderFactory {
 
     private nonisolated struct Registration: Sendable {
         let descriptor: MeetingBackendDescriptor
+        let onboardingPriority: Int
         let defaultLanguageCode: String
         let providerFactory: @MainActor @Sendable (MeetingFinalProcessingConfiguration) throws -> any TranscriptionProvider
         let configurationSnapshot: @MainActor @Sendable (String, String?, Bool, MeetingSpeakerProcessingMode) -> MeetingFinalProcessingConfiguration
@@ -49,7 +50,7 @@ enum PichiMeetingProviderFactory {
                 knownLimits: [
                     "GigaAM supports Russian. For English or mixed speech, select a multilingual model.",
                     "Speaker labels are automatic and can be uncertain in short or overlapping speech.",
-                    "Download the speaker models in Recording settings before an offline meeting.",
+                    "Speaker resources prepare automatically. Finish setup before an offline meeting.",
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
@@ -57,6 +58,7 @@ enum PichiMeetingProviderFactory {
                 supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
                 supportedSpeakerProcessingModes: [.afterRecording, .streaming]
             ),
+            onboardingPriority: 0,
             defaultLanguageCode: "ru",
             providerFactory: { configuration in
                 let store = configuration.asrArtifactDirectory.map { PichiGigaAMModelStore(directory: $0) } ?? .shared
@@ -89,14 +91,16 @@ enum PichiMeetingProviderFactory {
                     "Whisper Tiny is small and fast, with lower recognition accuracy.",
                     "Mixed Russian and English speech may contain errors or transliteration.",
                     "When different people speak in one transcript phrase, speaker labels may remain unknown.",
-                    "Download the speaker models in Recording settings before an offline meeting.",
+                    "Speaker resources prepare automatically. Finish setup before an offline meeting.",
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
                 allowsTranscriptOnlyOnUnsupportedHardware: true,
                 supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
-                pcmObservationPolicy: .init(initialSeconds: 3, intervalSeconds: 3)
+                pcmObservationPolicy: .init(initialSeconds: 3, intervalSeconds: 3),
+                supportedSpeakerProcessingModes: [.afterRecording, .streaming]
             ),
+            onboardingPriority: 2,
             defaultLanguageCode: "auto",
             providerFactory: { try WhisperProvider(meetingConfiguration: $0) },
             configurationSnapshot: { languageCode, fingerprint, diarizationEnabled, processingMode in
@@ -107,11 +111,13 @@ enum PichiMeetingProviderFactory {
                     asrArtifactFingerprint: fingerprint ?? (try? WhisperProvider.installedArtifactFingerprint(for: model, directory: directory)),
                     asrArtifactDirectory: directory,
                     languageCode: languageCode,
-                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled),
+                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled,
+                        profile: PichiMeetingProviderFactory.registrations[model.rawValue]?.speakerProcessingProfiles[processingMode] ?? .fast32SplitW8A8,
+                        speakerProcessingMode: processingMode),
                     speakerLabelsEnabled: diarizationEnabled, speakerProcessingMode: processingMode
                 )
             },
-            speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8],
+            speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8, .streaming: .experimentalFast128FP16CPU],
             modelsExistOnDisk: { SettingsStore.SpeechModel.whisperTiny.isInstalled },
             liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 2 * 1_073_741_824, maximumTrackCount: 2),
             admissionArtifactFingerprint: { nil }, supportsInstalledIdlePreparation: false
@@ -128,14 +134,16 @@ enum PichiMeetingProviderFactory {
                 knownLimits: [
                     "Parakeet v3 supports 25 languages, including Russian and English.",
                     "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech.",
-                    "Download the speaker models in Recording settings before an offline meeting.",
+                    "Speaker resources prepare automatically. Finish setup before an offline meeting.",
                     "Battery use and recognition speed depend on the device. Test longer meetings on your iPad.",
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
                 allowsTranscriptOnlyOnUnsupportedHardware: true,
-                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
+                supportedSpeakerProcessingModes: [.afterRecording, .streaming]
             ),
+            onboardingPriority: 1,
             defaultLanguageCode: "auto",
             providerFactory: { try FluidAudioProvider(meetingConfiguration: $0) },
             configurationSnapshot: { languageCode, fingerprint, diarizationEnabled, processingMode in
@@ -147,16 +155,22 @@ enum PichiMeetingProviderFactory {
                     asrArtifactFingerprint: fingerprint ?? (installed ? (try? descriptor.installedArtifactFingerprint(at: directory)) : nil),
                     asrArtifactDirectory: installed ? directory : nil,
                     languageCode: languageCode,
-                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled),
+                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled,
+                        profile: PichiMeetingProviderFactory.registrations[PichiMeetingProviderFactory.parakeetV3ModelID]?.speakerProcessingProfiles[processingMode] ?? .fast32SplitW8A8,
+                        speakerProcessingMode: processingMode),
                     speakerLabelsEnabled: diarizationEnabled, speakerProcessingMode: processingMode
                 )
             },
-            speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8],
+            speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8, .streaming: .experimentalFast128FP16CPU],
             modelsExistOnDisk: { SettingsStore.SpeechModel.parakeetTDT.isInstalled },
             liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4 * 1_073_741_824, maximumTrackCount: 2),
             admissionArtifactFingerprint: { nil }, supportsInstalledIdlePreparation: false
         ),
     ]
+
+    nonisolated static func onboardingPriority(for modelID: String) -> Int {
+        registrations[modelID]?.onboardingPriority ?? Int.max
+    }
 
     nonisolated static func registeredLanguageCodes(for modelID: String) -> Set<String>? {
         self.registrations[modelID]?.descriptor.supportedLanguageCodes

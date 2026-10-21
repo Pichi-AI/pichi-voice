@@ -420,7 +420,7 @@ actor MeetingStreamingTranscriptState {
                 guard count <= self.limits.maximumPendingTextBytes - bytes else { throw Failure.pendingTextLimit }
                 bytes += count
             }
-            guard let timing = word.nativeTiming, word.nativePrecision == .word,
+            guard let timing = word.nativeTiming, (word.nativePrecision == .word || word.nativePrecision == .utterance),
                   let nativeID = word.nativeUnitID, !nativeID.isEmpty else { throw Failure.unsupportedNativeTiming }
             guard word.sourceTrackID == self.track.id,
                   MeetingEvidenceInterval.isValid(start: timing.start, end: timing.end),
@@ -442,7 +442,7 @@ actor MeetingStreamingTranscriptState {
         var previous = -1.0
         var IDs = Set<MeetingTranscriptSegmentID>()
         for word in self.pending {
-            guard let timing = word.nativeTiming, word.nativePrecision == .word else { throw Failure.unsupportedNativeTiming }
+            guard let timing = word.nativeTiming, (word.nativePrecision == .word || word.nativePrecision == .utterance) else { throw Failure.unsupportedNativeTiming }
             guard timing.start >= previous, IDs.insert(word.id).inserted else { throw Failure.invalidObservation }
             previous = timing.start
             for count in [word.text.utf8.count, word.originalText?.utf8.count ?? 0] {

@@ -10,6 +10,8 @@ struct MobileMeetingRoot: View {
     @ObservedObject var asr: ASRService
     let store: any MeetingSessionStoring
     let privacy: PichiTranscriptPrivacyService
+    @ObservedObject var required: MobileRequiredResources
+    @ObservedObject var privacyActivation: MobilePrivacyActivation
     let microphones: @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
@@ -19,9 +21,6 @@ struct MobileMeetingRoot: View {
     @State private var destination = Destination.meetings
     @State private var settingsPath: [MobileSettingsDestination] = []
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @State private var isPreparingPrivacy = false
-    @State private var privacyPreparationProgress: Double?
-    @State private var privacyPreparationTask: Task<Void, Never>?
     @StateObject private var historySnapshot: MeetingHistorySnapshot
     private var sessions: [MeetingSession] { historySnapshot.sessions }
     @State private var selectedHistory: MeetingSession?
@@ -49,9 +48,11 @@ struct MobileMeetingRoot: View {
 
     init(coordinator: MeetingSessionCoordinator, asr: ASRService, store: any MeetingSessionStoring,
          privacy: PichiTranscriptPrivacyService,
+         required: MobileRequiredResources, privacyActivation: MobilePrivacyActivation,
          microphones: @escaping @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot) {
         self.coordinator = coordinator; self.asr = asr; self.store = store
         self.privacy = privacy; self.microphones = microphones
+        self.required = required; self.privacyActivation = privacyActivation
         self._historySnapshot = StateObject(wrappedValue: MeetingHistorySnapshot(load: { try await store.loadAll() }))
     }
 
@@ -96,7 +97,7 @@ struct MobileMeetingRoot: View {
             Button(PichiLocalization.text("OK"), role: .cancel) { error = nil }
         } message: { Text(error ?? "") }
         .sheet(isPresented: $showRecordingSettings) {
-            NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities, isPresentedAsSheet: true) }
+            NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities, isPresentedAsSheet: true, required: required) }
         }
         .sheet(item: $edit) { draft in
             MeetingEditSheet(draft: draft, cancel: { edit = nil }) { kind, updated in
@@ -274,8 +275,7 @@ struct MobileMeetingRoot: View {
             case .history: history
             case .settings:
                 MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
-                    isPreparingPrivacy: $isPreparingPrivacy, privacyPreparationProgress: $privacyPreparationProgress,
-                    privacyPreparationTask: $privacyPreparationTask, reportError: report)
+                    required: required, privacyActivation: privacyActivation, reportError: report)
             }
         }
         .navigationTitle(item == .meetings ? AppBrand.meetingName : PichiLocalization.text(item.title))
@@ -330,7 +330,7 @@ struct MobileMeetingRoot: View {
                         .foregroundStyle(theme.palette.secondaryText)
                     HStack {
                         Button { beginMeeting() } label: {
-                            Label(PichiLocalization.text("Start Recording"), systemImage: "record.circle")
+                            Label(PichiLocalization.text(isBusy ? "Preparing recording…" : "Start Recording"), systemImage: "record.circle")
                                 .foregroundStyle(theme.palette.accentForeground)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }.buttonStyle(.borderedProminent).disabled(isBusy || !coordinator.isQuiescent)
@@ -682,6 +682,9 @@ struct MobileMeetingRoot: View {
 
     private func beginMeeting() {
         run {
+            // Finish preparation before the capture lease can open the microphone.
+            try await required.prepare(modelID: settings.selectedSpeechModel.rawValue)
+            try await privacyActivation.waitUntilReadyIfRequested()
             await refreshMicrophones()
             let configuration = try await coordinator.defaultConfiguration(mode: .inRoom,
                 title: PichiLocalization.text("In-room meeting"))

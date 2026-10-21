@@ -104,7 +104,7 @@ struct MeetingStreamingTranscriptStateTests {
             limits: limits, speakerNameFormat: "Speaker %lld")
     }
     static func word(_ index: Int, start: Double? = nil, end: Double? = nil,
-                     text: String? = nil) -> MeetingTranscriptSegment {
+                     text: String? = nil, precision: MeetingTextUnitPrecision = .word) -> MeetingTranscriptSegment {
         let start = start ?? Double(index) * 0.5
         let end = end ?? start + 0.4
         return .init(id: UUID(uuidString: String(format: "00000000-0000-0000-0002-%012lld", Int64(index)))!,
@@ -112,7 +112,7 @@ struct MeetingStreamingTranscriptStateTests {
             end: .init(value: Int64((end * 1_000).rounded()), timescale: 1_000),
             sourceTrackID: trackID, speakerID: nil, text: text ?? "safe-\(index)", originalText: nil,
             revision: 0, status: .final, overlap: .none, completeness: .complete, attributionState: .unassigned,
-            nativePrecision: .word, nativeUnitID: "word-\(index)", nativeSpeakerAssignment: .unassigned,
+            nativePrecision: precision, nativeUnitID: "word-\(index)", nativeSpeakerAssignment: .unassigned,
             nativeTiming: .init(start: start, end: end))
     }
     static func observation(_ words: [MeetingTranscriptSegment] = [], accepted: Double,
@@ -135,6 +135,7 @@ struct MeetingStreamingTranscriptStateTests {
     static func main() async throws {
         try await speechBoundaryCancellationAndProofGuards()
         try await speechThenSealedEmptyWindowDrainsWhileCapturing()
+        try await nativeUtteranceTimingAndPrivacy()
         try await shortRecordingAndSilenceMatrix()
         try await longSilenceSpeakerMatrix()
         try await sparseEightHourStream()
@@ -649,6 +650,35 @@ struct MeetingStreamingTranscriptStateTests {
         check(total == 2_000 && identities.count == 2_000)
         check(maximumTail < 100, "A long meeting accumulated its entire protected transcript")
         check(final.diagnostics.retainedAttributionWords == 0)
+    }
+
+    /// Segment-only providers retain a single real native source interval. No synthetic
+    /// word timestamps or speaker transitions may be inferred inside their text.
+    static func nativeUtteranceTimingAndPrivacy() async throws {
+        for protect in [false, true] {
+            let value = try state(privacy: protect ? .init(redactor: SyntheticMaskingRedactor()) : nil)
+            let source = word(0, start: 0.2, end: 6, text: "Почта private@example.test, продолжим.", precision: .utterance)
+            let live = try await value.observe(observation([source], accepted: 6, asr: 6))
+            let final = try await value.finish(observation(accepted: 6, asr: 6, final: true))
+            let all = live.safeBatch.segments + final.safeBatch.segments
+            check(all.count == 1 && all[0].id == source.id)
+            check(all[0].nativePrecision == .utterance && all[0].nativeTiming == source.nativeTiming)
+            check(all[0].start == source.start && all[0].end == source.end)
+            check(all[0].text == (protect ? "Почта <EMAIL>, продолжим." : source.text))
+            check(final.diagnostics.isFinal && final.diagnostics.pendingProtectedWords == 0)
+        }
+        let mixed = try state()
+        let a = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")
+        let b = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "b")
+        let whole = word(0, start: 0, end: 12, text: "Две последовательные реплики без границ слов.", precision: .utterance)
+        let live = try await mixed.observe(observation([whole], accepted: 12, asr: 12,
+            activity: [.init(token: a, start: 0, end: 6), .init(token: b, start: 6, end: 12)]))
+        let final = try await mixed.finish(observation(accepted: 12, asr: 12, final: true,
+            activity: [.init(token: a, start: 0, end: 6), .init(token: b, start: 6, end: 12)]))
+        let all = live.safeBatch.segments + final.safeBatch.segments
+        check(all.count == 1 && all[0].nativePrecision == .utterance)
+        check(all[0].speakerID == nil, "One utterance containing two voices cannot be assigned to one participant")
+        check(all[0].nativeTiming == whole.nativeTiming && all[0].text == whole.text)
     }
 
     static func guardsAndLimits() async throws {

@@ -26,6 +26,7 @@ private final class CombinedVisibleMeetingUI {
         window.rootViewController = UIHostingController(rootView: MobileMeetingRoot(
             coordinator: services.meetingSessionCoordinator, asr: services.asr,
             store: services.meetingStore, privacy: services.transcriptPrivacy,
+            required: services.requiredResources, privacyActivation: services.privacyActivation,
             microphones: { .init(identities: [], defaultCoreAudioUID: nil) }))
         self.window = window
         window.makeKeyAndVisible()

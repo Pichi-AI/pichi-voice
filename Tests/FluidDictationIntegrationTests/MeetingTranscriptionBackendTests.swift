@@ -1439,8 +1439,15 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertThrowsError(try PichiMeetingProviderFactory.modelLocator(for: wrongProfile))
         for model in [PichiMeetingProviderFactory.whisperTinyModelID, PichiMeetingProviderFactory.parakeetV3ModelID] {
             let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model))
-            XCTAssertFalse(descriptor.supportedSpeakerProcessingModes.contains(.streaming))
-            XCTAssertNil(PichiMeetingProviderFactory.speakerModelStore(for: model, speakerProcessingMode: .streaming))
+            XCTAssertTrue(descriptor.supportedSpeakerProcessingModes.contains(.streaming))
+            XCTAssertNotNil(PichiMeetingProviderFactory.speakerModelStore(for: model, speakerProcessingMode: .streaming))
+            let configuration = PichiMeetingProviderFactory.configuration(asrModel: model, languageCode: "auto",
+                artifactFingerprintOverride: "synthetic-export", speakerProcessingMode: .streaming)
+            XCTAssertEqual(configuration.asrModel, model)
+            XCTAssertEqual(configuration.diarizationFingerprint,
+                MeetingNemotronModelProfile.experimentalFast128FP16CPU.streamingImplementationFingerprint)
+            XCTAssertEqual(try PichiMeetingProviderFactory.modelLocator(for: configuration).profile, .experimentalFast128FP16CPU)
+            XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(configuration, isAppleSilicon: true))
         }
         let store = try XCTUnwrap(PichiMeetingProviderFactory.speakerModelStore(
             for: selected.asrModel, speakerProcessingMode: .streaming))

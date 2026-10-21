@@ -13,6 +13,9 @@ final class AppServices: ObservableObject {
     let meetingStore: any MeetingSessionStoring
     let meetingAudioActivityArbiter: AudioActivityArbiter
     let transcriptPrivacy: PichiTranscriptPrivacyService
+    let requiredResources: MobileRequiredResources
+    let privacyActivation: MobilePrivacyActivation
+    private var requiredPreparationTask: Task<Void, Never>?
     @Published private(set) var isUIReady = false
     private static var didCleanExportStaging = false
     private let settings: SettingsStore
@@ -58,6 +61,7 @@ final class AppServices: ObservableObject {
         }
         let settings = settings ?? SettingsStore.shared
         self.settings = settings
+        settings.migrateMobileSetup()
         let store = store ?? MeetingSessionStore.shared
         let asr = ASRService(settings: settings)
         let privacy = privacy ?? PichiTranscriptPrivacyService(beginOrdinaryWork: {
@@ -72,6 +76,10 @@ final class AppServices: ObservableObject {
         let meetingRedactor: any TranscriptTextRedacting = privacyRedactor ?? privacy
         let resolveMicrophone = microphoneResolver ?? { try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: $0) }
         self.asr = asr; self.meetingStore = store; self.transcriptPrivacy = privacy
+        self.requiredResources = MobileRequiredResources()
+        self.privacyActivation = MobilePrivacyActivation(settings: settings, prepare: { progress in
+            try await privacy.prepare(progress: progress)
+        })
         let pipeline = MeetingProcessingPipeline(asrServiceProvider: { asr }, settings: settings,
             privacyRedactorProvider: { meetingRedactor },
             prepareDiarizationModel: { _ = try await MeetingDiarizationModelStore.shared.ensureInstalled(includingVoiceEncoder: true) },
@@ -96,7 +104,7 @@ final class AppServices: ObservableObject {
                 let storageMode: MeetingAudioStorageMode = settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
                 let speakerLabelsEnabled = settings.meetingSpeakerLabelsEnabled
                 let speakerProcessingMode = settings.meetingSpeakerProcessingMode(for: mode)
-                let piiRedactionEnabled = settings.meetingPIIRedactionEnabled
+                let piiRedactionEnabled = settings.meetingPIIRedactionRequested
                 let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
                 let language = preferences.languageCode.flatMap { supported.contains($0) ? $0 : nil }
                     ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
@@ -150,6 +158,13 @@ final class AppServices: ObservableObject {
         await meetingSessionCoordinator.ensureRestored()
         await meetingSessionCoordinator.sweepExpiredAudio()
         hasRestoredInitialState = true
+        privacyActivation.restore()
+        requiredPreparationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Artifact installation only. ASR follows explicit selection; optional privacy
+            // has its own requested transaction and is never downloaded here.
+            try? await requiredResources.prepare(modelID: settings.selectedSpeechModel.rawValue)
+        }
         await updateIdlePreparation()
     }
 
@@ -280,10 +295,16 @@ struct PichiVoiceMobileApp: App {
         }
     }
 
-    private var meetingRoot: some View {
+    @ViewBuilder private var meetingRoot: some View {
+        if !settings.mobileSetupCompleted {
+            MobileOnboarding(asr: services.asr, required: services.requiredResources, privacy: services.privacyActivation,
+                audioArbiter: services.meetingAudioActivityArbiter)
+        } else {
                 MobileMeetingRoot(coordinator: services.meetingSessionCoordinator, asr: services.asr,
                     store: services.meetingStore, privacy: services.transcriptPrivacy,
+                    required: services.requiredResources, privacyActivation: services.privacyActivation,
                     microphones: { await IOSMeetingCaptureEngine.microphoneSnapshot() })
+        }
     }
 }
 
