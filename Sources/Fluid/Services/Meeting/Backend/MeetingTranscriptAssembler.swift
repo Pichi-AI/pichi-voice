@@ -1026,6 +1026,7 @@ nonisolated enum MeetingPCMRecordingAttribution {
             return unit.assigningSpeaker(assignment)
         }
         func isManualSpeakerAssignment(_ segment: MeetingTranscriptSegment) -> Bool {
+            if let explicit = segment.isUserSpeakerAssigned { return explicit }
             guard speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true,
                   let id = segment.speakerID, segment.speakerAttribution == nil,
                   segment.speakerAttributionInference == nil,

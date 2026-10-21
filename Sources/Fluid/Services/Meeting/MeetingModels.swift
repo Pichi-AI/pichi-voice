@@ -831,6 +831,9 @@ nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Send
     /// Present only for assembler-generated names. Zero marks the confirmed owner, who
     /// consumes no participant number. Nil preserves legacy names and manual aliases.
     var generatedParticipantNumber: Int? = nil
+    /// Explicit user alias, independent of automatic owner recognition and generated labels.
+    /// Nil retains the display convention of sessions saved before this provenance existed.
+    var usesCustomDisplayName: Bool? = nil
 
     /// Admission order is stable across windows. Recompute only generated labels when
     /// acoustic owner evidence changes; names are never inspected to infer their origin.
@@ -940,6 +943,9 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     /// speaker patches also increment revision. Neither can erase this reading boundary.
     /// Optional so existing archives decode without inventing a correction history.
     var isUserTextEdited: Bool? = nil
+    /// Explicit participant correction. Kept separate from text/privacy revisions and raw
+    /// acoustic evidence so attribution rebuilding cannot reinterpret a manual selection.
+    var isUserSpeakerAssigned: Bool? = nil
     var revision: Int
     var status: MeetingTranscriptStatus
     var overlap: MeetingTranscriptOverlap
@@ -1124,6 +1130,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         guard self.speakers[index].displayName != trimmed else { return }
         self.speakers[index].displayName = trimmed
         self.speakers[index].generatedParticipantNumber = nil
+        self.speakers[index].usesCustomDisplayName = true
         self.updatedAt = Date()
     }
 
@@ -1150,6 +1157,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
             || self.transcriptSegments[segmentIndex].overlap != .none
             || replacingReadingSpeakerID.map({ $0 != speakerID }) == true else { return }
         self.transcriptSegments[segmentIndex].speakerID = speakerID
+        self.transcriptSegments[segmentIndex].isUserSpeakerAssigned = true
         self.transcriptSegments[segmentIndex].speakerAttribution = nil
         self.transcriptSegments[segmentIndex].speakerAttributionInference = nil
         self.transcriptSegments[segmentIndex].attributionState = .assigned
@@ -1186,9 +1194,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
             diarizationClusterID: nil,
             trackKind: trackKind,
             isLocalUser: false,
-            identityCandidates: []
+            identityCandidates: [],
+            usesCustomDisplayName: true
         ))
         self.transcriptSegments[segmentIndex].speakerID = speakerID
+        self.transcriptSegments[segmentIndex].isUserSpeakerAssigned = true
         self.transcriptSegments[segmentIndex].overlap = .none
         self.transcriptSegments[segmentIndex].speakerAttribution = nil
         self.transcriptSegments[segmentIndex].speakerAttributionInference = nil
@@ -1214,6 +1224,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         }
         for index in self.transcriptSegments.indices where self.transcriptSegments[index].speakerID == sourceID {
             self.transcriptSegments[index].speakerID = targetID
+            self.transcriptSegments[index].isUserSpeakerAssigned = true
             self.transcriptSegments[index].speakerAttribution = nil
             self.transcriptSegments[index].speakerAttributionInference = nil
             self.transcriptSegments[index].revision += 1

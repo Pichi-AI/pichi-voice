@@ -49,6 +49,7 @@ struct MeetingSessionStoreCheckpointTests {
         var named = session
         named.speakers = [generated]
         try named.renameSpeaker(id: generated.id, to: "Ручное имя Ёё")
+        check(named.speakers[0].usesCustomDisplayName == true, "Renaming records explicit alias provenance")
         check(named.speakers[0].generatedParticipantNumber == nil,
               "An explicit alias must leave automatic participant numbering")
         let alias = MeetingSessionSpeaker.numberingGeneratedParticipants(named.speakers, speakerNameFormat: "Speaker %lld")
@@ -59,10 +60,27 @@ struct MeetingSessionStoreCheckpointTests {
         check(decodedNumbered == generated, "Generated participant metadata failed to survive the saved-data codec")
         var legacyObject = try JSONSerialization.jsonObject(with: numberedData) as! [String: Any]
         legacyObject.removeValue(forKey: "generatedParticipantNumber")
+        legacyObject.removeValue(forKey: "usesCustomDisplayName")
         let decodedLegacy = try JSONDecoder().decode(MeetingSessionSpeaker.self,
             from: JSONSerialization.data(withJSONObject: legacyObject))
+        check(decodedLegacy.usesCustomDisplayName == nil, "An older speaker cannot invent explicit alias provenance")
         check(decodedLegacy.generatedParticipantNumber == nil && decodedLegacy.displayName == generated.displayName,
               "An older saved speaker must decode as a preserved alias")
+        for flag: Bool? in [nil, false, true] {
+            var alias = named.speakers[0]
+            alias.usesCustomDisplayName = flag
+            let decoded = try JSONDecoder().decode(MeetingSessionSpeaker.self, from: JSONEncoder().encode(alias))
+            check(decoded == alias, "Alias provenance must survive the production codec exactly")
+            var word = session.transcriptSegments[0]
+            word.isUserSpeakerAssigned = flag
+            let decodedWord = try JSONDecoder().decode(MeetingTranscriptSegment.self, from: JSONEncoder().encode(word))
+            check(decodedWord == word, "Manual participant provenance must survive the production codec exactly")
+        }
+        var legacyWord = try JSONSerialization.jsonObject(with: JSONEncoder().encode(session.transcriptSegments[0])) as! [String: Any]
+        legacyWord.removeValue(forKey: "isUserSpeakerAssigned")
+        let decodedLegacyWord = try JSONDecoder().decode(MeetingTranscriptSegment.self,
+            from: JSONSerialization.data(withJSONObject: legacyWord))
+        check(decodedLegacyWord.isUserSpeakerAssigned == nil, "An older word retains legacy assignment provenance")
         try Self.checkReadableTranscriptContract(check)
 
         try Self.checkPlainParticipantLabels(template: session, check: check)

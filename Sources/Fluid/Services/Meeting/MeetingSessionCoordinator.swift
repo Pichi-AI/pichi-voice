@@ -206,19 +206,35 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var isReadingRetentionSessions = false
     private var retentionTimerTask: Task<Void, Never>?
 
+    /// Only fields changed by participant reassignment, retained once per selected member.
+    /// A batch is one transaction and one undo entry without copying transcript text or audio.
+    private struct SpeakerAssignmentCorrection {
+        let segmentID: MeetingTranscriptSegmentID
+        let previousSpeakerID: SessionSpeakerID?
+        let previousOverlap: MeetingTranscriptOverlap
+        let previousAttributionState: MeetingTranscriptAttributionState?
+        let previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?
+        let previousLegacyInference: MeetingSpeakerAttributionInference?
+        let previousUserSpeakerAssigned: Bool?
+        let previousRevision: Int
+
+        init(_ segment: MeetingTranscriptSegment) {
+            self.segmentID = segment.id
+            self.previousSpeakerID = segment.speakerID
+            self.previousOverlap = segment.overlap
+            self.previousAttributionState = segment.attributionState
+            self.previousSpeakerAttribution = segment.speakerAttribution
+            self.previousLegacyInference = segment.speakerAttributionInference
+            self.previousUserSpeakerAssigned = segment.isUserSpeakerAssigned
+            self.previousRevision = segment.revision
+        }
+    }
+
     private enum TranscriptCorrection {
         case editText(segmentID: MeetingTranscriptSegmentID, previousText: String, previousOriginalText: String?,
                       previousUserTextEdited: Bool?, previousRevision: Int)
-        case rename(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?)
-        case reassign(
-            segmentID: MeetingTranscriptSegmentID,
-            previousSpeakerID: SessionSpeakerID?,
-            previousOverlap: MeetingTranscriptOverlap,
-            previousAttributionState: MeetingTranscriptAttributionState?,
-            previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?,
-            previousLegacyInference: MeetingSpeakerAttributionInference?,
-            previousRevision: Int
-        )
+        case rename(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?, previousCustomDisplayName: Bool?)
+        case reassign([SpeakerAssignmentCorrection])
         case nameUnknown(
             segmentID: MeetingTranscriptSegmentID,
             createdSpeakerID: SessionSpeakerID,
@@ -226,14 +242,15 @@ final class MeetingSessionCoordinator: ObservableObject {
             previousAttributionState: MeetingTranscriptAttributionState?,
             previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?,
             previousLegacyInference: MeetingSpeakerAttributionInference?,
+            previousUserSpeakerAssigned: Bool?,
             previousRevision: Int
         )
         case merge(
             sourceID: SessionSpeakerID,
             targetID: SessionSpeakerID,
-            movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int, previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?, previousLegacyInference: MeetingSpeakerAttributionInference?)]
+            movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int, previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?, previousLegacyInference: MeetingSpeakerAttributionInference?, previousUserSpeakerAssigned: Bool?)]
         )
-        case renameBatch([(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?)])
+        case renameBatch([(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?, previousCustomDisplayName: Bool?)])
 
         var requiresTranscriptPrivacyPublication: Bool {
             switch self {
@@ -1294,21 +1311,22 @@ final class MeetingSessionCoordinator: ObservableObject {
             let previous = session.speakers.first(where: { $0.id == speakerID })
             try session.renameSpeaker(id: speakerID, to: displayName)
             return .rename(speakerID: speakerID, previousName: previous?.displayName ?? "",
-                           previousGeneratedNumber: previous?.generatedParticipantNumber)
+                           previousGeneratedNumber: previous?.generatedParticipantNumber,
+                           previousCustomDisplayName: previous?.usesCustomDisplayName)
         }
     }
 
     @discardableResult
     func renameSpeakers(sessionID: MeetingSessionID, names: [SessionSpeakerID: String]) async throws -> MeetingSession {
         try await self.performCorrection(sessionID: sessionID) { session in
-            var applied: [(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?)] = []
+            var applied: [(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?, previousCustomDisplayName: Bool?)] = []
             for (speakerID, name) in names {
                 guard let existing = session.speakers.first(where: { $0.id == speakerID }),
                       existing.mergedIntoSpeakerID == nil else { continue }
                 let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty, trimmed != existing.displayName else { continue }
                 try session.renameSpeaker(id: speakerID, to: trimmed)
-                applied.append((speakerID, existing.displayName, existing.generatedParticipantNumber))
+                applied.append((speakerID, existing.displayName, existing.generatedParticipantNumber, existing.usesCustomDisplayName))
             }
             return .renameBatch(applied)
         }
@@ -1320,26 +1338,37 @@ final class MeetingSessionCoordinator: ObservableObject {
         segmentID: MeetingTranscriptSegmentID,
         to speakerID: SessionSpeakerID
     ) async throws -> MeetingSession {
+        try await self.reassignSegments(sessionID: sessionID, segmentIDs: [segmentID], to: speakerID)
+    }
+
+    /// A readable paragraph can contain several native members. One participant choice owns
+    /// one atomic save and inverse, even when the user explicitly selects several members.
+    @discardableResult
+    func reassignSegments(
+        sessionID: MeetingSessionID,
+        segmentIDs: [MeetingTranscriptSegmentID],
+        to speakerID: SessionSpeakerID
+    ) async throws -> MeetingSession {
         try await self.performCorrection(sessionID: sessionID) { session in
-            guard let segment = session.transcriptSegments.first(where: { $0.id == segmentID }) else {
-                throw MeetingDomainError.segmentNotFound
+            guard session.activeSpeakers.contains(where: { $0.id == speakerID }) else {
+                throw MeetingDomainError.speakerNotFound
             }
-            let previousSpeakerID = segment.speakerID
-            let previousOverlap = segment.overlap
-            let previousAttributionState = segment.attributionState
-            let previousRevision = segment.revision
-            let readingSpeakerID = MeetingTranscriptExporter.speakerPresentations(in: session)[segmentID]?.participantID
-            try session.reassignSegment(id: segmentID, to: speakerID,
-                                        replacingReadingSpeakerID: readingSpeakerID)
-            return .reassign(
-                segmentID: segmentID,
-                previousSpeakerID: previousSpeakerID,
-                previousOverlap: previousOverlap,
-                previousAttributionState: previousAttributionState,
-                previousSpeakerAttribution: segment.speakerAttribution,
-                previousLegacyInference: segment.speakerAttributionInference,
-                previousRevision: previousRevision
-            )
+            let selected = Set(segmentIDs)
+            let selectedSegments = session.transcriptSegments.filter { selected.contains($0.id) }
+            // Validate every requested identity before touching the mutation copy. Repeated
+            // member IDs are naturally one selection rather than repeated revisions.
+            guard selectedSegments.count == selected.count else { throw MeetingDomainError.segmentNotFound }
+            guard !selected.isEmpty else { return .reassign([]) }
+            let presentations = MeetingTranscriptExporter.speakerPresentations(in: session)
+            var inverse: [SpeakerAssignmentCorrection] = []
+            for previous in selectedSegments {
+                try session.reassignSegment(id: previous.id, to: speakerID,
+                    replacingReadingSpeakerID: presentations[previous.id]?.participantID)
+                if session.transcriptSegments.first(where: { $0.id == previous.id }) != previous {
+                    inverse.append(SpeakerAssignmentCorrection(previous))
+                }
+            }
+            return .reassign(inverse)
         }
     }
 
@@ -1361,6 +1390,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 previousAttributionState: segment.attributionState,
                 previousSpeakerAttribution: segment.speakerAttribution,
                 previousLegacyInference: segment.speakerAttributionInference,
+                previousUserSpeakerAssigned: segment.isUserSpeakerAssigned,
                 previousRevision: segment.revision
             )
         }
@@ -1371,7 +1401,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         try await self.performCorrection(sessionID: sessionID) { session in
             let movedSegments = session.transcriptSegments
                 .filter { $0.speakerID == source }
-                .map { (id: $0.id, previousRevision: $0.revision, previousSpeakerAttribution: $0.speakerAttribution, previousLegacyInference: $0.speakerAttributionInference) }
+                .map { (id: $0.id, previousRevision: $0.revision, previousSpeakerAttribution: $0.speakerAttribution, previousLegacyInference: $0.speakerAttributionInference, previousUserSpeakerAssigned: $0.isUserSpeakerAssigned) }
             try session.mergeSpeakers(source, into: targetID)
             return .merge(sourceID: source, targetID: targetID, movedSegments: movedSegments)
         }
@@ -1694,27 +1724,25 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.transcriptSegments[index].isUserTextEdited = previousUserTextEdited
             session.transcriptSegments[index].revision = previousRevision
             return true
-        case let .rename(speakerID, previousName, previousGeneratedNumber):
+        case let .rename(speakerID, previousName, previousGeneratedNumber, previousCustomDisplayName):
             guard let index = session.speakers.firstIndex(where: { $0.id == speakerID }) else { return false }
             session.speakers[index].displayName = previousName
             session.speakers[index].generatedParticipantNumber = previousGeneratedNumber
+            session.speakers[index].usesCustomDisplayName = previousCustomDisplayName
             return true
-        case let .reassign(
-            segmentID,
-            previousSpeakerID,
-            previousOverlap,
-            previousAttributionState,
-            previousSpeakerAttribution,
-            previousLegacyInference,
-            previousRevision
-        ):
-            guard let index = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }) else { return false }
-            session.transcriptSegments[index].speakerID = previousSpeakerID
-            session.transcriptSegments[index].speakerAttribution = previousSpeakerAttribution
-            session.transcriptSegments[index].speakerAttributionInference = previousLegacyInference
-            session.transcriptSegments[index].overlap = previousOverlap
-            session.transcriptSegments[index].attributionState = previousAttributionState
-            session.transcriptSegments[index].revision = previousRevision
+        case let .reassign(entries):
+            let indices = Dictionary(uniqueKeysWithValues: session.transcriptSegments.enumerated().map { ($0.element.id, $0.offset) })
+            guard !entries.isEmpty, entries.allSatisfy({ indices[$0.segmentID] != nil }) else { return false }
+            for entry in entries {
+                guard let index = indices[entry.segmentID] else { return false }
+                session.transcriptSegments[index].speakerID = entry.previousSpeakerID
+                session.transcriptSegments[index].speakerAttribution = entry.previousSpeakerAttribution
+                session.transcriptSegments[index].speakerAttributionInference = entry.previousLegacyInference
+                session.transcriptSegments[index].overlap = entry.previousOverlap
+                session.transcriptSegments[index].attributionState = entry.previousAttributionState
+                session.transcriptSegments[index].isUserSpeakerAssigned = entry.previousUserSpeakerAssigned
+                session.transcriptSegments[index].revision = entry.previousRevision
+            }
             return true
         case let .nameUnknown(
             segmentID,
@@ -1723,6 +1751,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             previousAttributionState,
             previousSpeakerAttribution,
             previousLegacyInference,
+            previousUserSpeakerAssigned,
             previousRevision
         ):
             guard let segmentIndex = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }),
@@ -1733,6 +1762,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.transcriptSegments[segmentIndex].speakerID = nil
             session.transcriptSegments[segmentIndex].speakerAttribution = previousSpeakerAttribution
             session.transcriptSegments[segmentIndex].speakerAttributionInference = previousLegacyInference
+            session.transcriptSegments[segmentIndex].isUserSpeakerAssigned = previousUserSpeakerAssigned
             session.transcriptSegments[segmentIndex].overlap = previousOverlap
             session.transcriptSegments[segmentIndex].attributionState = previousAttributionState
             session.transcriptSegments[segmentIndex].revision = previousRevision
@@ -1746,6 +1776,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 session.transcriptSegments[segmentIndex].speakerID = sourceID
                 session.transcriptSegments[segmentIndex].speakerAttribution = previous.previousSpeakerAttribution
                 session.transcriptSegments[segmentIndex].speakerAttributionInference = previous.previousLegacyInference
+                session.transcriptSegments[segmentIndex].isUserSpeakerAssigned = previous.previousUserSpeakerAssigned
                 session.transcriptSegments[segmentIndex].revision = previous.previousRevision
             }
             return true
@@ -1755,6 +1786,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 guard let index = session.speakers.firstIndex(where: { $0.id == entry.speakerID }) else { continue }
                 session.speakers[index].displayName = entry.previousName
                 session.speakers[index].generatedParticipantNumber = entry.previousGeneratedNumber
+                session.speakers[index].usesCustomDisplayName = entry.previousCustomDisplayName
                 restored = true
             }
             return restored
