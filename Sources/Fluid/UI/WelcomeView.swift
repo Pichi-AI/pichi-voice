@@ -2415,12 +2415,12 @@ private extension OnboardingFlowView {
                             FluidOnboardingCompactAppIconMark(size: 66)
                                 .padding(.bottom, self.theme.metrics.spacing.sm)
 
-                            Text("Meeting location")
+                            Text(PichiLocalization.text("Meeting location"))
                                 .font(self.theme.typography.title)
                                 .foregroundStyle(self.theme.palette.primaryText)
                                 .multilineTextAlignment(.center)
 
-                            Text("Optional: Add the meeting address using your location.")
+                            Text(PichiLocalization.text("Optional: Add the meeting address using your location."))
                                 .font(self.theme.typography.body)
                                 .foregroundStyle(self.theme.palette.secondaryText)
                                 .multilineTextAlignment(.center)

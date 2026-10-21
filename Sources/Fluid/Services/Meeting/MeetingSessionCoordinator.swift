@@ -130,6 +130,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private let settings: SettingsStore
     private let locationResolver: (any MeetingLocationResolving)?
     private var locationTask: Task<Void, Never>?
+    private var locationPreferenceObserver: AnyCancellable?
     private let defaultConfigurationResolver: (@MainActor (MeetingCaptureMode, String) async throws -> MeetingCaptureConfiguration)?
     private let redactorProvider: @MainActor () throws -> (any TranscriptTextRedacting)?
     private let preferredMicrophoneUID: @MainActor () -> String?
@@ -284,6 +285,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.prepareRecordingDependencies = prepareRecordingDependencies
         self.validateFrozenRecordingConfiguration = validateFrozenRecordingConfiguration
         self.processingLogger = processingLogger
+        self.locationPreferenceObserver = settings.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, !self.settings.meetingLocationEnabled else { return }
+                self.locationTask?.cancel()
+            }
+        }
     }
 
     var currentSession: MeetingSession? {
@@ -2839,7 +2846,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Optional metadata uses the existing authoritative snapshot and save queue. It never
     /// owns audio, blocks admission, changes a custom title or publishes after Stop.
     private func beginLocationCapture(for session: MeetingSession, generation: UUID) {
-        guard session.mode == .inRoom, let resolver = self.locationResolver else { return }
+        guard session.mode == .inRoom, self.settings.meetingLocationEnabled,
+              let resolver = self.locationResolver else { return }
         // Session creation precedes native/model startup and can be much earlier than
         // actual capture. Freshness is measured from this newly admitted location request.
         let requestedAt = Date()
@@ -2849,10 +2857,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         previous?.cancel()
         self.locationTask = Task { @MainActor [weak self] in
             await previous?.value
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self?.settings.meetingLocationEnabled == true else { return }
             let location = await resolver.locate(startedAt: requestedAt, languages: languages)
             guard !Task.isCancelled, let self, let location,
-                  self.captureGeneration == generation, self.isRecording,
+                  self.captureGeneration == generation, self.isRecording, self.settings.meetingLocationEnabled,
                   var current = self.activeSession, current.id == session.id else { return }
             current.location = location
             current.updatedAt = Date()

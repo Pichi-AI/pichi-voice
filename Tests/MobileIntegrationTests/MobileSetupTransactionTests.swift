@@ -10,6 +10,23 @@ final class MobileSetupTransactionTests: XCTestCase {
         return SettingsStore(defaults: defaults)
     }
 
+    func testLocationConsentDefaultsOffAndPersistsWithoutReopeningSetup() throws {
+        let value = try settings()
+        value.migrateMobileSetup()
+        XCTAssertFalse(value.meetingLocationEnabled)
+        value.mobileSetupCompleted = true
+        value.meetingLocationEnabled = true
+        value.migrateMobileSetup()
+        XCTAssertTrue(value.meetingLocationEnabled)
+        XCTAssertTrue(value.mobileSetupCompleted)
+        value.mobileSetupStep = 6
+        XCTAssertEqual(value.mobileSetupStep, 6)
+        value.meetingLocationEnabled = false
+        value.migrateMobileSetup()
+        XCTAssertFalse(value.meetingLocationEnabled)
+        XCTAssertTrue(value.mobileSetupCompleted)
+    }
+
     func testCleanInstallAndInterruptedSetupKeepPrivacyOffAndResumeSelection() throws {
         let value = try settings()
         value.migrateMobileSetup()

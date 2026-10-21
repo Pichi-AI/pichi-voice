@@ -1,11 +1,49 @@
 import Contacts
+import Combine
 import CoreLocation
 import Foundation
 
 /// Resolves one location at meeting start. Each attempt owns its native resources,
 /// so a late delegate callback cannot attach another meeting's location.
 @MainActor
-final class MeetingLocationService: NSObject, MeetingLocationResolving, CLLocationManagerDelegate {
+final class MeetingLocationService: NSObject, ObservableObject, MeetingLocationResolving, CLLocationManagerDelegate {
+    @Published private(set) var authorizationStatus: CLAuthorizationStatus
+    @Published private(set) var isRequestingAuthorization = false
+    private let authorizationManager: CLLocationManager
+    private let settings: SettingsStore
+
+    init(settings: SettingsStore = .shared) {
+        self.settings = settings
+        let manager = CLLocationManager()
+        self.authorizationManager = manager
+        self.authorizationStatus = manager.authorizationStatus
+        super.init()
+        manager.delegate = self
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        self.settings.meetingLocationEnabled = enabled
+        if enabled { self.requestAuthorization() }
+        else { self.cancelLocationLookup() }
+    }
+
+    /// Permission is shared by onboarding, Settings and capture, without geocoding
+    /// or acquiring a location while the user is deciding whether to opt in.
+    func requestAuthorization() {
+        self.refreshAuthorization()
+        guard self.authorizationStatus == .notDetermined, !self.isRequestingAuthorization else { return }
+        self.isRequestingAuthorization = true
+        self.authorizationManager.requestWhenInUseAuthorization()
+    }
+
+    func refreshAuthorization() {
+        self.authorizationStatus = self.authorizationManager.authorizationStatus
+        if self.authorizationStatus != .notDetermined { self.isRequestingAuthorization = false }
+    }
+
+    func cancelLocationLookup() {
+        if let attempt = self.attempt { self.finish(id: attempt.id, result: nil) }
+    }
     private final class Attempt {
         let id: UUID
         let startedAt: Date
@@ -93,7 +131,13 @@ final class MeetingLocationService: NSObject, MeetingLocationResolving, CLLocati
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        if manager === self.authorizationManager {
+            self.refreshAuthorization()
+            return
+        }
         guard let attempt = self.attempt, attempt.manager === manager else { return }
+        self.authorizationStatus = manager.authorizationStatus
+        if self.authorizationStatus != .notDetermined { self.isRequestingAuthorization = false }
         self.updateAuthorization(for: attempt)
     }
 

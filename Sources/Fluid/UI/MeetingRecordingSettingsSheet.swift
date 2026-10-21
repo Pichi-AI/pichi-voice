@@ -401,7 +401,7 @@ struct MeetingRecordingSettingsSheet: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
             FluidManagementGroup(title: PichiLocalization.text("Meeting location")) {
                 MeetingLocationSettingsContent()
-                Text("Location changes apply immediately, including when you close without saving other settings.")
+                Text(PichiLocalization.text("Location changes apply immediately, including when you close without saving other settings."))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)

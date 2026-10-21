@@ -6650,7 +6650,7 @@ final class MeetingRecoveryTests: XCTestCase {
             Task { await captureReleased.open() }
         }
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
-            processing: StubProcessingController(), audioArbiter: StubArbiter(), locationResolver: resolver)
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), settings: try self.makeLocationSettings(), locationResolver: resolver)
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         var startReturned = false
         let start = Task { @MainActor in
@@ -6697,7 +6697,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let resolver = GatedMeetingLocationResolver()
         defer { resolver.finishAll(with: nil) }
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
-            processing: StubProcessingController(), audioArbiter: StubArbiter(), locationResolver: resolver)
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), settings: try self.makeLocationSettings(), locationResolver: resolver)
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         let first = try await coordinator.startRecording(configuration: self.makeConfiguration())
         try await self.waitForLocationCondition("The first location lookup must be in flight") { resolver.requests.count == 1 }
@@ -6747,7 +6747,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let resolver = GatedMeetingLocationResolver()
         defer { resolver.finishAll(with: nil) }
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
-            processing: StubProcessingController(), audioArbiter: StubArbiter(), locationResolver: resolver)
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), settings: try self.makeLocationSettings(), locationResolver: resolver)
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
         try await self.waitForLocationCondition("Location must be pending before termination") { resolver.requests.count == 1 }
@@ -6783,7 +6783,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let resolver = GatedMeetingLocationResolver()
         defer { resolver.finishAll(with: nil) }
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
-            processing: StubProcessingController(), audioArbiter: StubArbiter(), locationResolver: resolver)
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), settings: try self.makeLocationSettings(), locationResolver: resolver)
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         var configuration = self.makeConfiguration()
         configuration.mode = .onlineCall
@@ -6797,6 +6797,68 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertNil(completed.location)
         let saved = try await store.load(id: session.id)
         XCTAssertNil(saved?.location)
+    }
+
+    func testDisabledMeetingLocationNeverStartsLookup() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        let settings = try self.makeLocationSettings(enabled: false)
+        let resolver = GatedMeetingLocationResolver()
+        defer { resolver.finishAll(with: nil) }
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), settings: settings, locationResolver: resolver)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        await self.drainCaptureEvents()
+        XCTAssertTrue(resolver.requests.isEmpty, "No location request or authorization without opt-in")
+        settings.meetingLocationEnabled = true
+        await self.drainCaptureEvents()
+        XCTAssertTrue(resolver.requests.isEmpty, "Enabling location only affects future recordings")
+        capture.stopResult = .init(tracks: [track], stoppedAt: session.startedAt.addingTimeInterval(2))
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertNil(completed.location)
+    }
+
+    func testDisablingMeetingLocationCancelsAndRejectsPendingLookup() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        let settings = try self.makeLocationSettings()
+        let resolver = GatedMeetingLocationResolver()
+        defer { resolver.finishAll(with: nil) }
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), settings: settings, locationResolver: resolver)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await self.waitForLocationCondition("The opted-in recording must own its lookup") { resolver.requests.count == 1 }
+        settings.meetingLocationEnabled = false
+        try await self.waitForLocationCondition("Turning location off must cancel the lookup") { resolver.cancelledRequests.contains(0) }
+        resolver.finishRequest(0, with: self.makeSyntheticMeetingLocation())
+        await self.drainCaptureEvents()
+        XCTAssertNil(coordinator.activeSession?.location)
+        capture.stopResult = .init(tracks: [track], stoppedAt: session.startedAt.addingTimeInterval(2))
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertNil(completed.location)
+        let saved = try await store.load(id: session.id)
+        XCTAssertNil(saved?.location)
+    }
+
+    private func makeLocationSettings(enabled: Bool = true) throws -> SettingsStore {
+        let name = "MeetingLocationTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        self.addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .parakeetTDTv2
+        settings.meetingTranscriptionBackendID = .productionDefault
+        settings.meetingLocationEnabled = enabled
+        return settings
     }
 
     private func makeSyntheticMeetingLocation(address: String = "10 Example Street, Sample City") -> MeetingLocation {
