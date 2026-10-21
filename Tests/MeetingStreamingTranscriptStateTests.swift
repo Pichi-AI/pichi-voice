@@ -157,6 +157,7 @@ struct MeetingStreamingTranscriptStateTests {
         catch { check(false, "Expected \(error), got \(error)") }
     }
     static func main() async throws {
+        try await integerSourceClockPreservesStrictPrivacyWatermarks()
         try await growingSpeechCannotEraseProtectedPendingWords()
         try await speechBoundaryCancellationAndProofGuards()
         try await speechThenSealedEmptyWindowDrainsWhileCapturing()
@@ -185,6 +186,28 @@ struct MeetingStreamingTranscriptStateTests {
         try await guardsAndLimits()
         try await cancellationAndReentry()
         print("Streaming transcript state: \(checks) checks passed")
+    }
+
+    static func integerSourceClockPreservesStrictPrivacyWatermarks() async throws {
+        for start in [Double(292_800) / 16_000, 18.299999999999997] {
+            let value = try state(privacy: .init(redactor: SyntheticMaskingRedactor()))
+            _ = try await value.observe(observation(accepted: 18.3, asr: 18.3,
+                emptyASR: 0..<292_800))
+            let words = [word(0, start: start, end: start + 1.44, text: "Пылесос"),
+                word(1, start: 19.9, end: 19.94, text: "на"),
+                word(2, start: 20.06, end: 20.34, text: "базу.")]
+            let speech = observation(words, accepted: 22.5, processed: 20.48, asr: 22.5)
+            if start < 18.3 {
+                await expect(.regressedCursor) { _ = try await value.observe(speech) }
+            } else {
+                _ = try await value.observe(speech)
+                let quiet = try await value.observe(observation(accepted: 23.5, processed: 20.48, asr: 23.5,
+                    emptyASR: 360_000..<376_000))
+                check(quiet.safeBatch.segments.map(\.text) == words.map(\.text))
+                check(quiet.safeBatch.segments.map(\.nativeTiming) == words.map(\.nativeTiming),
+                    "The integer source origin preserves genuine local word intervals")
+            }
+        }
     }
 
     static func growingSpeechCannotEraseProtectedPendingWords() async throws {
