@@ -1157,6 +1157,27 @@ final class MobileNavigationUITests: XCTestCase {
     func testLegacyOrphanWordReadsInsideOneParticipantParagraphInBothLanguagesAndThemes() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9021"
         let firstID = "00000000-0000-0000-0000-202610170001"
+        func assertIncomingTurns(step: String) throws {
+            // Independent assigned replies are turn boundaries. Only unresolved
+            // neighboring words follow their incoming speaker in the current policy.
+            for (suffix, text, speaker) in [
+                ("004", "Нет, это ответ.", "Борис"),
+                ("006", "Короткая вставка", "Анна"),
+                ("008", "и продолжение.", "Борис")
+            ] {
+                let row = app.descendants(matching: .any)[
+                    "transcript.paragraph.00000000-0000-0000-0000-202610170\(suffix)"
+                ].firstMatch
+                XCTAssertTrue(row.waitForExistence(timeout: 5))
+                let body = row.staticTexts[text].firstMatch
+                XCTAssertTrue(body.waitForExistence(timeout: 5))
+                try revealParagraphAboveNavigation(body, step: "\(step)-\(suffix)", container: row)
+                XCTAssertTrue(row.staticTexts[speaker].exists,
+                              "Each complete paragraph must retain its own participant caption")
+            }
+            XCTAssertFalse(app.staticTexts["Нет, это ответ. Короткая вставка и продолжение."].exists,
+                           "A genuine short reply must not be swallowed by another participant")
+        }
         for (language, appearance, historyTitle, participantLabel, cancelTitle) in [
             ("en", "light", "History", "Анна", "Cancel"),
             ("ru", "dark", "История", "Анна", "Отмена")
@@ -1192,10 +1213,7 @@ final class MobileNavigationUITests: XCTestCase {
             capture("legacy-attribution-\(language)-original-members")
             app.buttons[cancelTitle].firstMatch.tap()
             capture("legacy-attribution-\(language)-editor-cancelled")
-            let incomingParagraph = app.staticTexts["Нет, это ответ. Короткая вставка и продолжение."].firstMatch
-            XCTAssertTrue(incomingParagraph.waitForExistence(timeout: 5))
-            try revealParagraphAboveNavigation(incomingParagraph, step: "legacy-attribution-\(language)-incoming-portrait")
-            XCTAssertTrue(app.staticTexts["Борис"].firstMatch.exists)
+            try assertIncomingTurns(step: "legacy-attribution-\(language)-incoming-portrait")
             XCTAssertFalse(app.staticTexts[language == "ru" ? "Неизвестный участник" : "Unknown speaker"].exists)
             XCTAssertFalse(app.staticTexts["Несколько говорящих"].exists)
             XCTAssertFalse(app.staticTexts["Several speakers"].exists)
@@ -1206,7 +1224,7 @@ final class MobileNavigationUITests: XCTestCase {
             try revealParagraphAboveNavigation(paragraph, step: "legacy-attribution-\(language)-landscape")
             XCTAssertTrue(label.exists && paragraph.exists)
             capture("legacy-attribution-\(language)-landscape-merged")
-            try revealParagraphAboveNavigation(incomingParagraph, step: "legacy-attribution-\(language)-incoming-landscape")
+            try assertIncomingTurns(step: "legacy-attribution-\(language)-incoming-landscape")
             capture("legacy-attribution-\(language)-landscape-incoming-prefix")
         }
     }
