@@ -81,8 +81,11 @@ extension MeetingProcessingPipeline {
             try Task.checkCancellation()
             let consumer = try Self.makeProgressiveMemoryAudioConsumer(
                 chunkSeconds: 20, maximumPendingSeconds: 60,
-                initialPreviewSeconds: 3, previewIntervalSeconds: 10,
+                // Small PCM deliveries keep acoustic scoring and pause detection moving.
+                // Repeated batch ASR has its own cadence in the existing runtime.
+                initialPreviewSeconds: 0.5, previewIntervalSeconds: 0.5,
                 confidentlyNonSpeech: attempt.confidentlyNonSpeech,
+                pauseEndpointSilenceSeconds: 0.768,
                 recognize: { window, offset in
                     let observation = try await controller.recognize(window: window, offset: offset,
                         preview: observeSpeech)
