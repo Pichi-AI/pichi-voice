@@ -1494,7 +1494,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         let originalSaveAudio = settings.meetingSaveAudio
         let originalPrivacy = settings.meetingPIIRedactionEnabled
         settings.selectedSpeechModel = .whisperTiny
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
         settings.selectedSpeechModel = .gigaam
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .onlineCall), .afterRecording)

@@ -43,7 +43,8 @@ struct MobileOnboarding: View {
             .foregroundStyle(theme.palette.primaryText)
             .accessibilityIdentifier("onboarding.step.\(step)")
         }
-        .task { if selected == nil { selected = settings.selectedSpeechModel } }
+        .task { if selected == nil { selected = settings.mobileSetupSelectedModel ?? settings.selectedSpeechModel } }
+        .onChange(of: selected) { _, model in settings.mobileSetupSelectedModel = model }
         .onDisappear { operation?.cancel(); asr.cancelModelDownload() }
     }
 
@@ -230,8 +231,10 @@ struct MobilePrivacyActivationControls: View {
                 Text(PichiLocalization.text(activation.downloadProgress == 1
                     ? "Loading data cleanup model…" : "Enabling data cleanup…"))
                     .font(theme.typography.caption)
-                if let progress = activation.downloadProgress, progress < 1 { ProgressView(value: progress) }
-                else { ProgressView() }
+                Group {
+                    if let progress = activation.downloadProgress, progress < 1 { ProgressView(value: progress) }
+                    else { ProgressView() }
+                }.accessibilityIdentifier("privacy.pii.progress")
                 Button(PichiLocalization.text("Cancel")) { activation.setEnabled(false) }
                     .accessibilityIdentifier("privacy.pii.cancel")
             case .active:

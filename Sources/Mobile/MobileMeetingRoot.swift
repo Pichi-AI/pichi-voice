@@ -730,7 +730,7 @@ struct MobileMeetingRoot: View {
     private func copyTranscript(_ session: MeetingSession) {
         run {
             let output: MeetingSession
-            if settings.meetingPIIRedactionEnabled {
+            if settings.meetingPIIRedactionRequested {
                 let redactor = try settings.transcriptPrivacyRedactor(wrapping: privacy)
                 try await redactor.prepareForMeeting()
                 output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: session, using: redactor)
@@ -741,7 +741,7 @@ struct MobileMeetingRoot: View {
 
     private func exportTranscript(_ session: MeetingSession, json: Bool) {
         run {
-            let redactor = settings.meetingPIIRedactionEnabled ? try settings.transcriptPrivacyRedactor(wrapping: privacy) : nil
+            let redactor = settings.meetingPIIRedactionRequested ? try settings.transcriptPrivacyRedactor(wrapping: privacy) : nil
             guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
             let output: MeetingSession
             if let redactor {

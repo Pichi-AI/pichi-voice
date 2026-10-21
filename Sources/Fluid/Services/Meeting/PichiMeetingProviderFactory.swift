@@ -88,7 +88,7 @@ enum PichiMeetingProviderFactory {
                 supportedFinalPrecisions: [.word, .utterance],
                 resultContract: .canonicalEvidence,
                 knownLimits: [
-                    "Whisper Tiny is small and fast, with lower recognition accuracy.",
+                    "Whisper Tiny uses a compact model. Speed and memory depend on the device.",
                     "Mixed Russian and English speech may contain errors or transliteration.",
                     "When different people speak in one transcript phrase, speaker labels may remain unknown.",
                     "Speaker resources prepare automatically. Finish setup before an offline meeting.",

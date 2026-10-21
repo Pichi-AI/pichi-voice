@@ -53122,6 +53122,40 @@
           }
         }
       }
+    },
+    "Compact multilingual model. Recognition can be less accurate, especially for mixed speech.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact multilingual model. Recognition can be less accurate, especially for mixed speech."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Компактная многоязычная модель. Точность может быть ниже, особенно в смешанной речи."
+          }
+        }
+      }
+    },
+    "Whisper Tiny uses a compact model. Speed and memory depend on the device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper Tiny uses a compact model. Speed and memory depend on the device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper Tiny использует компактную модель. Скорость и расход памяти зависят от устройства."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

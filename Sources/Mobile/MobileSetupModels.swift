@@ -4,6 +4,7 @@ import Foundation
 extension SettingsStore {
     private static let mobileSetupVersionKey = "MobileSetupVersion"
     private static let mobileSetupStepKey = "MobileSetupStep"
+    private static let mobileSetupModelKey = "MobileSetupSelectedModel"
     private static let mobileBehaviorVersionKey = "MobileMeetingBehaviorVersion"
     private static let privacyRequestedKey = "MeetingPIIRedactionRequested"
 
@@ -14,6 +15,10 @@ extension SettingsStore {
     var mobileSetupStep: Int {
         get { min(5, max(0, defaults.integer(forKey: Self.mobileSetupStepKey))) }
         set { objectWillChange.send(); defaults.set(min(5, max(0, newValue)), forKey: Self.mobileSetupStepKey) }
+    }
+    var mobileSetupSelectedModel: SpeechModel? {
+        get { defaults.string(forKey: Self.mobileSetupModelKey).flatMap(SpeechModel.init(rawValue:)) }
+        set { defaults.set(newValue?.rawValue, forKey: Self.mobileSetupModelKey) }
     }
     var meetingPIIRedactionRequested: Bool {
         get { defaults.object(forKey: Self.privacyRequestedKey) as? Bool ?? meetingPIIRedactionEnabled }
@@ -47,16 +52,20 @@ final class MobileRequiredResources: ObservableObject {
     enum Phase: Equatable { case idle, speechActivity, speakers, ready, failed(String) }
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var modelID: String?
-    private var operation: (id: UUID, modelID: String, task: Task<Void, Error>)?
+    private var operation: (id: UUID, modelID: String, task: Task<Void, Never>)?
+    private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var progressObservers: Set<AnyCancellable> = []
     private let speech: MeetingSpeechActivityResources
+    private let prepareSpeech: () async throws -> Void
     private let speakerStore: (String) -> MeetingDiarizationModelStore?
 
     init(speech: MeetingSpeechActivityResources = .shared,
+         prepareSpeech: (() async throws -> Void)? = nil,
          speakerStore: @escaping (String) -> MeetingDiarizationModelStore? = {
              PichiMeetingProviderFactory.speakerModelStore(for: $0, speakerProcessingMode: .streaming)
          }) {
         self.speech = speech; self.speakerStore = speakerStore
+        self.prepareSpeech = prepareSpeech ?? { try await speech.prepare() }
     }
 
     var isPreparing: Bool { operation != nil }
@@ -71,14 +80,15 @@ final class MobileRequiredResources: ObservableObject {
     }
 
     func prepare(modelID requested: String) async throws {
-        if let operation {
-            try await operation.task.value
+        try Task.checkCancellation()
+        if let current = operation {
+            try await join()
             try Task.checkCancellation()
-            if operation.modelID == requested { return }
-            if self.operation?.id == operation.id { self.operation = nil }
+            if current.modelID == requested { return }
+            return try await prepare(modelID: requested)
         }
-        // Revalidate via the owning stores on a new explicit request. Their existing
-        // operation owners join any capture/enrollment work and never redownload valid files.
+        // The existing stores validate and join installs, including enrollment/capture.
+        // Cancelling a foreground waiter leaves the app-owned background job intact.
         modelID = requested
         progressObservers.removeAll()
         for publisher in [speech.objectWillChange, speakerStore(requested)?.objectWillChange].compactMap({ $0 }) {
@@ -86,25 +96,44 @@ final class MobileRequiredResources: ObservableObject {
         }
         let id = UUID()
         let task = Task { @MainActor in
+            let result: Result<Void, Error>
             do {
                 self.phase = .speechActivity
-                try await self.speech.prepare()
+                try await self.prepareSpeech()
                 try Task.checkCancellation()
                 guard let store = self.speakerStore(requested) else { throw MeetingProcessingError.modelUnavailable }
                 self.phase = .speakers
                 _ = try await store.ensureInstalled(includingVoiceEncoder: store.supportsOwnerVoiceVerification)
                 try Task.checkCancellation()
                 self.phase = .ready
+                result = .success(())
             } catch {
                 self.phase = .failed(error.localizedDescription)
-                throw error
+                result = .failure(error)
             }
+            guard self.operation?.id == id else { return }
+            self.operation = nil
+            let joined = Array(self.waiters.values)
+            self.waiters.removeAll()
+            for waiter in joined { waiter.resume(with: result) }
         }
         operation = (id, requested, task)
-        defer { if operation?.id == id { operation = nil } }
-        try await task.value
+        try await join()
         try Task.checkCancellation()
     }
+
+    private func join() async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+                else { waiters[id] = continuation }
+            }
+        } onCancel: {
+            Task { @MainActor in self.waiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
+        }
+    }
+
 }
 
 /// The persisted request is separate from committed activation. A cancelled/failed
@@ -116,13 +145,15 @@ final class MobilePrivacyActivation: ObservableObject {
     @Published private(set) var downloadProgress: Double?
     private let settings: SettingsStore
     private let prepare: (@escaping @Sendable (Double) -> Void) async throws -> Void
+    private let canPrepare: () -> Bool
     private var operation: Task<Void, Never>?
     private var generation = UUID()
     var isRequested: Bool { settings.meetingPIIRedactionRequested }
     var isPreparing: Bool { state == .enabling }
 
-    init(settings: SettingsStore, prepare: @escaping (@escaping @Sendable (Double) -> Void) async throws -> Void) {
-        self.settings = settings; self.prepare = prepare
+    init(settings: SettingsStore, canPrepare: @escaping () -> Bool = { true },
+         prepare: @escaping (@escaping @Sendable (Double) -> Void) async throws -> Void) {
+        self.settings = settings; self.prepare = prepare; self.canPrepare = canPrepare
         if settings.meetingPIIRedactionRequested { state = .enabling }
     }
 
@@ -131,7 +162,8 @@ final class MobilePrivacyActivation: ObservableObject {
     }
 
     func setEnabled(_ enabled: Bool) {
-        if enabled, operation != nil { return }
+        if enabled, state == .active { return }
+        if enabled, isRequested, state == .enabling, operation != nil { return }
         settings.meetingPIIRedactionRequested = enabled
         settings.meetingPIIRedactionEnabled = false
         let previous = operation
@@ -145,6 +177,11 @@ final class MobilePrivacyActivation: ObservableObject {
             await previous?.value
             guard !Task.isCancelled, self.generation == selected else { return }
             guard enabled else { self.operation = nil; return }
+            guard self.canPrepare() else {
+                self.state = .failed(MeetingModelResidencyError.busy.localizedDescription)
+                self.operation = nil
+                return
+            }
             do {
                 try await prepare { value in
                     Task { @MainActor in

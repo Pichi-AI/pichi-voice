@@ -341,7 +341,7 @@ extension SettingsStore {
             case .appleSpeechAnalyzer:
                 return "Advanced and modern on-device recognition for newer macOS devices."
             case .whisperTiny:
-                return "Minimal resource usage. Best for older devices or battery life."
+                return "Compact multilingual model. Recognition can be less accurate, especially for mixed speech."
             case .whisperBase:
                 return "Good balance of speed and accuracy. Works on any Mac."
             case .whisperSmall:

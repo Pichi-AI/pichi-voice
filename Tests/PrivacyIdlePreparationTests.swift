@@ -73,8 +73,24 @@ private actor ReadinessSnapshotGate {
     func ensureRestored() async { await restore.wait() }
     func sweepExpiredAudio() async {}
 }
+@MainActor final class IdleScenePrivacyActivationProbe {
+    var restores = 0
+    func restore() { restores += 1 }
+}
+@MainActor final class IdleSceneRequiredResourcesProbe {
+    var requests = 0
+    func prepare(modelID: String) async throws { requests += 1 }
+}
+struct IdleSceneSettingsProbe {
+    struct Model { let rawValue = "synthetic-model" }
+    let selectedSpeechModel = Model()
+}
 @MainActor final class IdleSceneHostProbe {
     let meetingSessionCoordinator = IdleSceneCoordinatorProbe()
+    let privacyActivation = IdleScenePrivacyActivationProbe()
+    let requiredResources = IdleSceneRequiredResourcesProbe()
+    let settings = IdleSceneSettingsProbe()
+    var requiredPreparationTask: Task<Void, Never>?
     var isUIReady = false
     var hasRestoredInitialState = false
     var isSceneActive = false

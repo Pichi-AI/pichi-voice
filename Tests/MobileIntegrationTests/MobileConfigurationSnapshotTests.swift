@@ -19,7 +19,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: SettingsStore.Keys.meetingSpeakerProcessingMode),
                      "Reading a capability default must not write or migrate a preference")
         settings.selectedSpeechModel = .whisperTiny
-        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .streaming)
         settings.selectedSpeechModel = .gigaam
         settings.meetingSpeakerProcessingMode = .afterRecording
         XCTAssertEqual(settings.meetingSpeakerProcessingMode(for: .inRoom), .afterRecording)

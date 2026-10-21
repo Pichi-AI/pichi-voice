@@ -77,7 +77,10 @@ final class AppServices: ObservableObject {
         let resolveMicrophone = microphoneResolver ?? { try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: $0) }
         self.asr = asr; self.meetingStore = store; self.transcriptPrivacy = privacy
         self.requiredResources = MobileRequiredResources()
-        self.privacyActivation = MobilePrivacyActivation(settings: settings, prepare: { progress in
+        self.privacyActivation = MobilePrivacyActivation(settings: settings, canPrepare: {
+            asr.activeExclusiveActivity == nil && !asr.hasActiveModelPreparation
+                && !MeetingModelResidencyCoordinator.shared.isExclusive
+        }, prepare: { progress in
             try await privacy.prepare(progress: progress)
         })
         let pipeline = MeetingProcessingPipeline(asrServiceProvider: { asr }, settings: settings,
@@ -279,6 +282,9 @@ struct PichiVoiceMobileApp: App {
                 #endif
             }.task {
                 #if DEBUG
+                // Hosted unit probes own their injected model operations. The ordinary
+                // UI-test application runs in another process and retains real startup.
+                if NSClassFromString("XCTestCase") != nil { return }
                 if ProcessInfo.processInfo.environment["PICHI_UI_CAPTION_REVIEW"] == "1" { return }
                 #endif
                 await services.signalUIReady()

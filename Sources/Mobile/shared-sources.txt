@@ -168,3 +168,6 @@ Sources/Fluid/Services/Meeting/MeetingStreamingTranscriptState.swift
 Sources/Fluid/Services/Meeting/MeetingProcessingPipelineStreamingAttempt.swift
 
 Sources/Fluid/Services/Meeting/MeetingSpeechActivityResources.swift
+
+Sources/Fluid/Services/Privacy/TranscriptSensitiveDictionary.swift
+Sources/Fluid/Persistence/SettingsStore+SensitiveDataDictionary.swift
