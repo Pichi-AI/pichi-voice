@@ -6774,7 +6774,12 @@ final class MeetingRecoveryTests: XCTestCase {
         let store = MeetingSessionStore(rootDirectory: dir)
         let capture = StubCaptureController()
         let track = self.makeMicrophoneTrack(chunks: [])
-        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        var applicationTrack = track
+        applicationTrack.id = UUID()
+        applicationTrack.kind = .applicationAudio
+        applicationTrack.sourceIdentifier = "system-audio"
+        let tracks = [track, applicationTrack]
+        capture.startResult = .init(tracks: tracks, firstPresentationTime: nil)
         let resolver = GatedMeetingLocationResolver()
         defer { resolver.finishAll(with: nil) }
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
@@ -6786,7 +6791,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let session = try await coordinator.startRecording(configuration: configuration)
         await self.drainCaptureEvents()
         XCTAssertTrue(resolver.requests.isEmpty, "Online calls must not request a physical meeting address")
-        capture.stopResult = .init(tracks: [track], stoppedAt: session.startedAt.addingTimeInterval(2))
+        capture.stopResult = .init(tracks: tracks, stoppedAt: session.startedAt.addingTimeInterval(2))
         let completed = try await coordinator.stopAndTranscribe()
         XCTAssertTrue(resolver.requests.isEmpty)
         XCTAssertNil(completed.location)
