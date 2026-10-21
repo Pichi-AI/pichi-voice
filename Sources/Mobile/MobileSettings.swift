@@ -31,8 +31,7 @@ struct MobileSettingsRoot: View {
                 NavigationLink(value: MobileSettingsDestination.privacy) {
                     Label(PichiLocalization.text("Data cleanup"), systemImage: "lock.shield")
                 }.accessibilityIdentifier("settings.privacy")
-            }
-            Section {
+            } footer: {
                 Text(PichiLocalization.text("Audio recordings and transcripts are stored on this device."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
@@ -245,7 +244,7 @@ private struct MobilePrivacySettings: View {
 
     var body: some View {
         Form {
-            Section(PichiLocalization.text("Audio storage")) {
+            Section {
                 MobileAudioPrivacyControls()
                 if settings.meetingSaveAudio {
                     Picker(PichiLocalization.text("Keep recordings"), selection: $settings.meetingAudioRetentionPolicy) {
@@ -253,6 +252,11 @@ private struct MobilePrivacySettings: View {
                             Text(PichiLocalization.text(policy.displayName)).tag(policy)
                         }
                     }.accessibilityIdentifier("privacy.retention")
+                }
+            } header: {
+                Text(PichiLocalization.text("Audio storage"))
+            } footer: {
+                if settings.meetingSaveAudio {
                     Text(PichiLocalization.text("Applies to past meetings too. Transcripts are always kept."))
                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 }

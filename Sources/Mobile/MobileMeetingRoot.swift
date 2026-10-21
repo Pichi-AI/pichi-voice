@@ -23,7 +23,9 @@ struct MobileMeetingRoot: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @StateObject private var historySnapshot: MeetingHistorySnapshot
     private var sessions: [MeetingSession] { historySnapshot.sessions }
-    @State private var selectedHistory: MeetingSession?
+    // The snapshot owns committed sessions; History's own path keeps only pushed identities.
+    @State private var historyPath: [MeetingSessionID] = []
+    @State private var copiedSessionID: MeetingSessionID?
     @State private var search = ""
     @State private var isBusy = false
     @State private var error: String?
@@ -32,7 +34,7 @@ struct MobileMeetingRoot: View {
     @State private var showRecordingSettings = false
     @State private var microphoneSnapshot = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
     @State private var edit: MeetingEditDraft?
-    @State private var deleteCandidate: MeetingSession?
+    @State private var deletion: Deletion?
     @State private var share: MeetingSharePayload?
     @State private var showPresentationPicker = false
     @State private var presentation: MobilePresentationDocument?
@@ -62,14 +64,26 @@ struct MobileMeetingRoot: View {
         var title: String {
             switch self { case .meetings: return "Meetings"; case .history: return "History"; case .settings: return "Settings" }
         }
+        // The same symbols as the desktop sidebar sections.
         var symbol: String {
-            switch self { case .meetings: return "waveform"; case .history: return "clock"; case .settings: return "gearshape" }
+            switch self { case .meetings: return "person.2.fill"; case .history: return "clock.arrow.circlepath"; case .settings: return "gearshape" }
+        }
+    }
+
+    /// Destructive actions share one confirmation, as on the desktop.
+    private enum Deletion {
+        case meeting(MeetingSession), audio(MeetingSession)
+        var title: String { if case .audio = self { return "Delete Audio?" }; return "Delete Meeting" }
+        var action: String { if case .audio = self { return "Delete Audio" }; return "Delete" }
+        var message: String {
+            if case .audio = self { return "The transcript stays; the audio files are deleted." }
+            return "Delete this meeting and its recordings?"
         }
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            if UIDevice.current.userInterfaceIdiom == .pad && geometry.size.width >= 700 {
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .pad && horizontalSizeClass == .regular {
                 NavigationSplitView(columnVisibility: $columnVisibility) {
                     sidebar.navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
                 } detail: {
@@ -146,20 +160,24 @@ struct MobileMeetingRoot: View {
         .fullScreenCover(item: $presentation) { document in
             PDFPresentation(document: document, coordinator: coordinator) { presentation = nil }
         }
-        .confirmationDialog(PichiLocalization.text("Delete Meeting"), isPresented: Binding(
-            get: { deleteCandidate != nil }, set: { if !$0 { deleteCandidate = nil } }
-        )) {
-            Button(PichiLocalization.text("Delete"), role: .destructive) {
-                guard let candidate = deleteCandidate else { return }
+        .confirmationDialog(PichiLocalization.text(deletion?.title ?? ""), isPresented: Binding(
+            get: { deletion != nil }, set: { if !$0 { deletion = nil } }
+        ), titleVisibility: .visible, presenting: deletion) { item in
+            Button(PichiLocalization.text(item.action), role: .destructive) {
+                deletion = nil
                 run {
                     playback.stop()
-                    try await coordinator.deleteSession(id: candidate.id)
-                    if selectedHistory?.id == candidate.id { selectedHistory = nil }
-                    await refreshHistory()
+                    switch item {
+                    case .meeting(let session):
+                        try await coordinator.deleteSession(id: session.id)
+                        if historyPath.contains(session.id) { historyPath.removeAll() }
+                        await refreshHistory()
+                    case .audio(let session):
+                        acceptCommittedSession(try await coordinator.deleteAudio(sessionID: session.id))
+                    }
                 }
-                deleteCandidate = nil
             }
-        } message: { Text(PichiLocalization.text("Delete this meeting and its recordings?")) }
+        } message: { item in Text(PichiLocalization.text(item.message)) }
         .task {
             await coordinator.ensureRestored()
             await coordinator.sweepExpiredAudio()
@@ -174,7 +192,7 @@ struct MobileMeetingRoot: View {
         .onAppear { updateRecordingScreenAwake() }
         .onChange(of: scenePhase) { _, _ in updateRecordingScreenAwake() }
         .onChange(of: destination) { _, _ in playback.stop(); presentationLoader.cancel() }
-        .onChange(of: selectedHistory?.id) { _, _ in playback.stop(); presentationLoader.cancel() }
+        .onChange(of: historyPath) { _, _ in playback.stop(); presentationLoader.cancel() }
         .onDisappear {
             presentationLoader.cancel()
             updateRecordingScreenAwake(isVisible: false)
@@ -245,7 +263,7 @@ struct MobileMeetingRoot: View {
         if destination == item {
             switch item {
             case .settings: settingsPath.removeAll()
-            case .history: selectedHistory = nil
+            case .history: historyPath.removeAll()
             case .meetings: break // Its root is the current meeting, including an active recording.
             }
         } else {
@@ -254,8 +272,8 @@ struct MobileMeetingRoot: View {
     }
 
     @ViewBuilder private func navigation(for item: Destination) -> some View {
-        // Each section owns its stack. A settings push must never cover another section,
-        // and its explicit path survives switching sections or the adaptive layout.
+        // Each section owns its stack. A settings or history push must never cover another
+        // section, and its explicit path survives switching sections or the adaptive layout.
         switch item {
         case .settings:
             NavigationStack(path: $settingsPath) {
@@ -264,7 +282,7 @@ struct MobileMeetingRoot: View {
         case .meetings:
             NavigationStack { sectionRoot(for: item) }
         case .history:
-            NavigationStack { sectionRoot(for: item) }
+            NavigationStack(path: $historyPath) { sectionRoot(for: item) }
         }
     }
 
@@ -294,7 +312,7 @@ struct MobileMeetingRoot: View {
                     .accessibilityHint(PichiLocalization.text("Open a PDF in this app while recording continues."))
                 }
             }
-            if item == .meetings, coordinator.isQuiescent, !coordinator.isRecording {
+            if item == .meetings, coordinator.isQuiescent, !coordinator.isRecording, !isShowingStart {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { newMeeting() } label: { Label(PichiLocalization.text("New Meeting"), systemImage: "plus") }
                         .accessibilityIdentifier("meeting.new")
@@ -316,6 +334,7 @@ struct MobileMeetingRoot: View {
         } else { start }
     }
 
+    private var isShowingStart: Bool { coordinator.currentSession == nil || coordinator.state == .idle }
     private var compactHeight: Bool { verticalSizeClass == .compact }
 
     private var start: some View {
@@ -449,11 +468,20 @@ struct MobileMeetingRoot: View {
         VStack(alignment: .leading, spacing: 16) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    // Without transcript text the title belongs here; otherwise the transcript shows it.
+                    if session.transcriptSegments.isEmpty {
+                        Text(session.title).font(theme.typography.title)
+                    }
                     Text(PichiLocalization.text(session.state == .interrupted
                         ? "Meeting transcription was interrupted" : "Meeting transcription failed"))
                         .font(theme.typography.sectionTitle)
                     if let failure = session.failures.last {
                         Text(PichiLocalization.text(failure.message)).foregroundStyle(theme.palette.warning)
+                    }
+                    if session.transcriptSegments.isEmpty {
+                        Text(PichiLocalization.text(session.hasRetryableAudio ? "Your captured audio is preserved"
+                            : "There is no transcript text or saved audio available for this meeting."))
+                            .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
                     }
                     if session.hasRetryableAudio {
                         Button(PichiLocalization.text("Retry transcription")) {
@@ -469,14 +497,6 @@ struct MobileMeetingRoot: View {
                                 .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
                         }
                     }
-                    Button(PichiLocalization.text("New Meeting")) { newMeeting() }
-                        .disabled(isBusy || !coordinator.isQuiescent)
-                    if session.transcriptSegments.isEmpty {
-                        Text(session.title).font(theme.typography.title)
-                        Text(PichiLocalization.text(session.hasRetryableAudio ? "Your captured audio is preserved"
-                            : "There is no transcript text or saved audio available for this meeting."))
-                            .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
-                    }
                 }.padding(24)
             }.frame(maxHeight: session.transcriptSegments.isEmpty ? .infinity : 240)
             if !session.transcriptSegments.isEmpty { transcript(session) }
@@ -484,44 +504,51 @@ struct MobileMeetingRoot: View {
     }
 
     private var history: some View {
-        Group {
-            if let session = selectedHistory {
-                VStack {
-                    Button { selectedHistory = nil } label: {
-                        Label(PichiLocalization.text("History"), systemImage: "chevron.left").frame(minHeight: 44)
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)
-                    if session.state == .failed || session.state == .interrupted { recovery(session) }
-                    else { transcript(session) }
-                }
-            } else {
-                List {
-                    ForEach(sessions.filter { session in
-                        search.isEmpty || session.title.localizedCaseInsensitiveContains(search)
-                            || session.activeSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
-                            || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
-                    }) { session in
-                        Button { selectedHistory = session } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(session.title).font(theme.typography.bodyStrong)
-                                HStack {
-                                    Text(session.startedAt.formatted(.dateTime.day().month().hour().minute()))
-                                    Text(MeetingTranscriptExporter.timestampText(session.duration)).monospacedDigit()
-                                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                                HStack {
-                                    Text(PichiLocalization.text(sessionStatus(session.state)))
-                                    if !session.activeSpeakers.isEmpty {
-                                        Text(session.activeSpeakers.count == 1 ? PichiLocalization.text("1 speaker") : PichiLocalization.format("%lld speakers", Int64(session.activeSpeakers.count)))
-                                    }
-                                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                .contentShape(Rectangle())
-                        }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
-                            .swipeActions { Button(PichiLocalization.text("Delete"), role: .destructive) { deleteCandidate = session } }
-                    }
-                }.searchable(text: $search, prompt: PichiLocalization.text("Search meetings"))
-                    .refreshable { await refreshHistory() }.accessibilityIdentifier("history.list")
+        let matches = sessions.filter { session in
+            search.isEmpty || session.title.localizedCaseInsensitiveContains(search)
+                || session.activeSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
+                || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
+        }
+        return List(matches) { session in
+            Button { historyPath = [session.id] } label: {
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                    Text(session.title).font(theme.typography.bodyStrong)
+                    Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
+                .swipeActions { Button(PichiLocalization.text("Delete"), role: .destructive) { deletion = .meeting(session) } }
+        }
+        .overlay {
+            // The desktop history's empty states and copy.
+            if matches.isEmpty, historySnapshot.hasLoaded, historySnapshot.errorMessage == nil {
+                ContentUnavailableView(
+                    PichiLocalization.text(search.isEmpty ? "No meetings yet" : "No matching meetings"),
+                    systemImage: search.isEmpty ? "person.2.wave.2" : "magnifyingglass",
+                    description: Text(PichiLocalization.text(search.isEmpty
+                        ? "Completed meetings will appear here." : "Try a different title, app, or speaker.")))
             }
         }
+        .searchable(text: $search, prompt: PichiLocalization.text("Search meetings"))
+        .refreshable { await refreshHistory() }.accessibilityIdentifier("history.list")
+        .navigationDestination(for: MeetingSessionID.self) { id in
+            if let session = sessions.first(where: { $0.id == id }) {
+                Group {
+                    if session.state == .failed || session.state == .interrupted { recovery(session) } else { transcript(session) }
+                }.navigationBarTitleDisplayMode(.inline)
+            }
+        }
+    }
+
+    /// One secondary line: date, duration, participants and any unfinished state.
+    private func historySummary(_ session: MeetingSession) -> String {
+        var parts = [session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)),
+                     MeetingTranscriptExporter.timestampText(session.duration)]
+        if !session.activeSpeakers.isEmpty {
+            parts.append(PichiLocalization.format("%lld speakers", Int64(session.activeSpeakers.count)))
+        }
+        if session.state != .completed { parts.append(PichiLocalization.text(sessionStatus(session.state))) }
+        return parts.joined(separator: " · ")
     }
 
     private func transcript(_ session: MeetingSession) -> some View {
@@ -535,12 +562,16 @@ struct MobileMeetingRoot: View {
                 Text(session.title).font(theme.typography.title)
                 HStack {
                     Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
-                    Text(PichiLocalization.text("In-room meeting"))
+                    Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
                 }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 HStack {
+                    // The desktop transcript's copy confirmation.
+                    let copied = copiedSessionID == session.id
                     Button { copyTranscript(session) } label: {
-                        Label(PichiLocalization.text("Copy"), systemImage: "doc.on.doc").frame(minHeight: 44)
+                        Label(PichiLocalization.text(copied ? "Copied" : "Copy"), systemImage: copied ? "checkmark" : "doc.on.doc")
+                            .frame(minHeight: 44)
                     }.accessibilityIdentifier("transcript.copy")
+                        .accessibilityLabel(PichiLocalization.text(copied ? "Transcript copied" : "Copy transcript"))
                     Menu {
                         Button(PichiLocalization.text("Export as Text")) { exportTranscript(session, json: false) }
                         Button(PichiLocalization.text("Export as JSON")) { exportTranscript(session, json: true) }
@@ -555,13 +586,7 @@ struct MobileMeetingRoot: View {
                                 }.disabled(!coordinator.isQuiescent)
                             }
                             Button(PichiLocalization.text("Export Audio")) { exportAudio(session) }
-                            Button(PichiLocalization.text("Delete Audio"), role: .destructive) {
-                                playback.stop()
-                                run {
-                                    let updated = try await coordinator.deleteAudio(sessionID: session.id)
-                                    acceptCommittedSession(updated)
-                                }
-                            }
+                            Button(PichiLocalization.text("Delete Audio"), role: .destructive) { deletion = .audio(session) }
                         }
                         Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.title) }
                         if coordinator.canUndoCorrection(sessionID: session.id) {
@@ -572,7 +597,7 @@ struct MobileMeetingRoot: View {
                                 }
                             }
                         }
-                        Button(PichiLocalization.text("Delete Meeting"), role: .destructive) { deleteCandidate = session }
+                        Button(PichiLocalization.text("Delete Meeting"), role: .destructive) { deletion = .meeting(session) }
                     } label: { Label(PichiLocalization.text("More"), systemImage: "ellipsis").frame(minHeight: 44) }
                         .accessibilityIdentifier("transcript.more")
                     Spacer()
@@ -716,12 +741,11 @@ struct MobileMeetingRoot: View {
     }
     private func acceptCommittedSession(_ session: MeetingSession) {
         historySnapshot.applyCommitted(session)
-        if selectedHistory?.id == session.id { selectedHistory = session }
     }
     private func refreshHistory() async {
         await historySnapshot.refresh()
         if let message = historySnapshot.errorMessage { error = message; showError = true; return }
-        if let id = selectedHistory?.id { selectedHistory = sessions.first { $0.id == id } }
+        if let id = historyPath.last, !sessions.contains(where: { $0.id == id }) { historyPath.removeAll() }
     }
     private func refreshMicrophones() async {
         do { microphoneSnapshot = try await microphones() } catch { report(error) }
@@ -736,6 +760,11 @@ struct MobileMeetingRoot: View {
                 output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: session, using: redactor)
             } else { output = session }
             UIPasteboard.general.string = MeetingTranscriptExporter.text(for: output)
+            copiedSessionID = session.id
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                if copiedSessionID == session.id { copiedSessionID = nil }
+            }
         }
     }
 

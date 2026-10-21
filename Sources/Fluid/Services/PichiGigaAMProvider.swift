@@ -74,14 +74,8 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
         self.download = download
     }
 
-    static var defaultDirectory: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let namespace = Bundle.main.bundleIdentifier ?? "ai.pichi.voice"
-        return support.appendingPathComponent(namespace, isDirectory: true)
-            .appendingPathComponent("Models/GigaAM", isDirectory: true)
-    }
-
-    static var configuredModelDirectory: URL { self.shared.directory }
+    // The installation's storage namespace, shared with every other model directory.
+    static var defaultDirectory: URL { AppBrand.modelsDirectory.appendingPathComponent("GigaAM", isDirectory: true) }
 
     /// Legacy directory preferences alone do not opt an existing installation into private weights.
     var directory: URL {

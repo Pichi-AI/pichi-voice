@@ -33,7 +33,6 @@ final class PichiMeetingSummarySettings: ObservableObject {
     @Published private(set) var models: [String] = []
     @Published private(set) var discovering = false
     @Published private(set) var discoveryIssue: PichiMeetingSummaryDiscoveryIssue?
-    var discoveryError: String? { self.discoveryIssue?.text() }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
