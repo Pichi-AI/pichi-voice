@@ -921,7 +921,7 @@ struct MeetingFailureCanvas: View {
                     }
                 }
             }
-            MeetingDocumentTitle(title: self.session?.title ?? PichiLocalization.text("Recording setup"))
+            MeetingDocumentTitle(title: self.session?.displayTitle ?? PichiLocalization.text("Recording setup"))
             Divider()
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                 Text(PichiLocalization.text(self.message))

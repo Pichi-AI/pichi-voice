@@ -2325,7 +2325,7 @@ private struct MeetingSetupCanvas: View {
                         .foregroundStyle(self.theme.palette.secondaryText)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                         Text("Last meeting").font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
-                        Text(recentSession.title).font(self.theme.typography.bodyStrong).lineLimit(2)
+                        Text(recentSession.displayTitle).font(self.theme.typography.bodyStrong).lineLimit(2)
                     }
                     Spacer()
                     Text(Self.durationText(recentSession.duration))

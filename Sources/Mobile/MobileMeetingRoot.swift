@@ -796,7 +796,7 @@ struct MobileMeetingRoot: View {
         run {
             guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
             let data = try await MeetingTranscriptExporter.protectedTranscriptJSONForSharing(for: fresh)
-            share = try MeetingSharePayload.transcript(data: data, title: fresh.title, fileExtension: "json")
+            share = try MeetingSharePayload.transcript(data: data, title: fresh.displayTitle, fileExtension: "json")
         }
     }
 }
