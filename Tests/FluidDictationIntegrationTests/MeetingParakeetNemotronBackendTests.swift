@@ -1621,6 +1621,17 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         try await self.assertRetainedOwnerRetryWithIncompleteRival(optionalReadDefect: nil)
     }
 
+    func testV4RetainedRetryPartialEncoderRivalCannotPromoteSurvivingOwner() async throws {
+        let profile = MeetingNemotronModelProfile.experimentalFast128FP16CPU
+        for fingerprint in [profile.ownerV4StreamingImplementationFingerprint, profile.streamingImplementationFingerprint] {
+            for evidence: RetainedOwnerRetryEvidence in [.missingRival, .duplicateRival, .invalidRival, .foreignRival] {
+                try await self.assertRetainedOwnerRetry(fingerprint: fingerprint,
+                    initialRivalMatchesOwner: true, retryEvidence: evidence,
+                    expectedInitialOwner: false, expectedRetryOwner: false, expectedRetryEncoderCalls: 1)
+            }
+        }
+    }
+
     func testV4RetainedRetryOptionalRivalReadFailureKeepsAnonymousTranscriptWithoutPromotion() async throws {
         for defect: FakeMaterializer.OptionalReadDefect in [.unreadable, .truncated, .nonFinite] {
             try await self.assertRetainedOwnerRetryWithIncompleteRival(optionalReadDefect: defect)
@@ -1721,6 +1732,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
 
     private enum RetainedOwnerRetryEvidence {
         case ambiguous, ownerAndDistantRival, missingProfiles, encoderFailure
+        case missingRival, duplicateRival, invalidRival, foreignRival
     }
 
     /// The real backend/verifier operate on generated non-silent PCM. Only inference output
@@ -1791,6 +1803,15 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         case .ownerAndDistantRival: resumed.voiceProfiles = profiles(rivalMatchesOwner: false)
         case .missingProfiles: resumed.voiceProfiles = []
         case .encoderFailure: resumed.voiceError = MeetingOwnerVoiceProfileError.invalidAudio
+        case .missingRival: resumed.voiceProfiles = Array(profiles(rivalMatchesOwner: true).prefix(1))
+        case .duplicateRival:
+            resumed.voiceProfiles = profiles(rivalMatchesOwner: true)
+            resumed.voiceProfiles.append(resumed.voiceProfiles[1])
+        case .invalidRival:
+            resumed.voiceProfiles = [profiles(rivalMatchesOwner: true)[0], .init(token: rivalToken, embeddings: [[0]])]
+        case .foreignRival:
+            resumed.voiceProfiles = [profiles(rivalMatchesOwner: true)[0],
+                .init(token: .init(analysisEpochID: epoch.id, label: "foreign"), embeddings: [ownerEmbedding, ownerEmbedding])]
         }
         let retry = self.makeBackend(runtime: resumed, materializer: materializer, locator: locator)
         let retryRequest = self.makeRequest(session: session, directory: directory, configuration: configuration)

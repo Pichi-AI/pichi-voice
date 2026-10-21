@@ -1189,10 +1189,12 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                             : legacyExcerpts
                         let profiles = try await self.speakerVoiceProfiles(samples: excerpts)
                         let clipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: excerpts, profiles: profiles)
-                        confirmedOwner = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles,
+                        let complete = !fullOwnerEvidence || MeetingOwnerVoiceVerifier.hasCompleteEncoderResults(
+                            samples: excerpts, profiles: profiles)
+                        confirmedOwner = complete ? MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles,
                             policy: fullOwnerEvidence ? .streamingV4 : .legacy, clipFramesByToken: clipFrames,
                             diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: excerpts, profiles: profiles,
-                                streaming: false, clipFramesByToken: clipFrames))
+                                streaming: false, clipFramesByToken: clipFrames)) : []
                     } catch { try Task.checkCancellation() }
                 }
                 try Task.checkCancellation()

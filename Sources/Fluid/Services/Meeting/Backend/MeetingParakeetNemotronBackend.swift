@@ -525,11 +525,14 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             do {
                 let profiles = try await runtime.speakerVoiceProfiles(samples: phaseA.voiceSamples)
                 let clipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: phaseA.voiceSamples, profiles: profiles)
-                let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: ownerProfile, profiles: profiles,
+                let complete = !fullOwnerEvidence || MeetingOwnerVoiceVerifier.hasCompleteEncoderResults(
+                    samples: phaseA.voiceSamples, profiles: profiles)
+                let confirmed: Set<MeetingBackendSpeakerToken> = complete
+                    ? MeetingOwnerVoiceVerifier.confirmedTokens(owner: ownerProfile, profiles: profiles,
                     policy: ownerPolicy, clipFramesByToken: clipFrames,
                     diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: phaseA.voiceSamples,
                         profiles: profiles, streaming: request.configuration.effectiveSpeakerProcessingMode == .streaming,
-                        clipFramesByToken: clipFrames))
+                        clipFramesByToken: clipFrames)) : []
                 let matchedSlots = Set(confirmed.map { "\($0.analysisEpochID.trackID.uuidString):\($0.label)" })
                 ownerTokens = Set(phaseA.activity.map(\.token).filter {
                     matchedSlots.contains("\($0.analysisEpochID.trackID.uuidString):\($0.label)")

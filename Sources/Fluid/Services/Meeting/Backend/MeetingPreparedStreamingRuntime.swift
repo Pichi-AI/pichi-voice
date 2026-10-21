@@ -34,6 +34,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         let clipFrames: [Int]?
     }
     private var ownerProfiles: [MeetingBackendSpeakerToken: OwnerProfileEvidence] = [:]
+    private var incompleteOwnerProfiles = Set<MeetingBackendSpeakerToken>()
     private var confirmedOwnerTokens: Set<MeetingBackendSpeakerToken> = []
     private var ownerEncoderUnavailable = false
 
@@ -239,6 +240,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         self.speakers.removeAll()
         self.ownerSamples = nil
         self.ownerProfiles.removeAll(keepingCapacity: false)
+        self.incompleteOwnerProfiles.removeAll(keepingCapacity: false)
         self.confirmedOwnerTokens.removeAll(keepingCapacity: false)
         self.pendingWindowTiming = nil
         self.update = .init(activity: [], acceptedThroughSample: 0, processedThroughSample: 0,
@@ -308,10 +310,28 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         try Task.checkCancellation()
         let returned = Dictionary(grouping: profiles, by: \.token)
         let encodedClipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: samples, profiles: profiles)
+        let expectedTokens = Set(samples.map(\.token))
+        let foreignResults = !Set(returned.keys).isSubset(of: expectedTokens)
         for sample in samples {
-            if let matches = returned[sample.token], matches.count == 1, let profile = matches.first {
+            let matches = returned[sample.token] ?? []
+            let complete = !foreignResults && MeetingOwnerVoiceVerifier.hasCompleteEncoderResults(samples: [sample], profiles: matches)
+            if matches.count == 1, let profile = matches.first,
+               self.ownerVerificationPolicy != .streamingV4 || complete {
                 self.ownerProfiles[sample.token] = .init(profile: profile, clipFrames: encodedClipFrames[sample.token])
-            } else { self.ownerProfiles[sample.token] = nil }
+                self.incompleteOwnerProfiles.remove(sample.token)
+            } else {
+                self.ownerProfiles[sample.token] = nil
+                if self.ownerVerificationPolicy == .streamingV4 { self.incompleteOwnerProfiles.insert(sample.token) }
+            }
+        }
+        if self.ownerVerificationPolicy == .streamingV4, !self.incompleteOwnerProfiles.isEmpty {
+            // Persist the blocker across other slots' batches and unchanged EOF. Only a
+            // valid replacement for each missing competitor can restore complete scoring.
+            self.confirmedOwnerTokens.removeAll(keepingCapacity: false)
+            self.traceOwnerDecision(encodedProfiles: profiles.count, candidateProfiles: self.ownerProfiles.count,
+                fullEvidenceProfiles: self.ownerProfiles.values.filter { $0.clipFrames == [80_000, 80_000] }.count,
+                outcome: "incompleteEncoderEvidence", final: final, since: began)
+            return
         }
         let evidence = self.ownerProfiles.values.sorted { $0.profile.token.label < $1.profile.token.label }
         let candidates = evidence.map(\.profile)

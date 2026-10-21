@@ -610,7 +610,8 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
         try await combinedOwnerEOFFirstEligibility()
         try await ownerEOFDueEvidenceRevokes(policy: .streamingV4)
         try await ownerEOFCancellationJoins(policy: .streamingV4)
-        print("33 prepared streaming runtime contract groups passed")
+        try await v4IncompleteRivalBlocksUntilValidReplacement()
+        print("34 prepared streaming runtime contract groups passed")
     }
 
     private nonisolated static var ownerDecisionLines: [String] {
@@ -858,6 +859,51 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
         print("PASS V4 cancelled short evidence joins native owners without internal or emitted confirmation")
     }
 
+    private nonisolated static func v4IncompleteRivalBlocksUntilValidReplacement() async throws {
+        for response: StreamingScopeFixture.Response in [.missing, .duplicate, .invalid, .foreignToken] {
+            DebugLogger.shared.reset()
+            let scope = StreamingScopeFixture(responses: [5: response], distancesBySlot: ["slot-1": 0.05])
+            let recorder = Recorder()
+            let rows = [MeetingNemotronSpeakerSegment(slotIndex: 0, start: 0, end: 12),
+                .init(slotIndex: 1, start: 13, end: 22), .init(slotIndex: 0, start: 26, end: 46)]
+            let source = OwnerReplayFixture(frames: 736_000, ranges: [0..<192_000, 208_000..<352_000, 416_000..<736_000])
+            let adapter = ownerAdapter(scope: scope, recorder: recorder,
+                diarizer: ScheduledOwnerDiarizer(rows), policy: .streamingV4)
+            let ambiguous = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
+            try require(scope.encoderCallCount == 4 && ambiguous.confirmedLocalUserTokens == [],
+                "The live fixture must first score both competing voices and reject their ambiguity")
+            let missing = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<384_000)
+            try require(scope.encoderCallCount == 5 && missing.confirmedLocalUserTokens == [],
+                "Losing only the rival must not promote the cached mature candidate; encoderCalls=\(scope.encoderCallCount)")
+            let decisions = ownerDecisionLines.count
+            _ = try await recognizeOwnerRange(adapter, source: source, range: 384_000..<704_000)
+            let continued = try await recognizeOwnerRange(adapter, source: source, range: 704_000..<736_000)
+            let final = try await adapter.finishStreaming()
+            try require(scope.encoderCallCount >= 6 && ownerDecisionLines.count == decisions
+                && continued.confirmedLocalUserTokens == [] && final.confirmedLocalUserTokens == [],
+                "Other slots' valid updates and unchanged EOF cannot erase a missing-rival blocker")
+            await adapter.cleanup()
+        }
+        DebugLogger.shared.reset()
+        let scope = StreamingScopeFixture(responses: [5: .missing, 6: .differentVoice], distancesBySlot: ["slot-1": 0.05])
+        let recorder = Recorder()
+        let source = OwnerReplayFixture(frames: 480_000, ranges: [0..<192_000, 208_000..<432_000])
+        let adapter = ownerAdapter(scope: scope, recorder: recorder,
+            diarizer: ScheduledOwnerDiarizer([.init(slotIndex: 0, start: 0, end: 12), .init(slotIndex: 1, start: 13, end: 27)]),
+            policy: .streamingV4)
+        _ = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
+        let missing = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<352_000)
+        try require(missing.confirmedLocalUserTokens == [] && scope.encoderCallCount == 5,
+            "Replacement recovery must start with a real missing rival and no owner")
+        let replaced = try await recognizeOwnerRange(adapter, source: source, range: 352_000..<480_000)
+        let final = try await adapter.finishStreaming()
+        try require(scope.encoderCallCount >= 6 && replaced.confirmedLocalUserTokens?.isEmpty == false
+            && final.confirmedLocalUserTokens == replaced.confirmedLocalUserTokens,
+            "A valid, now-distinct replacement for the affected rival must restore complete genuine scoring")
+        await adapter.cleanup()
+        print("PASS V4 incomplete rival blocks later unrelated batches and EOF, then valid replacement restores scoring")
+    }
+
     private static func integerClockOwnsTranscriptOffsets() async throws {
         let recorder = Recorder(), runtime = make(recorder)
         _ = try await runtime.recognize(window: .fixture(samples: Array(repeating: 0.1, count: 292_800), final: true),
@@ -1032,7 +1078,13 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
             let final = try await adapter.finishStreaming()
             try require(scope.encodedClipFrameHistory.count == 4 && final.confirmedLocalUserTokens == [],
                 "A due changed, missing, duplicate, invalid, foreign or failed result must revoke the prior owner at EOF")
-            if case .failure = response {
+            let producesDecision: Bool
+            switch response {
+            case .failure: producesDecision = false
+            case .differentVoice: producesDecision = true
+            default: producesDecision = policy != .streamingV4
+            }
+            if !producesDecision {
                 try require(ownerDecisionLines.count == 3, "Encoder failure cannot manufacture a verified final decision")
             } else {
                 try require(ownerDecisionLines.count == 4 && ownerDecisionLines.last?.contains("outcome=confirmed") == false,

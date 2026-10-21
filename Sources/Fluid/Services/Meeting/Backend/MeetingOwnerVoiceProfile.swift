@@ -45,6 +45,20 @@ nonisolated enum MeetingOwnerVoiceVerifier {
         return frames
     }
 
+    /// An omitted competitor is unavailable evidence, not evidence that the remaining
+    /// profile is the owner. Keep this input/result boundary separate from scoring.
+    static func hasCompleteEncoderResults(
+        samples: [MeetingSpeakerVoiceSamples], profiles: [MeetingSpeakerVoiceProfile]
+    ) -> Bool {
+        let expected = Set(samples.map(\.token))
+        let returned = Set(profiles.map(\.token))
+        return !samples.isEmpty && samples.count <= MeetingSpeakerVoiceSamples.maximumProfiles
+            && samples.count == profiles.count && expected.count == samples.count
+            && returned.count == profiles.count && expected == returned
+            && self.clipFramesByToken(samples: samples, profiles: profiles).count == samples.count
+            && profiles.allSatisfy { MeetingSpeakerVoiceMatcher.distance($0, $0) != nil }
+    }
+
     nonisolated enum Policy: Equatable, Sendable {
         case legacy
         case streamingV2
