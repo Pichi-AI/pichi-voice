@@ -282,3 +282,5 @@ builds/
 /models/
 /recordings/
 /.worktrees/
+
+!docs/development/streaming-owner-voice-2026-10-20.md
