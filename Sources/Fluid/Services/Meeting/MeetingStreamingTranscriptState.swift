@@ -81,6 +81,7 @@ actor MeetingStreamingTranscriptState {
     private var acknowledgedThroughSample = 0
     private var emittedProtectedSourceThroughSample = 0
     private var isComplete = true
+    private let previewID = UUID()
     private var preview: MeetingLivePartial?
     private(set) var metadataDiagnostics: Diagnostics?
     var retainActivityFromSample: Int { self.acknowledgedThroughSample }
@@ -193,10 +194,11 @@ actor MeetingStreamingTranscriptState {
             }
             // An actual sealed empty decoder result is a nonterminal speech boundary.
             // Acoustic-only progress and incomplete/rejected prefixes cannot authorize it.
+            // Text privacy can settle before speaker scoring; its protected words still
+            // wait below for their complete acoustic envelopes before canonical insertion.
             if !final, let range = observation.sealedEmptyASRRange,
                observation.batch.isComplete, self.isComplete,
                range.lowerBound >= self.lastRawWordEndSample,
-               self.processedThroughSample >= self.lastRawWordEndSample,
                let privacyContext = self.privacyContext {
                 let started = ContinuousClock.now
                 MeetingTimelineTrace.shared?.record("privacy_begin", fields: ["attemptID": self.attemptID.uuidString,
@@ -335,10 +337,10 @@ actor MeetingStreamingTranscriptState {
                 batch.protectedSourceThroughSample = protectedThrough
                 self.emittedProtectedSourceThroughSample = protectedThrough
             }
-            // Only the privacy actor's already approved lexical-tail display can leave
-            // separately from canonical words. It is in-memory UI metadata, not a word,
-            // checkpoint transcript or permission to advance the privacy-safe cursor.
-            self.preview = final ? nil : pendingPreview
+            // Privacy-approved words can be visible while their acoustic envelopes await
+            // speaker scoring. The lexical-tail display is disjoint from these canonical-safe
+            // pending words. Neither display changes canonical admission or its safe cursor.
+            self.preview = final ? nil : self.protectedPendingPreview(tail: pendingPreview)
             batch.livePreview = self.preview
             let retain = Self.floorSample(min(updated.retainActivityFrom,
                 heldStart ?? updated.retainActivityFrom, pendingStart ?? updated.retainActivityFrom))
@@ -479,6 +481,18 @@ actor MeetingStreamingTranscriptState {
         if checkTime, let start = self.pending.first?.nativeTiming?.start,
            let end = self.pending.compactMap({ $0.nativeTiming?.end }).max(),
            end - start > self.limits.maximumPendingSeconds { throw Failure.pendingTimeLimit }
+    }
+
+    private func protectedPendingPreview(tail: MeetingLivePartial?) -> MeetingLivePartial? {
+        let pendingText = self.pending.map(\.text).joined(separator: " ")
+        let text = [pendingText, tail?.text ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+        guard !text.isEmpty else { return nil }
+        let starts = self.pending.map { $0.start.seconds } + (tail.map { [$0.start] } ?? [])
+        guard let start = starts.min() else { return nil }
+        // A partial lexical tail can have approved text without an approved endpoint.
+        // In that case only complete pending fragments contribute audio coverage.
+        let ends = self.pending.map { $0.end.seconds } + (tail?.end.map { [$0] } ?? [])
+        return MeetingLivePartial(id: self.previewID, text: text, start: start, end: ends.max())
     }
 
     private func checkActive() throws {
