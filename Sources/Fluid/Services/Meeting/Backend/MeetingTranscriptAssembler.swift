@@ -780,11 +780,7 @@ nonisolated struct MeetingTranscriptAssembler {
                 || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
         }
         let localIdentities = Set(confirmedLocalUserTokens.map { canonicalByToken[$0] ?? $0 })
-        let priorIDs = Set(priorSpeakers.map(\.id))
-        let ordinals = Dictionary(uniqueKeysWithValues: speakingTokens.filter {
-            canonicalByToken[$0] == nil && !priorIDs.contains(Self.speakerID(attemptID: attemptID, token: $0))
-        }.enumerated().map { ($0.element, $0.offset + priorSpeakers.count + 1) })
-        return speakingTokens.map { token in
+        let mapped: [(token: MeetingBackendSpeakerToken, speaker: MeetingSessionSpeaker)] = speakingTokens.map { token in
             let canonical = canonicalByToken[token] ?? token
             let scopedClusterID = Self.scopedClusterID(for: canonical)
             let speakerID = Self.speakerID(attemptID: attemptID, token: canonical)
@@ -797,14 +793,23 @@ nonisolated struct MeetingTranscriptAssembler {
                 token,
                 MeetingSessionSpeaker(
                     id: speakerID,
-                    displayName: String(format: self.speakerNameFormat, Int64(ordinals[canonical] ?? 1)),
+                    displayName: String(format: self.speakerNameFormat, Int64(1)),
                     diarizationClusterID: scopedClusterID,
                     trackKind: trackKinds[token.analysisEpochID.trackID] ?? .microphone,
                     isLocalUser: isLocalUser,
-                    identityCandidates: []
+                    identityCandidates: [],
+                    generatedParticipantNumber: isLocalUser ? 0 : 1
                 )
             )
         }
+        var ordered = priorSpeakers
+        var indices = Dictionary(ordered.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        for item in mapped {
+            if let index = indices[item.speaker.id] { ordered[index] = item.speaker }
+            else { indices[item.speaker.id] = ordered.count; ordered.append(item.speaker) }
+        }
+        let numbered = MeetingSessionSpeaker.numberingGeneratedParticipants(ordered, speakerNameFormat: self.speakerNameFormat)
+        return mapped.map { ($0.token, numbered[indices[$0.speaker.id]!]) }
     }
 
     private static func unionIntervals(_ intervals: [MeetingAnalysisInterval]) -> [MeetingAnalysisInterval] {
@@ -916,7 +921,7 @@ nonisolated struct MeetingTranscriptAssembler {
         }
         var batch = MeetingPCMTranscriptBatch(segments: segments,
             speakers: speakers.map(\.speaker))
-        batch.speakers = batch.mergingSpeakers(into: reconciledPriorSpeakers)
+        batch.speakers = batch.mergingSpeakers(into: reconciledPriorSpeakers, speakerNameFormat: self.speakerNameFormat)
         return batch
     }
 
@@ -946,13 +951,15 @@ nonisolated struct MeetingTranscriptAssembler {
     /// Identity-only verification reuses the assembler's stable token mapping. It never mints
     /// another participant, edits aliases or reattributes already protected words.
     static func applyingLocalUserTokens(to speakers: [MeetingSessionSpeaker], attemptID: UUID,
-                                       tokens: Set<MeetingBackendSpeakerToken>) -> [MeetingSessionSpeaker] {
+                                       tokens: Set<MeetingBackendSpeakerToken>,
+                                       speakerNameFormat: String = PichiLocalization.text("Speaker %lld")) -> [MeetingSessionSpeaker] {
         let IDs = Set(tokens.map { Self.speakerID(attemptID: attemptID, token: $0) })
-        return speakers.map { source in
+        let updated = speakers.map { source in
             var speaker = source
             speaker.isLocalUser = IDs.contains(speaker.id)
             return speaker
         }
+        return MeetingSessionSpeaker.numberingGeneratedParticipants(updated, speakerNameFormat: speakerNameFormat)
     }
 
     private static func scopedClusterID(for token: MeetingBackendSpeakerToken) -> String {

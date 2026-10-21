@@ -43,6 +43,26 @@ struct MeetingSessionStoreCheckpointTests {
             precondition(value, message)
             checks += 1
         }
+        var generated = speaker
+        generated.displayName = "Speaker 1"
+        generated.generatedParticipantNumber = 1
+        var named = session
+        named.speakers = [generated]
+        try named.renameSpeaker(id: generated.id, to: "Ручное имя Ёё")
+        check(named.speakers[0].generatedParticipantNumber == nil,
+              "An explicit alias must leave automatic participant numbering")
+        let alias = MeetingSessionSpeaker.numberingGeneratedParticipants(named.speakers, speakerNameFormat: "Speaker %lld")
+        check(alias[0].displayName == "Ручное имя Ёё", "Numbering replaced a manual alias")
+        let speakerCodec = JSONEncoder()
+        let numberedData = try speakerCodec.encode(generated)
+        let decodedNumbered = try JSONDecoder().decode(MeetingSessionSpeaker.self, from: numberedData)
+        check(decodedNumbered == generated, "Generated participant metadata failed to survive the saved-data codec")
+        var legacyObject = try JSONSerialization.jsonObject(with: numberedData) as! [String: Any]
+        legacyObject.removeValue(forKey: "generatedParticipantNumber")
+        let decodedLegacy = try JSONDecoder().decode(MeetingSessionSpeaker.self,
+            from: JSONSerialization.data(withJSONObject: legacyObject))
+        check(decodedLegacy.generatedParticipantNumber == nil && decodedLegacy.displayName == generated.displayName,
+              "An older saved speaker must decode as a preserved alias")
         try Self.checkReadableTranscriptContract(check)
 
         try Self.checkPlainParticipantLabels(template: session, check: check)
