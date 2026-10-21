@@ -92,7 +92,8 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     /// Identity evidence can refine the owner marker after a speaker was first checkpointed.
     /// Reuse this merge in the runtime and durable checkpoint so promotion and revocation agree;
     /// an automatic observation never replaces user aliases, merges or identity corrections.
-    func mergingSpeakers(into existing: [MeetingSessionSpeaker]) -> [MeetingSessionSpeaker] {
+    func mergingSpeakers(into existing: [MeetingSessionSpeaker],
+                         speakerNameFormat: String = PichiLocalization.text("Speaker %lld")) -> [MeetingSessionSpeaker] {
         var result = existing
         var indices = Dictionary(existing.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
         for speaker in self.speakers {
@@ -103,6 +104,8 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
                 result.append(speaker)
             }
         }
-        return result
+        // Apply numbering against the latest canonical aliases and owner flags. Delayed raw
+        // observations may contain earlier generated numbers and must never restore them.
+        return MeetingSessionSpeaker.numberingGeneratedParticipants(result, speakerNameFormat: speakerNameFormat)
     }
 }

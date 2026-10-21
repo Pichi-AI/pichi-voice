@@ -70,7 +70,9 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             duration: 12, units: units, confirmedLocalUserTokens: [owner])
         XCTAssertEqual(result.speakers.count, 2)
         XCTAssertEqual(result.speakers.filter(\.isLocalUser).map(\.displayName), ["Speaker 1"])
-        XCTAssertEqual(result.speakers.filter { !$0.isLocalUser }.map(\.displayName), ["Speaker 2"])
+        XCTAssertEqual(result.speakers.filter { !$0.isLocalUser }.map(\.displayName), ["Speaker 1"])
+        XCTAssertEqual(result.speakers.filter(\.isLocalUser).map(\.generatedParticipantNumber), [0])
+        XCTAssertEqual(result.speakers.filter { !$0.isLocalUser }.map(\.generatedParticipantNumber), [1])
         XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil })
     }
 

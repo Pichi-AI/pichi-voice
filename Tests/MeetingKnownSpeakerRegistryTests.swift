@@ -44,6 +44,7 @@ struct MeetingKnownSpeakerRegistryTests {
             epoch: epoch, attemptID: attempt, duration: 13, speakerNameFormat: "Speaker %lld").speakers
         let index = speakers.firstIndex { $0.diarizationClusterID?.hasSuffix(":b") == true }!
         speakers[index].displayName = "Синтетический Ёж"
+        speakers[index].generatedParticipantNumber = nil
         speakers[index].diarizationEmbedding = [0.1, 0.2]
         speakers[index].isLocalUser = true
         return speakers
@@ -110,7 +111,67 @@ struct MeetingKnownSpeakerRegistryTests {
         try safetyAndSourceScopes()
         try registryScopes()
         try noNewIdentityAndNativeEvidence()
+        try ownerExcludedFromGeneratedNumbering()
         print("Known contextual speaker registry: \(checks) checks passed")
+    }
+
+    static func ownerExcludedFromGeneratedNumbering() throws {
+        let tokens = [token("a"), token("b"), token("c")]
+        let units = tokens.enumerated().map { index, token in
+            MeetingFinalTextUnit(id: "numbering:\(index)", trackID: epoch.trackID, analysisEpochID: epoch,
+                precision: .utterance, text: "Synthetic meeting voice", analysisStart: Double(index * 6),
+                analysisEnd: Double(index * 6 + 6), speaker: .assigned(token), analysisSpanIDs: [])
+        }
+        let assembler = MeetingTranscriptAssembler(speakerNameFormat: "Участник %lld")
+        let anonymous = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 0,
+            duration: 18, units: units)
+        check(anonymous.speakers.map(\.displayName) == ["Участник 1", "Участник 2", "Участник 3"])
+        for owner in tokens {
+            let confirmed = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 0,
+                duration: 18, units: units, confirmedLocalUserTokens: [owner])
+            let late = MeetingTranscriptAssembler.applyingLocalUserTokens(to: anonymous.speakers,
+                attemptID: attempt, tokens: [owner], speakerNameFormat: "Участник %lld")
+            check(confirmed.speakers.map(\.id) == anonymous.speakers.map(\.id))
+            check(late.map(\.id) == anonymous.speakers.map(\.id))
+            check(confirmed.speakers.filter { !$0.isLocalUser }.map(\.displayName) == ["Участник 1", "Участник 2"])
+            check(late.filter { !$0.isLocalUser }.map(\.generatedParticipantNumber) == [1, 2])
+            check(late.filter(\.isLocalUser).map(\.generatedParticipantNumber) == [0])
+            // A delayed raw batch may carry earlier numbers. Owner publication supplies the
+            // current flags; canonical merge must recalculate instead of copying stale names.
+            var stale = anonymous
+            stale.speakers = stale.speakers.map { source in
+                var speaker = source
+                speaker.isLocalUser = late.first(where: { $0.id == source.id })!.isLocalUser
+                return speaker
+            }
+            let merged = stale.mergingSpeakers(into: late, speakerNameFormat: "Участник %lld")
+            check(merged.filter { !$0.isLocalUser }.map(\.displayName) == ["Участник 1", "Участник 2"])
+            let extra = token("d")
+            let extraUnit = MeetingFinalTextUnit(id: "numbering:later", trackID: epoch.trackID,
+                analysisEpochID: epoch, precision: .utterance, text: "Later synthetic voice",
+                analysisStart: 0, analysisEnd: 6, speaker: .assigned(extra), analysisSpanIDs: [])
+            let later = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 120,
+                duration: 6, units: [extraUnit], priorSpeakers: merged, confirmedLocalUserTokens: [owner])
+            check(later.speakers.filter { !$0.isLocalUser }.map(\.displayName) == ["Участник 1", "Участник 2", "Участник 3"])
+            let returned = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 600,
+                duration: 18, units: units, priorSpeakers: later.speakers, confirmedLocalUserTokens: [owner])
+            check(returned.speakers == later.speakers, "A long pause or repeated voice changed its identity or number")
+            let revoked = MeetingTranscriptAssembler.applyingLocalUserTokens(to: late,
+                attemptID: attempt, tokens: [], speakerNameFormat: "Участник %lld")
+            check(revoked == anonymous.speakers, "Revocation failed to restore ordinary generated numbering")
+        }
+        var alias = anonymous.speakers
+        alias[1].displayName = "Ручное имя Ёё"
+        alias[1].generatedParticipantNumber = nil
+        let confirmed = MeetingTranscriptAssembler.applyingLocalUserTokens(to: alias, attemptID: attempt,
+            tokens: [tokens[0]], speakerNameFormat: "Участник %lld")
+        check(confirmed[1].displayName == "Ручное имя Ёё" && confirmed[1].generatedParticipantNumber == nil)
+        check(confirmed[2].displayName == "Участник 2", "An alias still represents a real participant")
+        var legacy = anonymous.speakers
+        for index in legacy.indices { legacy[index].generatedParticipantNumber = nil }
+        let old = MeetingTranscriptAssembler.applyingLocalUserTokens(to: legacy, attemptID: attempt,
+            tokens: [tokens[0]], speakerNameFormat: "Участник %lld")
+        check(old.map(\.displayName) == legacy.map(\.displayName), "Legacy saved names were rewritten without provenance")
     }
 
     static func matchingAutomaticContext() throws {

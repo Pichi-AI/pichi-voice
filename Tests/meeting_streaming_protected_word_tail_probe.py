@@ -60,6 +60,7 @@ pcm += assembler[start:]
 subprocess.run([
     "xcrun", "swiftc", "-O", "-swift-version", "6", "-strict-concurrency=complete",
     "-default-isolation", "MainActor", "-parse-as-library", "-module-cache-path", str(BUILD / "ModuleCache"),
+    str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
     str(BUILD / "ValueContracts.swift"), str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"),
     str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
     str(BUILD / "PCMAssembly.swift"), str(meeting / "Backend/MeetingStreamingProtectedWordTail.swift"),
@@ -69,6 +70,7 @@ subprocess.run([str(BUILD / "tests")], cwd=ROOT, check=True)
 subprocess.run([
     "xcrun", "swiftc", "-O", "-swift-version", "6", "-strict-concurrency=complete",
     "-default-isolation", "MainActor", "-parse-as-library", "-module-cache-path", str(BUILD / "ModuleCache"),
+    str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
     str(BUILD / "ValueContracts.swift"), str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"),
     str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
     str(BUILD / "PCMAssembly.swift"), str(meeting / "Backend/MeetingStreamingProtectedWordTail.swift"),
@@ -79,6 +81,7 @@ subprocess.run([str(BUILD / "registry-tests")], cwd=ROOT, check=True)
 subprocess.run([
     "xcrun", "swiftc", "-O", "-swift-version", "6", "-strict-concurrency=complete",
     "-default-isolation", "MainActor", "-parse-as-library", "-module-cache-path", str(BUILD / "ModuleCache"),
+    str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
     str(BUILD / "ValueContracts.swift"), str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"),
     str(meeting / "Backend/MeetingSpeakerAttribution.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
     str(BUILD / "PCMAssembly.swift"), str(meeting / "Backend/MeetingStreamingProtectedWordTail.swift"),

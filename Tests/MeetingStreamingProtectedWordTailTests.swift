@@ -267,6 +267,7 @@ struct MeetingStreamingProtectedWordTailTests {
             epoch: epoch, attemptID: attempt, duration: 13, speakerNameFormat: "Speaker %lld")
         var known = established.speakers
         known[1].displayName = "User alias"
+        known[1].generatedParticipantNumber = nil
         known[1].diarizationEmbedding = [1, 2, 3]
         known[1].isLocalUser = true
         var value = try tail(prior: known)
