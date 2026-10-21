@@ -871,14 +871,49 @@ final class FluidServeTests: XCTestCase {
 
     private func output(of tool: URL, _ arguments: [String]) throws -> String {
         let process = Process()
-        let pipe = Pipe()
+        let outputURL = self.home.appendingPathComponent("cli-output-\(UUID().uuidString).txt")
+        let manager = FileManager.default
+        guard manager.createFile(atPath: outputURL.path, contents: nil,
+                                 attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
+        defer { try? manager.removeItem(at: outputURL) }
+        let output = try FileHandle(forWritingTo: outputURL)
+        defer { try? output.close() }
         process.executableURL = tool
         process.arguments = arguments
-        process.standardOutput = pipe
-        process.standardError = pipe
+        // The native fixture must not wait for exit while a small Pipe blocks the
+        // child's output. Keep the complete synthetic reply in its owned directory.
+        process.standardOutput = output
+        process.standardError = output
         try process.run()
+        let deadline = ProcessInfo.processInfo.systemUptime + 10
+        while process.isRunning && ProcessInfo.processInfo.systemUptime < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if process.isRunning {
+            process.terminate()
+            let grace = ProcessInfo.processInfo.systemUptime + 1
+            while process.isRunning && ProcessInfo.processInfo.systemUptime < grace {
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            process.waitUntilExit()
+            throw NSError(domain: "FluidServeTestOutput", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Synthetic CLI fixture did not finish within ten seconds"])
+        }
         process.waitUntilExit()
-        return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+            throw NSError(domain: "FluidServeTestOutput", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Synthetic CLI fixture exited unsuccessfully"])
+        }
+        let reader = try FileHandle(forReadingFrom: outputURL)
+        defer { try? reader.close() }
+        let limit = 8 * 1024 * 1024
+        var captured = Data()
+        while let bytes = try reader.read(upToCount: min(65_536, limit + 1 - captured.count)), !bytes.isEmpty {
+            captured.append(bytes)
+            guard captured.count <= limit else { throw CocoaError(.fileReadTooLarge) }
+        }
+        return String(data: captured, encoding: .utf8) ?? ""
     }
 
     private func directory(for session: MeetingSession) -> URL {
