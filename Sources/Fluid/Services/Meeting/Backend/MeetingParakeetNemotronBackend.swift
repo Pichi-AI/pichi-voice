@@ -349,7 +349,11 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         let adaptiveOwnerEvidence = request.configuration.effectiveSpeakerProcessingMode == .streaming
             && artifact?.profile.usesAdaptiveStreamingOwnerEvidence(
                 implementationFingerprint: request.configuration.diarizationFingerprint) == true
-        let ownerPolicy: MeetingOwnerVoiceVerifier.Policy = adaptiveOwnerEvidence ? .streamingV2 : .legacy
+        let fullOwnerEvidence = request.configuration.effectiveSpeakerProcessingMode == .streaming
+            && artifact?.profile.requiresFullStreamingOwnerEvidence(
+                implementationFingerprint: request.configuration.diarizationFingerprint) == true
+        let ownerPolicy: MeetingOwnerVoiceVerifier.Policy = fullOwnerEvidence
+            ? .streamingV4 : (adaptiveOwnerEvidence ? .streamingV2 : .legacy)
         let ownerIdentity = ownerProfile.map { "\($0.metadata.generation.uuidString):\($0.encoderFingerprint)" }
         let runtimeFingerprint = artifact.map { "\($0.implementationFingerprint);manifest=\($0.manifestSHA256)" }
         let resume = request.session.audioStorageMode == .retainedFiles
@@ -362,6 +366,11 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             guard restoredState.asr.isEmpty else { throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration }
             restoredState.asr = [:]
         }
+        // V4 eligibility belongs to the actual encoded excerpts and complete competitor set.
+        // A cached decision contains neither, including when it was a negative decision.
+        // Reuse independently pinned ASR/diarizer work, but collect and verify owner evidence
+        // again before publishing any identity. Earlier recipes retain their saved semantics.
+        if fullOwnerEvidence { restoredState.confirmedOwnerTokens = nil }
         let restored = restoredState
 
         // Phase A: Nemotron diarization, one continuous state per track, then drained. A track's
@@ -503,7 +512,12 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         if restored.confirmedOwnerTokens == nil, ownerProfile != nil, !phaseA.voiceSamples.isEmpty {
             do {
                 let profiles = try await runtime.speakerVoiceProfiles(samples: phaseA.voiceSamples)
-                let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: ownerProfile, profiles: profiles, policy: ownerPolicy)
+                let clipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: phaseA.voiceSamples, profiles: profiles)
+                let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: ownerProfile, profiles: profiles,
+                    policy: ownerPolicy, clipFramesByToken: clipFrames,
+                    diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: phaseA.voiceSamples,
+                        profiles: profiles, streaming: request.configuration.effectiveSpeakerProcessingMode == .streaming,
+                        clipFramesByToken: clipFrames))
                 let matchedSlots = Set(confirmed.map { "\($0.analysisEpochID.trackID.uuidString):\($0.label)" })
                 ownerTokens = Set(phaseA.activity.map(\.token).filter {
                     matchedSlots.contains("\($0.analysisEpochID.trackID.uuidString):\($0.label)")

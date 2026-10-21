@@ -1587,6 +1587,133 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
 
     // MARK: - Epoch isolation and unit assignment
 
+    func testV4RetainedRetryRechecksShortRivalInsteadOfReusingOwnerConfirmation() async throws {
+        try await self.assertRetainedOwnerRetry(
+            fingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.streamingImplementationFingerprint,
+            initialRivalMatchesOwner: false, retryEvidence: .ambiguous,
+            expectedInitialOwner: true, expectedRetryOwner: false, expectedRetryEncoderCalls: 1)
+    }
+
+    func testV3RetainedRetryPreservesCachedOwnerDecisionWithoutReencoding() async throws {
+        try await self.assertRetainedOwnerRetry(
+            fingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.ownerV3StreamingImplementationFingerprint,
+            initialRivalMatchesOwner: false, retryEvidence: .ambiguous,
+            expectedInitialOwner: true, expectedRetryOwner: true, expectedRetryEncoderCalls: 0)
+    }
+
+    func testV4RetainedNegativeDecisionDoesNotSuppressNewValidEvidence() async throws {
+        try await self.assertRetainedOwnerRetry(
+            fingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.streamingImplementationFingerprint,
+            initialRivalMatchesOwner: true, retryEvidence: .ownerAndDistantRival,
+            expectedInitialOwner: false, expectedRetryOwner: true, expectedRetryEncoderCalls: 1)
+    }
+
+    func testV4RetainedRetryMissingOrFailedEncoderEvidenceCannotReuseOwnerConfirmation() async throws {
+        for evidence: RetainedOwnerRetryEvidence in [.missingProfiles, .encoderFailure] {
+            try await self.assertRetainedOwnerRetry(
+                fingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.streamingImplementationFingerprint,
+                initialRivalMatchesOwner: false, retryEvidence: evidence,
+                expectedInitialOwner: true, expectedRetryOwner: false, expectedRetryEncoderCalls: 1)
+        }
+    }
+
+    private enum RetainedOwnerRetryEvidence {
+        case ambiguous, ownerAndDistantRival, missingProfiles, encoderFailure
+    }
+
+    /// The real backend/verifier operate on generated non-silent PCM. Only inference output
+    /// is faked: a mature owner and a shorter eligible scoring rival share the same pinned
+    /// physical input on retry. No checkpoint format, model or private profile is fabricated.
+    private func assertRetainedOwnerRetry(
+        fingerprint: String, initialRivalMatchesOwner: Bool, retryEvidence: RetainedOwnerRetryEvidence,
+        expectedInitialOwner: Bool, expectedRetryOwner: Bool, expectedRetryEncoderCalls: Int,
+        file: StaticString = #filePath, line: UInt = #line
+    ) async throws {
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 120)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        var session = self.makeSession(mode: .inRoom, tracks: [track])
+        session.speakerProcessingMode = .streaming
+        let directory = try self.makeTempSessionDirectory()
+        let configuration = MeetingFinalProcessingConfiguration(asrArtifactFingerprint: "synthetic-sha256",
+            languageCode: "en", diarizationFingerprint: fingerprint, speakerProcessingMode: .streaming)
+        let observations: [MeetingAnalysisChunkKey: MeetingChunkObservationResult] = [
+            .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 20),
+        ]
+        var ownerEmbedding = [Float](repeating: 0, count: 256); ownerEmbedding[0] = 1
+        var distantEmbedding = [Float](repeating: 0, count: 256); distantEmbedding[1] = 1
+        let owner = MeetingOwnerVoiceProfileSnapshot(metadata: .init(generation: UUID(), enrolledAt: Date()),
+            encoderFingerprint: MeetingOwnerVoiceProfileStore.encoderFingerprint,
+            embeddings: [ownerEmbedding, ownerEmbedding])
+        let locator = StubModelLocator(artifact: .init(
+            packageURL: URL(fileURLWithPath: "/tmp/synthetic-fast128.nemotronbundle"),
+            totalByteCount: 1, fileCount: 1, manifestSHA256: "synthetic", entryMetadataSHA256: "synthetic",
+            profile: .experimentalFast128FP16CPU))
+        let original = FakeRuntime(), materializer = FakeMaterializer()
+        materializer.sampleAmplitude = 0.1; materializer.alternatingSamplePolarity = true
+        original.ownerVoiceProfileSnapshot = owner
+        let backend = self.makeBackend(runtime: original, materializer: materializer, locator: locator)
+        let plan = try backend.plan(self.makeRequest(session: session, directory: directory, configuration: configuration))
+        let manifest = try self.makeManifest(plan: plan, observations: observations)
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first, file: file, line: line)
+        let ownerToken = MeetingBackendSpeakerToken(analysisEpochID: epoch.id, label: "slot-0")
+        let rivalToken = MeetingBackendSpeakerToken(analysisEpochID: epoch.id, label: "slot-1")
+        func profiles(rivalMatchesOwner: Bool) -> [MeetingSpeakerVoiceProfile] {
+            let rival = rivalMatchesOwner ? ownerEmbedding : distantEmbedding
+            return [.init(token: ownerToken, embeddings: [ownerEmbedding, ownerEmbedding]),
+                    .init(token: rivalToken, embeddings: [rival, rival])]
+        }
+        original.diarizerFactory.segmentsByEpoch[epoch.id] = [
+            .init(slotIndex: 0, start: 0, end: 12), .init(slotIndex: 1, start: 12, end: 20),
+        ]
+        original.voiceProfiles = profiles(rivalMatchesOwner: initialRivalMatchesOwner)
+        original.asrSession.responses = [.init(text: "first second", words: [
+            .init(text: "first", start: 0.5, end: 1), .init(text: "second", start: 12.5, end: 13),
+        ])]
+        let initial = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(initialBundle) = initial else {
+            return XCTFail("Expected canonical result", file: file, line: line)
+        }
+        XCTAssertEqual(initialBundle.confirmedLocalUserTokens, expectedInitialOwner ? [ownerToken] : [], file: file, line: line)
+        XCTAssertEqual(original.voiceSampleCalls.count, 1, file: file, line: line)
+        let encodedInputs = try XCTUnwrap(original.voiceSampleCalls.first, file: file, line: line)
+        XCTAssertEqual(encodedInputs.first { $0.token == ownerToken }?.clipFrames, [80_000, 80_000], file: file, line: line)
+        let rivalFrames = try XCTUnwrap(encodedInputs.first { $0.token == rivalToken }?.clipFrames, file: file, line: line)
+        XCTAssertEqual(rivalFrames.count, 2, file: file, line: line)
+        XCTAssertTrue(rivalFrames.allSatisfy { (48_000..<80_000).contains($0) },
+                      "Short rivals must still reach scoring before full-winner eligibility", file: file, line: line)
+
+        session.processingAttempts = []
+        let resumed = FakeRuntime(); resumed.ownerVoiceProfileSnapshot = owner
+        switch retryEvidence {
+        case .ambiguous: resumed.voiceProfiles = profiles(rivalMatchesOwner: true)
+        case .ownerAndDistantRival: resumed.voiceProfiles = profiles(rivalMatchesOwner: false)
+        case .missingProfiles: resumed.voiceProfiles = []
+        case .encoderFailure: resumed.voiceError = MeetingOwnerVoiceProfileError.invalidAudio
+        }
+        let retry = self.makeBackend(runtime: resumed, materializer: materializer, locator: locator)
+        let retryRequest = self.makeRequest(session: session, directory: directory, configuration: configuration)
+        let retryPlan = try retry.plan(retryRequest)
+        let result = try await retry.execute(plan: retryPlan,
+            manifest: self.makeManifest(plan: retryPlan, observations: observations), progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = result else {
+            return XCTFail("Expected canonical retry result", file: file, line: line)
+        }
+        XCTAssertNotEqual(retryRequest.attemptID, plan.attemptID, file: file, line: line)
+        XCTAssertEqual(bundle.confirmedLocalUserTokens, expectedRetryOwner ? [ownerToken] : [], file: file, line: line)
+        XCTAssertEqual(resumed.voiceSampleCalls.count, expectedRetryEncoderCalls, file: file, line: line)
+        if expectedRetryEncoderCalls > 0 {
+            XCTAssertEqual(resumed.voiceSampleCalls, original.voiceSampleCalls,
+                           "V4 recollects the same actual excerpts with the complete competitor set", file: file, line: line)
+        }
+        XCTAssertTrue(resumed.diarizerFactory.createdEpochs.isEmpty,
+                      "Independently pinned completed diarization must remain reusable", file: file, line: line)
+        XCTAssertTrue(resumed.asrSession.callSampleCounts.isEmpty,
+                      "Completed native ASR must not repeat for owner re-verification", file: file, line: line)
+        XCTAssertEqual(bundle.evidence.units.map(\.text), initialBundle.evidence.units.map(\.text), file: file, line: line)
+        XCTAssertEqual(bundle.evidence.units.map(\.analysisStart), initialBundle.evidence.units.map(\.analysisStart), file: file, line: line)
+        XCTAssertEqual(bundle.evidence.speakerActivity, initialBundle.evidence.speakerActivity, file: file, line: line)
+    }
+
     func testShortenedTrackCannotInheritCachedOwnerConfirmationFromReassignedSlot() async throws {
         let firstChunk = self.makePCMChunk(sequence: 0, start: 100, end: 108)
         let secondChunk = self.makePCMChunk(sequence: 1, start: 111, end: 119)
@@ -2436,6 +2563,10 @@ private final nonisolated class FakeASRSession: MeetingParakeetASRSession, @unch
 }
 
 private final nonisolated class FakeRuntime: MeetingParakeetNemotronRunning, @unchecked Sendable {
+    nonisolated struct VoiceSampleInput: Equatable, Sendable {
+        let token: MeetingBackendSpeakerToken
+        let clipFrames: [Int]
+    }
     let diarizerFactory = FakeDiarizerFactory()
     let asrSession = FakeASRSession()
     var voiceProfiles: [MeetingSpeakerVoiceProfile] = []
@@ -2444,8 +2575,10 @@ private final nonisolated class FakeRuntime: MeetingParakeetNemotronRunning, @un
     private(set) var diarizationScopeCount = 0
     private(set) var asrAttemptIDs: [UUID] = []
     private(set) var asrConfigurations: [MeetingFinalProcessingConfiguration] = []
+    private(set) var voiceSampleCalls: [[VoiceSampleInput]] = []
 
-    func speakerVoiceProfiles(samples _: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
+    func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
+        self.voiceSampleCalls.append(samples.map { .init(token: $0.token, clipFrames: $0.clips.map(\.count)) })
         if let voiceError { throw voiceError }
         return self.voiceProfiles
     }
@@ -2474,6 +2607,7 @@ private final nonisolated class FakeMaterializer: MeetingEpochAudioMaterializing
     var customSpanSampleCounts: [MeetingAnalysisEpochID: [Int]] = [:]
     var replaySampleCounts: [MeetingAnalysisEpochID: Int] = [:]
     var sampleAmplitude: Float = 0
+    var alternatingSamplePolarity = false
     private(set) var maximumReplayRead = 0
 
     struct GeneratedSource: MeetingPCMReplaySource {
@@ -2531,7 +2665,9 @@ private final nonisolated class FakeMaterializer: MeetingEpochAudioMaterializing
         }
         return MeetingMaterializedEpoch(
             epochID: epoch.id,
-            samples: [Float](repeating: self.sampleAmplitude, count: cursor),
+            samples: self.alternatingSamplePolarity
+                ? (0..<cursor).map { $0 % 320 < 160 ? self.sampleAmplitude : -self.sampleAmplitude }
+                : [Float](repeating: self.sampleAmplitude, count: cursor),
             sampleRate: 16_000,
             spanSamples: ranges
         )
@@ -2540,6 +2676,7 @@ private final nonisolated class FakeMaterializer: MeetingEpochAudioMaterializing
 
 private final nonisolated class StubModelLocator: MeetingNemotronModelLocating, @unchecked Sendable {
     var error: (any Error)?
+    private let selectedArtifact: MeetingNemotronModelArtifact
     static let artifact = MeetingNemotronModelArtifact(
         packageURL: URL(fileURLWithPath: "/tmp/stub-nemotron.mlpackage"),
         totalByteCount: 1,
@@ -2548,13 +2685,14 @@ private final nonisolated class StubModelLocator: MeetingNemotronModelLocating, 
         entryMetadataSHA256: "stub"
     )
 
-    init(error: (any Error)? = nil) {
+    init(error: (any Error)? = nil, artifact: MeetingNemotronModelArtifact = Self.artifact) {
         self.error = error
+        self.selectedArtifact = artifact
     }
 
     func locate() throws -> MeetingNemotronModelArtifact {
         if let error { throw error }
-        return Self.artifact
+        return self.selectedArtifact
     }
 
     func recheck(_ artifact: MeetingNemotronModelArtifact) throws -> MeetingNemotronModelArtifact {
