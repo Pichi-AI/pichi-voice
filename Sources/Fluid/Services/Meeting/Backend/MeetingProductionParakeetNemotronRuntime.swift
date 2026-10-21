@@ -614,8 +614,13 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 let began = MeetingPCMRuntimeDiagnostics.begin(.voicePrepare)
                 defer { MeetingPCMRuntimeDiagnostics.completed(.voicePrepare, since: began) }
                 do {
-                    try MeetingSpeakerVoiceEncoder.prepare(directory: self.voiceModelDirectory,
-                        validateDefaultRoot: self.usesDefaultVoiceModelDirectory)
+                    let directory = self.voiceModelDirectory
+                    let validateRoot = self.usesDefaultVoiceModelDirectory
+                    // Idle preparation is requested by the UI owner. Use the existing
+                    // joined blocking executor so native compilation cannot inherit it.
+                    try await TranscriptionExecutor().runBlocking {
+                        try MeetingSpeakerVoiceEncoder.prepare(directory: directory, validateDefaultRoot: validateRoot)
+                    }
                 } catch {
                     try Task.checkCancellation()
                     // Optional voice preparation never replaces a valid anonymous recording.
