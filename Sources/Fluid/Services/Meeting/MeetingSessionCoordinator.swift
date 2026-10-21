@@ -2840,6 +2840,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// owns audio, blocks admission, changes a custom title or publishes after Stop.
     private func beginLocationCapture(for session: MeetingSession, generation: UUID) {
         guard session.mode == .inRoom, let resolver = self.locationResolver else { return }
+        // Session creation precedes native/model startup and can be much earlier than
+        // actual capture. Freshness is measured from this newly admitted location request.
+        let requestedAt = Date()
         let selected = PichiLocalization.language
         let languages = [selected] + PichiInterfaceLanguage.allCases.filter { $0 != selected }
         let previous = self.locationTask
@@ -2847,7 +2850,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.locationTask = Task { @MainActor [weak self] in
             await previous?.value
             guard !Task.isCancelled else { return }
-            let location = await resolver.locate(startedAt: session.startedAt, languages: languages)
+            let location = await resolver.locate(startedAt: requestedAt, languages: languages)
             guard !Task.isCancelled, let self, let location,
                   self.captureGeneration == generation, self.isRecording,
                   var current = self.activeSession, current.id == session.id else { return }

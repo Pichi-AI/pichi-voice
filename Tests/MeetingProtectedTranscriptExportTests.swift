@@ -126,6 +126,16 @@ extension MeetingSessionStoreCheckpointTests {
         try rejects(invalid, .protectedTranscriptRequired, "PII-off recordings cannot claim protected speech")
         invalid.piiRedactionEnabled = nil
         try rejects(invalid, .protectedTranscriptRequired, "Old unprotected archives cannot claim protected speech")
+        var located = session
+        located.defaultTitleBase = "In-room meeting"
+        located.location = .init(latitude: 37, longitude: -122, horizontalAccuracy: 10,
+            capturedAt: located.startedAt, addresses: [PichiLocalization.language.rawValue: "10 Example Street, Sample City"])
+        let locatedObject = try JSONSerialization.jsonObject(with:
+            MeetingTranscriptExporter.protectedTranscriptJSON(for: located)) as! [String: Any]
+        check(locatedObject["title"] as? String == located.displayTitle,
+              "Portable export uses the selected interface address and date")
+        located.location?.addresses[PichiLocalization.language.rawValue] = String(repeating: "я", count: 201)
+        try rejects(located, .limitExceeded, "Validate the localized address title that is actually exported")
         invalid = session; invalid.state = .recording
         try rejects(invalid, .protectedTranscriptRequired, "A live recording cannot be handed off as completed")
         invalid = session; invalid.transcriptSegments[0].originalText = "PRIVATE ORIGINAL"

@@ -6671,7 +6671,7 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         XCTAssertEqual(coordinator.state, .recording(session.id))
         XCTAssertNil(coordinator.activeSession?.location)
-        XCTAssertEqual(resolver.requests.first?.startedAt, session.startedAt)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(resolver.requests.first?.startedAt), session.startedAt)
         XCTAssertFalse(resolver.requests.first?.languages.isEmpty ?? true)
 
         let location = self.makeSyntheticMeetingLocation()
