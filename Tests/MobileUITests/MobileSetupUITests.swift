@@ -92,6 +92,15 @@ final class MobileSetupUITests: XCTestCase {
         app.launch()
         openPrivacy(in: app)
         reveal("privacy.dictionary.add", in: app)
+        let previousFixture = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+            "privacy.dictionary.entry.", "Ёжик Тестовый")).firstMatch
+        if ProcessInfo.processInfo.environment["PICHI_SETUP_REMOVE_INTERRUPTED_TEST_ENTRY"] == "1", previousFixture.exists {
+            capture("dictionary-fixture-before-cleanup")
+            previousFixture.tap()
+            XCTAssertTrue(app.buttons["privacy.dictionary.delete"].waitForExistence(timeout: 5))
+            app.buttons["privacy.dictionary.delete"].tap()
+            capture("dictionary-fixture-cleaned")
+        }
         capture("dictionary-00-settings")
         app.buttons["privacy.dictionary.add"].tap()
         let input = app.descendants(matching: .any)["privacy.dictionary.phrase"].firstMatch
@@ -106,11 +115,13 @@ final class MobileSetupUITests: XCTestCase {
         capture("dictionary-02-saved")
         entry.tap()
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        input.press(forDuration: 1.2)
-        let selectAll = app.descendants(matching: .any).matching(NSPredicate(
-            format: "label IN %@", ["Select All", "Выбрать всё", "Выбрать все"])).firstMatch
-        XCTAssertTrue(selectAll.waitForExistence(timeout: 5))
-        selectAll.tap()
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        // First focus moves the sheet when the software keyboard appears. Tap the
+        // settled text field's trailing area to place the caret after the short fixture.
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Ёжик Тестовый".count))
+        XCTAssertFalse((input.value as? String ?? "").contains("Ёжик"))
         input.typeText("Ёжик Проверочный")
         XCTAssertEqual(input.value as? String, "Ёжик Проверочный")
         app.buttons["privacy.dictionary.save"].tap()
