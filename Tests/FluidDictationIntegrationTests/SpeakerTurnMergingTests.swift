@@ -1668,6 +1668,7 @@ final class MeetingSessionModelTests: XCTestCase {
 
             var expected = original
             expected.revision += 1
+            expected.isUserSpeakerAssigned = true
             expected.attributionState = .assigned
             expected.overlap = .none
             XCTAssertEqual(session.transcriptSegments[0], expected)
