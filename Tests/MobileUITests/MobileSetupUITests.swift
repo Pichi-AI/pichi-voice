@@ -23,19 +23,23 @@ final class MobileSetupUITests: XCTestCase {
                           "Attach only to the normal application launched on the owned simulator")
             app.activate()
         } else { app.launch() }
-        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 15),
-                      "This test requires a fresh application container")
-        capture("flow-00-welcome")
-        app.buttons["onboarding.next"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.1"].firstMatch.waitForExistence(timeout: 10))
-        capture("flow-01-model-choice")
-        XCTAssertTrue(app.buttons["onboarding.model.gigaam-v3-eou"].exists)
-        app.buttons["onboarding.next"].tap()
-        capture("flow-02-model-preparation")
-        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.2"].firstMatch.waitForExistence(timeout: 180))
-        capture("flow-03-participants")
-        app.buttons["onboarding.next"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.3"].firstMatch.waitForExistence(timeout: 180))
+        if ProcessInfo.processInfo.environment["PICHI_SETUP_RESUME_AT_PRIVACY"] == "1" {
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.3"].firstMatch.waitForExistence(timeout: 15))
+        } else {
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 15),
+                          "This test requires a fresh application container")
+            capture("flow-00-welcome")
+            app.buttons["onboarding.next"].tap()
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.1"].firstMatch.waitForExistence(timeout: 10))
+            capture("flow-01-model-choice")
+            XCTAssertTrue(app.buttons["onboarding.model.gigaam-v3-eou"].exists)
+            app.buttons["onboarding.next"].tap()
+            capture("flow-02-model-preparation")
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.2"].firstMatch.waitForExistence(timeout: 180))
+            capture("flow-03-participants")
+            app.buttons["onboarding.next"].tap()
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.3"].firstMatch.waitForExistence(timeout: 180))
+        }
         capture("flow-04-privacy-default")
         XCTAssertEqual(app.switches["privacy.pii"].value as? String, "0")
         if ProcessInfo.processInfo.environment["PICHI_SETUP_PREPARE_PRIVACY_E2E"] == "1" {
@@ -142,11 +146,17 @@ final class MobileSetupUITests: XCTestCase {
     private func tapNativeSwitch(_ identifier: String, in app: XCUIApplication) throws {
         let row = app.switches[identifier]
         let bounds = row.frame
-        let control = try XCTUnwrap(app.switches.allElementsBoundByIndex.first {
+        if let control = app.switches.allElementsBoundByIndex.first(where: {
             bounds.contains($0.frame) && $0.frame.width > 0 && $0.frame.width < bounds.width / 2
-        })
-        XCTAssertTrue(control.isHittable)
-        control.tap()
+        }) {
+            XCTAssertTrue(control.isHittable)
+            control.tap()
+        } else {
+            // A standalone Toggle can expose the native switch itself as the identified
+            // element. Its trailing control is visible in the gated native screenshot.
+            XCTAssertTrue(row.isHittable)
+            row.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
     }
 
     private func capture(_ step: String) {

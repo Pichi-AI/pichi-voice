@@ -258,10 +258,6 @@ private struct MobilePrivacySettings: View {
             }
             Section(PichiLocalization.text("Data cleanup")) {
                 MobilePrivacyActivationControls(activation: activation)
-                if settings.meetingSaveAudio {
-                    Text(PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."))
-                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                }
             }
             MobileSensitiveDictionarySettings()
             Section {
