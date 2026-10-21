@@ -76,10 +76,10 @@ struct MeetingSessionStoreCheckpointTests {
             let decodedWord = try JSONDecoder().decode(MeetingTranscriptSegment.self, from: JSONEncoder().encode(word))
             check(decodedWord == word, "Manual participant provenance must survive the production codec exactly")
         }
-        var legacyWord = try JSONSerialization.jsonObject(with: JSONEncoder().encode(session.transcriptSegments[0])) as! [String: Any]
-        legacyWord.removeValue(forKey: "isUserSpeakerAssigned")
+        var legacyWordRecord = try JSONSerialization.jsonObject(with: JSONEncoder().encode(session.transcriptSegments[0])) as! [String: Any]
+        legacyWordRecord.removeValue(forKey: "isUserSpeakerAssigned")
         let decodedLegacyWord = try JSONDecoder().decode(MeetingTranscriptSegment.self,
-            from: JSONSerialization.data(withJSONObject: legacyWord))
+            from: JSONSerialization.data(withJSONObject: legacyWordRecord))
         check(decodedLegacyWord.isUserSpeakerAssigned == nil, "An older word retains legacy assignment provenance")
         try Self.checkReadableTranscriptContract(check)
 
