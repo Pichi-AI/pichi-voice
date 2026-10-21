@@ -31,17 +31,17 @@ struct MobileOnboarding: View {
                     ProgressView(value: Double(step + 1), total: 6).accessibilityLabel(PichiLocalization.text("Setup progress"))
                     Text(PichiLocalization.text(titles[step])).font(theme.typography.title)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("onboarding.step.\(step)")
                     content
                     if let error {
                         Text(error).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
                             .accessibilityIdentifier("onboarding.error")
                     }
-                }.padding(24).frame(maxWidth: 680, alignment: .leading).frame(maxWidth: .infinity)
+                }.foregroundStyle(theme.palette.primaryText)
+                    .padding(24).frame(maxWidth: 680, alignment: .leading).frame(maxWidth: .infinity)
             }
             .safeAreaInset(edge: .bottom) { footer }
             .background(theme.palette.windowBackground)
-            .foregroundStyle(theme.palette.primaryText)
-            .accessibilityIdentifier("onboarding.step.\(step)")
         }
         .task { if selected == nil { selected = settings.mobileSetupSelectedModel ?? settings.selectedSpeechModel } }
         .onChange(of: selected) { _, model in settings.mobileSetupSelectedModel = model }
@@ -139,7 +139,8 @@ struct MobileOnboarding: View {
                     .accessibilityIdentifier("onboarding.cancel")
             }
             Button(PichiLocalization.text(step == 5 ? "Get started" : error == nil ? "Next" : "Try again")) { next() }
-                .buttonStyle(.borderedProminent).disabled(advancing || (step == 3 && privacy.isPreparing))
+                .buttonStyle(.borderedProminent).foregroundStyle(theme.palette.accentForeground)
+                .disabled(advancing || (step == 3 && privacy.isPreparing))
                 .accessibilityIdentifier("onboarding.next")
         }.controlSize(.large)
         }.padding(20).frame(maxWidth: 680).frame(maxWidth: .infinity)
@@ -267,7 +268,7 @@ struct MobilePrivacyActivationControls: View {
             }
             Text(PichiLocalization.text("Locally hides Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets. Detection can miss data. Review before sharing."))
                 .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-        }.accessibilityIdentifier("privacy.activation")
+        }
     }
 }
 

@@ -39,11 +39,11 @@ final class MobileSetupUITests: XCTestCase {
         capture("flow-04-privacy-default")
         XCTAssertEqual(app.switches["privacy.pii"].value as? String, "0")
         if ProcessInfo.processInfo.environment["PICHI_SETUP_PREPARE_PRIVACY_E2E"] == "1" {
-            app.switches["privacy.pii"].tap()
+            try tapNativeSwitch("privacy.pii", in: app)
             capture("flow-04a-privacy-enabling")
             XCTAssertTrue(app.descendants(matching: .any)["privacy.pii.active"].firstMatch.waitForExistence(timeout: 180))
             capture("flow-04b-privacy-ready")
-            app.switches["privacy.pii"].tap()
+            try tapNativeSwitch("privacy.pii", in: app)
             XCTAssertFalse(app.descendants(matching: .any)["privacy.pii.active"].firstMatch.exists)
             capture("flow-04c-privacy-off")
         }
@@ -80,6 +80,73 @@ final class MobileSetupUITests: XCTestCase {
                 app.terminate()
             }
         }
+    }
+
+    func testNativeSensitiveDictionaryCRUDAndDarkAppearance() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light", "-MobileSetupVersion", "1"]
+        app.launch()
+        openPrivacy(in: app)
+        reveal("privacy.dictionary.add", in: app)
+        capture("dictionary-00-settings")
+        app.buttons["privacy.dictionary.add"].tap()
+        let input = app.descendants(matching: .any)["privacy.dictionary.phrase"].firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText("Ёжик Тестовый")
+        capture("dictionary-01-add")
+        app.buttons["privacy.dictionary.save"].tap()
+        let entry = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "privacy.dictionary.entry.")).firstMatch
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        XCTAssertTrue(entry.label.contains("Ёжик Тестовый"))
+        capture("dictionary-02-saved")
+        entry.tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Ёжик Тестовый".count))
+        input.typeText("Ёжик Проверочный")
+        app.buttons["privacy.dictionary.save"].tap()
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        XCTAssertTrue(entry.label.contains("Ёжик Проверочный"))
+        capture("dictionary-03-edited")
+        entry.tap()
+        app.buttons["privacy.dictionary.delete"].tap()
+        XCTAssertFalse(entry.exists)
+        capture("dictionary-04-deleted")
+        app.terminate()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark", "-MobileSetupVersion", "1"]
+        app.launch()
+        openPrivacy(in: app)
+        reveal("privacy.dictionary.add", in: app)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "privacy.dictionary.entry.")).firstMatch.exists)
+        capture("dictionary-05-dark-restart")
+    }
+
+    private func openPrivacy(in app: XCUIApplication) {
+        let sidebar = app.buttons["navigation.settings"]
+        if sidebar.waitForExistence(timeout: 2) { sidebar.tap() }
+        else { app.tabBars.buttons["Настройки"].tap() }
+        XCTAssertTrue(app.buttons["settings.privacy"].waitForExistence(timeout: 10))
+        app.buttons["settings.privacy"].tap()
+    }
+
+    private func reveal(_ identifier: String, in app: XCUIApplication) {
+        let button = app.buttons[identifier]
+        for _ in 0..<6 where !button.isHittable {
+            app.swipeUp()
+            capture("dictionary-scroll-\(identifier)")
+        }
+        XCTAssertTrue(button.isHittable)
+    }
+
+    private func tapNativeSwitch(_ identifier: String, in app: XCUIApplication) throws {
+        let row = app.switches[identifier]
+        let bounds = row.frame
+        let control = try XCTUnwrap(app.switches.allElementsBoundByIndex.first {
+            bounds.contains($0.frame) && $0.frame.width > 0 && $0.frame.width < bounds.width / 2
+        })
+        XCTAssertTrue(control.isHittable)
+        control.tap()
     }
 
     private func capture(_ step: String) {
