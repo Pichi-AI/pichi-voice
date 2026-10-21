@@ -1158,10 +1158,11 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     let fullOwnerEvidence = configuration.effectiveSpeakerProcessingMode == .streaming
                         && artifact.profile.requiresFullStreamingOwnerEvidence(
                             implementationFingerprint: configuration.diarizationFingerprint)
-                    let excerpts = fullOwnerEvidence
-                        ? try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(epoch: epoch, source: source, segments: segments)
-                        : try await MeetingSpeakerVoiceSamples.collect(epoch: epoch, source: source, segments: segments)
                     do {
+                        let excerpts = fullOwnerEvidence
+                            ? try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(epoch: epoch, source: source,
+                                segments: segments, requireSuccessfulRead: true)
+                            : try await MeetingSpeakerVoiceSamples.collect(epoch: epoch, source: source, segments: segments)
                         let profiles = try await self.speakerVoiceProfiles(samples: excerpts)
                         let clipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: excerpts, profiles: profiles)
                         confirmedOwner = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles,
