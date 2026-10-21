@@ -213,6 +213,7 @@ final class AppServices: ObservableObject {
             preferredMicrophoneUID: { [weak self] in
                 self?.microphonePreferenceCoordinator.inputDeviceForCapture()?.uid
             },
+            locationResolver: MeetingLocationService(),
             // The coordinator prepares the frozen speaker dependency profile only when the
             // capture mode needs it; the ASR lifecycle remains owned by the existing service.
             validateRecordingModels: {

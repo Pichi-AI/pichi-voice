@@ -995,6 +995,26 @@ nonisolated struct MeetingRetentionState: Codable, Equatable, Sendable {
     var retainAudioUntil: Date?
 }
 
+/// Captured once at the meeting's start. Addresses come from the system geocoder,
+/// keyed by interface language; they are never passed through the UI string catalog.
+nonisolated struct MeetingLocation: Codable, Equatable, Sendable {
+    var latitude: Double
+    var longitude: Double
+    var horizontalAccuracy: Double
+    var capturedAt: Date
+    var addresses: [String: String]
+
+    func address(for language: PichiInterfaceLanguage) -> String? {
+        let value = self.addresses[language.rawValue] ?? self.addresses[language.languageCode]
+        return value.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+    }
+}
+
+@MainActor
+protocol MeetingLocationResolving: AnyObject {
+    func locate(startedAt: Date, languages: [PichiInterfaceLanguage]) async -> MeetingLocation?
+}
+
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
@@ -1003,6 +1023,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var title: String
     /// Present only for automatically named recordings; cleared when the user renames one.
     var defaultTitleBase: String? = nil
+    /// Optional for schema-1 history. A previous recording's location is never inferred.
+    var location: MeetingLocation? = nil
     var languageCode: String
     var mode: MeetingCaptureMode
     var platform: MeetingPlatformProfile?
@@ -1091,6 +1113,17 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 
     var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
         self.applicationAudioScope ?? .selectedApplication
+    }
+
+    var displayTitle: String { self.displayTitle(language: PichiLocalization.language) }
+
+    func displayTitle(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
+        guard self.defaultTitleBase != nil, self.mode == .inRoom else { return self.title }
+        let base = self.location?.address(for: language)
+            ?? PichiLocalization.text("In-room meeting", language: language, bundle: bundle)
+        let date = self.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened)
+            .locale(language.locale))
+        return "\(base) · \(date)"
     }
 
     var effectiveSpeakerProcessingMode: MeetingSpeakerProcessingMode {

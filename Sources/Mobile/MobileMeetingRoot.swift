@@ -383,7 +383,7 @@ struct MobileMeetingRoot: View {
                 }
             }
             if !compactHeight {
-                Text(session.title).font(theme.typography.title).lineLimit(2)
+                Text(session.displayTitle).font(theme.typography.title).lineLimit(2)
             }
             HStack {
                 Label(PichiLocalization.text("Microphone"), systemImage: "mic")
@@ -439,7 +439,7 @@ struct MobileMeetingRoot: View {
         VStack(alignment: .leading, spacing: 24) {
             Label(PichiLocalization.text("Preparing your transcript"), systemImage: "text.alignleft")
                 .font(theme.typography.sectionTitle)
-            Text(session.title).font(theme.typography.title)
+            Text(session.displayTitle).font(theme.typography.title)
             ProgressView(PichiLocalization.text(stageTitle(stage)))
                 .accessibilityIdentifier("meeting.processing")
             Spacer()
@@ -471,7 +471,7 @@ struct MobileMeetingRoot: View {
                 VStack(alignment: .leading, spacing: 16) {
                     // Without transcript text the title belongs here; otherwise the transcript shows it.
                     if session.transcriptSegments.isEmpty {
-                        Text(session.title).font(theme.typography.title)
+                        Text(session.displayTitle).font(theme.typography.title)
                     }
                     Text(PichiLocalization.text(session.state == .interrupted
                         ? "Meeting transcription was interrupted" : "Meeting transcription failed"))
@@ -506,14 +506,14 @@ struct MobileMeetingRoot: View {
 
     private var history: some View {
         let matches = sessions.filter { session in
-            search.isEmpty || session.title.localizedCaseInsensitiveContains(search)
+            search.isEmpty || session.displayTitle.localizedCaseInsensitiveContains(search)
                 || session.activeSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
                 || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
         }
         return List(matches) { session in
             Button { historyPath = [session.id] } label: {
                 VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
-                    Text(session.title).font(theme.typography.bodyStrong)
+                    Text(session.displayTitle).font(theme.typography.bodyStrong)
                     Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
@@ -560,7 +560,7 @@ struct MobileMeetingRoot: View {
         let paragraphs = transcriptReadingSource == readingInput ? transcriptReading : []
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text(session.title).font(theme.typography.title)
+                Text(session.displayTitle).font(theme.typography.title)
                 HStack {
                     Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
                     Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
@@ -589,7 +589,7 @@ struct MobileMeetingRoot: View {
                             Button(PichiLocalization.text("Export Audio")) { exportAudio(session) }
                             Button(PichiLocalization.text("Delete Audio"), role: .destructive) { deletion = .audio(session) }
                         }
-                        Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.title) }
+                        Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.displayTitle) }
                         if coordinator.canUndoCorrection(sessionID: session.id) {
                             Button(PichiLocalization.text("Undo correction")) {
                                 run {

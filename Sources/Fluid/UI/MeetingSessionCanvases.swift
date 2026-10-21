@@ -35,9 +35,9 @@ struct MeetingRecordingCanvas: View {
             }
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                MeetingDocumentTitle(title: self.session.title)
+                MeetingDocumentTitle(title: self.session.displayTitle)
                     .lineLimit(2)
-                    .help(self.session.title)
+                    .help(self.session.displayTitle)
                 Text(self.sourceSummary)
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
@@ -219,7 +219,7 @@ struct MeetingProcessingCanvas: View {
             }
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                MeetingDocumentTitle(title: self.session.title)
+                MeetingDocumentTitle(title: self.session.displayTitle)
                 Text("You can close this window. Processing continues on this Mac.")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
@@ -624,9 +624,9 @@ struct MeetingResultCanvas: View {
     private func documentHeader(hasText: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.lg) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-                MeetingDocumentTitle(title: self.session.title)
+                MeetingDocumentTitle(title: self.session.displayTitle)
                     .editableTitle(
-                        self.session.title,
+                        self.session.displayTitle,
                         id: String(describing: self.session.id),
                         enabled: self.isQuiescent,
                         editorFont: .fluidSystem(.largeTitle, design: .serif).weight(.medium),
@@ -745,7 +745,7 @@ struct MeetingResultCanvas: View {
 
     private var renameMeetingAction: some View {
         Button("Rename meeting…", systemImage: "pencil") {
-            self.pendingRenameSessionText = self.session.title
+            self.pendingRenameSessionText = self.session.displayTitle
             self.isRenamingSession = true
         }
         .disabled(!self.isQuiescent)

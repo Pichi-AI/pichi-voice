@@ -898,7 +898,7 @@ nonisolated enum MeetingTranscriptExporter {
             }
         let document = ExportedTranscript(
             schemaVersion: 2,
-            title: session.title,
+            title: session.displayTitle,
             languageCode: session.languageCode,
             startedAt: session.startedAt,
             endedAt: session.endedAt,
@@ -988,7 +988,7 @@ nonisolated enum MeetingTranscriptExporter {
                 text: paragraph.text)
         }
         let document = PortableTranscript(
-            sessionID: session.id, title: session.title, languageCode: session.languageCode,
+            sessionID: session.id, title: session.displayTitle, languageCode: session.languageCode,
             startedAt: session.startedAt, endedAt: session.endedAt, durationSeconds: durationSeconds,
             speakers: session.activeSpeakers.map {
                 .init(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser)

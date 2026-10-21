@@ -39,7 +39,7 @@ nonisolated enum MeetingAudioExporter {
         copyItem: (URL, URL) throws -> Void
     ) throws -> URL {
         let fileManager = FileManager.default
-        let baseName = Self.sanitizedExportName(session.title)
+        let baseName = Self.sanitizedExportName(session.displayTitle)
         let name = Self.uniqueExportName(baseName, in: destinationFolder, fileManager: fileManager)
         let stagingDirectory = destinationFolder.appendingPathComponent(".\(name).\(UUID().uuidString).export-tmp", isDirectory: true)
         try fileManager.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)

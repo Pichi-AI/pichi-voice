@@ -1297,7 +1297,7 @@ struct MeetingTranscriptionView: View {
 
     private func exportTranscript(_ session: MeetingSession, format: MeetingTranscriptExportFormat, includeEchoes: Bool) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(Self.sanitizedExportName(session.title)).\(format.fileExtension)"
+        panel.nameFieldStringValue = "\(Self.sanitizedExportName(session.displayTitle)).\(format.fileExtension)"
         panel.message = AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         self.actionErrorMessage = nil
@@ -1677,7 +1677,7 @@ private struct MeetingHistoryInspector: View {
         let query = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return self.sessions }
         return self.sessions.filter { session in
-            session.title.localizedCaseInsensitiveContains(query) ||
+            session.displayTitle.localizedCaseInsensitiveContains(query) ||
                 session.capturedApplication?.displayName.localizedCaseInsensitiveContains(query) == true ||
                 session.activeSpeakers.contains(where: { $0.displayName.localizedCaseInsensitiveContains(query) })
         }
@@ -1799,7 +1799,7 @@ private struct MeetingHistoryInspector: View {
                                             .menuIndicator(.hidden)
                                             .fixedSize()
                                             .meetingHoverFeedback()
-                                            .accessibilityLabel("Actions for \(session.title)")
+                                            .accessibilityLabel("Actions for \(session.displayTitle)")
                                             .padding(self.theme.metrics.spacing.sm)
                                         }
                                     }
@@ -1863,7 +1863,7 @@ private struct MeetingHistoryInspector: View {
     @ViewBuilder
     private func contextMenu(for session: MeetingSession) -> some View {
         Button("Rename…", systemImage: "pencil") {
-            self.renameDraft = session.title
+            self.renameDraft = session.displayTitle
             self.renameSessionID = session.id
         }
         .disabled(!self.isQuiescent)
@@ -1943,7 +1943,7 @@ private struct MeetingHistoryRow: View {
                 HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
                     self.tile
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                        Text(self.session.title)
+                        Text(self.session.displayTitle)
                             .font(self.theme.typography.bodyStrong)
                             .foregroundStyle(self.theme.palette.primaryText)
                             .lineLimit(2)
@@ -1959,9 +1959,9 @@ private struct MeetingHistoryRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(self.session.title), \(self.statusText), \(self.sourceName)")
+            .accessibilityLabel("\(self.session.displayTitle), \(self.statusText), \(self.sourceName)")
             .accessibilityAddTraits(self.isSelected ? .isSelected : [])
-            .editableTitle(self.session.title, id: String(describing: self.session.id), enabled: self.isQuiescent, onRename: self.onRename)
+            .editableTitle(self.session.displayTitle, id: String(describing: self.session.id), enabled: self.isQuiescent, onRename: self.onRename)
             if let actionLabel {
                 Button(actionLabel, action: self.performAction)
                     .buttonStyle(.borderless)
