@@ -23,8 +23,9 @@ struct MobileSettingsRoot: View {
             Section {
                 NavigationLink(value: MobileSettingsDestination.general) { Label(PichiLocalization.text("General"), systemImage: "gearshape") }
                     .accessibilityIdentifier("settings.general")
+                // The desktop symbols: meeting capture uses mic, Voice Engine uses waveform.
                 NavigationLink(value: MobileSettingsDestination.recording) {
-                    Label(PichiLocalization.text("Recording"), systemImage: "waveform")
+                    Label(PichiLocalization.text("Recording"), systemImage: "mic")
                 }.accessibilityIdentifier("settings.recording")
                 NavigationLink(value: MobileSettingsDestination.models) {
                     Label(PichiLocalization.text("Voice Engine"), systemImage: "waveform")
@@ -32,10 +33,9 @@ struct MobileSettingsRoot: View {
                 NavigationLink(value: MobileSettingsDestination.privacy) {
                     Label(PichiLocalization.text("Privacy"), systemImage: "lock.shield")
                 }.accessibilityIdentifier("settings.privacy")
-            }
-            Section {
+            } footer: {
                 Text(PichiLocalization.text("Audio recordings and transcripts are stored on this device."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    .font(theme.typography.caption)
             }
         }.listStyle(.insetGrouped).accessibilityIdentifier("settings.root")
             .navigationDestination(for: MobileSettingsDestination.self) { destination in
@@ -72,6 +72,7 @@ struct MobileRecordingSettings: View {
     let microphones: [MeetingMicrophoneIdentity]
     var isPresentedAsSheet = false
     @ObservedObject private var settings = SettingsStore.shared
+    @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
     @State private var isPreparing = false
     @State private var error: String?
@@ -119,7 +120,6 @@ struct MobileRecordingSettings: View {
     var body: some View {
         Form {
             Section(PichiLocalization.text("Audio sources")) {
-                LabeledContent(PichiLocalization.text("Meeting type"), value: PichiLocalization.text("In-room"))
                 Picker(PichiLocalization.text("Microphone"), selection: selectedMicrophone) {
                     Text(PichiLocalization.text("System Default")).tag("")
                     ForEach(microphones, id: \.captureDeviceID) { microphone in
@@ -136,7 +136,7 @@ struct MobileRecordingSettings: View {
                     }
                 }.accessibilityIdentifier("recording.language")
             }
-            Section(PichiLocalization.text("Speaker labels")) {
+            Section {
                 Toggle(PichiLocalization.text("Identify each speaker"), isOn: $settings.meetingSpeakerLabelsEnabled)
                     .accessibilityIdentifier("recording.diarization")
                 if settings.meetingSpeakerLabelsEnabled {
@@ -151,16 +151,21 @@ struct MobileRecordingSettings: View {
                     } else {
                         Text(PichiLocalization.text("The selected voice model cannot identify speakers in this recording mode."))
                     }
+                }
+            } header: {
+                Text(PichiLocalization.text("Speaker labels"))
+            } footer: {
+                if settings.meetingSpeakerLabelsEnabled {
                     Text(PichiLocalization.text(settings.meetingSpeakerProcessingMode == .streaming
                         ? "Speaker labels update during recording. A short delay is expected."
-                        : "Speaker labels are added after recording."))
+                        : "Speaker labels are added after recording.")).font(theme.typography.caption)
                 }
             }
             Section(PichiLocalization.text("My voice")) {
                 MeetingOwnerVoiceSettingsContent(audioArbiter: AppServices.shared.meetingAudioActivityArbiter,
                     microphone: microphones.first { $0.coreAudioUID == settings.meetingRecordingDefaults.microphoneCoreAudioUID })
             }
-            if let error { Section { Text(error).foregroundStyle(.red) } }
+            if let error { Section { Text(error).foregroundStyle(theme.palette.warning) } }
         }.navigationTitle(PichiLocalization.text("Recording"))
             .toolbar {
                 if isPresentedAsSheet {
@@ -182,6 +187,7 @@ private struct MobileSpeakerResourcesSettings: View {
     let processingMode: MeetingSpeakerProcessingMode
     @Binding var isPreparing: Bool
     @Binding var error: String?
+    @Environment(\.theme) private var theme
 
     private var isBusy: Bool {
         switch store.state {
@@ -193,21 +199,28 @@ private struct MobileSpeakerResourcesSettings: View {
     var body: some View {
         diarizationState
         if isPreparing { ProgressView() }
-        Button(PichiLocalization.text("Download")) {
+        if !isReady { Button(PichiLocalization.text("Download")) {
             isPreparing = true
             Task { @MainActor in
                 defer { isPreparing = false }
                 do { _ = try await store.ensureInstalled(includingVoiceEncoder: store.supportsOwnerVoiceVerification) }
                 catch { self.error = error.localizedDescription }
             }
-        }.disabled(isPreparing || isBusy).accessibilityIdentifier("recording.downloadSpeakerModel")
+        }.disabled(isPreparing || isBusy).accessibilityIdentifier("recording.downloadSpeakerModel") }
+    }
+
+    private var isReady: Bool {
+        guard case .ready = store.state else { return false }
+        return processingMode == .streaming || store.allSpeakerResourcesReady
     }
 
     @ViewBuilder private var diarizationState: some View {
         switch store.state {
         case .idle:
-            Text(PichiLocalization.text(processingMode == .streaming
-                ? "Download the speaker model to identify speakers during recording." : "Available after recording"))
+            // After-recording labels are explained once, by the section footer.
+            if processingMode == .streaming {
+                Text(PichiLocalization.text("Download the speaker model to identify speakers during recording."))
+            }
         case .checking: ProgressView(PichiLocalization.text("Checking…"))
         case .downloading(let progress): ProgressView(value: progress)
         case .ready:
@@ -215,8 +228,8 @@ private struct MobileSpeakerResourcesSettings: View {
                 Label(PichiLocalization.text("Ready for speaker identification during recording"), systemImage: "checkmark.circle.fill")
             } else if store.allSpeakerResourcesReady {
                 Label(PichiLocalization.text("Ready · runs after recording"), systemImage: "checkmark.circle.fill")
-            } else { Text(PichiLocalization.text("Available after recording")) }
-        case .failed(let message): Text(message).foregroundStyle(.red)
+            }
+        case .failed(let message): Text(message).foregroundStyle(theme.palette.warning)
         }
     }
 }
@@ -230,6 +243,7 @@ private struct MobileVoiceEngineSettings: View {
     @State private var importing: SettingsStore.SpeechModel?
     @State private var fileImporter = false
     @State private var activatingModelID: String?
+    @State private var deleteCandidate: SettingsStore.SpeechModel?
 
     var body: some View {
         List {
@@ -279,9 +293,8 @@ private struct MobileVoiceEngineSettings: View {
                                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                                         .accessibilityIdentifier("model.selected.\(model.id)")
                                 }
-                                Button(PichiLocalization.text("Delete"), role: .destructive) {
-                                    Task { do { try await asr.clearModelCache(for: model); await refresh() } catch { reportError(error) } }
-                                }.disabled(asr.activeExclusiveActivity != nil).accessibilityIdentifier("model.delete.\(model.id)")
+                                Button(PichiLocalization.text("Delete"), role: .destructive) { deleteCandidate = model }
+                                    .disabled(asr.activeExclusiveActivity != nil).accessibilityIdentifier("model.delete.\(model.id)")
                             } else if model.supportsAutomaticDownload {
                                 Button(PichiLocalization.text("Download")) {
                                     Task {
@@ -300,6 +313,14 @@ private struct MobileVoiceEngineSettings: View {
                 }
             }
         }.navigationTitle(PichiLocalization.text("Voice Engine"))
+            // The desktop's confirmation for removing a downloaded model.
+            .confirmationDialog(PichiLocalization.text("Delete downloaded model?"), isPresented: Binding(
+                get: { deleteCandidate != nil }, set: { if !$0 { deleteCandidate = nil } }
+            ), titleVisibility: .visible, presenting: deleteCandidate) { model in
+                Button(PichiLocalization.text("Delete model"), role: .destructive) {
+                    Task { do { try await asr.clearModelCache(for: model); await refresh() } catch { reportError(error) } }
+                }
+            }
             .fileImporter(isPresented: $fileImporter, allowedContentTypes: [.folder]) { result in
                 guard let model = importing else { return }
                 switch result {
@@ -334,22 +355,25 @@ private struct MobilePrivacySettings: View {
 
     var body: some View {
         Form {
-            Section(PichiLocalization.text("Audio storage")) {
+            Section {
                 Toggle(PichiLocalization.text("Save audio recordings"), isOn: $settings.meetingSaveAudio)
                     .accessibilityIdentifier("privacy.saveAudio")
-                Text(PichiLocalization.text("When disabled, audio is never written to files, including temporary files. Only the transcript is saved."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 if settings.meetingSaveAudio {
                     Picker(PichiLocalization.text("Keep recordings"), selection: $settings.meetingAudioRetentionPolicy) {
                         ForEach(MeetingAudioRetentionPolicy.allCases, id: \.rawValue) { policy in
                             Text(PichiLocalization.text(policy.displayName)).tag(policy)
                         }
                     }.accessibilityIdentifier("privacy.retention")
-                    Text(PichiLocalization.text("Applies to past meetings too. Transcripts are always kept."))
-                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 }
+            } header: {
+                Text(PichiLocalization.text("Audio storage"))
+            } footer: {
+                Text(PichiLocalization.text(settings.meetingSaveAudio
+                    ? "Applies to past meetings too. Transcripts are always kept."
+                    : "When disabled, audio is never written to files, including temporary files. Only the transcript is saved."))
+                    .font(theme.typography.caption)
             }
-            Section(PichiLocalization.text("Sensitive data")) {
+            Section {
                 Toggle(PichiLocalization.text("Redact sensitive data"), isOn: Binding(
                     get: { settings.meetingPIIRedactionEnabled }, set: { enable in
                         if !enable { settings.meetingPIIRedactionEnabled = false; return }
@@ -372,16 +396,15 @@ private struct MobilePrivacySettings: View {
                     Button(PichiLocalization.text("Cancel")) { preparationTask?.cancel() }
                         .accessibilityIdentifier("privacy.pii.cancel")
                 }
-                Text(PichiLocalization.text("Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                if settings.meetingSaveAudio {
-                    Text(PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."))
-                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                }
-            }
-            Section {
-                Text(PichiLocalization.text("Changes apply to new meetings. Audio retention also applies to existing recordings."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            } header: {
+                Text(PichiLocalization.text("Sensitive data"))
+            } footer: {
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                    Text(PichiLocalization.text("Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing."))
+                    if settings.meetingSaveAudio {
+                        Text(PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."))
+                    }
+                }.font(theme.typography.caption)
             }
         }.navigationTitle(PichiLocalization.text("Privacy")).accessibilityIdentifier("settings.privacy.detail")
     }

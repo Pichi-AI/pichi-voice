@@ -43,7 +43,7 @@ struct MeetingSegmentAudioPlayer: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .monospacedDigit()
                     .fixedSize()
-                    .accessibilityLabel("Playback time")
+                    .accessibilityLabel(PichiLocalization.text("Playback time"))
             }
             Slider(
                 value: Binding(
@@ -78,8 +78,8 @@ struct MeetingSegmentAudioPlayer: View {
         Button(action: action) { Image(systemName: symbol) }
             .fluidGlassAction(circular: true)
             .disabled(self.isLoading)
-            .help(title)
-            .accessibilityLabel(title)
+            .help(PichiLocalization.text(title))
+            .accessibilityLabel(PichiLocalization.text(title))
     }
 
     private static func time(_ seconds: Double) -> String {
