@@ -31,8 +31,10 @@ enum AnalyticsConfigTests {
         try self.check(!AnalyticsConfig.from(info: ["POSTHOG_API_KEY": "phc_upstreamfixture", "POSTHOG_HOST": "https://eu.i.posthog.com"]).isConfigured, "Never use upstream keys")
         let custom = AnalyticsModelDescriptor(provider: "Client Alice alice@example.com", model: "/Users/alice/private/customer.onnx")
         try self.check(custom.provider == "custom_provider" && custom.model == "custom_model", "Private aliases and paths must be collapsed")
-        let known = AnalyticsModelDescriptor(provider: "Pichi", model: "gigaam-v3-eou")
-        try self.check(known.provider == "pichi" && known.model == "gigaam-v3-eou", "Retain approved public model metrics")
+        let known = AnalyticsModelDescriptor(provider: "SaluteDevices", model: "gigaam-v3-eou")
+        try self.check(known.provider == "salutedevices" && known.model == "gigaam-v3-eou", "Retain approved public model metrics")
+        let recorded = AnalyticsModelDescriptor(provider: "pichi", model: "gigaam-v3-eou")
+        try self.check(recorded.provider == "pichi", "Rows recorded before the publisher credit keep their provider")
         let payload: [String: Any] = ["event": "model_usage_daily_summary", "properties": [
             "distinct_id": "anonymous-test-install", "provider": "private bank", "model": "alice@example.com",
             "$set": ["name": "Alice"], "use_count": 2,

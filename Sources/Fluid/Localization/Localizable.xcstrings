@@ -8679,6 +8679,23 @@
         }
       }
     },
+    "Built on GigaAM-v3 by SaluteDevices.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Built on GigaAM-v3 by SaluteDevices."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На основе GigaAM-v3 от SaluteDevices."
+          }
+        }
+      }
+    },
     "Built-in": {
       "extractionState": "manual",
       "localizations": {

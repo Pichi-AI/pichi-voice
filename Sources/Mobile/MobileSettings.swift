@@ -241,6 +241,9 @@ private struct MobileVoiceEngineSettings: View {
                             if settings.selectedSpeechModel == model { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
                         }
                         Text(PichiLocalization.text(model.cardDescription)).font(theme.typography.bodySmall)
+                        if let creditLine = model.creditLine {
+                            Text(PichiLocalization.text(creditLine)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        }
                         Text(PichiLocalization.text(model.languageSupport)).font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
                         Text(model.downloadSize).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                         if let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.id) {

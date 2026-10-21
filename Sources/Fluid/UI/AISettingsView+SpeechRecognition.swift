@@ -167,8 +167,8 @@ extension VoiceEngineSettingsView {
                             .foregroundStyle(self.voiceEngineSecondaryText)
                             .lineLimit(2)
 
-                        if let descriptor = model.parakeetDescriptor {
-                            Text(PichiLocalization.text(descriptor.creditLine))
+                        if let creditLine = model.creditLine {
+                            Text(PichiLocalization.text(creditLine))
                                 .font(self.theme.typography.caption)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                                 .fixedSize(horizontal: false, vertical: true)

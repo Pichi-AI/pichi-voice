@@ -145,7 +145,7 @@ public enum GigaAMError: LocalizedError {
         case .invalidVocabulary: return "GigaAM vocabulary is invalid or incomplete."
         case .invalidOutput: return "GigaAM returned an incompatible tensor."
         case .invalidAudio: return "GigaAM expects finite 16 kHz mono PCM samples."
-        case .missingModels(let directory): return "Import the Pichi GigaAM model folder in Settings. Expected model files in \(directory.path)."
+        case .missingModels(let directory): return "Import the GigaAM model folder in Settings. Expected model files in \(directory.path)."
         case .checksumMismatch(let file): return "GigaAM checksum verification failed for \(file)."
         case .notPrepared: return "GigaAM is not loaded."
         case .incompatibleModel: return "This ONNX export is not a supported GigaAM v3 CTC model."
