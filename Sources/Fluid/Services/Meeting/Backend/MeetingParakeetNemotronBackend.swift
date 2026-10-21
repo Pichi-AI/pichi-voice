@@ -437,13 +437,24 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                         if completeTrackInput { try await resume?.completeTrack(segments, trackID: track.id) }
                     }
                     if ownerProfile != nil, restored.confirmedOwnerTokens == nil {
-                        let samples = adaptiveOwnerEvidence
-                            ? try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(
-                                epoch: first.work.epoch.id, source: source, segments: segments)
-                            : try await MeetingSpeakerVoiceSamples.collect(
-                                epoch: first.work.epoch.id, source: source, segments: segments)
-                        result.voiceSamples.append(contentsOf: samples.prefix(
-                            max(0, MeetingSpeakerVoiceSamples.maximumProfiles - result.voiceSamples.count)))
+                        do {
+                            let samples = adaptiveOwnerEvidence
+                                ? try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(
+                                    epoch: first.work.epoch.id, source: source, segments: segments,
+                                    requireSuccessfulRead: fullOwnerEvidence)
+                                : try await MeetingSpeakerVoiceSamples.collect(
+                                    epoch: first.work.epoch.id, source: source, segments: segments)
+                            let remainingCapacity = max(0, MeetingSpeakerVoiceSamples.maximumProfiles - result.voiceSamples.count)
+                            if fullOwnerEvidence, samples.count > remainingCapacity { result.ownerEvidenceComplete = false }
+                            result.voiceSamples.append(contentsOf: samples.prefix(remainingCapacity))
+                        } catch let error as CancellationError {
+                            throw error
+                        } catch {
+                            guard fullOwnerEvidence else { throw error }
+                            // Identity is optional: losing a competitor's excerpts must not
+                            // promote the surviving voice or discard anonymous speech.
+                            result.ownerEvidenceComplete = false
+                        }
                     }
                     for piece in pieces {
                         let pieceStart = Double(piece.offset) / piece.materialized.sampleRate
@@ -509,7 +520,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         var ownerTokens = Set((restored.confirmedOwnerTokens ?? []).filter {
             reusedOwnerTrackIDs.contains($0.analysisEpochID.trackID) && activeTokens.contains($0)
         })
-        if restored.confirmedOwnerTokens == nil, ownerProfile != nil, !phaseA.voiceSamples.isEmpty {
+        let mayVerifyOwner = !fullOwnerEvidence || (phaseA.failures.isEmpty && phaseA.ownerEvidenceComplete)
+        if mayVerifyOwner, restored.confirmedOwnerTokens == nil, ownerProfile != nil, !phaseA.voiceSamples.isEmpty {
             do {
                 let profiles = try await runtime.speakerVoiceProfiles(samples: phaseA.voiceSamples)
                 let clipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: phaseA.voiceSamples, profiles: profiles)

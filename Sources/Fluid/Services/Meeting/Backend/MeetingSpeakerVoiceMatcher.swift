@@ -388,9 +388,11 @@ extension MeetingSpeakerVoiceSamples {
     /// speech ranges are read in one-second buffers; silence is skipped and PCM memory
     /// stays bounded even when the archive spans hours. No owner/ASR model is loaded here.
     /// Optional evidence reread failures keep the completed anonymous transcript usable.
+    /// Full-evidence callers require explicit read failure so a lost competitor cannot look
+    /// like valid silence or insufficient clean speech; they preserve anonymous work locally.
     nonisolated static func collectFirstAndLatest(
         epoch: MeetingAnalysisEpochID, source: any MeetingPCMReplaySource,
-        segments: [MeetingNemotronSpeakerSegment]
+        segments: [MeetingNemotronSpeakerSegment], requireSuccessfulRead: Bool = false
     ) async throws -> [Self] {
         let groups = MeetingStreamingOwnerVoiceSamples.cleanRanges(activity: segments, lower: 0,
             through: max(0, source.totalSampleCount - 2_560), sourceEnd: source.totalSampleCount)
@@ -403,7 +405,9 @@ extension MeetingSpeakerVoiceSamples {
                         try Task.checkCancellation()
                         let end = min(range.upperBound, cursor + 16_000)
                         let samples = try await source.readSamples(in: cursor..<end)
-                        guard samples.count == end - cursor, samples.allSatisfy(\.isFinite) else { return [] }
+                        guard samples.count == end - cursor, samples.allSatisfy(\.isFinite) else {
+                            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+                        }
                         collector.consumeCleanOwnerSamples(samples[...], slot: entry.slot)
                         cursor = end
                     }
@@ -413,6 +417,7 @@ extension MeetingSpeakerVoiceSamples {
             throw error
         } catch {
             try Task.checkCancellation()
+            if requireSuccessfulRead { throw error }
             return []
         }
         try Task.checkCancellation()

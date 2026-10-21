@@ -1617,6 +1617,108 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
     }
 
+    func testV4RetainedRetryMissingCompetingTrackCannotPromoteSurvivingOwner() async throws {
+        try await self.assertRetainedOwnerRetryWithIncompleteRival(optionalReadDefect: nil)
+    }
+
+    func testV4RetainedRetryOptionalRivalReadFailureKeepsAnonymousTranscriptWithoutPromotion() async throws {
+        for defect: FakeMaterializer.OptionalReadDefect in [.unreadable, .truncated, .nonFinite] {
+            try await self.assertRetainedOwnerRetryWithIncompleteRival(optionalReadDefect: defect)
+        }
+    }
+
+    private func assertRetainedOwnerRetryWithIncompleteRival(
+        optionalReadDefect: FakeMaterializer.OptionalReadDefect?,
+        file: StaticString = #filePath, line: UInt = #line
+    ) async throws {
+        let ownerChunk = self.makePCMChunk(sequence: 0, start: 100, end: 112)
+        let rivalChunk = self.makePCMChunk(sequence: 1, start: 100, end: 112)
+        let ownerTrack = self.makeMicTrack(chunks: [ownerChunk], eraStart: 100)
+        let rivalTrack = self.makeAppTrack(chunks: [rivalChunk])
+        var session = self.makeSession(mode: .onlineCall, tracks: [ownerTrack, rivalTrack])
+        session.speakerProcessingMode = .streaming
+        let directory = try self.makeTempSessionDirectory()
+        let configuration = MeetingFinalProcessingConfiguration(asrArtifactFingerprint: "synthetic-sha256",
+            languageCode: "en",
+            diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.streamingImplementationFingerprint,
+            speakerProcessingMode: .streaming)
+        let observations: [MeetingAnalysisChunkKey: MeetingChunkObservationResult] = [
+            .init(trackID: ownerTrack.id, chunkID: ownerChunk.id): self.makeObserved(ownerChunk, duration: 12),
+            .init(trackID: rivalTrack.id, chunkID: rivalChunk.id): self.makeObserved(rivalChunk, duration: 12),
+        ]
+        var embedding = [Float](repeating: 0, count: 256); embedding[0] = 1
+        let owner = MeetingOwnerVoiceProfileSnapshot(metadata: .init(generation: UUID(), enrolledAt: Date()),
+            encoderFingerprint: MeetingOwnerVoiceProfileStore.encoderFingerprint, embeddings: [embedding, embedding])
+        let locator = StubModelLocator(artifact: .init(
+            packageURL: URL(fileURLWithPath: "/tmp/synthetic-fast128.nemotronbundle"),
+            totalByteCount: 1, fileCount: 1, manifestSHA256: "synthetic", entryMetadataSHA256: "synthetic",
+            profile: .experimentalFast128FP16CPU))
+        let original = FakeRuntime(), materializer = FakeMaterializer()
+        materializer.sampleAmplitude = 0.1; materializer.alternatingSamplePolarity = true
+        original.ownerVoiceProfileSnapshot = owner
+        let backend = self.makeBackend(runtime: original, materializer: materializer, locator: locator)
+        let plan = try backend.plan(self.makeRequest(session: session, directory: directory, configuration: configuration))
+        let manifest = try self.makeManifest(plan: plan, observations: observations)
+        let ownerEpoch = try XCTUnwrap(manifest.track(ownerTrack.id)?.epochs.first, file: file, line: line)
+        let rivalEpoch = try XCTUnwrap(manifest.track(rivalTrack.id)?.epochs.first, file: file, line: line)
+        let ownerToken = MeetingBackendSpeakerToken(analysisEpochID: ownerEpoch.id, label: "slot-0")
+        let rivalToken = MeetingBackendSpeakerToken(analysisEpochID: rivalEpoch.id, label: "slot-0")
+        for epoch in [ownerEpoch, rivalEpoch] {
+            original.diarizerFactory.segmentsByEpoch[epoch.id] = [.init(slotIndex: 0, start: 0, end: 12)]
+        }
+        original.voiceProfiles = [ownerToken, rivalToken].map { .init(token: $0, embeddings: [embedding, embedding]) }
+        original.asrSession.responses = (0..<2).map { _ in
+            .init(text: "speech", words: [.init(text: "speech", start: 0.5, end: 1)])
+        }
+        let initial = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(initialBundle) = initial else {
+            return XCTFail("Expected canonical result", file: file, line: line)
+        }
+        XCTAssertTrue(initialBundle.confirmedLocalUserTokens.isEmpty, "Both complete candidates are ambiguous", file: file, line: line)
+        XCTAssertEqual(original.voiceSampleCalls.count, 1, file: file, line: line)
+        XCTAssertEqual(original.voiceSampleCalls.first?.map(\.clipFrames), [[80_000, 80_000], [80_000, 80_000]],
+                       file: file, line: line)
+        if let optionalReadDefect {
+            materializer.optionalReadDefects[rivalEpoch.id] = optionalReadDefect
+        } else {
+            materializer.failingEpochs = [rivalEpoch.id]
+        }
+        session.processingAttempts = []
+        let resumed = FakeRuntime(); resumed.ownerVoiceProfileSnapshot = owner
+        resumed.voiceProfiles = [.init(token: ownerToken, embeddings: [embedding, embedding])]
+        let retry = self.makeBackend(runtime: resumed, materializer: materializer, locator: locator)
+        let retryPlan = try retry.plan(self.makeRequest(session: session, directory: directory, configuration: configuration))
+        let result = try await retry.execute(plan: retryPlan,
+            manifest: self.makeManifest(plan: retryPlan, observations: observations), progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = result else {
+            return XCTFail("Expected canonical retry result", file: file, line: line)
+        }
+        XCTAssertTrue(bundle.confirmedLocalUserTokens.isEmpty,
+                      "Missing competitor evidence cannot manufacture a unique owner", file: file, line: line)
+        XCTAssertTrue(resumed.voiceSampleCalls.isEmpty,
+                      "V4 must abstain before scoring an incomplete competitor set", file: file, line: line)
+        XCTAssertTrue(resumed.diarizerFactory.createdEpochs.isEmpty,
+                      "Surviving complete tracks reuse their independently pinned diarization", file: file, line: line)
+        XCTAssertTrue(resumed.asrSession.callSampleCounts.isEmpty,
+                      "Completed native ASR remains reusable despite incomplete optional identity evidence", file: file, line: line)
+        let surviving = bundle.evidence.units.filter { $0.trackID == ownerTrack.id }
+        XCTAssertEqual(surviving.map(\.text), ["speech"], file: file, line: line)
+        XCTAssertEqual(surviving.map(\.speaker), [.assigned(ownerToken)], file: file, line: line)
+        XCTAssertEqual(surviving.map(\.analysisStart), [0.5], file: file, line: line)
+        if optionalReadDefect != nil {
+            XCTAssertEqual(bundle.evidence.units.map(\.text), initialBundle.evidence.units.map(\.text),
+                           "Optional owner reread failure cannot discard anonymous ASR", file: file, line: line)
+            XCTAssertEqual(bundle.evidence.units.map(\.trackID), initialBundle.evidence.units.map(\.trackID), file: file, line: line)
+            XCTAssertEqual(bundle.evidence.units.map(\.analysisStart), initialBundle.evidence.units.map(\.analysisStart), file: file, line: line)
+            XCTAssertEqual(bundle.evidence.units.map(\.analysisEnd), initialBundle.evidence.units.map(\.analysisEnd), file: file, line: line)
+            XCTAssertEqual(bundle.evidence.units.map(\.speaker), initialBundle.evidence.units.map(\.speaker), file: file, line: line)
+            XCTAssertEqual(bundle.evidence.speakerActivity, initialBundle.evidence.speakerActivity,
+                           "Optional owner reread failure cannot discard anonymous diarization", file: file, line: line)
+        } else {
+            XCTAssertEqual(bundle.evidence.units.count, 1, file: file, line: line)
+        }
+    }
+
     private enum RetainedOwnerRetryEvidence {
         case ambiguous, ownerAndDistantRival, missingProfiles, encoderFailure
     }
@@ -2603,7 +2705,9 @@ private final nonisolated class FakeRuntime: MeetingParakeetNemotronRunning, @un
 }
 
 private final nonisolated class FakeMaterializer: MeetingEpochAudioMaterializing, @unchecked Sendable {
+    nonisolated enum OptionalReadDefect: Sendable { case unreadable, truncated, nonFinite }
     var failingEpochs: Set<MeetingAnalysisEpochID> = []
+    var optionalReadDefects: [MeetingAnalysisEpochID: OptionalReadDefect] = [:]
     var customSpanSampleCounts: [MeetingAnalysisEpochID: [Int]] = [:]
     var replaySampleCounts: [MeetingAnalysisEpochID: Int] = [:]
     var sampleAmplitude: Float = 0
@@ -2629,13 +2733,26 @@ private final nonisolated class FakeMaterializer: MeetingEpochAudioMaterializing
                          spanSamples: [.init(spanID: epoch.spanIDs[0], sampleRange: 0..<count)])
         }
         let value = try await self.materialize(epoch: epoch, track: track, manifest: manifest, sessionDirectory: sessionDirectory)
-        return .init(source: SmallSource(samples: value.samples), sampleRate: value.sampleRate, spanSamples: value.spanSamples)
+        return .init(source: SmallSource(samples: value.samples, optionalReadDefect: self.optionalReadDefects[epoch.id]),
+                     sampleRate: value.sampleRate, spanSamples: value.spanSamples)
     }
 
     struct SmallSource: MeetingPCMReplaySource {
         let samples: [Float]
+        let optionalReadDefect: OptionalReadDefect?
         var totalSampleCount: Int { self.samples.count }
-        func readSamples(in range: Range<Int>) async throws -> [Float] { Array(self.samples[range]) }
+        func readSamples(in range: Range<Int>) async throws -> [Float] {
+            // Diarizer/ASR replay starts on whole-second boundaries. Clean owner excerpts
+            // start after 160ms edge exclusion, providing a model-free optional reread seam.
+            if range.lowerBound % 16_000 != 0, let optionalReadDefect {
+                switch optionalReadDefect {
+                case .unreadable: throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+                case .truncated: return []
+                case .nonFinite: return [Float](repeating: .nan, count: range.count)
+                }
+            }
+            return Array(self.samples[range])
+        }
     }
 
     private(set) var materializedEpochs: [MeetingAnalysisEpochID] = []
