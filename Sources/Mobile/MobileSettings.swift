@@ -241,6 +241,7 @@ private struct MobilePrivacySettings: View {
     @ObservedObject var activation: MobilePrivacyActivation
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+    @State private var dictionaryEdit: MobileSensitiveDictionaryEdit?
 
     var body: some View {
         Form {
@@ -259,11 +260,14 @@ private struct MobilePrivacySettings: View {
             Section(PichiLocalization.text("Data cleanup")) {
                 MobilePrivacyActivationControls(activation: activation)
             }
-            MobileSensitiveDictionarySettings()
+            MobileSensitiveDictionarySettings { entry in dictionaryEdit = .init(entry: entry) }
             Section {
                 Text(PichiLocalization.text("Changes apply to new meetings. Audio retention also applies to existing recordings."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
         }.navigationTitle(PichiLocalization.text("Data cleanup")).accessibilityIdentifier("settings.privacy.detail")
+            .sheet(item: $dictionaryEdit) { request in
+                MobileSensitiveDictionaryEditor(entry: request.entry)
+            }
     }
 }
