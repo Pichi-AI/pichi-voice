@@ -321,7 +321,7 @@ extension SettingsStore {
         /// One-line description for the card UI
         var cardDescription: String {
             switch self {
-            case .gigaam: return "Local Russian recognition with GigaAM. Download the compact model or import a verified local export."
+            case .gigaam: return "On-device recognition for Russian speech."
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
                 return self.parakeetDescriptor?.cardDescription ?? ""
             case .parakeetRealtime:

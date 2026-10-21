@@ -72,8 +72,9 @@ final class MobileSetupUITests: XCTestCase {
     /// claim that static pages prove downloads, model accuracy or enrollment acceptance.
     func testRussianNativeSetupPagesInBothAppearances() {
         let app = XCUIApplication()
+        let steps = ProcessInfo.processInfo.environment["PICHI_SETUP_MODEL_CHOICE_ONLY"] == "1" ? [1] : Array(0...5)
         for appearance in ["light", "dark"] {
-            for step in 0...5 {
+            for step in steps {
                 app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance,
                                        "-MobileSetupVersion", "0", "-MobileSetupStep", String(step)]
                 app.launch()

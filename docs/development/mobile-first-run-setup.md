@@ -48,7 +48,7 @@ The retired `russianTiny` privacy descriptor is 30,334,469 bytes but is not the 
 
 ## Packaging decision
 
-The user selected automatic first-run downloads for required resources. ASR downloads follow the selected model; privacy downloads only after explicit activation. Distribution packaging and App Store policy are unchanged. Weights remain outside Git.
+Implemented baseline: automatic first-run downloads; bundled models evaluated and deferred to a separate distribution decision. ASR downloads follow the selected model; privacy downloads only after explicit activation. Distribution packaging and App Store policy are unchanged. Weights remain outside Git.
 
 | Candidate | Additional uncompressed payload | Resulting package before compression |
 | --- | ---: | --- |

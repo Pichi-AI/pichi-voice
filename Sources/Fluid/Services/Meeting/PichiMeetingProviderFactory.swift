@@ -49,6 +49,7 @@ enum PichiMeetingProviderFactory {
                 resultContract: .canonicalEvidence,
                 knownLimits: [
                     "GigaAM supports Russian. For English or mixed speech, select a multilingual model.",
+                    "Local Russian recognition with GigaAM. Download the compact model or import a verified local export.",
                     "Speaker labels are automatic and can be uncertain in short or overlapping speech.",
                     "Speaker resources prepare automatically. Finish setup before an offline meeting.",
                 ],
@@ -133,6 +134,10 @@ enum PichiMeetingProviderFactory {
                 resultContract: .canonicalEvidence,
                 knownLimits: [
                     "Parakeet v3 supports 25 languages, including Russian and English.",
+                    "Fast multilingual transcription. Supports Bulgarian, Croatian, Czech, Danish, " +
+                        "Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, " +
+                        "Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, " +
+                        "Slovenian, Spanish, Swedish, and Ukrainian.",
                     "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech.",
                     "Speaker resources prepare automatically. Finish setup before an offline meeting.",
                     "Battery use and recognition speed depend on the device. Test longer meetings on your iPad.",

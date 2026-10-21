@@ -53224,6 +53224,40 @@
           }
         }
       }
+    },
+    "On-device recognition for Russian speech.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On-device recognition for Russian speech."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание русской речи на устройстве."
+          }
+        }
+      }
+    },
+    "Multilingual recognition, including mixed speech.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Multilingual recognition, including mixed speech."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Многоязычное распознавание, включая смешанную речь."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
