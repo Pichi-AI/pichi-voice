@@ -13,28 +13,8 @@ nonisolated enum MeetingSpeakerVoiceEncoder {
         validateDefaultRoot: Bool = true
     ) throws -> [MeetingSpeakerVoiceProfile] {
         #if arch(arm64)
-        // Return only bounded Swift embeddings. The model and autoreleased native
-        // temporaries must retire before the next sequential inference phase.
-        return try autoreleasepool {
-            guard !samples.isEmpty else { return [] }
-            try Task.checkCancellation()
-            #if os(iOS)
-            let computeUnits: MLComputeUnits = .cpuOnly
-            #else
-            let computeUnits: MLComputeUnits = .cpuAndNeuralEngine
-            #endif
-            if validateDefaultRoot { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
-            try MeetingSpeakerVoiceModelArtifacts.validate(at: directory)
-            let configuration = MLModelConfiguration()
-            configuration.computeUnits = computeUnits
-            let model = try MLModel(contentsOf: directory, configuration: configuration)
-            try Task.checkCancellation()
-            guard let maskFrames = model.modelDescription.inputDescriptionsByName["mask"]?.multiArrayConstraint?.shape.last?.intValue,
-                  (1...4096).contains(maskFrames) else {
-                throw MeetingModelResidencyError.unsupportedProvider
-            }
-            let extractor = EmbeddingExtractor(embeddingModel: model)
-            let mask = [Float](repeating: 1, count: maskFrames)
+        guard !samples.isEmpty else { return [] }
+        return try self.withPreparedEncoder(directory: directory, validateDefaultRoot: validateDefaultRoot) { extractor, mask in
             var profiles: [MeetingSpeakerVoiceProfile] = []
             for sample in samples.prefix(MeetingSpeakerVoiceSamples.maximumProfiles) {
                 try Task.checkCancellation()
@@ -61,4 +41,45 @@ nonisolated enum MeetingSpeakerVoiceEncoder {
         return []
         #endif
     }
+
+    /// Prime the exact encoder graph on synthetic silence within the existing idle model
+    /// lifecycle. No microphone, enrollment/profile or participant identity is involved.
+    static func prepare(directory: URL = MeetingSpeakerVoiceModelArtifacts.packageURL(),
+                        validateDefaultRoot: Bool = true) throws {
+        #if arch(arm64)
+        try self.withPreparedEncoder(directory: directory, validateDefaultRoot: validateDefaultRoot) { extractor, mask in
+            _ = try extractor.getEmbeddings(audio: [Float](repeating: 0, count: 48_000), masks: [mask])
+            try Task.checkCancellation()
+        }
+        #endif
+    }
+
+    #if arch(arm64)
+    /// Both preparation and inference release weights/native temporaries before returning.
+    private static func withPreparedEncoder<T>(directory: URL, validateDefaultRoot: Bool,
+        _ body: (EmbeddingExtractor, [Float]) throws -> T) throws -> T {
+        try autoreleasepool {
+            try Task.checkCancellation()
+            #if os(iOS)
+            let computeUnits: MLComputeUnits = .cpuOnly
+            #else
+            let computeUnits: MLComputeUnits = .cpuAndNeuralEngine
+            #endif
+            if validateDefaultRoot { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
+            try MeetingSpeakerVoiceModelArtifacts.validate(at: directory)
+            let configuration = MLModelConfiguration()
+            configuration.computeUnits = computeUnits
+            let model = try MLModel(contentsOf: directory, configuration: configuration)
+            try Task.checkCancellation()
+            guard let maskFrames = model.modelDescription.inputDescriptionsByName["mask"]?.multiArrayConstraint?.shape.last?.intValue,
+                  (1...4096).contains(maskFrames) else {
+                throw MeetingModelResidencyError.unsupportedProvider
+            }
+            let extractor = EmbeddingExtractor(embeddingModel: model)
+            let mask = [Float](repeating: 1, count: maskFrames)
+            return try body(extractor, mask)
+        }
+    }
+    #endif
+
 }

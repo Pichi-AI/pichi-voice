@@ -149,6 +149,80 @@
       "completeness": "complete",
       "attributionState": "assigned",
       "speakerID": "00000000-0000-0000-0000-202610170099"
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610170006",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 5100,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 5250,
+        "timescale": 1000
+      },
+      "text": "Короткая",
+      "revision": 0,
+      "status": "final",
+      "overlap": "ambiguous",
+      "completeness": "complete",
+      "attributionState": "overlappingSpeakers"
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610170007",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 5300,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 5450,
+        "timescale": 1000
+      },
+      "text": "вставка",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "speakerID": "00000000-0000-0000-0000-000000000065"
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610170008",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 5500,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 5650,
+        "timescale": 1000
+      },
+      "text": "и",
+      "revision": 0,
+      "status": "final",
+      "overlap": "ambiguous",
+      "completeness": "complete",
+      "attributionState": "overlappingSpeakers"
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610170009",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 5800,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 6000,
+        "timescale": 1000
+      },
+      "text": "продолжение.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "speakerID": "00000000-0000-0000-0000-202610170099"
     }
   ],
   "retention": {},

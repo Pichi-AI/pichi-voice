@@ -11,6 +11,8 @@ classifier to independent overlapping BIO outputs, additional PII training,
 ONNX export, INT8 quantization, and a portable inference runtime.
 
 Original upstream LICENSE is included. No third-party dataset text is
-redistributed by this repository. See DATA_PROVENANCE.md for the distinct
-training-data license questions, including unresolved NEREL provenance.
+redistributed by this repository. See A1-TextPrivacy-DATA-PROVENANCE.txt for
+the distinct training-data license questions, including unresolved NEREL
+provenance, and the complete disclosure at the pinned model revision:
+https://huggingface.co/Powpowpow23/ru-pii-ner-a1/blob/67a6270bf24661bf62ea0e93582d02edcc8ee517/DATA_PROVENANCE.md
 This notice does not assert endorsement by the upstream authors.

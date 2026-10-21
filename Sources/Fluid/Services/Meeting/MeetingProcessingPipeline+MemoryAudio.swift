@@ -2,6 +2,10 @@
 import CoreMedia
 import Foundation
 
+/// True requires complete, measured non-speech coverage on the original capture clock.
+/// Missing, stale or uncertain activity evidence must return false and preserve recognition.
+typealias MeetingConfidentNonSpeechQuery = @Sendable (TimeInterval, TimeInterval) async -> Bool
+
 extension MeetingProcessingPipeline {
     /// PCM input is another input capability of the existing pipeline, not another meeting
     /// coordinator or model installer. Selection, residency, canonical assembly and storage are
@@ -12,6 +16,7 @@ extension MeetingProcessingPipeline {
         initialChunkSeconds: Double? = nil,
         recognize: @escaping @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
+        didProcessWindow: (@Sendable (MeetingPCMWindowProcessingFeedback) async throws -> Void)? = nil,
         finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)? = nil,
         diagnostic: @escaping @Sendable (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingMemoryAudio") },
         failure: @escaping @Sendable (Error) -> Void
@@ -19,7 +24,8 @@ extension MeetingProcessingPipeline {
         try MeetingPipelineMemoryAudioConsumer(chunkSeconds: chunkSeconds,
                                               maximumPendingSeconds: maximumPendingSeconds,
                                               initialChunkSeconds: initialChunkSeconds,
-                                              recognition: .sealed(recognize), checkpoint: checkpoint, finalize: finalize, diagnostic: diagnostic, failure: failure)
+                                              recognition: .sealed(recognize), checkpoint: checkpoint, didProcessWindow: didProcessWindow,
+                                              finalize: finalize, diagnostic: diagnostic, failure: failure)
     }
 
     /// The same bounded transport can start one recognizer while an attribution window is
@@ -31,8 +37,10 @@ extension MeetingProcessingPipeline {
         maximumPendingSeconds: Double = 60,
         initialPreviewSeconds: Double = 3,
         previewIntervalSeconds: Double = 3,
+        confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
         recognize: @escaping @Sendable (MeetingPCMProgressiveWindow, TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
+        didProcessWindow: (@Sendable (MeetingPCMWindowProcessingFeedback) async throws -> Void)? = nil,
         finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)? = nil,
         diagnostic: @escaping @Sendable (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingMemoryAudio") },
         failure: @escaping @Sendable (Error) -> Void
@@ -40,8 +48,10 @@ extension MeetingProcessingPipeline {
         try MeetingPipelineMemoryAudioConsumer(chunkSeconds: chunkSeconds,
                                               maximumPendingSeconds: maximumPendingSeconds,
                                               initialChunkSeconds: initialPreviewSeconds,
+                                              confidentlyNonSpeech: confidentlyNonSpeech,
                                               recognition: .progressive(intervalSeconds: previewIntervalSeconds, recognize),
-                                              checkpoint: checkpoint, finalize: finalize, diagnostic: diagnostic, failure: failure)
+                                              checkpoint: checkpoint, didProcessWindow: didProcessWindow,
+                                              finalize: finalize, diagnostic: diagnostic, failure: failure)
     }
 
 }
@@ -62,6 +72,16 @@ nonisolated enum MeetingMemoryAudioError: LocalizedError, Equatable {
     }
 }
 
+/// Scalar scheduling feedback after protected checkpoint/projection has joined. The transport
+/// has released this window's PCM. The remaining charged count describes its admission budget,
+/// never elapsed waiting age or capture-to-visible latency.
+nonisolated struct MeetingPCMWindowProcessingFeedback: Sendable {
+    let sourceStartSample: Int
+    let sourceFrameCount: Int
+    let chargedPendingFrames: Int
+    let maximumPendingFrames: Int
+}
+
 /// Ownership of the delta moves to the single worker. `totalFrames` describes the growing
 /// window, not the delta length. A final empty delta seals a previously delivered prefix.
 nonisolated struct MeetingPCMWindowUpdate: Sendable {
@@ -79,6 +99,7 @@ nonisolated final class MeetingPCMProgressiveWindow: @unchecked Sendable {
     private let lock = NSLock()
     private let initialFrames: Int
     private let intervalFrames: Int
+    private let nonSpeechQuery: MeetingConfidentNonSpeechQuery?
     private var pending: [Float] = []
     private var acceptedFrames = 0
     private var deliveredAny = false
@@ -87,9 +108,19 @@ nonisolated final class MeetingPCMProgressiveWindow: @unchecked Sendable {
     private var terminalError: Error?
     private var waiter: CheckedContinuation<MeetingPCMWindowUpdate?, Error>?
 
-    fileprivate init(initialFrames: Int, intervalFrames: Int) {
+    fileprivate init(initialFrames: Int, intervalFrames: Int,
+                     confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil) {
         self.initialFrames = initialFrames
         self.intervalFrames = intervalFrames
+        self.nonSpeechQuery = confidentlyNonSpeech
+    }
+
+    func confidentlyNonSpeech(start: TimeInterval, end: TimeInterval) async -> Bool {
+        guard !Task.isCancelled, start.isFinite, end.isFinite, start >= 0, end > start else { return false }
+        guard self.lock.withLock({ self.terminalError == nil }) else { return false }
+        guard let nonSpeechQuery else { return false }
+        let result = await nonSpeechQuery(start, end)
+        return !Task.isCancelled && self.lock.withLock({ self.terminalError == nil }) && result
     }
 
     /// Call sequentially, after the prior inference has joined. Cancellation closes this window
@@ -201,11 +232,13 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private let maximumPendingFrames: Int
     private let recognition: Recognition
     private let previewIntervalFrames: Int?
+    private let nonSpeechQuery: MeetingConfidentNonSpeechQuery?
     private var openProgressiveWindow: MeetingPCMProgressiveWindow?
     private var openProgressiveStart: TimeInterval = 0
     private var openProgressiveScheduled = false
     private var activeProgressiveWindow: MeetingPCMProgressiveWindow?
     private let checkpoint: @Sendable (MeetingPCMTranscriptBatch) async throws -> Void
+    private let didProcessWindow: (@Sendable (MeetingPCMWindowProcessingFeedback) async throws -> Void)?
     private let finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)?
     private let failure: @Sendable (Error) -> Void
     private let diagnostic: @Sendable (String) -> Void
@@ -226,8 +259,10 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     }
 
     init(chunkSeconds: Double, maximumPendingSeconds: Double, initialChunkSeconds: Double?,
+         confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
          recognition: Recognition,
          checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
+         didProcessWindow: (@Sendable (MeetingPCMWindowProcessingFeedback) async throws -> Void)? = nil,
          finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)?,
          diagnostic: @escaping @Sendable (String) -> Void,
          failure: @escaping @Sendable (Error) -> Void) throws {
@@ -244,6 +279,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         self.initialChunkFrames = Int((initial * 16_000).rounded())
         self.maximumPendingFrames = Int((maximumPendingSeconds * 16_000).rounded())
         self.recognition = recognition
+        self.nonSpeechQuery = confidentlyNonSpeech
         switch recognition {
         case .sealed: self.previewIntervalFrames = nil
         case .progressive(let interval, _):
@@ -253,6 +289,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
             self.previewIntervalFrames = Int((interval * 16_000).rounded())
         }
         self.checkpoint = checkpoint
+        self.didProcessWindow = didProcessWindow
         self.finalize = finalize
         self.failure = failure
         self.diagnostic = diagnostic
@@ -301,7 +338,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                 if let intervalFrames = self.previewIntervalFrames {
                     if self.openProgressiveWindow == nil {
                         self.openProgressiveWindow = MeetingPCMProgressiveWindow(initialFrames: self.initialChunkFrames,
-                                                                                 intervalFrames: intervalFrames)
+                            intervalFrames: intervalFrames, confidentlyNonSpeech: self.nonSpeechQuery)
                         self.openProgressiveStart = start + Double(position) / 16_000
                         self.openProgressiveScheduled = false
                     }
@@ -361,7 +398,8 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                 do {
                     if let finalize, var batch = try await finalize() {
                         if priorError != nil { batch.isComplete = false }
-                        if !batch.segments.isEmpty || !batch.speakers.isEmpty || !batch.speakerRevisions.isEmpty {
+                        if !batch.segments.isEmpty || !batch.speakers.isEmpty || !batch.speakerRevisions.isEmpty
+                            || batch.protectedSourceThroughSample != nil {
                             try await self.checkpoint(batch)
                         }
                     }
@@ -422,8 +460,11 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                 try Task.checkCancellation()
                 let recognized = ProcessInfo.processInfo.systemUptime
                 try await self.checkpoint(result.batch)
-                let pending = self.lock.withLock { (self.pendingFrames, self.peakPendingFrames) }
                 let checkpointMs = Int((ProcessInfo.processInfo.systemUptime - recognized) * 1000)
+                let pending = self.lock.withLock { (self.pendingFrames, self.peakPendingFrames) }
+                try await self.didProcessWindow?(.init(sourceStartSample: Int((result.start * 16_000).rounded()),
+                    sourceFrameCount: result.frames, chargedPendingFrames: pending.0,
+                    maximumPendingFrames: self.maximumPendingFrames))
                 // A growing-window callback also waits for future capture, unlike sealed ASR.
                 let timingLabel = self.previewIntervalFrames == nil ? "inferenceMs" : "windowMs"
                 self.diagnostic("window offset=\(result.start) frames=\(result.frames) \(timingLabel)=\(result.elapsed) checkpointMs=\(checkpointMs) pendingFrames=\(pending.0) peakPendingFrames=\(pending.1) budgetFrames=\(self.maximumPendingFrames)")

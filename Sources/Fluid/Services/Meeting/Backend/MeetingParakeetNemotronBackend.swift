@@ -344,6 +344,12 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
         let pcmMaterializations = MaterializationCache()
         let ownerProfile = runtime.ownerVoiceProfileSnapshot
+        // The actual inference adapter preserves the same immutable owner recipe after a
+        // retained streaming retry. Anonymous, owner-v1 and ordinary batch behavior stay strict.
+        let adaptiveOwnerEvidence = request.configuration.effectiveSpeakerProcessingMode == .streaming
+            && artifact?.profile.usesAdaptiveStreamingOwnerEvidence(
+                implementationFingerprint: request.configuration.diarizationFingerprint) == true
+        let ownerPolicy: MeetingOwnerVoiceVerifier.Policy = adaptiveOwnerEvidence ? .streamingV2 : .legacy
         let ownerIdentity = ownerProfile.map { "\($0.metadata.generation.uuidString):\($0.encoderFingerprint)" }
         let runtimeFingerprint = artifact.map { "\($0.implementationFingerprint);manifest=\($0.manifestSHA256)" }
         let resume = request.session.audioStorageMode == .retainedFiles
@@ -422,9 +428,13 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                         if completeTrackInput { try await resume?.completeTrack(segments, trackID: track.id) }
                     }
                     if ownerProfile != nil, restored.confirmedOwnerTokens == nil {
-                        result.voiceSamples.append(contentsOf: try await MeetingSpeakerVoiceSamples.collect(
-                            epoch: first.work.epoch.id, source: source, segments: segments
-                        ).prefix(max(0, MeetingSpeakerVoiceSamples.maximumProfiles - result.voiceSamples.count)))
+                        let samples = adaptiveOwnerEvidence
+                            ? try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(
+                                epoch: first.work.epoch.id, source: source, segments: segments)
+                            : try await MeetingSpeakerVoiceSamples.collect(
+                                epoch: first.work.epoch.id, source: source, segments: segments)
+                        result.voiceSamples.append(contentsOf: samples.prefix(
+                            max(0, MeetingSpeakerVoiceSamples.maximumProfiles - result.voiceSamples.count)))
                     }
                     for piece in pieces {
                         let pieceStart = Double(piece.offset) / piece.materialized.sampleRate
@@ -493,7 +503,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         if restored.confirmedOwnerTokens == nil, ownerProfile != nil, !phaseA.voiceSamples.isEmpty {
             do {
                 let profiles = try await runtime.speakerVoiceProfiles(samples: phaseA.voiceSamples)
-                let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: ownerProfile, profiles: profiles)
+                let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: ownerProfile, profiles: profiles, policy: ownerPolicy)
                 let matchedSlots = Set(confirmed.map { "\($0.analysisEpochID.trackID.uuidString):\($0.label)" })
                 ownerTokens = Set(phaseA.activity.map(\.token).filter {
                     matchedSlots.contains("\($0.analysisEpochID.trackID.uuidString):\($0.label)")

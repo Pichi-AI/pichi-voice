@@ -153,7 +153,7 @@ private final class InlineCaptionContent {
         }
         let retained = Set(configuration.pending.tokens.map(\.id))
         attachments = attachments.filter { retained.contains($0.key) }
-        let animated = Set(configuration.pending.tokens.suffix(3).map(\.id))
+        let animated = configuration.pending.animatedTokenIDs
         var boundsChanged = false
         for token in configuration.pending.tokens {
             let attachment = attachments[token.id] ?? InlineCaptionAttachment(tokenID: token.id)
@@ -232,6 +232,10 @@ private final class InlineCaptionAttachment: NSTextAttachment {
         #if os(iOS)
         if let host { return host.view }
         let host = UIHostingController(rootView: root)
+        // A waveform is a word-sized attachment, not a screen-sized presentation.
+        // Window safe areas otherwise displace the SwiftUI content when a long
+        // paragraph scrolls the hosting view partly or entirely offscreen.
+        host.safeAreaRegions = []
         host.view.backgroundColor = .clear
         host.view.isUserInteractionEnabled = false
         host.view.isAccessibilityElement = false
@@ -241,6 +245,9 @@ private final class InlineCaptionAttachment: NSTextAttachment {
         #else
         if let host { return host }
         let host = NSHostingView(rootView: root)
+        // Word-sized attachments must not inherit the window's safe area when
+        // a long paragraph scrolls partly or entirely outside its viewport.
+        host.safeAreaRegions = []
         host.setAccessibilityElement(false)
         host.setAccessibilityIdentifier("meeting.inlineWave.\(tokenID)")
         self.host = host
@@ -251,6 +258,16 @@ private final class InlineCaptionAttachment: NSTextAttachment {
     override func image(for bounds: CGRect, attributes: [NSAttributedString.Key: Any],
                         location: any NSTextLocation, textContainer: NSTextContainer?) ->
         InlineCaptionImage? { nil }
+
+    #if os(macOS)
+    // AppKit otherwise uses the empty attachment cell's 1x1 fallback even when
+    // bounds is set. Reserve the full word before placing its live waveform host.
+    override func attachmentBounds(for attributes: [NSAttributedString.Key: Any],
+                                   location: any NSTextLocation, textContainer: NSTextContainer?,
+                                   proposedLineFragment: CGRect, position: CGPoint) -> CGRect {
+        self.bounds
+    }
+    #endif
 }
 
 @MainActor
@@ -369,23 +386,93 @@ private final class InlineCaptionWavePlacement {
 }
 
 #if os(iOS)
+/// SwiftUI can probe several widths before assigning the final frame. Measuring
+/// on the displayed container leaves it wrapped at the last probe, which can be
+/// wider than the actual cell. This TextKit-only owner never mounts wave hosts.
+@MainActor
+private final class InlineCaptionTextMeasurement {
+    private let storage = NSTextContentStorage()
+    private let manager = NSTextLayoutManager()
+    private let container = NSTextContainer(size: .zero)
+
+    init() {
+        container.lineFragmentPadding = 0
+        manager.textContainer = container
+        storage.addTextLayoutManager(manager)
+    }
+
+    func usedBounds(for text: NSAttributedString, width: CGFloat) -> CGRect {
+        storage.textStorage?.setAttributedString(text)
+        container.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        manager.ensureLayout(for: storage.documentRange)
+        return manager.usageBoundsForTextContainer
+    }
+}
+
 @MainActor
 private final class InlineCaptionTextView: UITextView {
     var retainedTextContentStorage: NSTextContentStorage?
     var renderReceipt: InlineCaptionRenderReceipt?
     private let waves = InlineCaptionWavePlacement()
+    private let measurement = InlineCaptionTextMeasurement()
+
+    func measuredBounds(width: CGFloat) -> CGRect {
+        measurement.usedBounds(for: attributedText, width: width)
+    }
+
     override func layoutSubviews() {
+        // The enclosing caption table is the sole viewport/height owner. Its
+        // assigned width, rather than a speculative SwiftUI fitting proposal,
+        // is authoritative for both the glyphs and attachment rectangles.
+        if bounds.width.isFinite, bounds.width > 0 {
+            let size = CGSize(width: bounds.width, height: .greatestFiniteMagnitude)
+            if textContainer.size != size { textContainer.size = size }
+        }
         super.layoutSubviews()
         waves.layout(in: self, manager: textLayoutManager, text: attributedText, receipt: renderReceipt)
     }
 }
 #else
+/// Fitting proposals must not rewrap the displayed paragraph or move its waves.
+/// This TextKit owner measures only; it never mounts native waveform hosts.
+@MainActor
+private final class InlineCaptionTextMeasurement {
+    private let storage = NSTextContentStorage()
+    private let manager = NSTextLayoutManager()
+    private let container = NSTextContainer(size: .zero)
+
+    init() {
+        container.lineFragmentPadding = 0
+        manager.textContainer = container
+        storage.addTextLayoutManager(manager)
+    }
+
+    func usedBounds(for text: NSAttributedString, width: CGFloat) -> CGRect {
+        storage.textStorage?.setAttributedString(text)
+        container.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        manager.ensureLayout(for: storage.documentRange)
+        return manager.usageBoundsForTextContainer
+    }
+}
+
 @MainActor
 private final class InlineCaptionTextView: NSTextView {
     var retainedTextContentStorage: NSTextContentStorage?
     var renderReceipt: InlineCaptionRenderReceipt?
     private let waves = InlineCaptionWavePlacement()
+    private let measurement = InlineCaptionTextMeasurement()
+
+    func measuredBounds(width: CGFloat) -> CGRect {
+        measurement.usedBounds(for: attributedString(), width: width)
+    }
+
     override func layout() {
+        // SwiftUI may reject a fitting proposal. Only the assigned native frame
+        // owns the displayed glyph wrapping and word attachment rectangles.
+        if bounds.width.isFinite, bounds.width > 0 {
+            let size = CGSize(width: bounds.width, height: .greatestFiniteMagnitude)
+            if textContainer?.size != size { textContainer?.size = size }
+        }
         super.layout()
         waves.layout(in: self, manager: textLayoutManager, text: attributedString(), receipt: renderReceipt)
     }
@@ -435,11 +522,9 @@ private struct InlineCaptionNativeText: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView view: UITextView, context: Context) -> CGSize? {
-        guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
-        view.textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
-        guard let manager = view.textLayoutManager, let content = manager.textContentManager else { return nil }
-        manager.ensureLayout(for: content.documentRange)
-        let used = manager.usageBoundsForTextContainer
+        guard let width = proposal.width, width.isFinite, width > 0,
+              let view = view as? InlineCaptionTextView else { return nil }
+        let used = view.measuredBounds(width: width)
         let fittedWidth = configuration.documentStyle ? width : min(width, ceil(max(1, used.maxX)))
         return CGSize(width: fittedWidth, height: ceil(max(configuration.font.lineHeight, used.maxY)))
     }
@@ -488,12 +573,10 @@ private struct InlineCaptionNativeText: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: NSTextView, context: Context) -> CGSize? {
-        guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
-        view.textContainer?.size = CGSize(width: width, height: .greatestFiniteMagnitude)
-        guard let manager = view.textLayoutManager, let content = manager.textContentManager else { return nil }
-        manager.ensureLayout(for: content.documentRange)
+        guard let width = proposal.width, width.isFinite, width > 0,
+              let view = view as? InlineCaptionTextView else { return nil }
+        let used = view.measuredBounds(width: width)
         let font = configuration.font
-        let used = manager.usageBoundsForTextContainer
         let fittedWidth = configuration.documentStyle ? width : min(width, ceil(max(1, used.maxX)))
         return CGSize(width: fittedWidth, height: ceil(max(font.ascender - font.descender + font.leading, used.maxY)))
     }

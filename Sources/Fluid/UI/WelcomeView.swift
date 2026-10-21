@@ -2060,7 +2060,7 @@ struct OnboardingFlowView: View {
     private func onboardingModelTooltip(for route: VoiceEngineLanguageRoute) -> String {
         let model = route.model
         let downloadSize = PichiLocalization.text(self.installations.latestDescriptors[model.id]?.downloadSize ?? model.downloadSize, locale: self.locale)
-        let credit = model.parakeetDescriptor.map { "\n\($0.creditLine)" } ?? ""
+        let credit = model.creditLine.map { "\n\(PichiLocalization.text($0, locale: self.locale))" } ?? ""
         return "\(self.onboardingModelSubtitle(for: model)) - \(downloadSize)\n\(PichiLocalization.text(model.cardDescription))\(credit)"
     }
 

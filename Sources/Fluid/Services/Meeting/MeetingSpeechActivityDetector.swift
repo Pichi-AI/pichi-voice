@@ -43,41 +43,59 @@ nonisolated struct MeetingLocalSileroActivityModel: MeetingSpeechActivityFrameMo
             self.context = [Float](repeating: 0, count: 64)
             self.hidden = [Float](repeating: 0, count: 128); self.cell = self.hidden
         }
-        func array(_ values: [Float]) throws -> MLMultiArray {
-            let array = try MLMultiArray(shape: [1, NSNumber(value: values.count)], dataType: .float32)
-            for i in values.indices {
-                array[i] = NSNumber(value: values[i])
+        // CoreML feature providers bridge through Objective-C. Drain temporary arrays and
+        // providers per frame even when this adapter runs on a long-lived worker thread.
+        return try autoreleasepool {
+            func array(_ values: [Float]) throws -> MLMultiArray {
+                let array = try MLMultiArray(shape: [1, NSNumber(value: values.count)], dataType: .float32)
+                // Fresh MLMultiArray storage is contiguous; avoid one NSNumber per sample.
+                values.withUnsafeBufferPointer { source in
+                    array.dataPointer.assumingMemoryBound(to: Float.self).update(from: source.baseAddress!, count: source.count)
+                }
+                return array
             }
-            return array
+            let features = try MLDictionaryFeatureProvider(dictionary: [
+                "audio_input": array(context + samples), "hidden_state": array(self.hidden), "cell_state": array(self.cell),
+            ])
+            let output = try model.prediction(from: features)
+            func values(_ name: String, count: Int) throws -> [Float] {
+                guard let array = output.featureValue(for: name)?.multiArrayValue,
+                      array.dataType == .float32, array.count == count else { throw Failure.output }
+                var stride = 1
+                var contiguous = true
+                for (dimension, actualStride) in zip(array.shape.reversed(), array.strides.reversed()) {
+                    if dimension.intValue > 1 && actualStride.intValue != stride { contiguous = false }
+                    stride *= dimension.intValue
+                }
+                let values: [Float]
+                if contiguous {
+                    values = Array(UnsafeBufferPointer(start: array.dataPointer.assumingMemoryBound(to: Float.self), count: count))
+                } else {
+                    values = (0..<count).map { array[$0].floatValue }
+                }
+                guard values.allSatisfy(\.isFinite) else { throw Failure.output }
+                return values
+            }
+            let p = try values("vad_output", count: 1)[0]
+            guard (0...1).contains(p) else { throw Failure.output }
+            let nextHidden = try values("new_hidden_state", count: 128)
+            let nextCell = try values("new_cell_state", count: 128)
+            self.hidden = nextHidden; self.cell = nextCell; self.context = Array(samples.suffix(64))
+            return p
         }
-        let features = try MLDictionaryFeatureProvider(dictionary: [
-            "audio_input": array(context + samples), "hidden_state": array(self.hidden), "cell_state": array(self.cell),
-        ])
-        let output = try model.prediction(from: features)
-        func values(_ name: String, count: Int) throws -> [Float] {
-            guard let array = output.featureValue(for: name)?.multiArrayValue,
-                  array.dataType == .float32, array.count == count else { throw Failure.output }
-            let values = (0..<count).map { array[$0].floatValue }
-            guard values.allSatisfy(\.isFinite) else { throw Failure.output }
-            return values
-        }
-        let p = try values("vad_output", count: 1)[0]
-        guard (0...1).contains(p) else { throw Failure.output }
-        let nextHidden = try values("new_hidden_state", count: 128)
-        let nextCell = try values("new_cell_state", count: 128)
-        self.hidden = nextHidden; self.cell = nextCell; self.context = Array(samples.suffix(64))
-        return p
     }
 }
 
 nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFrameModel> {
-    static var version: String { "speech-shadow-b2-v1" }
+    static var version: String { "speech-shadow-b2-v3" }
     struct Frame: Codable, Equatable {
-        enum Unknown: String, Codable { case invalidInput, unscoredCoverage, contextWarmup, modelFailure, overBudget, cancelled, disabled }
+        enum Unknown: String, Codable { case invalidInput, invalidClock, unscoredCoverage, contextWarmup, modelFailure, budgetCooldown, cancelled, disabled }
         let start: Double
         let epoch: UInt64
         let probability: Float?
         let unknown: Unknown?
+        /// Scheduling telemetry, independent of whether a finite same-source score is valid.
+        let budgetExceeded: Bool
         /// Window-level activity only; not a voiced-duration annotation or near-end decision.
         var active: Bool? { self.probability.map { $0 >= 0.85 } }
     }
@@ -87,7 +105,12 @@ nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFra
     private var scope: String?
     private var sessionID: UUID?
     private var needsReset = true
-    private var failures = 0
+    private var modelFailures = 0
+    private var consecutiveOverBudget = 0
+    // nil is normal operation, zero permits one recovery prediction. Positive values
+    // consume only real, valid, contiguous PCM, not wall time or padded samples.
+    private var budgetCooldownRemainingSamples: Int?
+    private static var budgetCooldownSamples: Int { 32_000 }
     private let clock: () -> Double
     init(model: Model, clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) {
         self.model = model; self.clock = clock
@@ -105,38 +128,81 @@ nonisolated struct MeetingSpeechActivityDetector<Model: MeetingSpeechActivityFra
         route: String,
         cancelled: () -> Bool = { false }
     ) -> Frame {
-        if self.sessionID != session { self.failures = 0; self.needsReset = true }
+        if self.sessionID != session {
+            self.modelFailures = 0; self.consecutiveOverBudget = 0
+            self.budgetCooldownRemainingSamples = nil; self.needsReset = true
+            self.scope = nil; self.lastEnd = nil
+        }
         self.sessionID = session
-        func unknown(_ reason: Frame.Unknown) -> Frame {
-            Frame(start: start.isFinite ? start : 0, epoch: epoch, probability: nil, unknown: reason)
+        func unknown(_ reason: Frame.Unknown, budgetExceeded: Bool = false) -> Frame {
+            Frame(start: start.isFinite ? start : 0, epoch: epoch, probability: nil,
+                  unknown: reason, budgetExceeded: budgetExceeded)
         }
         guard start.isFinite, start >= 0, !route.isEmpty,
               samples.count == 4096, valid.count == samples.count,
               samples.allSatisfy(\.isFinite)
         else {
-            self.needsReset = true; if self.failures < 3 { self.failures = 0 }; return unknown(.invalidInput)
+            self.resetUnscoredContext(); return unknown(.invalidInput)
         }
         let nextScope = "\(session):\(epoch):\(route)"
-        if self.scope != nextScope || self.lastEnd.map({ abs($0 - start) > 1.0 / 32_000 }) != false { self.needsReset = true }
+        if self.scope != nextScope || self.lastEnd.map({ abs($0 - start) > 1.0 / 32_000 }) != false {
+            self.needsReset = true
+            // A gap, replay or new source epoch cannot shorten the recovery interval.
+            if self.budgetCooldownRemainingSamples != nil {
+                self.budgetCooldownRemainingSamples = Self.budgetCooldownSamples
+            }
+        }
         self.scope = nextScope; self.lastEnd = start + 0.256
-        guard !cancelled() else { self.needsReset = true; if self.failures < 3 { self.failures = 0 }; return unknown(.cancelled) }
-        guard self.failures < 3 else { self.needsReset = true; return unknown(.disabled) }
-        guard valid.allSatisfy({ $0 }) else { self.needsReset = true; self.failures = 0; return unknown(.unscoredCoverage) }
+        guard !cancelled() else { self.resetUnscoredContext(); return unknown(.cancelled) }
+        guard self.modelFailures < 3 else { self.needsReset = true; return unknown(.disabled) }
+        guard valid.allSatisfy({ $0 }) else { self.resetUnscoredContext(); return unknown(.unscoredCoverage) }
+        if let remaining = self.budgetCooldownRemainingSamples, remaining > 0 {
+            self.budgetCooldownRemainingSamples = max(0, remaining - samples.count)
+            self.needsReset = true
+            return unknown(.budgetCooldown)
+        }
         let reset = self.needsReset, began = self.clock()
+        guard began.isFinite, began >= 0 else { self.resetUnscoredContext(); return unknown(.invalidClock) }
         do {
             let probability = try model.probability(samples: samples, reset: reset)
-            guard !cancelled() else { self.needsReset = true; self.failures = 0; return unknown(.cancelled) }
-            guard self.clock() - began <= 0.1 else {
-                self.failures += 1; self.needsReset = true; return unknown(.overBudget)
-            }
+            guard !cancelled() else { self.resetUnscoredContext(); return unknown(.cancelled) }
             guard probability.isFinite, (0...1).contains(probability) else {
-                self.failures += 1; self.needsReset = true; return unknown(.modelFailure)
+                self.modelFailures += 1; self.consecutiveOverBudget = 0
+                self.needsReset = true; return unknown(.modelFailure)
             }
-            self.failures = 0; self.needsReset = false
-            if reset { return unknown(.contextWarmup) }
-            return Frame(start: start, epoch: epoch, probability: probability, unknown: nil)
+            self.modelFailures = 0
+            let elapsed = self.clock() - began
+            guard elapsed.isFinite, elapsed >= 0 else { self.resetUnscoredContext(); return unknown(.invalidClock) }
+            let budgetExceeded = elapsed > 0.1
+            if budgetExceeded {
+                self.consecutiveOverBudget += 1
+                if self.budgetCooldownRemainingSamples != nil || self.consecutiveOverBudget >= 3 {
+                    // After the initial three slow calls, retry at most once per new
+                    // two seconds of source PCM. A slow recovery call cools down again.
+                    self.budgetCooldownRemainingSamples = Self.budgetCooldownSamples
+                    self.consecutiveOverBudget = 0
+                }
+            } else {
+                self.consecutiveOverBudget = 0; self.budgetCooldownRemainingSamples = nil
+            }
+            // Wall contention does not invalidate a completed, same-frame prediction or
+            // its recurrent state. Only subsequent cooldown frames go unscored.
+            self.needsReset = false
+            if reset { return unknown(.contextWarmup, budgetExceeded: budgetExceeded) }
+            return Frame(start: start, epoch: epoch, probability: probability, unknown: nil,
+                         budgetExceeded: budgetExceeded)
         } catch {
-            self.failures += 1; self.needsReset = true; return unknown(.modelFailure)
+            self.modelFailures += 1; self.consecutiveOverBudget = 0
+            self.needsReset = true; return unknown(.modelFailure)
+        }
+    }
+
+    private mutating func resetUnscoredContext() {
+        self.needsReset = true
+        if self.modelFailures < 3 { self.modelFailures = 0 }
+        self.consecutiveOverBudget = 0
+        if self.budgetCooldownRemainingSamples != nil {
+            self.budgetCooldownRemainingSamples = Self.budgetCooldownSamples
         }
     }
 }

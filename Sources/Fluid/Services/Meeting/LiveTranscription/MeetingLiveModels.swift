@@ -3,8 +3,8 @@ import CoreMedia
 import Foundation
 
 /// Internal live-only source tags: `.you` is the microphone track and `.them` is application audio.
-/// Source captions use neutral labels. Protected streaming results can additionally supply
-/// participant presentation without changing source routing or partial recognition contracts.
+/// Protected streaming results can additionally supply participant presentation without
+/// changing source routing or partial recognition contracts.
 nonisolated enum MeetingLiveSpeaker: Sendable, Equatable {
     case you
     case them
@@ -27,7 +27,7 @@ nonisolated struct MeetingLiveUtterance: Identifiable, Sendable, Equatable {
     /// Its original end then cannot retire the audio still waiting for safe text.
     var hasIncompleteTextCoverage = false
     /// Optional product speaker evidence for protected streaming results. Source-only engines
-    /// and provisional hypotheses keep the existing neutral microphone/application labels.
+    /// and provisional hypotheses do not claim a participant identity.
     var participant: MeetingSpeakerPresentation? = nil
 }
 
@@ -152,35 +152,80 @@ nonisolated struct MeetingLiveTranscriptSnapshot: Sendable, Equatable {
 /// Pure row composition for the live captions card: finalized turns in transcript order, then
 /// active partials bottom-pinned by turn start, so a solidifying bubble keeps its row identity.
 nonisolated enum MeetingLiveBubbleComposer {
-    nonisolated struct Row: Identifiable, Equatable {
+    nonisolated struct Row: Identifiable, Equatable, Sendable {
         var id: UUID
         var speaker: MeetingLiveSpeaker
         var text: String
         var isPartial: Bool
         var showsLabel: Bool
         var participant: MeetingSpeakerPresentation? = nil
+        /// Original session-relative first-word time, retained independently of reading ownership.
+        var start: TimeInterval = 0
+        /// The first word of the current readable participant turn, including layout continuations.
+        var readingTurnStart: TimeInterval = 0
+
+        var hasReadableParticipant: Bool {
+            participant?.hasReadableParticipant == true
+        }
 
         func hasSameSpeaker(as other: Self) -> Bool {
             speaker == other.speaker && participant?.identity == other.participant?.identity
         }
     }
 
+    static func rowsForDisplay(_ snapshot: MeetingLiveTranscriptSnapshot) async throws -> [Row] {
+        let work = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let rows = Self.rows(for: snapshot)
+            try Task.checkCancellation()
+            return rows
+        }
+        return try await withTaskCancellationHandler {
+            let result = try await work.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: { work.cancel() }
+    }
+
     static func rows(for snapshot: MeetingLiveTranscriptSnapshot) -> [Row] {
         var rows = snapshot.utterances.map {
             Row(id: $0.id, speaker: $0.speaker, text: $0.text, isPartial: false,
-                showsLabel: false, participant: $0.participant)
+                showsLabel: false, participant: $0.participant, start: $0.start)
         }
         let activePartials = [MeetingLiveSpeaker.you, .them]
             .compactMap { speaker in snapshot.partials[speaker].map { (speaker, $0) } }
             .filter { pair in !snapshot.utterances.contains { $0.id == pair.1.id } }
             .sorted { $0.1.start < $1.1.start }
         for (speaker, partial) in activePartials {
-            rows.append(Row(id: partial.id, speaker: speaker, text: partial.text, isPartial: true, showsLabel: false))
+            rows.append(Row(id: partial.id, speaker: speaker, text: partial.text, isPartial: true,
+                            showsLabel: false, start: partial.start))
+        }
+
+        // Unresolved words and provisional hypotheses continue the last readable participant
+        // on their own capture source. This is a transient reading projection only: the snapshot
+        // retains its original uncertainty, IDs, text and timing for later speaker corrections.
+        var readingTurns: [MeetingLiveSpeaker: (participant: MeetingSpeakerPresentation, start: TimeInterval)] = [:]
+        for index in rows.indices {
+            let source = rows[index].speaker
+            let previous = readingTurns[source]
+            if rows[index].hasReadableParticipant, let participant = rows[index].participant {
+                let start = previous.flatMap { $0.participant.identity == participant.identity ? $0.start : nil }
+                    ?? rows[index].start
+                readingTurns[source] = (participant, start)
+                rows[index].readingTurnStart = start
+            } else if let previous {
+                rows[index].participant = previous.participant.markingEstimated()
+                rows[index].readingTurnStart = previous.start
+            } else {
+                rows[index].participant = nil
+                rows[index].readingTurnStart = rows[index].start
+            }
         }
 
         var labelIndex = rows.startIndex
         for index in rows.indices {
-            rows[index].showsLabel = index == rows.startIndex || !rows[index].hasSameSpeaker(as: rows[index - 1])
+            rows[index].showsLabel = rows[index].hasReadableParticipant
+                && (index == rows.startIndex || !rows[index].hasSameSpeaker(as: rows[index - 1]))
             if rows[index].showsLabel { labelIndex = index }
             // The visible header belongs to the complete continuous reading turn, even
             // when long text is divided into several layout paragraphs below that header.
@@ -361,19 +406,38 @@ nonisolated struct MeetingPendingSpeechToken: Identifiable, Sendable, Equatable 
     var level: Float
 }
 
+/// Evidence for capture presentation only. Unknown is distinct from confirmed non-speech;
+/// neither state proves that audio has been recognized or can be discarded.
+nonisolated enum MeetingSpeechActivity: Sendable, Equatable {
+    case speech, nonSpeech, unknown
+}
+
 nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
     var tokens: [MeetingPendingSpeechToken] = []
     var isCapturing = false
+    var activityBySource: [MeetingLiveSpeaker: MeetingSpeechActivity] = [:]
+
+    /// Both native inline attachments and standalone waves share this bounded animation set.
+    /// Retained audio remains visible while recognition or privacy publication is delayed.
+    var animatedTokenIDs: Set<UInt64> {
+        guard isCapturing else { return [] }
+        var result: Set<UInt64> = []
+        for source in [MeetingLiveSpeaker.you, .them] where activityBySource[source] == .speech {
+            result.formUnion(tokens.lazy.filter { $0.source == source }.suffix(3).map(\.id))
+        }
+        return result
+    }
+
     /// Separate from live-transcript revisions: capture progress cannot invalidate an async
     /// privacy-filtered recognition update.
     var revision: UInt64 = 0
     static let empty = MeetingPendingSpeechSnapshot()
 }
 
-/// A small signal heuristic for capture animation, not a calibrated VAD. The existing Silero
-/// detector is an offline model with its own residency; this path must not load a second model.
-/// Silence, steady background and impulses do not create progress. Modulated non-speech can
-/// still resemble speech, so the UI must describe audio capture, never recognized words.
+/// Scalar-only projection. Mobile capture supplies activity from its single model worker;
+/// legacy capture can still use the inexpensive signal heuristic below. Positive model
+/// windows mean speech somewhere in that window, not exact voiced duration or word counts.
+/// Wave cadence is a bounded presentation estimate, never recognized words.
 nonisolated struct MeetingPendingSpeechProjection {
     static let maximumTokens = 64
     static let minimumActivityRMS: Float = 0.0042
@@ -384,7 +448,8 @@ nonisolated struct MeetingPendingSpeechProjection {
     /// content crosses this callback, including when publication is held by privacy.
     nonisolated struct DiagnosticEvent: Sendable {
         enum Kind: String, Sendable {
-            case created, replaced, trimmed, stopped
+            case created, replaced, trimmed, stopped, extended
+            case processedCoverage = "processed_coverage"
             case quietWaiting = "quiet_waiting"
             case capacityReached = "capacity_reached"
             case reconciled, staleTranscript = "stale_transcript", capturePublished = "capture_published"
@@ -425,6 +490,9 @@ nonisolated struct MeetingPendingSpeechProjection {
         var lastActivityEnd: Double?
         var lastProgressEnd: Double?
         var reportedQuietWaiting = false
+        var cadenceSeconds: Double = 0.4
+        var cadenceObservedThrough: Double?
+        var protectedThrough: Double = 0
     }
     private var tracks: [MeetingLiveSpeaker: Track] = [:]
     private var nextID: UInt64 = 0
@@ -465,45 +533,83 @@ nonisolated struct MeetingPendingSpeechProjection {
         // rejects broadband hiss. These thresholds classify an animation candidate only.
         let candidate = rms >= Self.minimumActivityRMS && modulation >= 0.12 && zeroCrossingRate < 0.34 && peak <= max(0.02, rms * 9)
         track.consecutiveActivity = candidate ? min(2, track.consecutiveActivity + 1) : 0
-        if track.consecutiveActivity >= 2 {
-            track.lastActivityEnd = end
-            track.pendingDuration += end - start
-            // Baseline presentation cadence: 150 words/minute, not a claim about actual words.
-            if track.pendingDuration >= 0.4 - 0.000_001 {
-                track.pendingDuration -= 0.4
-                // A short accepted bump must not keep old waves alive forever.
-                // Only sustained activity that earns a visual fragment extends its lifetime.
+        let isSpeech = track.consecutiveActivity >= 2
+        if isSpeech { track.lastActivityEnd = end }
+        // Short intra-syllable dips must not toggle every 20ms. A real detector's explicit
+        // non-speech decision below bypasses this heuristic hangover entirely.
+        let activity: MeetingSpeechActivity = isSpeech || track.lastActivityEnd.map {
+            end - $0 < Self.cadenceResetSeconds - 0.000_001
+        } == true ? .speech : .nonSpeech
+        self.advance(source: source, start: start, end: end, activity: activity,
+            contributesSpeech: isSpeech, level: min(1, max(0.08, sqrt(rms / 0.08))), track: &track)
+        self.tracks[source] = track
+    }
+
+    /// Scalar seam for an admitted detector. No model or audio is retained here, and confirmed
+    /// decisions do not pass through the energy/modulation heuristic. Callers choose one
+    /// evidence stream per source and preserve the same capture-relative time contract.
+    mutating func observeSpeechActivity(source: MeetingLiveSpeaker, start: Double, end: Double,
+                                       activity: MeetingSpeechActivity, level: Float = 0.5) {
+        guard self.snapshot.isCapturing, start.isFinite, end.isFinite, start >= 0,
+              end > start, end - start <= 0.256_001, level.isFinite, (0...1).contains(level) else { return }
+        var track = self.tracks[source] ?? Track()
+        if let lastEnd = track.lastEnd {
+            guard start >= lastEnd - 0.000_001 else { return }
+            if start - lastEnd > 0.06 { track.pendingDuration = 0 }
+        }
+        track.lastEnd = end
+        if activity == .speech { track.lastActivityEnd = end }
+        else { track.pendingDuration = 0 }
+        self.advance(source: source, start: start, end: end, activity: activity,
+            contributesSpeech: activity == .speech, level: level, track: &track)
+        self.tracks[source] = track
+    }
+
+    private mutating func advance(source: MeetingLiveSpeaker, start: Double, end: Double,
+                                  activity: MeetingSpeechActivity, contributesSpeech: Bool,
+                                  level: Float, track: inout Track) {
+        if (self.snapshot.activityBySource[source] ?? .unknown) != activity {
+            self.snapshot.activityBySource[source] = activity
+            self.snapshot.revision &+= 1
+        }
+        if contributesSpeech, end > track.protectedThrough + 0.000_001 {
+            track.pendingDuration += end - max(start, track.protectedThrough)
+            // Start at 150 shapes/minute, then gently follow newly visible native speech
+            // timing. Activity decides when to mint; cadence is still only a UI estimate.
+            if track.pendingDuration >= track.cadenceSeconds - 0.000_001 {
+                track.pendingDuration -= track.cadenceSeconds
                 track.lastProgressEnd = end
                 track.reportedQuietWaiting = false
                 if self.snapshot.tokens.count < Self.maximumTokens {
                     let widths: [Double] = [0.72, 1.02, 0.56, 0.88, 0.64, 1.10, 0.80]
                     self.nextID &+= 1
                     self.snapshot.tokens.append(MeetingPendingSpeechToken(
-                        id: self.nextID, source: source, start: max(0, end - 0.4), end: end,
-                        widthHint: widths[Int((self.nextID - 1) % UInt64(widths.count))],
-                        level: min(1, max(0.08, sqrt(rms / 0.08)))))
+                        id: self.nextID, source: source, start: max(track.protectedThrough, end - track.cadenceSeconds), end: end,
+                        widthHint: widths[Int((self.nextID - 1) % UInt64(widths.count))], level: level))
                     self.snapshot.revision &+= 1
                     self.reportedCapacity = false
                     self.emit(.created, source: source, tokens: [self.snapshot.tokens.last!])
+                } else if let index = self.snapshot.tokens.lastIndex(where: { $0.source == source }) {
+                    // Preserve the same bounded display token and its complete outstanding
+                    // source envelope when recognition falls behind. Later speech must not
+                    // disappear merely because the renderer reached its view budget.
+                    self.snapshot.tokens[index].end = max(self.snapshot.tokens[index].end, end)
+                    self.snapshot.revision &+= 1
+                    self.emit(.extended, source: source, tokens: [self.snapshot.tokens[index]])
                 } else if !self.reportedCapacity {
                     self.reportedCapacity = true
                     self.emit(.capacityReached, source: source, start: start, end: end)
                 }
             }
         }
-        if let lastActivityEnd = track.lastActivityEnd {
-            // Unminted cadence must not accumulate across separate background bumps.
-            if end - lastActivityEnd >= Self.cadenceResetSeconds { track.pendingDuration = 0 }
-        }
+        if let lastActivityEnd = track.lastActivityEnd,
+           end - lastActivityEnd >= Self.cadenceResetSeconds { track.pendingDuration = 0 }
         if let lastProgressEnd = track.lastProgressEnd, end - lastProgressEnd >= Self.quietWaitingSeconds,
            !track.reportedQuietWaiting {
-            // Silence stops minting. It does not prove the preceding speech has
-            // been recognized, rejected as noise, or admitted by privacy yet.
             track.reportedQuietWaiting = true
             self.emit(.quietWaiting, source: source,
                 tokens: self.snapshot.tokens.filter { $0.source == source }, start: lastProgressEnd, end: end)
         }
-        self.tracks[source] = track
     }
 
     /// Recognition-based retirement uses only caller-approved, actually visible captions. PII-held words and
@@ -515,10 +621,21 @@ nonisolated struct MeetingPendingSpeechProjection {
             return
         }
         self.visibleRevision = visible.revision
-        for utterance in visible.utterances where !utterance.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guard !utterance.hasIncompleteTextCoverage,
+        // Full reading history must not turn each preview into a text scan and token
+        // retirement pass over the whole meeting. Pending capture itself stays bounded.
+        let pendingBounds = Dictionary(grouping: self.snapshot.tokens, by: \.source).mapValues { tokens in
+            (start: tokens.map(\.start).min()!, end: tokens.map(\.end).max()!)
+        }
+        for utterance in visible.utterances {
+            if self.snapshot.tokens.isEmpty { break }
+            guard let bounds = pendingBounds[utterance.speaker],
+                  utterance.end > bounds.start, utterance.start < bounds.end,
+                  !utterance.hasIncompleteTextCoverage,
                   utterance.start.isFinite, utterance.start >= 0,
-                  utterance.end.isFinite, utterance.end > utterance.start else { continue }
+                  utterance.end.isFinite, utterance.end > utterance.start,
+                  !utterance.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            self.observeCadence(source: utterance.speaker, start: utterance.start,
+                end: utterance.end, text: utterance.text)
             self.applyCoverage(source: utterance.speaker, start: utterance.start, end: utterance.end,
                 captionID: utterance.id, visibleUTF16: utterance.text.utf16.count)
         }
@@ -531,13 +648,53 @@ nonisolated struct MeetingPendingSpeechProjection {
             self.applyCoverage(source: source, start: partial.start, end: end,
                 captionID: partial.id, visibleUTF16: partial.text.utf16.count)
         }
-        let visibleUTF16 = visible.utterances.reduce(0) { $0 + $1.text.utf16.count }
-            + visible.partials.values.reduce(0) { $0 + $1.text.utf16.count }
-        self.emit(.reconciled, transcriptRevision: visible.revision, visibleUTF16: visibleUTF16)
+        if self.onDiagnostic != nil {
+            let visibleUTF16 = visible.utterances.reduce(0) { $0 + $1.text.utf16.count }
+                + visible.partials.values.reduce(0) { $0 + $1.text.utf16.count }
+            self.emit(.reconciled, transcriptRevision: visible.revision, visibleUTF16: visibleUTF16)
+        }
+    }
+
+    /// The pipeline supplies exact normalized source progress only after its protected
+    /// checkpoint is visible. Unlike word-shaped estimates this includes scored gaps
+    /// and complete empty ASR windows. It never acknowledges later queued audio.
+    mutating func acknowledgeProtectedSource(source: MeetingLiveSpeaker, throughSample: Int,
+                                             transcriptRevision: UInt64) {
+        guard snapshot.isCapturing, transcriptRevision == visibleRevision,
+              throughSample >= 0, throughSample <= Int.max / 2 else { return }
+        let end = Double(throughSample) / 16_000
+        var track = tracks[source] ?? Track()
+        guard end > track.protectedThrough else { return }
+        let start = track.protectedThrough
+        track.protectedThrough = end
+        track.pendingDuration = 0
+        tracks[source] = track
+        applyCoverage(source: source, start: start, end: end, captionID: nil, visibleUTF16: 0)
+        emit(.processedCoverage, source: source, transcriptRevision: transcriptRevision, start: start, end: end)
+    }
+
+    private mutating func observeCadence(source: MeetingLiveSpeaker, start: Double, end: Double, text: String) {
+        guard var track = self.tracks[source], end.isFinite, start.isFinite, end > start,
+              track.cadenceObservedThrough.map({ end > $0 + 0.000_001 }) != false else { return }
+        // Do not retain text or word counts. A speaker-only revision cannot train twice,
+        // and a long pause is not a slow speaking rate. Single native words use spacing
+        // between successive endpoints rather than their much shorter phonation length.
+        let words = text.split(whereSeparator: { $0.isWhitespace }).filter {
+            $0.contains(where: { $0.isLetter || $0.isNumber })
+        }.count
+        guard words > 0 else { return }
+        defer { track.cadenceObservedThrough = end; self.tracks[source] = track }
+        let span: Double
+        if words == 1, let previous = track.cadenceObservedThrough { span = end - previous }
+        else if words > 1 { span = end - start }
+        else { return }
+        guard span > 0, span <= max(1.5, Double(words)), end - start <= 30 else { return }
+        let observed = min(1, max(0.256, span / Double(words)))
+        track.cadenceSeconds = track.cadenceSeconds * 0.8 + observed * 0.2
     }
 
     private mutating func applyCoverage(source: MeetingLiveSpeaker, start: TimeInterval, end: TimeInterval,
-                                       captionID: UUID, visibleUTF16: Int) {
+                                       captionID: UUID?, visibleUTF16: Int) {
         var removed: [MeetingPendingSpeechToken] = []
         var trimmed: [MeetingPendingSpeechToken] = []
         self.snapshot.tokens = self.snapshot.tokens.compactMap { token in
@@ -572,18 +729,23 @@ nonisolated struct MeetingPendingSpeechProjection {
     private func emit(_ kind: DiagnosticEvent.Kind, source: MeetingLiveSpeaker? = nil,
                       tokens: [MeetingPendingSpeechToken] = [], transcriptRevision: UInt64? = nil,
                       captionID: UUID? = nil, visibleUTF16: Int = 0, start: TimeInterval? = nil, end: TimeInterval? = nil) {
-        guard let onDiagnostic else { return }
-        onDiagnostic(DiagnosticEvent(kind: kind, uptime: ProcessInfo.processInfo.systemUptime,
+        guard onDiagnostic != nil || MeetingTimelineTrace.enabled else { return }
+        let event = DiagnosticEvent(kind: kind, uptime: ProcessInfo.processInfo.systemUptime,
             source: source, tokens: tokens, remainingIDs: self.snapshot.tokens.map(\.id),
             pendingRevision: self.snapshot.revision, transcriptRevision: transcriptRevision,
-            captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end))
+            captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end)
+        onDiagnostic?(event)
+        MeetingTimelineTrace.shared?.record("wave_" + kind.rawValue, fields: ["metadata": event.logFields],
+            words: tokens.map { .init(text: String($0.id), start: $0.start, end: $0.end) })
     }
 
     mutating func stop() {
+        guard self.snapshot.isCapturing else { return }
         let removed = self.snapshot.tokens
         self.tracks.removeAll()
         self.snapshot.tokens.removeAll()
         self.snapshot.isCapturing = false
+        self.snapshot.activityBySource.removeAll()
         self.snapshot.revision &+= 1
         self.emit(.stopped, tokens: removed)
     }
@@ -591,7 +753,8 @@ nonisolated struct MeetingPendingSpeechProjection {
 }
 
 /// Synchronous metadata tee. Reads the caller-owned PCM once without retaining or copying
-/// an audio buffer, retains fixed-size scalar statistics, and coalesces main-runloop delivery.
+/// unbounded audio, retains fixed-size scalar statistics, and coalesces main-runloop delivery.
+/// Optional model inference has a separate bounded worker; the projection lock never guards it.
 final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     private struct Meter {
         var count = 0
@@ -606,21 +769,58 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     private let originBox: MeetingLiveOriginBox
     private let onUpdate: @Sendable (MeetingPendingSpeechSnapshot) -> Void
     private var projection: MeetingPendingSpeechProjection
+    private var activityWorker: MeetingCaptureSpeechActivityWorker?
     private let onDiagnostic: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)?
     private var meters: [MeetingLiveSpeaker: Meter] = [:]
     private var publicationScheduled = false
     private var lastPublishedRevision: UInt64 = 0
 
     init(originBox: MeetingLiveOriginBox,
+         activityModel: MeetingCaptureSpeechActivityWorker.Factory? = nil,
          diagnostics: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)? = nil,
          onUpdate: @escaping @Sendable (MeetingPendingSpeechSnapshot) -> Void) {
         self.originBox = originBox
         self.onUpdate = onUpdate
         self.onDiagnostic = diagnostics
         self.projection = MeetingPendingSpeechProjection(diagnostics: diagnostics)
+        if let activityModel {
+            self.activityWorker = MeetingCaptureSpeechActivityWorker(factory: activityModel) { [weak self] start, end, activity in
+                guard let self, self.activityWorker?.isUnavailable != true else { return }
+                let publish = self.lock.withLock {
+                    self.projection.observeSpeechActivity(source: .you, start: start, end: end, activity: activity)
+                    return self.reservePublication()
+                }
+                if publish { self.schedulePublication() }
+            }
+        }
+    }
+
+    func confidentlyNonSpeech(start: Double, end: Double) -> Bool {
+        self.activityWorker?.confidentlyNonSpeech(start: start, end: end) ?? false
+    }
+
+    func awaitConfidentNonSpeech(start: Double, end: Double) async -> Bool {
+        await self.activityWorker?.awaitConfidentNonSpeech(start: start, end: end) ?? false
+    }
+
+    func stopAndWait() async {
+        self.stop()
+        await self.activityWorker?.join()
+        MeetingTimelineTrace.shared?.record("capture_joined")
+        await MeetingTimelineTrace.shared?.flush()
     }
 
     func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
+        if let activityWorker, kind == .microphone, !activityWorker.isUnavailable {
+            let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            guard pts.isNumeric else { return }
+            let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: self.originBox.establish(pts))
+            MeetingTimelineTrace.shared?.record("capture_pcm", fields: ["source": String(describing: kind),
+                "sourceStartSeconds": String(start), "sampleCount": String(CMSampleBufferGetNumSamples(sampleBuffer)),
+                "vadState": "worker-present"])
+            activityWorker.offer(sampleBuffer, start: start)
+            return
+        }
         guard CMSampleBufferIsValid(sampleBuffer), CMSampleBufferDataIsReady(sampleBuffer),
               let description = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee,
@@ -634,6 +834,9 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         guard count > 0, count <= 65_536, pts.isNumeric else { return }
         let origin = self.originBox.establish(pts)
         let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: origin)
+        MeetingTimelineTrace.shared?.record("capture_pcm", fields: ["source": String(describing: kind),
+            "sourceStartSeconds": String(start), "sampleCount": String(count),
+            "vadState": self.activityWorker == nil ? "not-configured" : "capture-fallback-see-vad-events"])
         var needed = 0
         guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer,
             bufferListSizeNeededOut: &needed, bufferListOut: nil, bufferListSize: 0,
@@ -696,7 +899,19 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
         }
     }
 
+    func acknowledgeProtectedSource(source: MeetingLiveSpeaker, throughSample: Int,
+                                    transcriptRevision: UInt64) -> MeetingPendingSpeechSnapshot {
+        MeetingTimelineTrace.shared?.record("wave_source_ack_request", fields: ["source": String(describing: source),
+            "throughSample": String(throughSample), "transcriptRevision": String(transcriptRevision)])
+        return self.lock.withLock {
+            self.projection.acknowledgeProtectedSource(source: source, throughSample: throughSample,
+                transcriptRevision: transcriptRevision)
+            return self.projection.snapshot
+        }
+    }
+
     func stop() {
+        self.activityWorker?.stop()
         self.lock.withLock { self.projection.stop(); self.meters.removeAll() }
     }
 
@@ -721,5 +936,269 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
             self.onUpdate(snapshot)
         }
         CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
+}
+
+
+/// The mobile tee already supplies normalized 16kHz mono PCM. A single attempt-owned
+/// worker loads one optional model and owns its recurrent state. Admission only retains
+/// bounded sample buffers; conversion, inference and model loading never run on capture.
+/// Unknown coverage always fails open for ASR. No audio file or model download is created.
+final nonisolated class MeetingCaptureSpeechActivityWorker: @unchecked Sendable {
+    typealias Factory = @Sendable () throws -> any MeetingSpeechActivityFrameModel
+    private struct Model: MeetingSpeechActivityFrameModel {
+        var value: any MeetingSpeechActivityFrameModel
+        mutating func probability(samples: [Float], reset: Bool) throws -> Float {
+            try value.probability(samples: samples, reset: reset)
+        }
+    }
+    private struct Input: @unchecked Sendable {
+        let buffer: CMSampleBuffer
+        let start: Double
+        let count: Int
+        let epoch: UInt64
+    }
+    private struct Evidence {
+        let start: Double
+        let end: Double
+        let activity: MeetingSpeechActivity
+    }
+    private struct NonSpeechAssessment {
+        let result: Bool
+        let reason: String
+        let scoredThrough: Double
+        let mayAwaitRightTail: Bool
+        let generation: UInt64
+    }
+    private let queue = DispatchQueue(label: "meeting.speech-activity", qos: .utility)
+    private let lock = NSLock()
+    private var inputs: [Input] = []
+    private var pendingSamples = 0
+    private var scheduled = false
+    private var closed = false
+    private var unavailable = false
+    private var epoch: UInt64 = 0
+    private var evidence: [Evidence] = []
+    private var evidenceGeneration: UInt64 = 0
+    private var detector: MeetingSpeechActivityDetector<Model>?
+    private var samples: [Float] = []
+    private var sampleStart = 0.0
+    private var previousEnd: Double?
+    private var previousEpoch: UInt64?
+    private let session = UUID()
+    private let publish: @Sendable (Double, Double, MeetingSpeechActivity) -> Void
+
+    init(factory: @escaping Factory,
+         clock: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
+         publish: @escaping @Sendable (Double, Double, MeetingSpeechActivity) -> Void) {
+        self.publish = publish
+        queue.async { [self] in
+            guard !lock.withLock({ closed }) else { return }
+            // A missing or invalid model leaves the whole attempt unknown. Capture and
+            // recognition continue. The next explicit recording can try again.
+            let began = ProcessInfo.processInfo.systemUptime
+            MeetingTimelineTrace.shared?.record("vad_model_load_begin", fields: ["captureID": session.uuidString])
+            do {
+                detector = MeetingSpeechActivityDetector(model: Model(value: try factory()), clock: clock)
+                MeetingTimelineTrace.shared?.record("vad_model_load_end", fields: ["captureID": session.uuidString,
+                    "outcome": "loaded", "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000)])
+            } catch {
+                detector = nil
+                MeetingTimelineTrace.shared?.record("vad_model_load_end", fields: ["captureID": session.uuidString,
+                    "outcome": "unavailable", "errorType": String(reflecting: type(of: error)),
+                    "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000)])
+            }
+            lock.withLock { unavailable = detector == nil }
+        }
+    }
+
+    /// A missing/disabled optional model restores capture-only UI feedback. Its heuristic
+    /// can never authorize ASR suppression or be treated as neural speech evidence.
+    var isUnavailable: Bool { lock.withLock { unavailable } }
+
+    func offer(_ buffer: CMSampleBuffer, start: Double) {
+        let count = CMSampleBufferGetNumSamples(buffer)
+        guard start.isFinite, start >= 0, count > 0, count <= 16_000,
+              CMSampleBufferIsValid(buffer), CMSampleBufferDataIsReady(buffer),
+              let description = CMSampleBufferGetFormatDescription(buffer),
+              let format = try? MeetingPCMFormatContract(formatDescription: description),
+              format.sampleRate == 16_000, format.channelCount == 1,
+              let block = CMSampleBufferGetDataBuffer(buffer),
+              CMBlockBufferGetDataLength(block) <= count * MemoryLayout<Float>.stride else {
+            MeetingTimelineTrace.shared?.record("vad_input_rejected", fields: ["captureID": session.uuidString,
+                "reason": "normalized-pcm-contract", "sampleCount": String(count)])
+            return
+        }
+        let shouldSchedule = lock.withLock { () -> Bool in
+            guard !closed else { return false }
+            // At most two seconds of admitted PCM and sixteen retained buffers. Overflow
+            // invalidates evidence immediately; recognition never waits for this worker.
+            if inputs.count >= 16 || pendingSamples + count > 32_000 {
+                MeetingTimelineTrace.shared?.record("vad_queue_overflow", fields: ["captureID": session.uuidString,
+                    "discardedBuffers": String(inputs.count), "discardedSamples": String(pendingSamples), "epoch": String(epoch)])
+                inputs.removeAll(); pendingSamples = 0; epoch &+= 1; evidence.removeAll(); evidenceGeneration &+= 1
+            }
+            inputs.append(Input(buffer: buffer, start: start, count: count, epoch: epoch))
+            pendingSamples += count
+            guard !scheduled else { return false }
+            scheduled = true
+            return true
+        }
+        if shouldSchedule { queue.async { [self] in drain() } }
+    }
+
+    func confidentlyNonSpeech(start: Double, end: Double) -> Bool {
+        let query = self.nonSpeechAssessment(start: start, end: end)
+        self.recordNonSpeechQuery(query, start: start, end: end)
+        return query.result
+    }
+
+    /// A growing ASR window can arrive just before its last VAD frame completes.
+    /// Wait only for that one missing right-edge frame after an entirely measured quiet
+    /// prefix. Unknown, interior gaps and speech never become silence through waiting.
+    func awaitConfidentNonSpeech(start: Double, end: Double) async -> Bool {
+        let began = ProcessInfo.processInfo.systemUptime
+        var query = self.nonSpeechAssessment(start: start, end: end)
+        let generation = query.generation
+        var waited = false
+        func finish(_ result: Bool, reason: String? = nil) -> Bool {
+            self.recordNonSpeechQuery(query, start: start, end: end, result: result, reason: reason,
+                waitMilliseconds: waited ? (ProcessInfo.processInfo.systemUptime - began) * 1_000 : 0)
+            return result
+        }
+        while true {
+            guard !Task.isCancelled else { return finish(false, reason: "cancelled") }
+            guard query.generation == generation else { return finish(false, reason: "source-reset") }
+            if waited, ProcessInfo.processInfo.systemUptime - began >= 0.35 {
+                return finish(false, reason: "right-tail-timeout")
+            }
+            if query.result { return finish(true) }
+            guard query.mayAwaitRightTail else { return finish(false) }
+            guard ProcessInfo.processInfo.systemUptime - began < 0.35 else { return finish(false, reason: "right-tail-timeout") }
+            waited = true
+            do { try await Task.sleep(for: .milliseconds(5)) }
+            catch { return finish(false, reason: "cancelled") }
+            query = self.nonSpeechAssessment(start: start, end: end)
+        }
+    }
+
+    private func nonSpeechAssessment(start: Double, end: Double) -> NonSpeechAssessment {
+        lock.withLock {
+            let scoredThrough = evidence.last?.end ?? 0
+            func result(_ value: Bool = false, _ reason: String, mayAwait: Bool = false) -> NonSpeechAssessment {
+                .init(result: value, reason: reason, scoredThrough: scoredThrough,
+                      mayAwaitRightTail: mayAwait, generation: evidenceGeneration)
+            }
+            guard start.isFinite, end.isFinite, start >= 0, end > start else { return result(false, "invalid-range") }
+            guard !closed, !unavailable else { return result(false, closed ? "closed" : "unavailable") }
+            var cursor = start, overlaps = 0
+            for item in evidence where item.end > start && item.start < end {
+                guard item.start <= cursor + 0.000_001 else { return result(false, "unscored-gap") }
+                guard item.activity == .nonSpeech else { return result(false, "speech-or-unknown") }
+                cursor = max(cursor, item.end); overlaps += 1
+            }
+            if cursor >= end - 0.000_001 { return result(true, "complete-nonspeech") }
+            let mayAwait = overlaps > 0 && end - cursor <= 0.256 + 0.000_001
+            return result(false, "unscored-tail", mayAwait: mayAwait)
+        }
+    }
+
+    private func recordNonSpeechQuery(_ query: NonSpeechAssessment, start: Double, end: Double,
+                                     result: Bool? = nil, reason: String? = nil, waitMilliseconds: Double = 0) {
+        MeetingTimelineTrace.shared?.record("vad_policy_query", fields: ["captureID": session.uuidString,
+            "sourceStartSeconds": String(start), "sourceEndSeconds": String(end), "result": String(result ?? query.result),
+            "reason": reason ?? query.reason, "scoredThroughSeconds": String(query.scoredThrough),
+            "waitMilliseconds": String(waitMilliseconds)])
+    }
+
+    func stop() {
+        lock.withLock { closed = true; inputs.removeAll(); pendingSamples = 0; evidence.removeAll(); evidenceGeneration &+= 1 }
+    }
+
+    /// Queue barrier joins an in-flight non-preemptible CoreML prediction and releases its
+    /// model before the attempt is declared finished. Never synchronously blocks main.
+    func join() async {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                detector = nil; samples.removeAll(); previousEnd = nil
+                continuation.resume()
+            }
+        }
+    }
+
+    private func drain() {
+        while let input = lock.withLock({ () -> Input? in
+            guard !closed, !inputs.isEmpty else { scheduled = false; return nil }
+            let next = inputs.removeFirst(); pendingSamples -= next.count; return next
+        }) {
+            autoreleasepool { process(input) }
+        }
+    }
+
+    private func process(_ input: Input) {
+        let expectedEnd = input.start + Double(input.count) / 16_000
+        let changed = previousEpoch != input.epoch || previousEnd.map { abs($0 - input.start) > 1.0 / 32_000 } != false
+        if changed {
+            MeetingTimelineTrace.shared?.record("vad_reset", fields: ["captureID": session.uuidString,
+                "epoch": String(input.epoch), "sourceStartSeconds": String(input.start)])
+            samples.removeAll(keepingCapacity: true); sampleStart = input.start
+            lock.withLock { evidence.removeAll(); evidenceGeneration &+= 1 }
+        }
+        previousEpoch = input.epoch; previousEnd = expectedEnd
+        guard let copied = MeetingLiveSampleCopy.copy(input.buffer),
+              copied.buffer.format.sampleRate == 16_000, copied.buffer.format.channelCount == 1,
+              copied.buffer.format.commonFormat == .pcmFormatFloat32,
+              let pcm = copied.buffer.floatChannelData?[0] else {
+            samples.removeAll(keepingCapacity: true); previousEnd = nil
+            emit(start: input.start, end: expectedEnd, activity: .unknown, epoch: input.epoch)
+            return
+        }
+        if samples.isEmpty { sampleStart = input.start }
+        samples.append(contentsOf: UnsafeBufferPointer(start: pcm, count: input.count))
+        while samples.count >= 4096 {
+            let frame = Array(samples.prefix(4096))
+            samples.removeFirst(4096)
+            let start = sampleStart; sampleStart += 0.256
+            let began = ProcessInfo.processInfo.systemUptime
+            let result = detector?.process(samples: frame, valid: [Bool](repeating: true, count: 4096),
+                start: start, session: session, epoch: input.epoch, route: "normalized-microphone-16k",
+                cancelled: { self.lock.withLock { self.closed || self.epoch != input.epoch } })
+            MeetingTimelineTrace.shared?.record("vad_frame", fields: ["captureID": session.uuidString,
+                "epoch": String(input.epoch), "sourceStartSeconds": String(start), "sourceEndSeconds": String(start + 0.256),
+                "probability": result?.probability.map { String($0) } ?? "unavailable",
+                "unknownReason": result?.unknown?.rawValue ?? (result == nil ? "no-detector" : "none"),
+                "budgetExceeded": String(result?.budgetExceeded ?? false),
+                "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000),
+                "detectorPolicyVersion": MeetingSpeechActivityDetector<Model>.version,
+                "probabilityScope": "OR-aggregate-8x32ms" ])
+            if result?.unknown == .disabled {
+                // Only repeated actual model failures disable the attempt. Transient
+                // budget cooldown frames remain unknown and keep this worker available.
+                lock.withLock {
+                    unavailable = true; evidence.removeAll(); evidenceGeneration &+= 1; inputs.removeAll(); pendingSamples = 0
+                }
+                detector = nil; samples.removeAll(keepingCapacity: false)
+                return
+            }
+            let activity: MeetingSpeechActivity
+            // The graph OR-aggregates eight internal frames. A low aggregate bounds
+            // every internal probability; intermediate activity remains explicitly unknown.
+            if let p = result?.probability { activity = p >= 0.85 ? .speech : (p <= 0.1 ? .nonSpeech : .unknown) }
+            else { activity = .unknown }
+            // This is activity anywhere in a 256ms window, never an estimate of voiced
+            // milliseconds or recognized words. Partial tails remain unscored/fail-open.
+            emit(start: start, end: start + 0.256, activity: activity, epoch: input.epoch)
+        }
+    }
+
+    private func emit(start: Double, end: Double, activity: MeetingSpeechActivity, epoch: UInt64) {
+        let admitted = lock.withLock { () -> Bool in
+            guard !closed, self.epoch == epoch else { return false }
+            evidence.append(Evidence(start: start, end: end, activity: activity))
+            evidence.removeAll { $0.end < end - 90 }
+            if evidence.count > 512 { evidence.removeFirst(evidence.count - 512) }
+            return true
+        }
+        if admitted { publish(start, end, activity) }
     }
 }

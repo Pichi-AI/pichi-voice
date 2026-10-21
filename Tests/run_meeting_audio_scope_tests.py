@@ -15,6 +15,7 @@ capture = (ROOT / "Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift").r
 model_declarations = "\n".join(declaration(models, marker) for marker in (
     "nonisolated enum MeetingLanguageCode",
     "nonisolated enum MeetingAudioStorageMode:",
+    "nonisolated enum MeetingSpeakerProcessingMode:",
     "nonisolated enum MeetingCaptureMode:",
     "nonisolated enum MeetingApplicationAudioScope:",
     "nonisolated enum MeetingApplicationAudioSource:",

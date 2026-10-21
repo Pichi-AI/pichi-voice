@@ -8,6 +8,75 @@ import XCTest
 /// transport are real; no model downloads, app activation or microphone are used.
 @MainActor
 final class MobilePCMRuntimeCoverageTests: XCTestCase {
+    func testConfidentNonSpeechSkipsASRWithFullPhysicalCoverageAndUnknownFailsOpen() async throws {
+        for confidentlyQuiet in [true, false] {
+            let fixture = try self.makeNativePCMPreviewFixture()
+            addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+            let attempt = UUID(), track = UUID(), observed = PCMPreviewObservation()
+            try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+            let prefix = expectation(description: "First activity-gated prefix")
+            let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+                chunkSeconds: 6, initialPreviewSeconds: 3, previewIntervalSeconds: 3,
+                confidentlyNonSpeech: { start, end in confidentlyQuiet && start == 37 && end <= 43 },
+                recognize: { window, _ in
+                    try await fixture.runtime.recognizePCM(window: window, offset: 37, trackID: track,
+                        attemptID: attempt, configuration: fixture.configuration, preview: { batch in
+                            await MainActor.run {
+                                observed.batches.append(batch)
+                                if observed.batches.count == 1 { prefix.fulfill() }
+                            }
+                        })
+                }, checkpoint: { batch in await MainActor.run { observed.checkpoints.append(batch) } },
+                failure: { _ in XCTFail("A silence decision cannot interrupt physical capture") })
+            XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+            await fulfillment(of: [prefix], timeout: 3)
+            XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 48_000)))
+            try await consumer.finish()
+            XCTAssertEqual(fixture.provider.timedSampleCounts, confidentlyQuiet ? [] : [48_000, 96_000])
+            let final = try XCTUnwrap(observed.checkpoints.first)
+            XCTAssertEqual(final.segments.isEmpty, confidentlyQuiet)
+            XCTAssertEqual(final.isComplete, true, "Skipping measured silence still covers the entire physical window")
+            XCTAssertEqual(fixture.provider.releaseCalls, 1)
+            XCTAssertFalse(fixture.owner.isClaimed)
+        }
+    }
+
+    func testSpeechAfterScoredSilenceKeepsItsOriginalClockAndAcceptedSpeechCannotBeSkipped() async throws {
+        for quietPrefix in [true, false] {
+            let fixture = try self.makeNativePCMPreviewFixture()
+            addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+            fixture.provider.timedResponses = [
+                48_000: ("Ранняя речь", [.init(text: "Ранняя", start: 0.2, end: 0.5), .init(text: "речь", start: 0.5, end: 0.8)]),
+                96_000: ("После паузы", [.init(text: "После", start: 3.4, end: 3.6), .init(text: "паузы", start: 3.6, end: 3.8)])
+            ]
+            let attempt = UUID(), track = UUID(), observed = PCMPreviewObservation()
+            try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+            let prefix = expectation(description: "First speech-preservation prefix")
+            let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+                chunkSeconds: 6, initialPreviewSeconds: 3, previewIntervalSeconds: 3,
+                confidentlyNonSpeech: { _, end in quietPrefix ? end <= 40 : end > 40 },
+                recognize: { window, _ in
+                    try await fixture.runtime.recognizePCM(window: window, offset: 37, trackID: track,
+                        attemptID: attempt, configuration: fixture.configuration, preview: { batch in
+                            await MainActor.run {
+                                observed.batches.append(batch)
+                                if observed.batches.count == 1 { prefix.fulfill() }
+                            }
+                        })
+                }, checkpoint: { batch in await MainActor.run { observed.checkpoints.append(batch) } },
+                failure: { _ in XCTFail("VAD cannot close capture or erase an accepted speech prefix") })
+            XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+            await fulfillment(of: [prefix], timeout: 3)
+            XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 48_000)))
+            try await consumer.finish()
+            XCTAssertEqual(fixture.provider.timedSampleCounts, quietPrefix ? [96_000] : [48_000, 96_000])
+            let final = try XCTUnwrap(observed.checkpoints.first)
+            XCTAssertEqual(final.segments.first?.start.seconds ?? -1, 40.4, accuracy: 0.0001)
+            XCTAssertEqual(final.segments.last?.end.seconds ?? -1, 40.8, accuracy: 0.0001)
+            XCTAssertEqual(final.isComplete, true)
+        }
+    }
+
     @MainActor private final class NativeScopeProvider: TranscriptionProvider {
         let name = "Generic native scope fixture"
         let isAvailable = true

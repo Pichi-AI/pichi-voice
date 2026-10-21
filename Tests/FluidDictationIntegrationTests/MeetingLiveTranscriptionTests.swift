@@ -290,7 +290,7 @@ final class MeetingLiveBubbleComposerTests: XCTestCase {
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
         XCTAssertEqual(rows.map(\.text), ["hello", "you partial", "them partial"])
         XCTAssertEqual(rows.map(\.isPartial), [false, true, true])
-        XCTAssertEqual(rows.map(\.showsLabel), [true, false, true])
+        XCTAssertEqual(rows.map(\.showsLabel), [false, false, false], "Capture sources do not invent participant headers")
     }
 
     func testShowsLabelIsFalseWhenSpeakerRepeatsAcrossPartial() {
@@ -299,7 +299,7 @@ final class MeetingLiveBubbleComposerTests: XCTestCase {
         snapshot = snapshot.settingPartial(MeetingLivePartial(id: UUID(), text: "still talking", start: 2), for: .you)
 
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
-        XCTAssertEqual(rows.map(\.showsLabel), [true, false])
+        XCTAssertEqual(rows.map(\.showsLabel), [false, false], "Unidentified captions remain readable without pseudo-speaker labels")
     }
 
     func testSolidifyKeepsRowIdentityStable() {
@@ -450,6 +450,74 @@ final class MeetingLiveMemoryGateTests: XCTestCase {
             physicalMemory: MeetingLiveTranscriptionCoordinator.minimumPhysicalMemoryBytes
         ))
         XCTAssertTrue(MeetingLiveTranscriptionCoordinator.isMemorySufficient(physicalMemory: 64 * 1024 * 1024 * 1024))
+    }
+}
+
+final class MeetingLiveCaptionRouteTests: XCTestCase {
+    private typealias Route = MeetingLiveTranscriptionCoordinator.CaptionRoute
+    private static let englishOnly = Route.unavailable(
+        reason: "Live captions support English only. Your transcript will be generated after recording.")
+    private static let unsupportedLanguage = Route.unavailable(
+        reason: "The selected model does not support live captions in this meeting language.")
+    private static let unregisteredModelIDs: [String?] = [
+        nil,
+        SettingsStore.SpeechModel.appleSpeech.rawValue,
+        SettingsStore.SpeechModel.appleSpeechAnalyzer.rawValue,
+        SettingsStore.SpeechModel.parakeetTDTv2.rawValue,
+        SettingsStore.SpeechModel.whisperBase.rawValue,
+        "fixture.unregistered-provider",
+    ]
+
+    private func route(_ languageCode: String, _ modelID: String?) -> Route {
+        MeetingLiveTranscriptionCoordinator.captionRoute(languageCode: languageCode, modelID: modelID)
+    }
+
+    func testRegisteredModelsCaptionOnlyTheirOwnSupportedLanguages() {
+        let parakeetV3 = PichiMeetingProviderFactory.parakeetV3ModelID
+        let gigaam = PichiMeetingProviderFactory.gigaamModelID
+        let whisperTiny = PichiMeetingProviderFactory.whisperTinyModelID
+        XCTAssertEqual(self.route("ru", parakeetV3), .buffered(modelID: parakeetV3))
+        XCTAssertEqual(self.route("en", parakeetV3), .buffered(modelID: parakeetV3))
+        XCTAssertEqual(self.route("ru", gigaam), .buffered(modelID: gigaam))
+        XCTAssertEqual(self.route("en", gigaam), Self.unsupportedLanguage)
+        XCTAssertEqual(self.route("ru", whisperTiny), .buffered(modelID: whisperTiny))
+        XCTAssertEqual(self.route("en", whisperTiny), .buffered(modelID: whisperTiny))
+    }
+
+    func testUnregisteredModelsKeepUpstreamEnglishOnlyCaptionsWithoutSubstitutingAModel() {
+        for modelID in Self.unregisteredModelIDs {
+            XCTAssertNil(modelID.flatMap(PichiMeetingProviderFactory.registeredLanguageCodes(for:)), "\(modelID ?? "nil")")
+            XCTAssertEqual(self.route("en", modelID), .englishStreaming, "\(modelID ?? "nil")")
+            for languageCode in ["ru", "de", "auto"] {
+                XCTAssertEqual(self.route(languageCode, modelID), Self.englishOnly, "\(modelID ?? "nil") \(languageCode)")
+            }
+        }
+    }
+
+    func testUnregisteredRussianMeetingPublishesNoticeWithoutLoadingBufferedCaptions() {
+        for modelID in Self.unregisteredModelIDs {
+            let notice = expectation(description: "English-only notice for \(modelID ?? "nil")")
+            let noLoading = expectation(description: "No caption model loads for \(modelID ?? "nil")")
+            noLoading.isInverted = true
+            let published = Counter()
+            let coordinator = MeetingLiveTranscriptionCoordinator { snapshot in
+                if published.increment() == 1 {
+                    XCTAssertEqual(snapshot.availability, .unavailable(reason: "Live captions support English only. Your transcript will be generated after recording."))
+                    XCTAssertTrue(snapshot.utterances.isEmpty)
+                    notice.fulfill()
+                } else {
+                    noLoading.fulfill()
+                }
+            }
+            coordinator.start(mode: .onlineCall, languageCode: "ru", modelID: modelID, artifactFingerprint: nil)
+            wait(for: [notice, noLoading], timeout: 0.2)
+        }
+    }
+
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func increment() -> Int { self.lock.withLock { self.value += 1; return self.value } }
     }
 }
 

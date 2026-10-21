@@ -21,6 +21,7 @@ enum PichiMeetingProviderFactory {
 
     private nonisolated struct Registration: Sendable {
         let descriptor: MeetingBackendDescriptor
+        let onboardingPriority: Int
         let defaultLanguageCode: String
         let providerFactory: @MainActor @Sendable (MeetingFinalProcessingConfiguration) throws -> any TranscriptionProvider
         let configurationSnapshot: @MainActor @Sendable (String, String?, Bool, MeetingSpeakerProcessingMode) -> MeetingFinalProcessingConfiguration
@@ -29,13 +30,22 @@ enum PichiMeetingProviderFactory {
         let liveAdmission: LiveAdmission
         /// Cheap catalog/file-presence metadata only, never model hashing or preparation.
         let admissionArtifactFingerprint: @MainActor @Sendable () -> String?
+        /// The registered adapter promises preparation of an exact installed export does
+        /// not install/repair/download resources. Unsupported providers keep their cold path.
+        let supportsInstalledIdlePreparation: Bool
+        /// Content identity of an installed export that is derived by hashing its weights. The
+        /// main-actor step only resolves paths; the returned digest can run detached. Nil when
+        /// the snapshot reads its identity from catalog metadata instead.
+        var installedArtifactFingerprint: (@MainActor @Sendable () -> @Sendable () throws -> String?)? = nil
     }
 
     private nonisolated static let registrations: [String: Registration] = [
         PichiMeetingProviderFactory.gigaamModelID: Registration(
             descriptor: MeetingBackendDescriptor(
                 id: .gigaam,
-                version: "1",
+                // Version 3 evaluates lexical Unicode scalars directly in optimized builds.
+                // Existing retained pins reject earlier timing semantics before preparation.
+                version: "3",
                 execution: .local,
                 supportedLanguageCodes: ["ru"],
                 supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
@@ -43,8 +53,9 @@ enum PichiMeetingProviderFactory {
                 resultContract: .canonicalEvidence,
                 knownLimits: [
                     "GigaAM supports Russian. For English or mixed speech, select a multilingual model.",
+                    "Local Russian recognition with GigaAM. Download the compact model or import a verified local export.",
                     "Speaker labels are automatic and can be uncertain in short or overlapping speech.",
-                    "Download the speaker models in Recording settings before an offline meeting.",
+                    "Speaker resources prepare automatically. Finish setup before an offline meeting.",
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
@@ -52,6 +63,7 @@ enum PichiMeetingProviderFactory {
                 supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
                 supportedSpeakerProcessingModes: [.afterRecording, .streaming]
             ),
+            onboardingPriority: 0,
             defaultLanguageCode: "ru",
             providerFactory: { configuration in
                 let store = configuration.asrArtifactDirectory.map { PichiGigaAMModelStore(directory: $0) } ?? .shared
@@ -69,7 +81,7 @@ enum PichiMeetingProviderFactory {
             admissionArtifactFingerprint: {
                 // A fresh install prepares the public export. Complete imports retain priority.
                 (try? PichiGigaAMModelStore.shared.installedModelFingerprint()) ?? GigaAMModelCatalog.downloadableModel.fingerprint
-            }
+            }, supportsInstalledIdlePreparation: true
         ),
         PichiMeetingProviderFactory.whisperTinyModelID: Registration(
             descriptor: MeetingBackendDescriptor(
@@ -81,35 +93,41 @@ enum PichiMeetingProviderFactory {
                 supportedFinalPrecisions: [.word, .utterance],
                 resultContract: .canonicalEvidence,
                 knownLimits: [
-                    "Whisper Tiny is small and fast, with lower recognition accuracy.",
+                    "Whisper Tiny uses a compact model. Speed and memory depend on the device.",
                     "Mixed Russian and English speech may contain errors or transliteration.",
                     "When different people speak in one transcript phrase, speaker labels may remain unknown.",
-                    "Download the speaker models in Recording settings before an offline meeting.",
+                    "Speaker resources prepare automatically. Finish setup before an offline meeting.",
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
                 allowsTranscriptOnlyOnUnsupportedHardware: true,
                 supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
-                pcmObservationPolicy: .init(initialSeconds: 3, intervalSeconds: 3)
+                pcmObservationPolicy: .init(initialSeconds: 3, intervalSeconds: 3),
+                supportedSpeakerProcessingModes: [.afterRecording, .streaming]
             ),
+            onboardingPriority: 2,
             defaultLanguageCode: "auto",
             providerFactory: { try WhisperProvider(meetingConfiguration: $0) },
             configurationSnapshot: { languageCode, fingerprint, diarizationEnabled, processingMode in
-                let model = SettingsStore.SpeechModel.whisperTiny
-                let directory = AppBrand.cachesDirectory.appendingPathComponent("WhisperModels", isDirectory: true)
-                return MeetingFinalProcessingConfiguration(
-                    asrModel: model.rawValue,
-                    asrArtifactFingerprint: fingerprint ?? (try? WhisperProvider.installedArtifactFingerprint(for: model, directory: directory)),
-                    asrArtifactDirectory: directory,
+                MeetingFinalProcessingConfiguration(
+                    asrModel: SettingsStore.SpeechModel.whisperTiny.rawValue,
+                    asrArtifactFingerprint: fingerprint,
+                    asrArtifactDirectory: PichiMeetingProviderFactory.whisperArtifactDirectory,
                     languageCode: languageCode,
-                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled),
+                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled,
+                        profile: PichiMeetingProviderFactory.registrations[SettingsStore.SpeechModel.whisperTiny.rawValue]?.speakerProcessingProfiles[processingMode] ?? .fast32SplitW8A8,
+                        speakerProcessingMode: processingMode),
                     speakerLabelsEnabled: diarizationEnabled, speakerProcessingMode: processingMode
                 )
             },
-            speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8],
+            speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8, .streaming: .experimentalFast128FP16CPU],
             modelsExistOnDisk: { SettingsStore.SpeechModel.whisperTiny.isInstalled },
             liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 2 * 1_073_741_824, maximumTrackCount: 2),
-            admissionArtifactFingerprint: { nil }
+            admissionArtifactFingerprint: { nil }, supportsInstalledIdlePreparation: false,
+            installedArtifactFingerprint: {
+                WhisperProvider.installedArtifactFingerprintOperation(for: .whisperTiny,
+                    directory: PichiMeetingProviderFactory.whisperArtifactDirectory)
+            }
         ),
         PichiMeetingProviderFactory.parakeetV3ModelID: Registration(
             descriptor: MeetingBackendDescriptor(
@@ -122,15 +140,21 @@ enum PichiMeetingProviderFactory {
                 resultContract: .canonicalEvidence,
                 knownLimits: [
                     "Parakeet v3 supports 25 languages, including Russian and English.",
+                    "Fast multilingual transcription. Supports Bulgarian, Croatian, Czech, Danish, " +
+                        "Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, " +
+                        "Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Russian, Slovak, " +
+                        "Slovenian, Spanish, Swedish, and Ukrainian.",
                     "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech.",
-                    "Download the speaker models in Recording settings before an offline meeting.",
+                    "Speaker resources prepare automatically. Finish setup before an offline meeting.",
                     "Battery use and recognition speed depend on the device. Test longer meetings on your iPad.",
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
                 allowsTranscriptOnlyOnUnsupportedHardware: true,
-                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
+                supportedSpeakerProcessingModes: [.afterRecording, .streaming]
             ),
+            onboardingPriority: 1,
             defaultLanguageCode: "auto",
             providerFactory: { try FluidAudioProvider(meetingConfiguration: $0) },
             configurationSnapshot: { languageCode, fingerprint, diarizationEnabled, processingMode in
@@ -139,19 +163,35 @@ enum PichiMeetingProviderFactory {
                 let installed = descriptor.artifactsAreComplete(at: directory)
                 return MeetingFinalProcessingConfiguration(
                     asrModel: PichiMeetingProviderFactory.parakeetV3ModelID,
-                    asrArtifactFingerprint: fingerprint ?? (installed ? (try? descriptor.installedArtifactFingerprint(at: directory)) : nil),
+                    asrArtifactFingerprint: fingerprint,
                     asrArtifactDirectory: installed ? directory : nil,
                     languageCode: languageCode,
-                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled),
+                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled,
+                        profile: PichiMeetingProviderFactory.registrations[PichiMeetingProviderFactory.parakeetV3ModelID]?.speakerProcessingProfiles[processingMode] ?? .fast32SplitW8A8,
+                        speakerProcessingMode: processingMode),
                     speakerLabelsEnabled: diarizationEnabled, speakerProcessingMode: processingMode
                 )
             },
-            speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8],
+            speakerProcessingProfiles: [.afterRecording: .fast32SplitW8A8, .streaming: .experimentalFast128FP16CPU],
             modelsExistOnDisk: { SettingsStore.SpeechModel.parakeetTDT.isInstalled },
             liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4 * 1_073_741_824, maximumTrackCount: 2),
-            admissionArtifactFingerprint: { nil }
+            admissionArtifactFingerprint: { nil }, supportsInstalledIdlePreparation: false,
+            installedArtifactFingerprint: {
+                let descriptor = ParakeetSpeechModelCatalog.v3
+                let directory = descriptor.cacheDirectory(in: AppBrand.modelsDirectory)
+                // The digest validates completeness first and returns nil for a partial export.
+                return { try descriptor.installedArtifactFingerprint(at: directory) }
+            }
         ),
     ]
+
+    nonisolated static func onboardingPriority(for modelID: String) -> Int {
+        registrations[modelID]?.onboardingPriority ?? Int.max
+    }
+
+    private nonisolated static var whisperArtifactDirectory: URL {
+        AppBrand.cachesDirectory.appendingPathComponent("WhisperModels", isDirectory: true)
+    }
 
     nonisolated static func registeredLanguageCodes(for modelID: String) -> Set<String>? {
         self.registrations[modelID]?.descriptor.supportedLanguageCodes
@@ -206,10 +246,13 @@ enum PichiMeetingProviderFactory {
         if configuration.effectiveSpeakerProcessingMode == .streaming {
             guard let registration = self.registrations[configuration.asrModel],
                   let expected = registration.speakerProcessingProfiles[.streaming], matched == expected,
-                  configuration.diarizationFingerprint == expected.implementationFingerprint else {
+                  expected.acceptsStreamingImplementationFingerprint(configuration.diarizationFingerprint) else {
                 throw MeetingBackendError.unsupportedSpeakerProcessingMode(
                     backend: self.registrations[configuration.asrModel]?.descriptor.id ?? .productionDefault, mode: .streaming)
             }
+            let locator = MeetingNemotronModelLocator(profile: expected)
+            return expected.verifiesStreamingOwner(implementationFingerprint: configuration.diarizationFingerprint)
+                ? locator : locator.withoutOwnerVoiceVerification()
         }
         return MeetingNemotronModelLocator(profile: matched ?? .fast32SplitW8A8)
     }
@@ -224,8 +267,14 @@ enum PichiMeetingProviderFactory {
     static func prepareSpeakerResources(for configuration: MeetingFinalProcessingConfiguration) async throws {
         guard configuration.speakerLabelsEnabled else { return }
         let locator = try self.modelLocator(for: configuration)
+        // Streaming capture needs only the continuous speaker graph. Enrollment and the
+        // explicit Settings download own optional voice-encoder installation; losing that
+        // optional resource must not block capture or trigger a network wait before the mic.
+        // The frozen runtime validates it locally; live-capable recipes join bounded
+        // owner inference on the existing worker without opening another capture pipeline.
         let dependencies: Set<MeetingDiarizationDependency> = configuration.effectiveSpeakerProcessingMode == .streaming
-            ? [.speakerSeparation] : [.speakerSeparation, .voiceMatching]
+            ? [.speakerSeparation] : (locator.supportsOwnerVoiceVerification
+                ? [.speakerSeparation, .voiceMatching] : [.speakerSeparation])
         try await MeetingDiarizationModelStore.shared(for: locator.profile).prepare(dependencies: dependencies)
     }
 
@@ -235,7 +284,8 @@ enum PichiMeetingProviderFactory {
                 MeetingProviderBackedBackend(
                     descriptor: registration.descriptor,
                     providerModelID: modelID,
-                    runtimeFactory: context.parakeetNemotronRuntimeFactory
+                    runtimeFactory: context.parakeetNemotronRuntimeFactory,
+                    idleResourcePreparation: context.idleResourcePreparation
                 )
             }
         }
@@ -247,6 +297,18 @@ enum PichiMeetingProviderFactory {
             return try registration.providerFactory(configuration)
         }
         return try FluidAudioProvider(meetingConfiguration: configuration)
+    }
+
+    /// Uses the same registered provider constructor and immutable artifact selection as
+    /// recording. This capability is explicit because generic prepare() may download.
+    static func makeInstalledProviderForIdle(_ configuration: MeetingFinalProcessingConfiguration) throws -> (any TranscriptionProvider)? {
+        guard let registration = registrations[configuration.asrModel], registration.supportsInstalledIdlePreparation,
+              registration.modelsExistOnDisk() else { return nil }
+        try validateRecordingConfiguration(configuration, isAppleSilicon: CPUArchitecture.isAppleSilicon,
+            requiresInstalledArtifact: true)
+        let provider = try registration.providerFactory(configuration)
+        guard provider.modelsExistOnDisk() else { return nil }
+        return provider
     }
 
     static func selectedBackendID(languageCode: String, selectedModelID: String? = nil,
@@ -274,7 +336,7 @@ enum PichiMeetingProviderFactory {
                                         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording) -> MeetingFinalProcessingConfiguration {
         if let (modelID, registration) = self.registrations.first(where: { $0.value.descriptor.id == backendID }) {
             let diarizationFingerprint = diarizationEnabled && speakerProcessingMode == .streaming
-                ? registration.speakerProcessingProfiles[.streaming]?.implementationFingerprint ?? "unavailable:unsupported-mode"
+                ? registration.speakerProcessingProfiles[.streaming]?.streamingImplementationFingerprint ?? "unavailable:unsupported-mode"
                 : "unavailable:input-admission"
             return MeetingFinalProcessingConfiguration(asrModel: modelID,
                 asrArtifactFingerprint: artifactFingerprintOverride ?? registration.admissionArtifactFingerprint(), languageCode: languageCode,
@@ -287,6 +349,8 @@ enum PichiMeetingProviderFactory {
     }
 
     /// The returned value is frozen once per attempt and used by planning, ASR and metadata.
+    /// Without an override, a hashing registration digests its installed weights on the
+    /// caller's actor; main-actor attempt owners use `frozenConfiguration` instead.
     static func configuration(
         backendID: MeetingBackendID,
         languageCode: String,
@@ -295,7 +359,8 @@ enum PichiMeetingProviderFactory {
         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording
     ) -> MeetingFinalProcessingConfiguration {
         if let registration = self.registrations.values.first(where: { $0.descriptor.id == backendID }) {
-            return registration.configurationSnapshot(languageCode, artifactFingerprintOverride, diarizationEnabled, speakerProcessingMode)
+            let fingerprint = artifactFingerprintOverride ?? registration.installedArtifactFingerprint.flatMap { try? $0()() }
+            return registration.configurationSnapshot(languageCode, fingerprint, diarizationEnabled, speakerProcessingMode)
         }
         return MeetingFinalProcessingConfiguration(languageCode: languageCode,
                                                   diarizationFingerprint: diarizationEnabled ? MeetingProcessingCheckpoint.currentDiarizationFingerprint : self.transcriptOnlyDiarizationFingerprint,
@@ -310,11 +375,51 @@ enum PichiMeetingProviderFactory {
         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording
     ) -> MeetingFinalProcessingConfiguration {
         if let registration = self.registrations[asrModel] {
-            return registration.configurationSnapshot(languageCode, artifactFingerprintOverride, diarizationEnabled, speakerProcessingMode)
+            let fingerprint = artifactFingerprintOverride ?? registration.installedArtifactFingerprint.flatMap { try? $0()() }
+            return registration.configurationSnapshot(languageCode, fingerprint, diarizationEnabled, speakerProcessingMode)
         }
         return MeetingFinalProcessingConfiguration(asrModel: asrModel, languageCode: languageCode,
                                                   diarizationFingerprint: diarizationEnabled ? MeetingProcessingCheckpoint.currentDiarizationFingerprint : self.transcriptOnlyDiarizationFingerprint,
                                                   speakerLabelsEnabled: diarizationEnabled, speakerProcessingMode: speakerProcessingMode)
+    }
+
+    /// The same frozen snapshot as `configuration(backendID:)`, with installed weights hashed on a
+    /// detached task (the retained-pin pattern), so freezing an attempt never stalls the main actor.
+    static func frozenConfiguration(
+        backendID: MeetingBackendID,
+        languageCode: String,
+        artifactFingerprintOverride: String? = nil,
+        diarizationEnabled: Bool = true,
+        speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording
+    ) async throws -> MeetingFinalProcessingConfiguration {
+        guard artifactFingerprintOverride == nil,
+              let registration = self.registrations.values.first(where: { $0.descriptor.id == backendID }),
+              let fingerprint = registration.installedArtifactFingerprint else {
+            return self.configuration(backendID: backendID, languageCode: languageCode,
+                artifactFingerprintOverride: artifactFingerprintOverride, diarizationEnabled: diarizationEnabled,
+                speakerProcessingMode: speakerProcessingMode)
+        }
+        let resolved = try await self.detachedFingerprint(fingerprint())
+        return registration.configurationSnapshot(languageCode, resolved, diarizationEnabled, speakerProcessingMode)
+    }
+
+    static func frozenConfiguration(asrModel: String, languageCode: String) async throws -> MeetingFinalProcessingConfiguration {
+        guard let registration = self.registrations[asrModel], let fingerprint = registration.installedArtifactFingerprint else {
+            return self.configuration(asrModel: asrModel, languageCode: languageCode)
+        }
+        let resolved = try await self.detachedFingerprint(fingerprint())
+        return registration.configurationSnapshot(languageCode, resolved, true, .afterRecording)
+    }
+
+    /// Unreadable or partial exports keep the synchronous builder's nil identity. Cancellation
+    /// stops the digest and is rethrown, so it never freezes a missing identity.
+    private static func detachedFingerprint(_ digest: @escaping @Sendable () throws -> String?) async throws -> String? {
+        let task = Task.detached(priority: .userInitiated) { () throws -> String? in
+            do { return try digest() } catch is CancellationError { throw CancellationError() } catch { return nil }
+        }
+        let fingerprint = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        try Task.checkCancellation()
+        return fingerprint
     }
 
     private static func gigaamConfiguration(
@@ -347,7 +452,7 @@ enum PichiMeetingProviderFactory {
         guard enabled else { return self.transcriptOnlyDiarizationFingerprint }
         // Streaming requires preparation of this exact profile before capture. A missing
         // candidate must not silently turn the requested processing mode into transcript-only.
-        if speakerProcessingMode == .streaming { return profile.implementationFingerprint }
+        if speakerProcessingMode == .streaming { return profile.streamingImplementationFingerprint }
         #if arch(arm64)
         guard let artifact = try? MeetingNemotronModelLocator(profile: profile).locate(),
               (try? MeetingSpeakerVoiceModelArtifacts.validate()) != nil else { return self.transcriptOnlyDiarizationFingerprint }

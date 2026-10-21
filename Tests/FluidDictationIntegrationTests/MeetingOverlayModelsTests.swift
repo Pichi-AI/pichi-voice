@@ -674,6 +674,40 @@ final class MeetingHistorySnapshotTests: XCTestCase {
         XCTAssertNil(snapshot.errorMessage)
     }
 
+    func testCommittedCorrectionUpdatesHistoryWithoutReloadingOtherMeetings() async {
+        let loader = HistorySnapshotLoader()
+        let snapshot = MeetingHistorySnapshot { try await loader.load() }
+        let original = self.session()
+        let initial = Task { await snapshot.refresh() }
+        await loader.waitForCall(1)
+        loader.finish(.success([original]))
+        await initial.value
+        var committed = original
+        committed.title = "Committed corrected meeting"
+        snapshot.applyCommitted(committed)
+        XCTAssertEqual(snapshot.sessions, [committed])
+        XCTAssertEqual(loader.calls, 1, "A saved correction must not decode every other meeting again")
+        XCTAssertNil(snapshot.errorMessage)
+    }
+
+    func testCommittedCorrectionCannotBeOverwrittenByAnOlderInFlightRead() async {
+        let loader = HistorySnapshotLoader()
+        let snapshot = MeetingHistorySnapshot { try await loader.load() }
+        let original = self.session()
+        let refresh = Task { await snapshot.refresh() }
+        await loader.waitForCall(1)
+        var committed = original
+        committed.title = "Latest committed alias and transcript"
+        snapshot.applyCommitted(committed)
+        loader.finish(.success([original]))
+        await loader.waitForCall(2)
+        XCTAssertEqual(snapshot.sessions, [committed], "The stale read must not roll back the visible correction")
+        loader.finish(.success([committed]))
+        await refresh.value
+        XCTAssertEqual(snapshot.sessions, [committed])
+        XCTAssertEqual(loader.calls, 2)
+    }
+
     func testRefreshDuringReadDoesNotPublishStaleRows() async {
         let loader = HistorySnapshotLoader()
         let snapshot = MeetingHistorySnapshot { try await loader.load() }

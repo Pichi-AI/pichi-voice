@@ -220,7 +220,7 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
     /// Real matching, canonical assembly and attempt-local state; only the encoder's input
     /// embeddings are synthetic. No runtime, capture or model behavior is reimplemented.
     private func ownerBatch(current: [MeetingSpeakerVoiceProfile], attempt: UUID,
-                            state: MeetingPCMIdentityState) throws -> MeetingPCMTranscriptBatch {
+                            state: MeetingPCMIdentityState, speakerNameFormat: String = "Speaker %lld") throws -> MeetingPCMTranscriptBatch {
         let epoch = try XCTUnwrap(current.first).token.analysisEpochID
         let prior = try state.begin(attemptID: attempt)
         defer { state.end() }
@@ -237,7 +237,7 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
                 speaker: admission.identityTokens.contains(profile.token) ? .assigned(profile.token) : .unassigned,
                 analysisSpanIDs: [])
         }
-        let batch = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: attempt,
+        let batch = try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat).assemblePCMWindow(attemptID: attempt,
             epoch: epoch, offset: Double(epoch.ordinal * 6), duration: Double(current.count * 6),
             units: units, identityLinks: admission.links, priorSpeakers: prior.speakers,
             confirmedLocalUserTokens: owner)
@@ -312,13 +312,14 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         let session = try await coordinator.startRecording(configuration: configuration)
         let state = MeetingPCMIdentityState(), attempt = UUID()
         var initial = try self.ownerBatch(current: [profile(track: track.id, epoch: 0),
-            profile(track: track.id, epoch: 0, slot: 1, angle: 0.3)], attempt: attempt, state: state)
+            profile(track: track.id, epoch: 0, slot: 1, angle: 0.3)], attempt: attempt, state: state, speakerNameFormat: "Frozen %lld")
         let firstID = try XCTUnwrap(initial.segments.first?.speakerID)
         let firstIndex = try XCTUnwrap(initial.speakers.firstIndex(where: { $0.id == firstID }))
         initial.speakers[firstIndex].displayName = "Synthetic custom alias"
+        initial.speakers[firstIndex].generatedParticipantNumber = nil
         try await processing.checkpoint(initial)
         let promoted = try self.ownerBatch(current: [profile(track: track.id, epoch: 1, angle: 0.8)],
-            attempt: attempt, state: state)
+            attempt: attempt, state: state, speakerNameFormat: "Frozen %lld")
         try await processing.checkpoint(promoted)
         let promotedStored = try await store.load(id: session.id)
         let promotedDisk = try XCTUnwrap(promotedStored)
@@ -327,7 +328,7 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         // A newly admitted independent near-owner voice makes the full evidence ambiguous.
         let revoked = try self.ownerBatch(current: [profile(track: track.id, epoch: 2, angle: 0.1),
             profile(track: track.id, epoch: 2, slot: 1, angle: -0.1)],
-            attempt: attempt, state: state)
+            attempt: attempt, state: state, speakerNameFormat: "Frozen %lld")
         XCTAssertTrue(revoked.speakers.allSatisfy { !$0.isLocalUser })
         try await processing.checkpoint(revoked)
         let revokedStored = try await store.load(id: session.id)
@@ -337,6 +338,12 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         XCTAssertEqual(revokedDisk.transcriptSegments.map(\.id), (initial.segments + promoted.segments + revoked.segments).map(\.id))
         XCTAssertEqual(revokedDisk.transcriptSegments.map(\.text), (initial.segments + promoted.segments + revoked.segments).map(\.text))
         XCTAssertEqual(coordinator.activeSession?.speakers, revokedDisk.speakers)
+        for speaker in revokedDisk.speakers {
+            if let number = speaker.generatedParticipantNumber, number > 0 {
+                XCTAssertEqual(speaker.displayName, String(format: "Frozen %lld", number),
+                    "The durable merge must use producer-frozen labels rather than the current interface template")
+            }
+        }
         await coordinator.shutdownForTermination()
         let files = try FileManager.default.subpathsOfDirectory(atPath: root.path)
         XCTAssertFalse(files.contains { ["caf", "wav", "m4a"].contains(URL(fileURLWithPath: $0).pathExtension) })

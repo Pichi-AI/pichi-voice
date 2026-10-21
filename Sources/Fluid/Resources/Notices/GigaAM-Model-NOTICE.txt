@@ -1,0 +1,21 @@
+GigaAM v3 public ONNX model attribution
+
+Base model: ai-sage/GigaAM-v3, GigaChat Team
+https://huggingface.co/ai-sage/GigaAM-v3
+https://github.com/salute-developers/GigaAM
+ONNX conversion: istupakov/gigaam-v3-onnx
+Pinned revision: 322c3b29492673eb7d0b434bfa9dfb8653e34d02
+Pinned model card:
+https://huggingface.co/istupakov/gigaam-v3-onnx/blob/322c3b29492673eb7d0b434bfa9dfb8653e34d02/README.md
+
+The public download used by a fresh Pichi Voice installation is the converted
+and quantized v3_e2e_ctc.int8.onnx with v3_e2e_ctc_vocab.txt. It is the Russian
+GigaAM v3 E2E CTC INT8 export, without a private end-of-utterance (EOU) head.
+The inherited settings identifier gigaam-v3-eou is retained for compatibility;
+it does not identify an EOU head in this public artifact. Separately imported
+private EOU exports have their own fingerprints and are not distributed here.
+
+The pinned conversion card declares MIT. The original copyright and license
+are included in GigaAM-LICENSE.txt. Model weights are downloaded separately
+and are not included in this source repository. No endorsement by the
+original authors or conversion author is asserted.

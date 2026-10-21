@@ -122,8 +122,9 @@ nonisolated struct AnalyticsModelDescriptor: Equatable, Sendable {
     // Custom endpoint labels, locally served model names and paths can contain
     // customer names or private project data. Only shipped public identifiers
     // are analytics dimensions. New providers/models require explicit review.
+    // "pichi" is GigaAM's provider in rows recorded before it was credited to its publisher.
     private static let approvedProviders: Set<String> = [
-        "pichi", "nvidia", "apple", "openai", "qwen", "cohere", "fluid_audio",
+        "salutedevices", "pichi", "nvidia", "apple", "openai", "qwen", "cohere", "fluid_audio",
         "anthropic", "xai", "groq", "cerebras", "google", "openrouter", "ollama", "lmstudio",
         "fluid", "custom_provider", "unknown",
     ]

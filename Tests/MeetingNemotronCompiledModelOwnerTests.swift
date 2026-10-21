@@ -88,8 +88,8 @@ struct MeetingNemotronCompiledModelOwnerTests {
 
         for profile in MeetingNemotronModelProfile.allCases {
             let candidate = profile.isExperimental
-            try require(profile.supportsOwnerVoiceVerification == !candidate,
-                        "Anonymous experimental profiles cannot advertise an unprepared voice encoder")
+            try require(profile.supportsOwnerVoiceVerification == (profile != .experimentalFast32FP16CPU),
+                        "Only the registered offline and continuous owner-capable profiles advertise voice verification")
             try require(MeetingNemotronModelLocator(profile: profile).supportsOwnerVoiceVerification
                         == profile.supportsOwnerVoiceVerification,
                         "The request-bound locator must expose its exact immutable profile capability")

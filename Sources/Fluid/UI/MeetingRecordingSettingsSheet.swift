@@ -310,7 +310,7 @@ struct MeetingRecordingSettingsSheet: View {
             FluidManagementGroup(title: PichiLocalization.text("Transcript language")) {
                 MeetingAdaptiveSetupRow(
                     title: PichiLocalization.text("Language"),
-                    detail: PichiLocalization.text("Live captions use English streaming or buffered transcription for supported languages. Russian captions support GigaAM and Parakeet v3.")
+                    detail: PichiLocalization.text("Models with meeting captions show them in their supported languages. Other models show English live captions on Apple Silicon only.")
                 ) {
                     Menu {
                         Picker("Meeting language", selection: self.$draft.languageCode) {

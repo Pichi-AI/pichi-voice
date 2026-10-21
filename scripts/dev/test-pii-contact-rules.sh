@@ -25,6 +25,7 @@ names = ['KnownNonPersonPERDoesNotFreezeProvisionalMeetingContext',
     'CardCandidatesStopAtActualGroupsAndPreserveFollowingAmount',
     'StructuredRussianAddressesStopBeforeUnpunctuatedDrugAndDose',
     'UngroupedAmountsAfterValidCardArePreservedAtAllGroupLengths',
+    'CompetingCompleteCardChecksumsKeepEveryCandidateMasked',
     'NoBlindLongNumberDateLocationOrganizationOrMedicationRedaction',
     'OverlappingSpansMaskUnionAndDoNotLeakTail',
     'BadOffsetsFailClosedAndPlaceholdersIdempotentAcrossSegments',
@@ -36,7 +37,7 @@ for name in names:
     methods.append(match.group())
 fixtures = pathlib.Path('Vendor/PichiGigaAM/Tests/PichiTextPrivacyTests/PIIRussianASRFixtures.swift').read_text()
 tests += '\n' + fixtures + '\nfinal class PIIRulesBaselineTests: XCTestCase {\n' + '\n'.join(methods) + '\n}\n'
-runner = '\nlet suite = XCTestSuite(name: "PII rules")\nsuite.addTest(XCTestSuite(forTestCaseClass: PIIContactRulesTests.self))\nsuite.addTest(XCTestSuite(forTestCaseClass: PIIRulesBaselineTests.self))\nsuite.run()\nexit(suite.testRun!.totalFailureCount == 0 && suite.testRun!.executionCount == 17 ? 0 : 1)\n'
+runner = '\nlet suite = XCTestSuite(name: "PII rules")\nsuite.addTest(XCTestSuite(forTestCaseClass: PIIContactRulesTests.self))\nsuite.addTest(XCTestSuite(forTestCaseClass: PIIRulesBaselineTests.self))\nsuite.run()\nexit(suite.testRun!.totalFailureCount == 0 && suite.testRun!.executionCount == 19 ? 0 : 1)\n'
 
 (build / 'main.swift').write_text(tests + runner)
 PY

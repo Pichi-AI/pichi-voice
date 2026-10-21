@@ -24,7 +24,7 @@ extension SettingsStore {
         case nemotronStreaming = "nemotron-3.5-streaming"
         case nemotronStreaming320 = "nemotron-3.5-streaming-320"
 
-        // MARK: - Pichi Russian Models
+        // MARK: - Russian Models
 
         case gigaam = "gigaam-v3-eou"
 
@@ -88,7 +88,7 @@ extension SettingsStore {
 
         var displayName: String {
             switch self {
-            case .gigaam: return "Pichi GigaAM v3"
+            case .gigaam: return "GigaAM v3"
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.displayName ?? self.rawValue
             case .parakeetRealtime: return "Parakeet Flash (Beta)"
             case .qwen3Asr: return "Qwen3 ASR (Beta)"
@@ -321,7 +321,7 @@ extension SettingsStore {
         /// One-line description for the card UI
         var cardDescription: String {
             switch self {
-            case .gigaam: return "Local Russian recognition with GigaAM. Download the compact model or import a verified local export."
+            case .gigaam: return "On-device recognition for Russian speech."
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
                 return self.parakeetDescriptor?.cardDescription ?? ""
             case .parakeetRealtime:
@@ -341,7 +341,7 @@ extension SettingsStore {
             case .appleSpeechAnalyzer:
                 return "Advanced and modern on-device recognition for newer macOS devices."
             case .whisperTiny:
-                return "Minimal resource usage. Best for older devices or battery life."
+                return "Compact multilingual model. Recognition can be less accurate, especially for mixed speech."
             case .whisperBase:
                 return "Good balance of speed and accuracy. Works on any Mac."
             case .whisperSmall:
@@ -352,6 +352,14 @@ extension SettingsStore {
                 return "Near-maximum accuracy with optimized speed."
             case .whisperLarge:
                 return "Best possible accuracy. Large download and memory usage."
+            }
+        }
+
+        /// Credit for the model's original publisher, shown with the card description on every model surface.
+        var creditLine: String? {
+            switch self {
+            case .gigaam: return "Built on GigaAM-v3 by SaluteDevices."
+            default: return self.parakeetDescriptor?.creditLine
             }
         }
 
@@ -487,7 +495,6 @@ extension SettingsStore {
         /// Optional badge text for the card (e.g., "FluidVoice Pick")
         var badgeText: String? {
             switch self {
-            case .gigaam: return "Pichi"
             case .parakeetTDT: return AppBrand.text("FluidVoice Pick")
             case .parakeetTDTv2: return AppBrand.text("FluidVoice Pick")
             case .fluidParakeetMini, .fluidParakeetPico: return "New"
@@ -568,7 +575,7 @@ extension SettingsStore {
 
         /// Provider category for tab grouping
         enum Provider: String, CaseIterable {
-            case pichi = "Pichi"
+            case saluteDevices = "SaluteDevices"
             case nvidia = "NVIDIA"
             case apple = "Apple"
             case openai = "OpenAI"
@@ -579,7 +586,7 @@ extension SettingsStore {
         /// Which provider this model belongs to
         var provider: Provider {
             switch self {
-            case .gigaam: return .pichi
+            case .gigaam: return .saluteDevices
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return .nvidia
             case .appleSpeech, .appleSpeechAnalyzer:
@@ -693,7 +700,7 @@ extension SettingsStore {
         /// Brand/provider name for the model (NVIDIA, Apple, OpenAI)
         var brandName: String {
             switch self {
-            case .gigaam: return "Pichi"
+            case .gigaam: return "SaluteDevices"
             case .fluidParakeetMini, .fluidParakeetPico:
                 return "FluidVoice"
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
@@ -720,7 +727,7 @@ extension SettingsStore {
         /// Brand color for the provider badge
         var brandColorHex: String {
             switch self {
-            case .gigaam: return AppBrand.profile.accentLight
+            case .gigaam: return "#21A038" // SaluteDevices (Sber group) green
             case .fluidParakeetMini, .fluidParakeetPico:
                 return "#1A75FF" // FluidBrandColors.blue
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:

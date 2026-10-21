@@ -405,20 +405,24 @@ typealias MeetingParakeetNemotronRuntimeFactory = @MainActor (
 struct MeetingBackendHostContext {
     let legacyExecutor: MeetingLegacyBackendExecutor
     let parakeetNemotronRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
+    let idleResourcePreparation: (@MainActor @Sendable (MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)?)?
 
     init(
         legacyExecutor: @escaping MeetingLegacyBackendExecutor,
         parakeetNemotronRuntimeFactory: @escaping MeetingParakeetNemotronRuntimeFactory = { _ in
             throw MeetingBackendError.runtimeUnavailable(backend: .parakeetNemotron)
-        }
+        },
+        idleResourcePreparation: (@MainActor @Sendable (MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)?)? = nil
     ) {
         self.legacyExecutor = legacyExecutor
         self.parakeetNemotronRuntimeFactory = parakeetNemotronRuntimeFactory
+        self.idleResourcePreparation = idleResourcePreparation
     }
 }
 
 @MainActor
 protocol MeetingTranscriptionBackend: AnyObject {
+    func prepareIdleResources(configuration: MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)?
     var descriptor: MeetingBackendDescriptor { get }
     /// A canonical backend explicitly opts into an echo-evidence source; unknown backends remain
     /// fail-closed. This avoids inferring signal capabilities from a model identifier.
@@ -450,6 +454,7 @@ protocol MeetingTranscriptionBackend: AnyObject {
 }
 
 extension MeetingTranscriptionBackend {
+    func prepareIdleResources(configuration: MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)? { nil }
     var echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? { nil }
 
     func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {

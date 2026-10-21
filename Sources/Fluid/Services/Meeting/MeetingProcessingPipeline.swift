@@ -11,6 +11,15 @@ protocol MeetingProcessingControlling: AnyObject {
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
                             preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void) async throws
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws
     func cancelMemoryAudio(sessionID: MeetingSessionID) async
     func process(
         session: MeetingSession,
@@ -20,6 +29,23 @@ protocol MeetingProcessingControlling: AnyObject {
 }
 
 extension MeetingProcessingControlling {
+    /// Recording admission can pass its exact privacy capability through async model
+    /// preparation. Older controllers keep their existing preparation implementation.
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudio(session: session, sessionDirectory: sessionDirectory,
+            checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech)
+    }
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudio(session: session, sessionDirectory: sessionDirectory,
+            checkpoint: checkpoint, preview: preview)
+    }
     func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor? {
         configuration.audioStorageMode == .memoryOnly
             ? try self.validateMemoryAudioInput(configuration: configuration, backendID: backendID) : nil
@@ -671,7 +697,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
     /// Version 15: merge frozen word attribution with main without resuming distinct version-14 rules.
-    static let pipelineVersion = 15
+    /// Version 16: admit protected speech at sealed empty ASR boundaries while capture continues.
+    static let pipelineVersion = 16
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1357,7 +1384,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Deployment/PII admission is separate from ASR identity and is frozen per strict attempt.
     let pcmAdmissionContextProvider: @MainActor (Bool) -> MeetingPCMAdmissionContext
     private let managesModelResidency: Bool
-    private let settings: SettingsStore
+    let settings: SettingsStore
     let asrServiceProvider: @MainActor () -> any MeetingASRServicing
     private let serializationGate: MeetingProcessingSerializationGate
     let backendRegistry: MeetingTranscriptionBackendRegistry
@@ -1373,6 +1400,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Canonical path only: builds the composite backend's runtime for the frozen request. Tests
     /// inject a fake here; production wires ASRService and the Nemotron model locator.
     let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
+    let idleResourcePreparation: (@MainActor @Sendable (MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)?)?
+    lazy var idlePreparedResourceOwner: MeetingIdlePreparedResourceOwner? = {
+        asrServiceProvider().idleModelResidency.map { MeetingIdlePreparedResourceOwner(residency: $0) }
+    }()
     /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
     /// requires it installed. Production downloads it here when the background download has not
     /// finished; tests inject nothing and supply the model themselves.
@@ -1395,6 +1426,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         chunkObserver: (any MeetingChunkAudioObserving)? = nil,
         echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
+        idleResourcePreparation: (@MainActor @Sendable (MeetingFinalProcessingConfiguration) async throws -> (any MeetingIdlePreparedResource)?)? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         prepareDiarizationDependencies: (@MainActor (Set<MeetingDiarizationDependency>) async throws -> Void)? = nil,
         diarizationSupported: @escaping @MainActor () -> Bool = { CPUArchitecture.isAppleSilicon },
@@ -1416,6 +1448,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 modelLocator: try PichiMeetingProviderFactory.modelLocator(for: request.configuration)
             )
         }
+        // The existing runtime factory is request-bound. An optional, registered resource
+        // capability prepares weights without manufacturing a session or capture request.
+        self.idleResourcePreparation = idleResourcePreparation ?? (meetingRuntimeFactory == nil ? { [asrServiceProvider] configuration in
+            let service = asrServiceProvider()
+            guard service.supportsPreparedProviderAdoption, try await service.retireIdleSpeechResidency() else { return nil }
+            let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: asrServiceProvider,
+                modelLocator: try PichiMeetingProviderFactory.modelLocator(for: configuration))
+            return try await runtime.prepareIdleResources(configuration: configuration)
+        } : nil)
         self.diarizationSupported = diarizationSupported
         self.prepareDiarizationDependencies = prepareDiarizationDependencies ?? { dependencies in
             if !dependencies.isEmpty { try await prepareDiarizationModel() }
@@ -1463,7 +1504,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     func prepareSpeakerDependencies(for descriptor: MeetingBackendDescriptor, session: MeetingSession) async throws {
         guard session.speakerLabelsEnabled != false else { return }
         if session.effectiveSpeakerProcessingMode == .streaming {
-            let configuration = PichiMeetingProviderFactory.configuration(backendID: descriptor.id,
+            let configuration = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: descriptor.id,
                 languageCode: session.languageCode, artifactFingerprintOverride: session.recordingASRArtifactFingerprint,
                 diarizationEnabled: true, speakerProcessingMode: session.effectiveSpeakerProcessingMode)
             try descriptor.validateSpeakerProcessingMode(configuration: configuration, mode: session.mode)
@@ -1549,17 +1590,23 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         //
         // The request is frozen first, so the host capability handed to the factory can be bound to
         // this exact value.
-        let request = MeetingBackendRequest(
-            attemptID: Self.resolvedAttemptID(session: session),
-            session: session,
-            sessionDirectory: sessionDirectory,
-            configuration: retainedPin?.configuration ?? PichiMeetingProviderFactory.configuration(
+        let configuration: MeetingFinalProcessingConfiguration
+        if let retainedPin {
+            configuration = retainedPin.configuration
+        } else {
+            configuration = try await PichiMeetingProviderFactory.frozenConfiguration(
                 backendID: backendID,
                 languageCode: session.languageCode,
                 artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil,
                 diarizationEnabled: session.speakerLabelsEnabled ?? true,
                 speakerProcessingMode: session.effectiveSpeakerProcessingMode
-            ),
+            )
+        }
+        let request = MeetingBackendRequest(
+            attemptID: Self.resolvedAttemptID(session: session),
+            session: session,
+            sessionDirectory: sessionDirectory,
+            configuration: configuration,
             privacyFingerprint: attemptRedactor?.checkpointIdentity
         )
         let backend = try self.backendRegistry.makeBackend(

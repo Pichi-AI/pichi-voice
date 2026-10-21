@@ -21,7 +21,7 @@ nonisolated enum MeetingSummaryInput {
     }
 
     static func transcript(for session: MeetingSession, timeZone: TimeZone? = nil) -> String {
-        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        let presentations = MeetingTranscriptExporter.speakerPresentations(in: session)
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         if let timeZone { formatter.timeZone = timeZone }
@@ -45,8 +45,9 @@ nonisolated enum MeetingSummaryInput {
         Transcript language: \(Self.transcriptLanguageDescription(session.languageCode))
         Participants: \(session.activeSpeakers.map(\.displayName).joined(separator: ", "))
         ----------
-        """ + "\n" + turns.map {
-            "**\(MeetingTranscriptExporter.speakerLabel(for: $0, in: session, speakerNames: names))**: \($0.text)"
+        """ + "\n" + turns.map { segment in
+            let presentation = presentations[segment.id] ?? .init(identity: "unknown", label: .unknown)
+            return "**\(MeetingTranscriptExporter.speakerLabel(for: presentation))**: \(segment.text)"
         }.joined(separator: "\n")
     }
 

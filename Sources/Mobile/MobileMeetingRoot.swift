@@ -1,5 +1,6 @@
 import AVFoundation
 import Combine
+import UniformTypeIdentifiers
 import SwiftUI
 import UIKit
 
@@ -9,20 +10,22 @@ struct MobileMeetingRoot: View {
     @ObservedObject var asr: ASRService
     let store: any MeetingSessionStoring
     let privacy: PichiTranscriptPrivacyService
+    @ObservedObject var required: MobileRequiredResources
+    @ObservedObject var privacyActivation: MobilePrivacyActivation
     let microphones: @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     @State private var destination = Destination.meetings
     @State private var settingsPath: [MobileSettingsDestination] = []
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @State private var isPreparingPrivacy = false
-    @State private var privacyPreparationProgress: Double?
-    @State private var privacyPreparationTask: Task<Void, Never>?
     @StateObject private var historySnapshot: MeetingHistorySnapshot
     private var sessions: [MeetingSession] { historySnapshot.sessions }
-    @State private var selectedHistory: MeetingSession?
+    // The snapshot owns committed sessions; History's own path keeps only pushed identities.
+    @State private var historyPath: [MeetingSessionID] = []
+    @State private var copiedSessionID: MeetingSessionID?
     @State private var search = ""
     @State private var isBusy = false
     @State private var error: String?
@@ -31,16 +34,27 @@ struct MobileMeetingRoot: View {
     @State private var showRecordingSettings = false
     @State private var microphoneSnapshot = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
     @State private var edit: MeetingEditDraft?
-    @State private var deleteCandidate: MeetingSession?
+    @State private var deletion: Deletion?
     @State private var share: MeetingSharePayload?
+    @State private var showPresentationPicker = false
+    @State private var presentation: MobilePresentationDocument?
+    @StateObject private var presentationLoader = MobilePresentationLoader()
+    @State private var recordingScreenAwakeToken: UUID?
     @StateObject private var playback = MeetingSegmentPlayback()
+    // Projection is independent of microphone meters, pending audio, playback progress
+    // and other frequent view invalidations. Keep one result for the visible transcript.
+    @State private var transcriptReadingSource: MeetingTranscriptExporter.ReadingInput?
+    @State private var transcriptReading: [MeetingTranscriptExporter.DisplayParagraph] = []
+
 
 
     init(coordinator: MeetingSessionCoordinator, asr: ASRService, store: any MeetingSessionStoring,
          privacy: PichiTranscriptPrivacyService,
+         required: MobileRequiredResources, privacyActivation: MobilePrivacyActivation,
          microphones: @escaping @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot) {
         self.coordinator = coordinator; self.asr = asr; self.store = store
         self.privacy = privacy; self.microphones = microphones
+        self.required = required; self.privacyActivation = privacyActivation
         self._historySnapshot = StateObject(wrappedValue: MeetingHistorySnapshot(load: { try await store.loadAll() }))
     }
 
@@ -50,14 +64,26 @@ struct MobileMeetingRoot: View {
         var title: String {
             switch self { case .meetings: return "Meetings"; case .history: return "History"; case .settings: return "Settings" }
         }
+        // The same symbols as the desktop sidebar sections.
         var symbol: String {
-            switch self { case .meetings: return "waveform"; case .history: return "clock"; case .settings: return "gearshape" }
+            switch self { case .meetings: return "person.2.fill"; case .history: return "clock.arrow.circlepath"; case .settings: return "gearshape" }
+        }
+    }
+
+    /// Destructive actions share one confirmation, as on the desktop.
+    private enum Deletion {
+        case meeting(MeetingSession), audio(MeetingSession)
+        var title: String { if case .audio = self { return "Delete Audio?" }; return "Delete Meeting" }
+        var action: String { if case .audio = self { return "Delete Audio" }; return "Delete" }
+        var message: String {
+            if case .audio = self { return "The transcript stays; the audio files are deleted." }
+            return "Delete this meeting and its recordings?"
         }
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            if UIDevice.current.userInterfaceIdiom == .pad && geometry.size.width >= 700 {
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .pad && horizontalSizeClass == .regular {
                 NavigationSplitView(columnVisibility: $columnVisibility) {
                     sidebar.navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
                 } detail: {
@@ -85,7 +111,7 @@ struct MobileMeetingRoot: View {
             Button(PichiLocalization.text("OK"), role: .cancel) { error = nil }
         } message: { Text(error ?? "") }
         .sheet(isPresented: $showRecordingSettings) {
-            NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities, isPresentedAsSheet: true) }
+            NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities, isPresentedAsSheet: true, required: required) }
         }
         .sheet(item: $edit) { draft in
             MeetingEditSheet(draft: draft, cancel: { edit = nil }) { kind, updated in
@@ -104,48 +130,111 @@ struct MobileMeetingRoot: View {
                         // The picker opens a revision-checked member editor before saving.
                         throw MeetingDomainError.segmentNotFound
                     }
-                    if selectedHistory?.id == result.id { selectedHistory = result }
-                    await refreshHistory()
+                    acceptCommittedSession(result)
                 }
             }
         }
         .sheet(item: $share) { payload in
-            VStack(spacing: 0) {
-                Text(payload.includesAudio
-                    ? PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls.")
-                    : AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText).padding()
-                MobileActivitySheet(items: payload.items) { share = nil }
-            }.onDisappear { payload.cleanup() }
+            MobileActivitySheet(items: payload.items) { share = nil }
+                .onDisappear { payload.cleanup() }
         }
-        .confirmationDialog(PichiLocalization.text("Delete Meeting"), isPresented: Binding(
-            get: { deleteCandidate != nil }, set: { if !$0 { deleteCandidate = nil } }
-        )) {
-            Button(PichiLocalization.text("Delete"), role: .destructive) {
-                guard let candidate = deleteCandidate else { return }
+        .fileImporter(isPresented: $showPresentationPicker, allowedContentTypes: [.pdf]) { result in
+            showPresentationPicker = false
+            switch result {
+            case .success(let url):
+                presentationLoader.load(url: url) { result in
+                    switch result {
+                    case .success(let document): presentation = document
+                    case .failure:
+                        report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
+                            "The PDF presentation could not be opened. Choose a readable PDF file."]))
+                    }
+                }
+            case .failure(let error):
+                if (error as NSError).code != NSUserCancelledError {
+                    report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
+                    "The PDF presentation could not be opened. Choose a readable PDF file."]))
+                }
+            }
+        }
+        .fullScreenCover(item: $presentation) { document in
+            PDFPresentation(document: document, coordinator: coordinator) { presentation = nil }
+        }
+        .confirmationDialog(PichiLocalization.text(deletion?.title ?? ""), isPresented: Binding(
+            get: { deletion != nil }, set: { if !$0 { deletion = nil } }
+        ), titleVisibility: .visible, presenting: deletion) { item in
+            Button(PichiLocalization.text(item.action), role: .destructive) {
+                deletion = nil
                 run {
                     playback.stop()
-                    try await coordinator.deleteSession(id: candidate.id)
-                    if selectedHistory?.id == candidate.id { selectedHistory = nil }
-                    await refreshHistory()
+                    switch item {
+                    case .meeting(let session):
+                        try await coordinator.deleteSession(id: session.id)
+                        if historyPath.contains(session.id) { historyPath.removeAll() }
+                        await refreshHistory()
+                    case .audio(let session):
+                        acceptCommittedSession(try await coordinator.deleteAudio(sessionID: session.id))
+                    }
                 }
-                deleteCandidate = nil
             }
-        } message: { Text(PichiLocalization.text("Delete this meeting and its recordings?")) }
+        } message: { item in Text(PichiLocalization.text(item.message)) }
         .task {
             await coordinator.ensureRestored()
-            await coordinator.sweepExpiredAudio()
             await refreshHistory()
             await refreshMicrophones()
         }
+        // The app's UI-ready signal owns the launch sweep; its committed deletions reload History.
+        .onChange(of: coordinator.retentionSweepRevision) { _, _ in Task { await refreshHistory() } }
         .onChange(of: coordinator.state) { _, state in
             if coordinator.isRecording { playback.stop() }
+            updateRecordingScreenAwake()
             Task { await refreshHistory() }
         }
-        .onChange(of: destination) { _, _ in playback.stop() }
-        .onChange(of: selectedHistory?.id) { _, _ in playback.stop() }
+        .onAppear { updateRecordingScreenAwake() }
+        .onChange(of: scenePhase) { _, _ in updateRecordingScreenAwake() }
+        .onChange(of: destination) { _, _ in playback.stop(); presentationLoader.cancel() }
+        .onChange(of: historyPath) { _, _ in playback.stop(); presentationLoader.cancel() }
+        .onDisappear {
+            presentationLoader.cancel()
+            updateRecordingScreenAwake(isVisible: false)
+        }
         .onChange(of: settings.meetingAudioRetentionPolicy) { _, _ in
-            Task { await coordinator.sweepExpiredAudio(); await refreshHistory() }
+            Task { await coordinator.sweepExpiredAudio() }
+        }
+    }
+
+    /// The active recording screen and an active PDF window share one process
+    /// timer. Scene/background transitions release only this view's own token.
+    private func updateRecordingScreenAwake(isVisible: Bool = true) {
+        let shouldStayAwake = isVisible && scenePhase == .active && coordinator.isRecording
+        if shouldStayAwake && recordingScreenAwakeToken == nil {
+            recordingScreenAwakeToken = MobilePresentationAwakeRegistry.shared.acquire()
+        } else if !shouldStayAwake, let token = recordingScreenAwakeToken {
+            recordingScreenAwakeToken = nil
+            MobilePresentationAwakeRegistry.shared.release(token)
+        }
+    }
+
+    // Observe the coordinator inside the presented subtree as well, so Stop or
+    // failure releases screen ownership even while the recording screen is covered.
+    private struct PDFPresentation: View {
+        let document: MobilePresentationDocument
+        @ObservedObject var coordinator: MeetingSessionCoordinator
+        @Environment(\.scenePhase) private var scenePhase
+        let close: () -> Void
+
+        var body: some View {
+            NavigationStack {
+                MobilePresentationPDFView(document: document, isRecording: coordinator.isRecording,
+                                          isSceneActive: scenePhase == .active)
+                    .ignoresSafeArea(edges: .bottom)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(PichiLocalization.text("Done"), action: close)
+                                .accessibilityIdentifier("meeting.presentation.close")
+                        }
+                    }
+            }
         }
     }
 
@@ -175,7 +264,7 @@ struct MobileMeetingRoot: View {
         if destination == item {
             switch item {
             case .settings: settingsPath.removeAll()
-            case .history: selectedHistory = nil
+            case .history: historyPath.removeAll()
             case .meetings: break // Its root is the current meeting, including an active recording.
             }
         } else {
@@ -184,8 +273,8 @@ struct MobileMeetingRoot: View {
     }
 
     @ViewBuilder private func navigation(for item: Destination) -> some View {
-        // Each section owns its stack. A settings push must never cover another section,
-        // and its explicit path survives switching sections or the adaptive layout.
+        // Each section owns its stack. A settings or history push must never cover another
+        // section, and its explicit path survives switching sections or the adaptive layout.
         switch item {
         case .settings:
             NavigationStack(path: $settingsPath) {
@@ -194,7 +283,7 @@ struct MobileMeetingRoot: View {
         case .meetings:
             NavigationStack { sectionRoot(for: item) }
         case .history:
-            NavigationStack { sectionRoot(for: item) }
+            NavigationStack(path: $historyPath) { sectionRoot(for: item) }
         }
     }
 
@@ -205,14 +294,26 @@ struct MobileMeetingRoot: View {
             case .history: history
             case .settings:
                 MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
-                    isPreparingPrivacy: $isPreparingPrivacy, privacyPreparationProgress: $privacyPreparationProgress,
-                    privacyPreparationTask: $privacyPreparationTask, reportError: report)
+                    required: required, privacyActivation: privacyActivation, reportError: report)
             }
         }
         .navigationTitle(item == .meetings ? AppBrand.meetingName : PichiLocalization.text(item.title))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if item == .meetings, coordinator.isQuiescent, !coordinator.isRecording {
+            if item == .meetings, coordinator.isRecording || coordinator.isQuiescent {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showPresentationPicker = true } label: {
+                        HStack {
+                            if presentationLoader.isLoading { ProgressView() }
+                            Label(PichiLocalization.text("PDF Presentation"), systemImage: "doc.richtext")
+                        }
+                    }
+                    .disabled(presentationLoader.isLoading)
+                    .accessibilityIdentifier("meeting.presentation")
+                    .accessibilityHint(PichiLocalization.text("Open a PDF in this app while recording continues."))
+                }
+            }
+            if item == .meetings, coordinator.isQuiescent, !coordinator.isRecording, !isShowingStart {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { newMeeting() } label: { Label(PichiLocalization.text("New Meeting"), systemImage: "plus") }
                         .accessibilityIdentifier("meeting.new")
@@ -234,6 +335,7 @@ struct MobileMeetingRoot: View {
         } else { start }
     }
 
+    private var isShowingStart: Bool { coordinator.currentSession == nil || coordinator.state == .idle }
     private var compactHeight: Bool { verticalSizeClass == .compact }
 
     private var start: some View {
@@ -248,7 +350,7 @@ struct MobileMeetingRoot: View {
                         .foregroundStyle(theme.palette.secondaryText)
                     HStack {
                         Button { beginMeeting() } label: {
-                            Label(PichiLocalization.text("Start Recording"), systemImage: "record.circle")
+                            Label(PichiLocalization.text(isBusy ? "Preparing recording…" : "Start Recording"), systemImage: "record.circle")
                                 .foregroundStyle(theme.palette.accentForeground)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }.buttonStyle(.borderedProminent).disabled(isBusy || !coordinator.isQuiescent)
@@ -269,19 +371,20 @@ struct MobileMeetingRoot: View {
     }
 
     private func recording(_ session: MeetingSession) -> some View {
-        GeometryReader { geometry in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: compactHeight ? 8 : 16) {
             HStack {
-                Label(PichiLocalization.text("Recording"), systemImage: "record.circle")
+                Label(PichiLocalization.text(coordinator.state == .stopping(session.id) ? "Stopping..." : "Recording"),
+                      systemImage: coordinator.state == .stopping(session.id) ? "stop.circle" : "record.circle")
                     .foregroundStyle(theme.palette.accent)
                 Spacer()
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text(MeetingTranscriptExporter.timestampText(session.duration))
+                    Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))
                         .monospacedDigit().accessibilityIdentifier("meeting.timer")
                 }
             }
-            Text(session.title).font(theme.typography.title)
+            if !compactHeight {
+                Text(session.title).font(theme.typography.title).lineLimit(2)
+            }
             HStack {
                 Label(PichiLocalization.text("Microphone"), systemImage: "mic")
                 AudioWaveformBars(color: theme.palette.accent, barCount: 7, barWidth: 3, barSpacing: 3,
@@ -290,8 +393,10 @@ struct MobileMeetingRoot: View {
                     isAnimating: coordinator.isRecording, isIdleWaveEnabled: false)
                     .foregroundStyle(theme.palette.accent).frame(width: 45, height: 26).accessibilityHidden(true)
             }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-            Divider()
-            Text(PichiLocalization.text("Live transcript")).font(theme.typography.sectionTitle)
+            if !compactHeight {
+                Divider()
+                Text(PichiLocalization.text("Live transcript")).font(theme.typography.sectionTitle)
+            }
             switch coordinator.liveTranscript.availability {
             case .unavailable(let reason), .degraded(let reason):
                 Text(MeetingUILocalization.captionAvailability(reason)).font(theme.typography.caption)
@@ -299,17 +404,24 @@ struct MobileMeetingRoot: View {
                     .accessibilityIdentifier("meeting.liveAvailability")
             case .available: EmptyView()
             }
-            MeetingLiveBubbleScrollList(rows: MeetingLiveBubbleComposer.rows(for: coordinator.liveTranscript),
-                                       pending: coordinator.pendingSpeech, documentStyle: true)
-                .frame(height: max(200, geometry.size.height - 250))
+            MeetingLiveTranscriptScrollList(snapshot: coordinator.liveTranscript,
+                                           pending: coordinator.pendingSpeech, documentStyle: true)
+                .id(session.id)
+                // This is the recording screen's only vertical scroll owner. Its viewport
+                // fills the remaining space; controls never compete for the same gesture.
+                .frame(maxHeight: .infinity)
+                .layoutPriority(1)
                 .accessibilityIdentifier("meeting.liveTranscript")
-            if session.speakerLabelsEnabled != false {
-                Text(PichiLocalization.text("Speaker labels are added after recording."))
+            if !compactHeight, session.speakerLabelsEnabled != false {
+                Text(PichiLocalization.text(session.effectiveSpeakerProcessingMode == .streaming
+                    ? "Speaker labels appear after enough speech has been collected."
+                    : "Speaker labels are added after recording."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
-                }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
-            }
-        }
+                }.padding(compactHeight ? 12 : 24)
+                    .frame(maxWidth: 1000, maxHeight: .infinity, alignment: .topLeading)
+                    .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("meeting.recording")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button { run { _ = try await coordinator.stopAndTranscribe() } } label: {
@@ -357,11 +469,20 @@ struct MobileMeetingRoot: View {
         VStack(alignment: .leading, spacing: 16) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    // Without transcript text the title belongs here; otherwise the transcript shows it.
+                    if session.transcriptSegments.isEmpty {
+                        Text(session.title).font(theme.typography.title)
+                    }
                     Text(PichiLocalization.text(session.state == .interrupted
                         ? "Meeting transcription was interrupted" : "Meeting transcription failed"))
                         .font(theme.typography.sectionTitle)
                     if let failure = session.failures.last {
                         Text(PichiLocalization.text(failure.message)).foregroundStyle(theme.palette.warning)
+                    }
+                    if session.transcriptSegments.isEmpty {
+                        Text(PichiLocalization.text(session.hasRetryableAudio ? "Your captured audio is preserved"
+                            : "There is no transcript text or saved audio available for this meeting."))
+                            .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
                     }
                     if session.hasRetryableAudio {
                         Button(PichiLocalization.text("Retry transcription")) {
@@ -377,14 +498,6 @@ struct MobileMeetingRoot: View {
                                 .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
                         }
                     }
-                    Button(PichiLocalization.text("New Meeting")) { newMeeting() }
-                        .disabled(isBusy || !coordinator.isQuiescent)
-                    if session.transcriptSegments.isEmpty {
-                        Text(session.title).font(theme.typography.title)
-                        Text(PichiLocalization.text(session.hasRetryableAudio ? "Your captured audio is preserved"
-                            : "There is no transcript text or saved audio available for this meeting."))
-                            .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
-                    }
                 }.padding(24)
             }.frame(maxHeight: session.transcriptSegments.isEmpty ? .infinity : 240)
             if !session.transcriptSegments.isEmpty { transcript(session) }
@@ -392,68 +505,80 @@ struct MobileMeetingRoot: View {
     }
 
     private var history: some View {
-        Group {
-            if let session = selectedHistory {
-                VStack {
-                    Button { selectedHistory = nil } label: {
-                        Label(PichiLocalization.text("History"), systemImage: "chevron.left").frame(minHeight: 44)
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)
-                    if session.state == .failed || session.state == .interrupted { recovery(session) }
-                    else { transcript(session) }
-                }
-            } else {
-                List {
-                    ForEach(sessions.filter { session in
-                        search.isEmpty || session.title.localizedCaseInsensitiveContains(search)
-                            || session.activeSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
-                            || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
-                    }) { session in
-                        Button { selectedHistory = session } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(session.title).font(theme.typography.bodyStrong)
-                                HStack {
-                                    Text(session.startedAt.formatted(.dateTime.day().month().hour().minute()))
-                                    Text(MeetingTranscriptExporter.timestampText(session.duration)).monospacedDigit()
-                                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                                HStack {
-                                    Text(PichiLocalization.text(sessionStatus(session.state)))
-                                    if !session.activeSpeakers.isEmpty {
-                                        Text(session.activeSpeakers.count == 1 ? PichiLocalization.text("1 speaker") : PichiLocalization.format("%lld speakers", Int64(session.activeSpeakers.count)))
-                                    }
-                                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                .contentShape(Rectangle())
-                        }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
-                            .swipeActions { Button(PichiLocalization.text("Delete"), role: .destructive) { deleteCandidate = session } }
-                    }
-                }.searchable(text: $search, prompt: PichiLocalization.text("Search meetings"))
-                    .refreshable { await refreshHistory() }.accessibilityIdentifier("history.list")
+        let matches = sessions.filter { session in
+            search.isEmpty || session.title.localizedCaseInsensitiveContains(search)
+                || session.activeSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
+                || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
+        }
+        return List(matches) { session in
+            Button { historyPath = [session.id] } label: {
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                    Text(session.title).font(theme.typography.bodyStrong)
+                    Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
+                .swipeActions { Button(PichiLocalization.text("Delete"), role: .destructive) { deletion = .meeting(session) } }
+        }
+        .overlay {
+            // The desktop history's empty states and copy.
+            if matches.isEmpty, historySnapshot.hasLoaded, historySnapshot.errorMessage == nil {
+                ContentUnavailableView(
+                    PichiLocalization.text(search.isEmpty ? "No meetings yet" : "No matching meetings"),
+                    systemImage: search.isEmpty ? "person.2.wave.2" : "magnifyingglass",
+                    description: Text(PichiLocalization.text(search.isEmpty
+                        ? "Completed meetings will appear here." : "Try a different title, app, or speaker.")))
             }
         }
+        .searchable(text: $search, prompt: PichiLocalization.text("Search meetings"))
+        .refreshable { await refreshHistory() }.accessibilityIdentifier("history.list")
+        .navigationDestination(for: MeetingSessionID.self) { id in
+            if let session = sessions.first(where: { $0.id == id }) {
+                Group {
+                    if session.state == .failed || session.state == .interrupted { recovery(session) } else { transcript(session) }
+                }.navigationBarTitleDisplayMode(.inline)
+            }
+        }
+    }
+
+    /// One secondary line: date, duration, participants and any unfinished state.
+    private func historySummary(_ session: MeetingSession) -> String {
+        var parts = [session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)),
+                     MeetingTranscriptExporter.timestampText(session.duration)]
+        if !session.activeSpeakers.isEmpty {
+            parts.append(PichiLocalization.format("%lld speakers", Int64(session.activeSpeakers.count)))
+        }
+        if session.state != .completed { parts.append(PichiLocalization.text(sessionStatus(session.state))) }
+        return parts.joined(separator: " · ")
     }
 
     private func transcript(_ session: MeetingSession) -> some View {
         let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map {
             ($0.id, MeetingTranscriptExporter.speakerDisplayName($0, language: PichiLocalization.language))
         })
-        let segments = session.transcriptSegments.filter { !$0.isEcho }.enumerated().sorted {
-            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
-        }.map(\.element)
-        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: segments, in: session)
+        let readingInput = MeetingTranscriptExporter.ReadingInput(session)
+        let paragraphs = transcriptReadingSource == readingInput ? transcriptReading : []
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text(session.title).font(theme.typography.title)
                 HStack {
                     Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
-                    Text(PichiLocalization.text("In-room meeting"))
+                    Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
                 }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 HStack {
+                    // The desktop transcript's copy confirmation.
+                    let copied = copiedSessionID == session.id
                     Button { copyTranscript(session) } label: {
-                        Label(PichiLocalization.text("Copy"), systemImage: "doc.on.doc").frame(minHeight: 44)
+                        Label(PichiLocalization.text(copied ? "Copied" : "Copy"), systemImage: copied ? "checkmark" : "doc.on.doc")
+                            .frame(minHeight: 44)
                     }.accessibilityIdentifier("transcript.copy")
+                        .accessibilityLabel(PichiLocalization.text(copied ? "Transcript copied" : "Copy transcript"))
                     Menu {
                         Button(PichiLocalization.text("Export as Text")) { exportTranscript(session, json: false) }
                         Button(PichiLocalization.text("Export as JSON")) { exportTranscript(session, json: true) }
+                        Button(PichiLocalization.text("Export Protected Transcript")) { exportProtectedTranscript(session) }
+                            .disabled(!MeetingTranscriptExporter.canExportProtectedTranscript(session))
+                            .accessibilityIdentifier("transcript.exportProtected")
                         if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
                             if session.hasRetryableAudio {
                                 Button(PichiLocalization.text("Retry transcription")) {
@@ -462,30 +587,28 @@ struct MobileMeetingRoot: View {
                                 }.disabled(!coordinator.isQuiescent)
                             }
                             Button(PichiLocalization.text("Export Audio")) { exportAudio(session) }
-                            Button(PichiLocalization.text("Delete Audio"), role: .destructive) {
-                                playback.stop()
-                                run {
-                                    let updated = try await coordinator.deleteAudio(sessionID: session.id)
-                                    if selectedHistory?.id == updated.id { selectedHistory = updated }
-                                    await refreshHistory()
-                                }
-                            }
+                            Button(PichiLocalization.text("Delete Audio"), role: .destructive) { deletion = .audio(session) }
                         }
                         Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.title) }
                         if coordinator.canUndoCorrection(sessionID: session.id) {
                             Button(PichiLocalization.text("Undo correction")) {
                                 run {
                                     let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
-                                    if selectedHistory?.id == updated.id { selectedHistory = updated }
-                                    await refreshHistory()
+                                    acceptCommittedSession(updated)
                                 }
                             }
                         }
-                        Button(PichiLocalization.text("Delete Meeting"), role: .destructive) { deleteCandidate = session }
+                        Button(PichiLocalization.text("Delete Meeting"), role: .destructive) { deletion = .meeting(session) }
                     } label: { Label(PichiLocalization.text("More"), systemImage: "ellipsis").frame(minHeight: 44) }
                         .accessibilityIdentifier("transcript.more")
                     Spacer()
                 }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
+                    if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
+                        Text(PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls."))
+                    }
+                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 Text(PichiLocalization.text("Transcript")).font(theme.typography.sectionTitle)
                 Divider()
                 if !session.activeSpeakers.isEmpty {
@@ -518,6 +641,15 @@ struct MobileMeetingRoot: View {
                 }
             }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
         }.accessibilityIdentifier("meeting.transcript")
+            .task(id: readingInput) {
+                do {
+                    let projection = try await MeetingTranscriptExporter.readingParagraphs(for: session)
+                    try Task.checkCancellation()
+                    transcriptReading = projection
+                    transcriptReadingSource = readingInput
+                } catch is CancellationError { }
+                catch { report(error) }
+            }
     }
 
     private func participantButton(_ speaker: MeetingSessionSpeaker, session: MeetingSession, expands: Bool) -> some View {
@@ -540,10 +672,12 @@ struct MobileMeetingRoot: View {
                 Text(MeetingTranscriptExporter.timestampText(segment.start.seconds))
                     .font(theme.typography.codeCaption).foregroundStyle(theme.palette.secondaryText)
                     .padding(.top, theme.metrics.spacing.sm)
-                Text(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: session,
-                    speakerNames: names, language: PichiLocalization.language))
-                    .font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
-                    .padding(.top, theme.metrics.spacing.sm)
+                if let label = MeetingTranscriptExporter.captionLabel(for: paragraph, in: session,
+                    speakerNames: names, language: PichiLocalization.language) {
+                    Text(label)
+                        .font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
+                        .padding(.top, theme.metrics.spacing.sm)
+                }
                 Spacer(minLength: 0)
                 if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
                     Button {
@@ -574,6 +708,9 @@ struct MobileMeetingRoot: View {
 
     private func beginMeeting() {
         run {
+            // Finish preparation before the capture lease can open the microphone.
+            try await required.prepare(modelID: settings.selectedSpeechModel.rawValue)
+            try await privacyActivation.waitUntilReadyIfRequested()
             await refreshMicrophones()
             let configuration = try await coordinator.defaultConfiguration(mode: .inRoom,
                 title: PichiLocalization.text("In-room meeting"))
@@ -603,10 +740,13 @@ struct MobileMeetingRoot: View {
         error = PichiLocalization.text(failure.localizedDescription)
         showError = true
     }
+    private func acceptCommittedSession(_ session: MeetingSession) {
+        historySnapshot.applyCommitted(session)
+    }
     private func refreshHistory() async {
         await historySnapshot.refresh()
         if let message = historySnapshot.errorMessage { error = message; showError = true; return }
-        if let id = selectedHistory?.id { selectedHistory = sessions.first { $0.id == id } }
+        if let id = historyPath.last, !sessions.contains(where: { $0.id == id }) { historyPath.removeAll() }
     }
     private func refreshMicrophones() async {
         do { microphoneSnapshot = try await microphones() } catch { report(error) }
@@ -615,21 +755,28 @@ struct MobileMeetingRoot: View {
     private func copyTranscript(_ session: MeetingSession) {
         run {
             let output: MeetingSession
-            if settings.meetingPIIRedactionEnabled {
-                if !(await privacy.isReady) { try await privacy.prepare() }
-                output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: session, using: privacy)
+            if settings.meetingPIIRedactionRequested {
+                let redactor = try settings.transcriptPrivacyRedactor(wrapping: privacy)
+                try await redactor.prepareForMeeting()
+                output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: session, using: redactor)
             } else { output = session }
             UIPasteboard.general.string = MeetingTranscriptExporter.text(for: output)
+            copiedSessionID = session.id
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                if copiedSessionID == session.id { copiedSessionID = nil }
+            }
         }
     }
 
     private func exportTranscript(_ session: MeetingSession, json: Bool) {
         run {
+            let redactor = settings.meetingPIIRedactionRequested ? try settings.transcriptPrivacyRedactor(wrapping: privacy) : nil
             guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
             let output: MeetingSession
-            if settings.meetingPIIRedactionEnabled {
-                if !(await privacy.isReady) { try await privacy.prepare() }
-                output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: fresh, using: privacy)
+            if let redactor {
+                try await redactor.prepareForMeeting()
+                output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: fresh, using: redactor)
             } else { output = fresh }
             let data = json ? try MeetingTranscriptExporter.json(for: output) : Data(MeetingTranscriptExporter.text(for: output).utf8)
             share = try MeetingSharePayload.transcript(data: data, title: output.title, fileExtension: json ? "json" : "txt")
@@ -642,6 +789,14 @@ struct MobileMeetingRoot: View {
                   fresh.hasFinalizedAudio, let directory = try await store.existingSessionDirectory(for: fresh.id)
             else { throw CocoaError(.fileNoSuchFile) }
             share = try await MeetingSharePayload.audio(session: fresh, directory: directory)
+        }
+    }
+
+    private func exportProtectedTranscript(_ session: MeetingSession) {
+        run {
+            guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
+            let data = try await MeetingTranscriptExporter.protectedTranscriptJSONForSharing(for: fresh)
+            share = try MeetingSharePayload.transcript(data: data, title: fresh.title, fileExtension: "json")
         }
     }
 }

@@ -20,9 +20,9 @@ nonisolated enum MeetingNemotronModelProfile: String, CaseIterable, Sendable {
 
     var isExperimental: Bool { self != .fast32SplitW8A8 }
     /// The selected composite profile includes the optional owner verifier only when its
-    /// fingerprint and resource preparation include voice matching. Continuous anonymous
-    /// profiles keep their stable diarizer slots without loading a separate encoder.
-    var supportsOwnerVoiceVerification: Bool { self == .fast32SplitW8A8 }
+    /// fingerprint and resource preparation include voice matching. The registered continuous
+    /// profile's exact recipe fixes whether verification runs live or after model cleanup.
+    var supportsOwnerVoiceVerification: Bool { self == .fast32SplitW8A8 || self == .experimentalFast128FP16CPU }
     var computePreference: ComputePreference { self.isExperimental ? .cpuOnly : .devicePreferred }
     var presetName: String {
         switch self {
@@ -197,7 +197,18 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
     let injectedURL: URL?
     let environment: [String: String]
     let profile: MeetingNemotronModelProfile
-    var supportsOwnerVoiceVerification: Bool { self.profile.supportsOwnerVoiceVerification }
+    private var ownerVoiceVerificationDisabled = false
+    var supportsOwnerVoiceVerification: Bool {
+        self.profile.supportsOwnerVoiceVerification && !self.ownerVoiceVerificationDisabled
+    }
+
+    /// A frozen legacy anonymous recipe shares the exact diarizer artifacts, but must not
+    /// acquire owner identity merely because the app now supports that optional stage.
+    func withoutOwnerVoiceVerification() -> Self {
+        var frozen = self
+        frozen.ownerVoiceVerificationDisabled = true
+        return frozen
+    }
 
     init(
         injectedURL: URL? = nil,

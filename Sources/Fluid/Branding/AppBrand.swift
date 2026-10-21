@@ -106,7 +106,6 @@ nonisolated enum AppBrand {
     }()
 
     static var package: BrandPackage { BrandPackageStore.shared.current() }
-    static var packagedProfile: BrandProfile { self.packagedPackage.profile }
     static var profile: BrandProfile { self.package.profile }
     static var appName: String { self.profile.appName }
     static var meetingName: String { self.profile.meetingName }

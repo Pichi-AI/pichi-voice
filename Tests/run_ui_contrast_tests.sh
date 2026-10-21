@@ -10,6 +10,9 @@ mkdir -p "$task_test_dir"
 python3 -S - "$task_test_dir/ProductionLabels.swift" <<'PY'
 from pathlib import Path
 import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path('Tests').resolve()))
+from run_meeting_backup_refresh_tests import declaration
 
 def snippet(file, start, end):
     text = Path(file).read_text()
@@ -439,10 +442,10 @@ assert speaker_calls == {
     'Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift': ['tint'],
 }, f'Uncovered production speaker palette caller: {speaker_calls}'
 live_source = Path('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift').read_text()
-live_fill = snippet('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift',
-    '    private var fill: Color {', '    var body: some View {')
-live_microphone = snippet('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift',
-    '    private var isMicrophone: Bool {', '    private var sourceLabel: String {')
+for marker in ('    private var fill: Color {', '    private var isMicrophone: Bool {'):
+    assert live_source.count(marker) == 1, f'Expected one production label: {marker}'
+live_fill = declaration(live_source, '    private var fill: Color {')
+live_microphone = declaration(live_source, '    private var isMicrophone: Bool {')
 assert '.foregroundStyle(self.theme.palette.readableText(self.tint))' in speaker_canvas
 assert 'self.speakerTint.map(self.theme.palette.readableText)' in speaker_canvas
 with Path(sys.argv[1]).open('a') as output:
@@ -455,7 +458,7 @@ with Path(sys.argv[1]).open('a') as output:
     output.write('struct ProductionLiveSpeakerPaletteProducer {\n'
         ' enum Speaker { case you, remote }; struct Row { let speaker: Speaker; let isPartial: Bool }\n'
         ' let row: Row; let theme: AppTheme; let colorScheme: ColorScheme\n'
-        + live_microphone + live_fill + '\n func currentFill() -> Color { self.fill }\n}\n')
+        + live_microphone + '\n' + live_fill + '\n func currentFill() -> Color { self.fill }\n}\n')
 Path(sys.argv[1]).with_name('SpeakerPaletteProductionSource.json').write_text(json.dumps({
     'paletteSHA256': hashlib.sha256(speaker_source.encode()).hexdigest(),
     'producerSHA256': hashlib.sha256(speaker_producer.encode()).hexdigest(),

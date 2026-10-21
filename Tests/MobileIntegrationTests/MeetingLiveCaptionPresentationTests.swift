@@ -185,7 +185,7 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         XCTAssertEqual(paragraphs.flatMap(\.rows), rows)
     }
 
-    func testActualParticipantDoesNotClaimIdentityOfSourceOnlyPartial() {
+    func testSourceOnlyPartialContinuesReadableParticipantWithoutChangingItsEvidence() {
         let id = UUID()
         let participant = MeetingSpeakerPresentation(identity: "person", label: .identified(.init(displayName: "Участник", isLocalUser: false)))
         var snapshot = MeetingLiveTranscriptSnapshot.empty
@@ -196,9 +196,57 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         XCTAssertEqual(MeetingLiveBubbleComposer.rows(for: snapshot).map(\.text), ["[PERSON]"])
         snapshot.partials[.you] = .init(id: UUID(), text: "следующий", start: 2)
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
-        XCTAssertEqual(rows.map(\.showsLabel), [true, true])
-        XCTAssertNil(rows[1].participant)
-        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 2)
+        XCTAssertEqual(rows.map(\.showsLabel), [true, false])
+        XCTAssertEqual(rows[1].participant, participant.markingEstimated())
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 1)
+        XCTAssertNil(snapshot.partials[.you]?.stableUTF16Count,
+                     "Readable ownership does not mutate provisional recognition evidence")
+    }
+
+    func testLiveUnresolvedTextHasNoPseudoSpeakerHeadersAndKeepsFirstWordTurnTime() {
+        let participant = MeetingSpeakerPresentation(identity: "person",
+            label: .identified(.init(displayName: "Участник 1", isLocalUser: false)))
+        let other = MeetingSpeakerPresentation(identity: "different-person",
+            label: .identified(.init(displayName: "Участник 1", isLocalUser: false)))
+        let unknown = MeetingSpeakerPresentation(identity: "unknown", label: .unknown)
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.utterances = [
+            .init(id: UUID(), speaker: .you, text: "До определения", start: 0, end: 1, participant: unknown),
+            .init(id: UUID(), speaker: .you, text: "Начало\n", start: 7.8, end: 8, participant: participant),
+            .init(id: UUID(), speaker: .you, text: "А", start: 9, end: 9.1, participant: unknown),
+            .init(id: UUID(), speaker: .you, text: "продолжение", start: 10, end: 11, participant: participant),
+            .init(id: UUID(), speaker: .you, text: "ответ", start: 75, end: 76, participant: other),
+        ]
+        snapshot.partials[.you] = .init(id: UUID(), text: "и дальше", start: 77)
+        let original = snapshot
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
+        XCTAssertEqual(rows.map(\.showsLabel), [false, true, false, false, true, false])
+        XCTAssertNil(rows[0].captionLabel)
+        XCTAssertEqual(rows[1].captionLabel, "00:07 Участник 1")
+        XCTAssertEqual(rows[4].captionLabel, "01:15 Участник 1",
+                       "Distinct identities remain separate even when users give them the same name")
+        XCTAssertEqual(paragraphs.map { $0.text() }, ["До определения", "Начало\n", "А продолжение", "ответ и дальше"])
+        XCTAssertEqual(paragraphs[2].captionLabel, "00:07 Участник 1",
+                       "A layout-only paragraph keeps the original participant turn timestamp")
+        XCTAssertFalse(paragraphs[2].showsLabel, "Layout continuation does not duplicate the header or timestamp")
+        XCTAssertEqual(snapshot, original)
+        XCTAssertEqual(paragraphs.flatMap(\.rows).map(\.id), snapshot.utterances.map(\.id) + [snapshot.partials[.you]!.id])
+    }
+
+    func testSourceOnlyAndUncertainCaptionLabelsStayAbsentEvenInDirectPreviewRows() {
+        for source in [MeetingLiveSpeaker.you, .them] {
+            let presentations: [MeetingSpeakerPresentation?] = [nil,
+                .init(identity: "unknown", label: .unknown),
+                .init(identity: "candidates", label: .candidates([nil], relation: .several)),
+            ]
+            for participant in presentations {
+                let row = MeetingLiveBubbleComposer.Row(id: UUID(), speaker: source, text: "Текст",
+                    isPartial: false, showsLabel: true, participant: participant)
+                XCTAssertNil(row.captionLabel, "Live captions do not fall back to Unknown speaker, Microphone or Meeting audio")
+                XCTAssertNil(MeetingLiveCaptionParagraphs.compose([row])[0].captionLabel)
+            }
+        }
     }
 
     func testParticipantRefinementDoesNotPretendThatNewWordsArrived() {
@@ -233,6 +281,16 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
     }
 
     func testGrowthIsLayoutChangeRatherThanScrollIntent() {
+        let originalViewport = MeetingCaptionScrollTracking.Geometry(contentBottom: 320, viewportHeight: 320,
+            viewportWidth: 520, contentHeight: 1000, contentOffset: 680)
+        let realizedHistory = MeetingCaptionScrollTracking.Geometry(contentBottom: 1040, viewportHeight: 320,
+            viewportWidth: 520, contentHeight: 1040, contentOffset: 0)
+        XCTAssertTrue(realizedHistory.layoutChanged(from: originalViewport))
+        XCTAssertFalse(realizedHistory.viewportChanged(from: originalViewport),
+                       "Realizing older lazy paragraphs cannot issue a viewport-resize follow request")
+        let narrower = MeetingCaptionScrollTracking.Geometry(contentBottom: 1040, viewportHeight: 320,
+            viewportWidth: 340, contentHeight: 1040, contentOffset: 0)
+        XCTAssertTrue(narrower.viewportChanged(from: realizedHistory), "Width reflow remains a real viewport change")
         typealias Geometry = MeetingCaptionScrollTracking.Geometry
         let before = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 600, contentOffset: 300)
         let grown = Geometry(contentBottom: 900, viewportHeight: 300, contentHeight: 1200, contentOffset: 300)
@@ -257,6 +315,51 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         let reflow = Geometry(contentBottom: 850, viewportHeight: 300, contentHeight: 1200, contentOffset: 350)
         XCTAssertTrue(reflow.followPreference(after: before, currentlyFollowing: true, userIsScrolling: true),
                       "A reflow that also adjusts the offset must retain the follow preference")
+    }
+
+    func testIOS17OffsetOnlyLayoutCorrectionCannotPauseWithoutAnActualDrag() {
+        typealias Geometry = MeetingCaptionScrollTracking.Geometry
+        let bottom = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 2000, contentOffset: 1400)
+        let correction = Geometry(contentBottom: 700, viewportHeight: 600, contentHeight: 2000, contentOffset: 1300)
+        XCTAssertFalse(correction.layoutChanged(from: bottom))
+        XCTAssertTrue(correction.offsetChanged(from: bottom))
+        XCTAssertTrue(correction.fallbackFollowPreference(after: bottom,
+            currentlyFollowing: true, upwardDrag: false),
+            "UIKit offset compensation without a finger must retain follow intent")
+        XCTAssertFalse(correction.fallbackFollowPreference(after: bottom,
+            currentlyFollowing: true, upwardDrag: true), "An actual upward drag still pauses")
+
+        let momentum = Geometry(contentBottom: 800, viewportHeight: 600, contentHeight: 2000, contentOffset: 1200)
+        XCTAssertFalse(momentum.fallbackFollowPreference(after: correction,
+            currentlyFollowing: false, upwardDrag: false), "Finger release must not undo reading mode")
+        let growth = Geometry(contentBottom: 1000, viewportHeight: 600, contentHeight: 2200, contentOffset: 1200)
+        XCTAssertFalse(growth.fallbackFollowPreference(after: momentum,
+            currentlyFollowing: false, upwardDrag: false), "New captions must respect the reader")
+        let returned = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 2200, contentOffset: 1600)
+        XCTAssertTrue(returned.fallbackFollowPreference(after: growth,
+            currentlyFollowing: false, upwardDrag: false), "Returning to the actual bottom resumes following")
+    }
+
+    func testIOS17VoiceOverRetainsPriorOffsetIntentWithoutReplacingNativeScroll() {
+        typealias Geometry = MeetingCaptionScrollTracking.Geometry
+        let bottom = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 2000, contentOffset: 1400)
+        let earlier = Geometry(contentBottom: 700, viewportHeight: 600, contentHeight: 2000, contentOffset: 1300)
+        XCTAssertFalse(earlier.fallbackFollowPreference(after: bottom,
+            currentlyFollowing: true, upwardDrag: false, accessibilityOffsetIntent: true))
+        XCTAssertTrue(earlier.fallbackFollowPreference(after: bottom,
+            currentlyFollowing: true, upwardDrag: false, accessibilityOffsetIntent: false))
+        let growth = Geometry(contentBottom: 900, viewportHeight: 600, contentHeight: 2200, contentOffset: 1300)
+        XCTAssertFalse(growth.fallbackFollowPreference(after: earlier,
+            currentlyFollowing: false, upwardDrag: false, accessibilityOffsetIntent: true))
+        XCTAssertTrue(growth.fallbackFollowPreference(after: earlier,
+            currentlyFollowing: true, upwardDrag: false, accessibilityOffsetIntent: true))
+        let returned = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 2200, contentOffset: 1600)
+        XCTAssertTrue(returned.fallbackFollowPreference(after: growth,
+            currentlyFollowing: false, upwardDrag: false, accessibilityOffsetIntent: true))
+        let beforeClamp = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 1800, contentOffset: 1600)
+        let clamped = Geometry(contentBottom: 600, viewportHeight: 600, contentHeight: 1800, contentOffset: 1200)
+        XCTAssertTrue(clamped.fallbackFollowPreference(after: beforeClamp,
+            currentlyFollowing: true, upwardDrag: false, accessibilityOffsetIntent: true))
     }
 
     func testFastBottomCrossingLatchesFollowThroughRubberBandRecoil() {
@@ -353,6 +456,157 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testReadableTurnHeadersShowElapsedTimeWithoutAnonymousRows() async throws {
+        let first = MeetingSpeakerPresentation(identity: "first",
+            label: .identified(.init(displayName: "Анна", isLocalUser: false)))
+        let second = MeetingSpeakerPresentation(identity: "second",
+            label: .identified(.init(displayName: "Борис", isLocalUser: false)))
+        let unknown = MeetingSpeakerPresentation(identity: "unresolved", label: .unknown)
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.revision = 1
+        snapshot.utterances = [
+            .init(id: UUID(), speaker: .you, text: "Первая реплика.", start: 7.8, end: 8, participant: first),
+            .init(id: UUID(), speaker: .you, text: "А", start: 8, end: 8.04, participant: unknown),
+            .init(id: UUID(), speaker: .you, text: "затем продолжение.", start: 26, end: 27, participant: first),
+            .init(id: UUID(), speaker: .you, text: "Следующий участник отвечает.",
+                  start: 3_755.2, end: 3_756, participant: second),
+        ]
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(rows.filter(\.showsLabel).compactMap(\.captionLabel), ["00:07 Анна", "1:02:35 Борис"])
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 2)
+        for scheme in [ColorScheme.light, .dark] {
+            let host = try CaptionNativeHost(rows: [], scheme: scheme)
+            defer { host.close() }
+            host.model.snapshot = snapshot
+            host.model.pending = .init(tokens: (0..<3).map {
+                .init(id: UInt64($0 + 1), source: .you, start: 3_756 + Double($0) * 0.4,
+                      end: 3_756.4 + Double($0) * 0.4, widthHint: 0.8, level: 0.6)
+            }, isCapturing: false, revision: 1)
+            try await settle(host, "Only real participant turns become native rows") {
+                self.descendants(in: host.controller.view).compactMap { $0 as? UITableView }.contains {
+                    $0.numberOfSections > 0 && $0.numberOfRows(inSection: 0) == 2 && $0.visibleCells.count == 2
+                }
+            }
+            capture(host, step: "readable-headers-elapsed-time", scheme: scheme)
+        }
+    }
+
+    func testViewportHeightShrinkKeepsTheLatestProtectedTextVisible() async throws {
+        let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: .light)
+        defer { host.close() }
+        let scroll = try await captionScroll(in: host)
+        try await settle(host, "Initial captions follow before viewport height changes") { self.nearBottom(scroll) }
+        host.model.height *= 0.55
+        try await settle(host, "A shorter viewport keeps the latest text visible without new speech") {
+            abs(scroll.bounds.height - host.model.height) < 2 && self.nearBottom(scroll)
+        }
+        capture(host, step: "viewport-height-following", scheme: .light)
+    }
+
+    func testDynamicTypeReflowKeepsTheLatestProtectedTextVisible() async throws {
+        let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: .light)
+        defer { host.close() }
+        let scroll = try await captionScroll(in: host)
+        try await settle(host, "Initial captions follow before text-size changes") { self.nearBottom(scroll) }
+        let height = scroll.contentSize.height
+        host.model.textSize = .accessibility2
+        try await settle(host, "Larger native text stays visible without waiting for new speech") {
+            scroll.contentSize.height > height + 20 && self.nearBottom(scroll)
+        }
+        capture(host, step: "dynamic-type-following", scheme: .light)
+    }
+
+    func testVersionedSnapshotRendersSameIDCorrectionsAcrossPendingActivity() async throws {
+        let host = try CaptionNativeHost(rows: [], scheme: .light)
+        defer { host.close() }
+        let id = UUID()
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.revision = 1
+        snapshot.utterances = [.init(id: id, speaker: .you, text: "Первая версия.", start: 0, end: 1)]
+        host.model.snapshot = snapshot
+        func contains(_ text: String) -> Bool {
+            self.descendants(in: host.controller.view).compactMap { $0 as? UITextView }.contains {
+                $0.attributedText.string.contains(text)
+            }
+        }
+        try await settle(host, "Versioned transcript reaches native text") { contains("Первая версия.") }
+        host.model.pending = pending(count: 3)
+        try await settle(host, "Pending feedback retains the already rendered transcript") { contains("Первая версия.") }
+        snapshot.utterances[0].text = "Исправленная версия [PERSON]."
+        snapshot.utterances[0].participant = .init(identity: "first", label: .identified(.init(displayName: "Анна", isLocalUser: false)))
+        snapshot.revision = 2
+        host.model.snapshot = snapshot
+        try await settle(host, "A same-ID protected correction and participant revision are not skipped") {
+            contains("Исправленная версия [PERSON].") && !contains("Первая версия.")
+        }
+        host.model.pending = .empty
+        try await settle(host, "Retiring pending feedback cannot restore stale text") { contains("Исправленная версия [PERSON].") }
+        capture(host, step: "versioned-snapshot-correction", scheme: .light)
+    }
+
+    /// Synthetic native-word input exercises the real privacy/state/composer path.
+    /// No microphone, speech model, durable store or speaker identity is fabricated.
+    func testProtectedShortSpeechRemainsVisibleAcrossSilenceUntilStop() async throws {
+        for scheme in [ColorScheme.light, .dark] {
+            let attempt = UUID(), trackID = UUID()
+            let track = MeetingAudioTrack(id: trackID, kind: .microphone,
+                sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic", format: nil,
+                timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1,
+                    machTimebaseDenominator: 1, firstPresentationTime: nil), health: .waiting, chunks: [])
+            let state = try MeetingStreamingTranscriptState(attemptID: attempt, track: track,
+                configuration: .init(speakerProcessingMode: .streaming),
+                privacyContext: .init(redactor: CaptionPreviewFixtureRedactor()))
+            let words = ["Сегодня", "обсуждаем", "план.", "private@example.test", "Проверим", "результат."].enumerated().map { index, text in
+                MeetingTranscriptSegment(id: UUID(), start: .init(value: Int64(index * 500), timescale: 1_000),
+                    end: .init(value: Int64(index * 500 + 400), timescale: 1_000), sourceTrackID: trackID,
+                    speakerID: nil, text: text, originalText: nil, revision: 0, status: .final,
+                    overlap: .none, completeness: .complete, attributionState: .unassigned,
+                    nativePrecision: .word, nativeUnitID: "synthetic-\(index)", nativeSpeakerAssignment: .unassigned,
+                    nativeTiming: .init(start: Double(index) * 0.5, end: Double(index) * 0.5 + 0.4))
+            }
+            func observation(_ segments: [MeetingTranscriptSegment] = [], seconds: Int,
+                             final: Bool = false) -> MeetingStreamingPCMObservation {
+                .init(batch: .init(segments: segments), activity: [], acceptedThroughSample: seconds * 16_000,
+                    processedThroughSample: seconds * 16_000, retainedFromSample: 0,
+                    isFinal: final, asrStableThroughSample: seconds * 16_000)
+            }
+            let first = try await state.observe(observation(words, seconds: 20))
+            let preview = try XCTUnwrap(first.safeBatch.livePreview)
+            XCTAssertTrue(first.safeBatch.segments.isEmpty)
+            XCTAssertFalse(preview.text.contains("private@example.test"))
+            var snapshot = MeetingLiveTranscriptSnapshot.empty.settingPartial(preview, for: .you)
+            let host = try CaptionNativeHost(rows: MeetingLiveBubbleComposer.rows(for: snapshot), scheme: scheme)
+            defer { host.close() }
+            func approvedTextIsVisible() -> Bool {
+                self.descendants(in: host.controller.view).compactMap { $0 as? UITextView }.contains {
+                    $0.attributedText.string.contains("[EMAIL]") && $0.bounds.height > 0
+                        && !$0.attributedText.string.contains("private@example.test")
+                }
+            }
+            try await settle(host, "Short protected speech is visible before Stop", predicate: approvedTextIsVisible)
+            capture(host, step: "protected-short-01-before-stop", scheme: scheme)
+            let silence = try await state.observe(observation(seconds: 620))
+            XCTAssertEqual(silence.safeBatch.livePreview, preview)
+            XCTAssertEqual(silence.diagnostics.privacySafeThroughSample, 0)
+            snapshot = snapshot.settingPartial(silence.safeBatch.livePreview, for: .you)
+            host.model.rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+            try await settle(host, "Silence retains the approved display", predicate: approvedTextIsVisible)
+            capture(host, step: "protected-short-02-after-silence", scheme: scheme)
+            let final = try await state.finish(observation(seconds: 620, final: true))
+            XCTAssertNil(final.safeBatch.livePreview)
+            XCTAssertEqual(final.safeBatch.segments.map(\.id), words.map(\.id))
+            XCTAssertEqual(final.safeBatch.segments.map(\.nativeTiming), words.map(\.nativeTiming))
+            snapshot = snapshot.settingPartial(nil, for: .you)
+            snapshot.utterances = final.safeBatch.segments.map {
+                .init(id: $0.id, speaker: .you, text: $0.text, start: $0.start.seconds, end: $0.end.seconds)
+            }
+            host.model.rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+            XCTAssertEqual(host.model.rows.count, words.count)
+            try await settle(host, "Stop replaces the preview without duplicate words", predicate: approvedTextIsVisible)
+            capture(host, step: "protected-short-03-after-stop", scheme: scheme)
+        }
+    }
+
     func testStreamingParticipantsRenderAsSeparateNativeTurns() async throws {
         let first = MeetingSpeakerPresentation.Name(displayName: "Анна", isLocalUser: false)
         let second = MeetingSpeakerPresentation.Name(displayName: "Борис", isLocalUser: false)
@@ -668,52 +922,73 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
         }
     }
 
-    func testIOS17NonTouchScrollToOlderTextStaysPausedWhenNewRowsArrive() async throws {
+    func testFullMeetingHistoryCanReachItsBeginningAfterMultipleParticipantTurns() async throws {
+        let voices = ["Анна", "Борис", "Виктор"]
+        let rows = (0..<1_200).map { index in
+            let owner = voices[(index / 200) % voices.count]
+            return MeetingLiveBubbleComposer.Row(id: UUID(), speaker: .you,
+                text: index == 0 ? "Самое начало всей встречи." : "Слово \(index)",
+                isPartial: false, showsLabel: index % 200 == 0,
+                participant: .init(identity: owner, label: .identified(.init(displayName: owner, isLocalUser: false))))
+        }
+        let host = try CaptionNativeHost(rows: rows, scheme: .light)
+        defer { host.close() }
+        let scroll = try await captionScroll(in: host)
+        try await settle(host, "Full history starts following the latest participant") { self.nearBottom(scroll) }
+        capture(host, step: "full-history-01-tail", scheme: .light)
+        let beginning = -scroll.adjustedContentInset.top
+        scroll.setContentOffset(CGPoint(x: 0, y: beginning), animated: false)
+        try await settle(host, "The first participant's words remain reachable beyond the last 100 words") {
+            abs(scroll.contentOffset.y - beginning) < 3 && !self.nearBottom(scroll)
+        }
+        capture(host, step: "full-history-02-beginning", scheme: .light)
+        // A programmatic offset proves the full history is reachable, not that a
+        // person dragged. Real manual reading/return is covered by UI gestures.
+        XCTAssertEqual(host.model.rows.first?.id, rows.first?.id)
+    }
+
+    func testIOS17ProgrammaticOffsetCorrectionKeepsFollowingWhenNewRowsArrive() async throws {
         guard #unavailable(iOS 18) else {
-            throw XCTSkip("This exercises the iOS 17 offset-based fallback. Programmatic UIKit scrolling does not simulate a user scroll phase on iOS 18+.")
+            throw XCTSkip("This exercises the iOS 17 geometry fallback; programmatic movement is not a user gesture.")
         }
         for scheme in [ColorScheme.light, .dark] {
             let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: scheme)
             defer { host.close() }
             let scroll = try await captionScroll(in: host)
             try await settle(host, "Initial captions must be bottom-pinned") { self.nearBottom(scroll) }
-            capture(host, step: "01-before-non-touch-scroll", scheme: scheme)
+            capture(host, step: "01-before-layout-offset-correction", scheme: scheme)
 
             let olderOffset = max(-scroll.adjustedContentInset.top, self.bottomOffset(scroll) - 250)
             scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: olderOffset), animated: false)
-            try await settle(host, "UIKit non-touch movement must reach older text") {
+            try await settle(host, "UIKit can adjust the offset without a finger gesture") {
                 abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
             }
-            capture(host, step: "02-non-touch-older-text", scheme: scheme)
+            capture(host, step: "02-programmatic-offset-correction", scheme: scheme)
 
             let oldContentHeight = scroll.contentSize.height
             host.model.rows += wordRows(count: 120)
-            try await settle(host, "New captions must not pull an older-text reader back to the bottom") {
+            try await settle(host, "New captions must remain visible after a non-user offset correction") {
                 scroll.contentSize.height > oldContentHeight + 40
-                    && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
+                    && self.nearBottom(scroll)
             }
-            capture(host, step: "03-appended-while-paused", scheme: scheme)
+            capture(host, step: "03-append-preserves-following", scheme: scheme)
             let heightBeforePending = scroll.contentSize.height
             host.model.pending = pending(count: 40)
-            try await settle(host, "Pending waveforms must also respect reading older text") {
+            try await settle(host, "Pending waveforms must also retain automatic following") {
                 scroll.contentSize.height > heightBeforePending + 20
-                    && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
+                    && self.nearBottom(scroll)
             }
-            capture(host, step: "04-pending-while-paused", scheme: scheme)
+            capture(host, step: "04-pending-preserves-following", scheme: scheme)
             let heightBeforeStop = scroll.contentSize.height
             host.model.pending = .empty
-            try await settle(host, "Terminal capture cleanup must preserve the reader's position") {
+            try await settle(host, "Terminal pending cleanup must preserve following") {
                 scroll.contentSize.height < heightBeforeStop - 20
-                    && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
+                    && self.nearBottom(scroll)
             }
-            capture(host, step: "05-capture-stop-while-paused", scheme: scheme)
-            scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: self.bottomOffset(scroll) - 20), animated: false)
-            try await settle(host, "Almost reaching the bottom does not resume following") { !self.nearBottom(scroll) }
-            scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: self.bottomOffset(scroll)), animated: false)
-            try await settle(host, "Reaching the actual bottom resumes following") { self.nearBottom(scroll) }
+            capture(host, step: "05-capture-stop-preserves-following", scheme: scheme)
             host.model.pending = pending(count: 64)
-            try await settle(host, "New pending audio follows after reaching the bottom") { self.nearBottom(scroll) }
-            capture(host, step: "06-bottom-resumes-pending", scheme: scheme)
+            try await settle(host, "Later pending audio must still follow") { self.nearBottom(scroll) }
+            capture(host, step: "06-later-pending-follows", scheme: scheme)
         }
     }
 
@@ -832,12 +1107,25 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
     }
 }
 
+private struct CaptionPreviewFixtureRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let source = text as NSString
+        let range = source.range(of: "private@example.test")
+        let spans: [TranscriptRedactedSpan] = range.location == NSNotFound ? []
+            : [.init(range: range, replacement: "[EMAIL]")]
+        return .init(text: spans.isEmpty ? text : source.replacingCharacters(in: range, with: "[EMAIL]"),
+            spans: spans, provisionalSafeUTF16: source.length)
+    }
+}
+
 @MainActor
 private final class CaptionNativeRows: ObservableObject {
     @Published var rows: [MeetingLiveBubbleComposer.Row]
+    @Published var snapshot: MeetingLiveTranscriptSnapshot? = nil
+    @Published var textSize: DynamicTypeSize = .large
     @Published var pending: MeetingPendingSpeechSnapshot = .empty
     @Published var width: CGFloat
-    let height: CGFloat
+    @Published var height: CGFloat
 
     init(rows: [MeetingLiveBubbleComposer.Row], width: CGFloat, height: CGFloat) {
         self.rows = rows; self.width = width; self.height = height
@@ -853,13 +1141,20 @@ private struct CaptionNativeDocument: View {
         let theme = AppTheme.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme)
         ZStack {
             theme.palette.windowBackground
-            MeetingLiveBubbleScrollList(rows: model.rows, pending: model.pending, documentStyle: documentStyle)
+            Group {
+                if let snapshot = model.snapshot {
+                    MeetingLiveTranscriptScrollList(snapshot: snapshot, pending: model.pending, documentStyle: documentStyle)
+                } else {
+                    MeetingLiveBubbleScrollList(rows: model.rows, pending: model.pending, documentStyle: documentStyle)
+                }
+            }
                 .frame(width: model.width, height: model.height)
                 .background(theme.palette.contentBackground)
         }
         .appTheme(theme)
         .environment(\.colorScheme, scheme)
         .environment(\.locale, Locale(identifier: "ru"))
+        .environment(\.dynamicTypeSize, model.textSize)
     }
 }
 
@@ -898,10 +1193,113 @@ private final class CaptionNativeHost {
 }
 
 final class MeetingSavedTranscriptPresentationTests: XCTestCase {
-    func testHistoricalMultipleVoicesAreNotPresentedAsOneUnknownParticipant() {
-        for (language, expected) in [(PichiInterfaceLanguage.english, "Several speakers"), (.russian, "Несколько говорящих")] {
+    func testMixedBoutReadsWithTheContinuingParticipantAndPreservesEveryOriginalWord() throws {
+        let a = UUID(), b = UUID(), track = UUID()
+        var source = session()
+        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(10)
+        source.processingAttempts = [.init(id: UUID(), startedAt: source.startedAt, completedAt: source.endedAt,
+                                          stage: .completed, pipelineVersion: 13)]
+        source.speakers = [(a, "Участник 2"), (b, "Участник 1")].map {
+            .init(id: $0.0, displayName: $0.1, diarizationClusterID: nil, trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        var rows = [segment("Продолжаю", track: track, start: 0, speaker: a, attribution: .assigned),
+                    segment("короткая", track: track, start: 0.6),
+                    segment("вставка", track: track, start: 1.2, speaker: b, attribution: .assigned),
+                    segment("и", track: track, start: 1.8),
+                    segment("продолжение.", track: track, start: 2.4, speaker: a, attribution: .assigned)]
+        for index in rows.indices { rows[index].revision = 0; rows[index].originalText = nil }
+        for index in [1, 2, 3] { rows[index].attributionState = .overlappingSpeakers; rows[index].overlap = .ambiguous }
+        source.transcriptSegments = rows
+        let original = try MeetingTranscriptExporter.json(for: source)
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: source)
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
+        let paragraph = try XCTUnwrap(paragraphs.first)
+        for language in [PichiInterfaceLanguage.english, .russian] {
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
+                speakerNames: [a: "Участник 2", b: "Участник 1"], language: language), "Участник 2")
+        }
+        let presentations = MeetingTranscriptExporter.speakerPresentations(in: source)
+        XCTAssertTrue(rows.allSatisfy { presentations[$0.id]?.participantID == a })
+        let liveRows = rows.map { MeetingLiveBubbleComposer.Row(id: $0.id, speaker: .you, text: $0.text,
+            isPartial: false, showsLabel: true, participant: presentations[$0.id]) }
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(liveRows).count, 1)
+        XCTAssertEqual(try MeetingTranscriptExporter.json(for: source), original)
+    }
+
+    @MainActor
+    func testProtectedLiveHistoryRetainsEveryParticipantBeyondOneHundredWords() async throws {
+        let voices = [UUID(), UUID(), UUID()]
+        let track = UUID()
+        var source = session()
+        source.speakers = voices.enumerated().map { index, id in
+            .init(id: id, displayName: "Участник \(index + 1)", diarizationClusterID: nil,
+                  trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        }
+        source.transcriptSegments = (0..<1_200).map { index in
+            var word = segment(index == 0 ? "Самое начало встречи." : "Защищённое слово \(index)",
+                track: track, start: Double(index) * 0.6,
+                speaker: voices[(index / 200) % voices.count], attribution: .assigned)
+            word.originalText = nil; word.revision = 0
+            return word
+        }
+        // Active export duration advances with wall time; the persisted source codec must not.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let original = try encoder.encode(source)
+        let preview = MeetingLivePartial(id: UUID(), text: "Только защищённый предпросмотр", start: 721)
+        let result = try await MeetingSessionCoordinator.protectedLiveHistory(session: source, revision: 8, preview: preview)
+        XCTAssertEqual(result.revision, 8)
+        XCTAssertEqual(result.utterances.map(\.id), source.transcriptSegments.map(\.id))
+        XCTAssertEqual(result.utterances.first?.text, "Самое начало встречи.")
+        XCTAssertEqual(Set(result.utterances.compactMap { $0.participant?.participantID }), Set(voices))
+        let rows = MeetingLiveBubbleComposer.rows(for: result)
+        let paragraphs = try await MeetingLiveCaptionParagraphs.composeForDisplay(rows)
+        XCTAssertEqual(paragraphs.flatMap(\.rows).map(\.id), rows.map(\.id))
+        XCTAssertEqual(paragraphs.first?.id, source.transcriptSegments.first?.id)
+        XCTAssertEqual(result.partials[.you]?.id, preview.id)
+        XCTAssertEqual(try encoder.encode(source), original)
+
+        let revised = try await MeetingSessionCoordinator.protectedLiveHistory(session: source, revision: 9, preview: nil)
+        XCTAssertEqual(revised.utterances.map(\.id), result.utterances.map(\.id))
+        XCTAssertTrue(revised.partials.isEmpty, "Finishing the preview cannot erase approved history")
+        let cancelled = Task {
+            try await MeetingSessionCoordinator.protectedLiveHistory(session: source, revision: 10, preview: nil)
+        }
+        cancelled.cancel()
+        do { _ = try await cancelled.value; XCTFail("A cancelled projection published a new history") }
+        catch is CancellationError { }
+    }
+
+    func testReadingCacheIgnoresMetersButInvalidatesAliasesWordsAndEvidence() {
+        var source = session()
+        source.speakers = [.init(id: UUID(), displayName: "Анна", diarizationClusterID: nil,
+                                trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
+        source.transcriptSegments = [segment("Защищённый текст.", track: UUID(), start: 0,
+                                            speaker: source.speakers[0].id, attribution: .assigned)]
+        let original = MeetingTranscriptExporter.ReadingInput(source)
+        var changed = source
+        changed.title = "Другое название"; changed.updatedAt = source.updatedAt.addingTimeInterval(1)
+        changed.events = [.init(id: UUID(), occurredAt: Date(), kind: .microphoneChanged,
+                               trackID: nil, detail: "Synthetic capture health event")]
+        XCTAssertEqual(MeetingTranscriptExporter.ReadingInput(changed), original)
+        changed.speakers[0].displayName = "Борис"
+        XCTAssertNotEqual(MeetingTranscriptExporter.ReadingInput(changed), original)
+        changed = source; changed.transcriptSegments[0].text = "Исправленный текст."
+        XCTAssertNotEqual(MeetingTranscriptExporter.ReadingInput(changed), original)
+        changed = source; changed.transcriptSegments[0].attributionState = .timingUncertain
+        XCTAssertNotEqual(MeetingTranscriptExporter.ReadingInput(changed), original)
+        changed = source; changed.transcriptCoverageGaps = []
+        XCTAssertNotEqual(MeetingTranscriptExporter.ReadingInput(changed), original)
+    }
+
+    func testNoMultipleVoiceLabelWhenThereIsNoSingleReadingOwner() {
+        for (language, expected) in [(PichiInterfaceLanguage.english, "Unknown speaker"), (.russian, "Неизвестный участник")] {
             let value = MeetingSpeakerPresentation(identity: "historical-multiple", label: .candidates([], relation: .several))
             XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: value, language: language), expected)
+            XCTAssertNil(MeetingTranscriptExporter.captionLabel(for: value, language: language),
+                         "Product transcript captions omit uncertain/source labels while evidence remains available")
         }
     }
     private func session() -> MeetingSession {

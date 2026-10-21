@@ -78,13 +78,16 @@ struct MeetingSharePayload: Identifiable {
     func cleanup() { try? FileManager.default.removeItem(at: directory) }
 }
 
+/// Present as the sole SwiftUI sheet content; UIKit owns activity presentation.
 struct MobileActivitySheet: UIViewControllerRepresentable {
     let items: [Any]
     let completion: () -> Void
+
     func makeUIViewController(context: Context) -> UIActivityViewController {
         let controller = UIActivityViewController(activityItems: items, applicationActivities: nil)
         controller.completionWithItemsHandler = { _, _, _, _ in completion() }
         return controller
     }
+
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

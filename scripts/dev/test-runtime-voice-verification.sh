@@ -7,6 +7,7 @@ pichi_build="$pichi_root/.build/runtime-voice-verification"
 mkdir -p "$pichi_build"
 python3 - "$pichi_build/ActualVoiceAdmission.swift" <<'PY'
 from pathlib import Path
+import re
 import sys
 source = Path('Sources/Fluid/Services/Meeting/Backend/MeetingProductionParakeetNemotronRuntime.swift').read_text()
 start = source.index('    func speakerVoiceProfiles(samples:')
@@ -19,13 +20,38 @@ final nonisolated class VoiceVerificationProbe: Sendable {
     private let usesDefaultVoiceModelDirectory = false
     init(verificationEnabled: Bool) { self.ownerVoiceVerificationEnabled = verificationEnabled }
 '''
-Path(sys.argv[1]).write_text(context + source[start:end] + '\n}\n')
+voice = Path('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceModelArtifacts.swift').read_text()
+extension_start = voice.index('extension MeetingNemotronModelProfile {')
+def declaration(text, marker):
+    first = text.index(marker)
+    cursor = text.index('{', first) + 1
+    depth = 1
+    while depth:
+        depth += (text[cursor] == '{') - (text[cursor] == '}')
+        cursor += 1
+    return text[first:cursor] + '\n'
+owner = Path('Sources/Fluid/Services/Meeting/Backend/MeetingOwnerVoiceProfile.swift').read_text()
+matcher = Path('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift').read_text()
+index = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipeline.swift').read_text()
+pure = declaration(owner, 'nonisolated enum MeetingOwnerVoiceVerifier {')
+pure += 'nonisolated enum MeetingSpeakerEmbeddingIndex {\n' + declaration(index, '    static func cosineDistance(') + '}\n'
+pure += 'nonisolated enum MeetingSpeakerVoiceMatcher {\n'
+pure += re.search(r'    static let maximumDistance:[^\n]+', matcher).group(0) + '\n'
+pure += re.search(r'    static let ambiguityMargin:[^\n]+', matcher).group(0) + '\n'
+pure += declaration(matcher, '    static func distance(') + declaration(matcher, '    static func validLinks(') + '}\n'
+pure += 'extension MeetingPCMRuntimeDiagnostics {\n'
+pure += re.search(r'    static let detailedProfilingEnabled[^\n]+', source).group(0) + '\n'
+pure += declaration(source, '    static func ownerVerificationObserver(') + '}\n'
+Path(sys.argv[1]).write_text(context + source[start:end] + '\n}\n' + voice[extension_start:] + pure)
 PY
 swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
     -module-cache-path "$pichi_build/ModuleCache" \
     Sources/Fluid/Services/Meeting/Backend/MeetingNemotronModelLocator.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingModelInstaller.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingNemotronCompiledModelOwner.swift \
+    Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift \
     "$pichi_build/ActualVoiceAdmission.swift" Tests/MeetingRuntimeVoiceVerificationContractTests.swift \
     -o "$pichi_build/tests"
-"$pichi_build/tests"
+env -u PICHI_MEETING_DETAILED_PROFILE "$pichi_build/tests"
+PICHI_MEETING_DETAILED_PROFILE=1 "$pichi_build/tests"
+PICHI_MEETING_DETAILED_PROFILE=true "$pichi_build/tests"

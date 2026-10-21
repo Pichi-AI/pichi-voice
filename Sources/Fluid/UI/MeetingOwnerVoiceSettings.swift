@@ -114,14 +114,22 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
     @Published var showDeleteConfirmation = false
     private let audioArbiter: any MeetingAudioActivityArbitrating
     private let service: MeetingOwnerVoiceProfileService
+    private let modelResidency: MeetingModelResidencyCoordinator
+    private let makeCapture: @MainActor () throws -> MeetingOwnerVoiceEnrollmentCapture
     private var draft: MeetingOwnerVoiceProfileDraft?
     private var operation: Task<Void, Never>?
     private var stopRequested = false
     var isBusy: Bool { self.phase != .idle && self.phase != .ready }
 
-    init(audioArbiter: any MeetingAudioActivityArbitrating, service: MeetingOwnerVoiceProfileService = .shared) {
+    init(audioArbiter: any MeetingAudioActivityArbitrating, service: MeetingOwnerVoiceProfileService = .shared,
+         modelResidency: MeetingModelResidencyCoordinator = .shared,
+         makeCapture: @escaping @MainActor () throws -> MeetingOwnerVoiceEnrollmentCapture = { try MeetingOwnerVoiceEnrollmentCapture() }) {
         self.audioArbiter = audioArbiter
         self.service = service
+        self.modelResidency = modelResidency
+        // The factory keeps lease/cancellation regressions from opening audio hardware.
+        // Production still constructs the existing capture only after model admission.
+        self.makeCapture = makeCapture
     }
 
     func refresh() async {
@@ -135,10 +143,17 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
         self.phase = .preparing
         self.operation = Task {
             var lease: MeetingAudioActivityLease?
+            var modelOperation: UUID?
             var capture: MeetingOwnerVoiceEnrollmentCapture?
             do {
                 let acquired = try await self.audioArbiter.acquireMeetingCapture()
                 lease = acquired
+                try Task.checkCancellation()
+                // The audio lease also serves meetings, whose prepared resources are
+                // adopted later. Enrollment cannot adopt them. Join an existing idle
+                // prime and hold ordinary admission so a queued prime cannot restart.
+                modelOperation = try await self.modelResidency.beginOperationRetiringIdle(
+                    owner: "voice-enrollment", modelID: "voice-matching")
                 try Task.checkCancellation()
                 let selected: MeetingMicrophoneIdentity
                 if let microphone { selected = microphone }
@@ -150,7 +165,7 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
                     #endif
                 }
                 try Task.checkCancellation()
-                let active = try MeetingOwnerVoiceEnrollmentCapture()
+                let active = try self.makeCapture()
                 capture = active
                 try await active.start(microphone: selected)
                 self.phase = .recording
@@ -175,6 +190,7 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
                 self.draft = nil
                 if !(error is CancellationError) { self.error = Self.message(for: error) }
             }
+            if let modelOperation { self.modelResidency.endOperation(modelOperation) }
             if let lease { await self.audioArbiter.release(lease) }
             if Task.isCancelled { self.draft = nil; self.error = nil }
             self.phase = self.draft == nil ? .idle : .ready

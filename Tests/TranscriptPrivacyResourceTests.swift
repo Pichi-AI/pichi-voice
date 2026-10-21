@@ -45,10 +45,41 @@ struct TranscriptPrivacyResourceTests {
                 progress(artifact.byteCount, artifact.byteCount)
                 return (temporary, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             }
+            // Explicit test setup installs an isolated copy from the approved public fixture.
+            // The startup operation below must only open that already installed artifact.
+            _ = try await model.ensureInstalled()
             let service = PichiTranscriptPrivacyService(modelStore: model)
-            try await service.prepare()
+            guard let idleToken = try await service.prepareInstalledForIdle() else { fatalError("Installed A1 should prepare for idle") }
+            let idleReady = await service.isReady
+            precondition(idleReady)
+            async let recording: Void = service.prepareForMeeting()
+            async let settings: Void = service.prepare()
+            _ = try await (recording, settings)
+            await service.releaseIdlePreparation(idleToken)
+            let adoptedReady = await service.isReady
+            precondition(adoptedReady, "A real service caller adopts the prepared A1 model")
             let redacted = try await service.redact("Врач Иван Иванов, email test@example.org.")
             precondition(!redacted.contains("Иванов") && !redacted.contains("test@example.org"))
+            try await service.unload()
+            guard let unadopted = try await service.prepareInstalledForIdle() else { fatalError("A fresh idle A1 should prepare") }
+            await service.releaseIdlePreparation(unadopted)
+            let retiredReady = await service.isReady
+            precondition(!retiredReady, "Retiring an unadopted native A1 resource releases its actual runtime")
+            try await service.prepare()
+            for phrase in [
+                "обсудили планы",
+                "обсудили планы.",
+                "обсудили номер задачи и телефон в справочнике затем продолжили обсуждение графика",
+                "Это вот они буквально недавно в апреле запустили там новую версию приложения и теперь мы обсуждаем работу интерфейса пока устройство распознаёт речь и показывает текст затем делаем паузу и ждём завершения обработки"
+            ] {
+                let completed = try await service.redactSpeechBoundaryWithSpans(phrase)
+                precondition(completed.text == phrase && completed.spans.isEmpty,
+                    "Production A1 must not replace ordinary completed words with privacy masks")
+            }
+            let closedPII = try await service.redactSpeechBoundaryWithSpans("Врач Иван Иванов, телефон +7 916 123-45-67 и продолжили обсуждение")
+            precondition(!closedPII.text.contains("Иванов") && !closedPII.text.contains("916"))
+            precondition(closedPII.text.hasSuffix("и продолжили обсуждение"),
+                "Entity cleanup must preserve surrounding ordinary completed words")
             let attemptedAgain = Task {
                 withUnsafeCurrentTask { $0?.cancel() }
                 try await service.prepare()
@@ -67,6 +98,6 @@ struct TranscriptPrivacyResourceTests {
             do { _ = try await service.redact("Иван Иванов"); fatalError("unloaded service must fail closed") }
             catch { precondition(error as? TextPrivacyError == .notPrepared) }
         }
-        print("Transcript privacy resource tests passed: corrupt stage, joined cancel, opt-in public install/inference/delete")
+        print("Transcript privacy resource tests passed: corrupt stage, joined cancel, opt-in public A1 idle/adoption/retirement/inference/delete")
     }
 }

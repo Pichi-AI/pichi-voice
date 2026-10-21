@@ -5,7 +5,6 @@ import SwiftUI
 /// Typed metadata replaces label substring matching and is shared by every model surface.
 nonisolated struct SpeechModelProviderPresentation: Equatable, Sendable {
     enum Mark: Equatable, Sendable {
-        case appBrand
         case systemSymbol(String)
         case asset(String)
     }
@@ -23,8 +22,6 @@ nonisolated struct SpeechModelProviderPresentation: Equatable, Sendable {
 extension SettingsStore.SpeechModel.Provider {
     var presentation: SpeechModelProviderPresentation {
         switch self {
-        case .pichi:
-            SpeechModelProviderPresentation(mark: .appBrand, background: .accent, imageScale: 1)
         case .nvidia:
             SpeechModelProviderPresentation(mark: .asset("Provider_NVIDIA"), background: .neutral, imageScale: 0.86)
         case .apple:
@@ -50,8 +47,7 @@ struct SpeechModelProviderMark: View {
         switch self.presentation.background {
         case .neutral: Color(red: 0.97, green: 0.97, blue: 0.97)
         case .themed: self.theme.palette.cardBackground.opacity(0.9)
-        case .accent:
-            (self.presentation.mark == .appBrand ? self.theme.palette.accent : (self.providerColor ?? self.theme.palette.accent)).opacity(0.2)
+        case .accent: (self.providerColor ?? self.theme.palette.accent).opacity(0.2)
         }
     }
 
@@ -59,8 +55,6 @@ struct SpeechModelProviderMark: View {
         ZStack {
             RoundedRectangle(cornerRadius: self.size / 4, style: .continuous).fill(self.background)
             switch self.presentation.resolvedMark(assetAvailable: { NSImage(named: $0) != nil }) {
-            case .appBrand:
-                PichiBrandMark(size: self.size, color: self.theme.palette.accent)
             case let .systemSymbol(name):
                 Image(systemName: name)
                     .font(.fluidSystem(size: self.size / 2, weight: .medium))

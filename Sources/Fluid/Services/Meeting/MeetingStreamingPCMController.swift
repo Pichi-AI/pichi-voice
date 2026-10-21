@@ -7,6 +7,12 @@ nonisolated protocol MeetingPreparedStreamingPCMProcessing: Sendable {
                    preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingStreamingPCMObservation
     func finishStreaming() async throws -> MeetingStreamingPCMObservation
     func discardActivity(beforeSample: Int) async throws
+    /// Joins mandatory downstream work before the next window's optional-work decision.
+    func recordWindowProcessing(_ feedback: MeetingPCMWindowProcessingFeedback) async throws
+}
+
+extension MeetingPreparedStreamingPCMProcessing {
+    func recordWindowProcessing(_ feedback: MeetingPCMWindowProcessingFeedback) async throws {}
 }
 
 nonisolated struct MeetingStreamingPCMObservation: Sendable {
@@ -19,10 +25,18 @@ nonisolated struct MeetingStreamingPCMObservation: Sendable {
     /// Physical source end of a sealed ASR window, including silence. Metadata-only
     /// speaker updates leave this nil so they cannot advance the stable speech prefix.
     let asrStableThroughSample: Int?
+    /// Exact source interval of a sealed, complete ASR result with no words.
+    /// This is a decoder result, not inferred VAD confidence or elapsed time.
+    let sealedEmptyASRRange: Range<Int>?
+    /// Exact acoustic owner decision, independent of text/privacy readiness. Nil leaves the
+    /// prior decision unchanged; an empty set revokes it. Tokens never create participants.
+    let confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken>?
 
     init(batch: MeetingPCMTranscriptBatch, activity: [MeetingBackendSpeakerActivity],
          acceptedThroughSample: Int, processedThroughSample: Int, retainedFromSample: Int,
-         isFinal: Bool, asrStableThroughSample: Int? = nil) {
+         isFinal: Bool, asrStableThroughSample: Int? = nil,
+         sealedEmptyASRRange: Range<Int>? = nil,
+         confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken>? = nil) {
         self.batch = batch
         self.activity = activity
         self.acceptedThroughSample = acceptedThroughSample
@@ -30,6 +44,8 @@ nonisolated struct MeetingStreamingPCMObservation: Sendable {
         self.retainedFromSample = retainedFromSample
         self.isFinal = isFinal
         self.asrStableThroughSample = asrStableThroughSample
+        self.sealedEmptyASRRange = sealedEmptyASRRange
+        self.confirmedLocalUserTokens = confirmedLocalUserTokens
     }
 }
 
@@ -58,21 +74,23 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
                        (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?,
                        CheckedContinuation<MeetingStreamingPCMObservation, Error>)
         case discard(UUID, Int, CheckedContinuation<Void, Error>)
+        case processed(UUID, MeetingPCMWindowProcessingFeedback, CheckedContinuation<Void, Error>)
         case finish(UUID, CheckedContinuation<MeetingStreamingPCMObservation, Error>)
 
         var id: UUID {
-            switch self { case .recognize(let id, _, _, _, _), .discard(let id, _, _), .finish(let id, _): return id }
+            switch self { case .recognize(let id, _, _, _, _), .discard(let id, _, _), .processed(let id, _, _), .finish(let id, _): return id }
         }
         func fail(_ error: Error) {
             switch self {
             case .recognize(_, _, _, _, let reply), .finish(_, let reply): reply.resume(throwing: error)
-            case .discard(_, _, let reply): reply.resume(throwing: error)
+            case .discard(_, _, let reply), .processed(_, _, let reply): reply.resume(throwing: error)
             }
         }
     }
 
     private let id = UUID()
     private let lock = NSLock()
+    private var preparation: ScopeOperation?
     private var worker: Task<Void, Never>?
     private var prepared = false
     private var closed = false
@@ -84,11 +102,19 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
     private var waiting: CheckedContinuation<Command?, Never>?
     private var finalObservation: MeetingStreamingPCMObservation?
 
-    private init() {}
+    private init(scope: @escaping ScopeOperation) { self.preparation = scope }
+
+    /// Admit capture without opening native models first. The existing bounded PCM transport
+    /// owns all samples while the first command waits for preparation. Creating this controller
+    /// does not start a task or acquire model resources; Stop before any PCM still joins its
+    /// final command, and cancellation before first use has no native work to abandon.
+    static func deferred(using scope: @escaping ScopeOperation) -> MeetingStreamingPCMController {
+        MeetingStreamingPCMController(scope: scope)
+    }
 
     static func prepare(using scope: @escaping ScopeOperation) async throws -> MeetingStreamingPCMController {
-        let controller = MeetingStreamingPCMController()
-        controller.start(scope)
+        let controller = MeetingStreamingPCMController(scope: scope)
+        controller.startIfNeeded()
         return try await controller.joined {
             try await controller.waitUntilReady()
             return controller
@@ -113,6 +139,22 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
         try await self.submit { .discard(UUID(), beforeSample, $0) }
     }
 
+    func recordWindowProcessing(_ feedback: MeetingPCMWindowProcessingFeedback) async throws {
+        try await self.submit { .processed(UUID(), feedback, $0) }
+    }
+
+    /// A failed microphone start or an empty recording has no native state to flush. The
+    /// transport calls this only after its sole worker has drained every accepted PCM window.
+    /// Closing atomically prevents a racing first command from opening an abandoned scope.
+    func cancelIfUnstarted() -> Bool {
+        self.lock.withLock {
+            guard self.worker == nil else { return false }
+            self.closed = true
+            self.preparation = nil
+            return true
+        }
+    }
+
     func cancelAndWait() async {
         self.cancel()
         // A callback cannot await its own worker. Its owning public operation performs the
@@ -121,27 +163,27 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
         await self.join()
     }
 
-    private func start(_ scope: @escaping ScopeOperation) {
-        let task = Task.detached(priority: .userInitiated) {
-            await MeetingStreamingPCMCallContext.$controllerID.withValue(self.id) {
-                do {
-                    try Task.checkCancellation()
-                    // A prepared provider may bridge the body through its own detached
-                    // executor. Bind at the actual command owner too, so callback reentry
-                    // still rejects before trying to join this controller's outer worker.
-                    try await scope { session in
-                        try await MeetingStreamingPCMCallContext.$controllerID.withValue(self.id) {
-                            try await self.run(session)
-                        }
-                    }
-                    try Task.checkCancellation()
-                    self.complete(error: nil)
-                } catch { self.complete(error: error) }
-            }
-        }
+    private func startIfNeeded() {
         self.lock.withLock {
-            self.worker = task
-            if self.closed { task.cancel() }
+            guard self.worker == nil, !self.closed, let scope = self.preparation else { return }
+            self.preparation = nil
+            self.worker = Task.detached(priority: .userInitiated) {
+                await MeetingStreamingPCMCallContext.$controllerID.withValue(self.id) {
+                    do {
+                        try Task.checkCancellation()
+                        // A prepared provider may bridge the body through its own detached
+                        // executor. Bind at the actual command owner too, so callback reentry
+                        // still rejects before trying to join this controller's outer worker.
+                        try await scope { session in
+                            try await MeetingStreamingPCMCallContext.$controllerID.withValue(self.id) {
+                                try await self.run(session)
+                            }
+                        }
+                        try Task.checkCancellation()
+                        self.complete(error: nil)
+                    } catch { self.complete(error: error) }
+                }
+            }
         }
     }
 
@@ -165,7 +207,9 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
             throw MeetingStreamingPCMControllerError.reentrantOperation
         }
         return try await self.joined {
-            try await withCheckedThrowingContinuation { continuation in
+            self.startIfNeeded()
+            try await self.waitUntilReady()
+            return try await withCheckedThrowingContinuation { continuation in
                 let proposed = make(continuation)
                 do {
                     let waiter = try self.lock.withLock { () throws -> CheckedContinuation<Command?, Never>? in
@@ -206,6 +250,7 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
     private func cancel() {
         let state = self.lock.withLock { () -> (Task<Void, Never>?, CheckedContinuation<Command?, Never>?) in
             self.closed = true
+            self.preparation = nil
             let waiter = self.waiting
             self.waiting = nil
             return (self.worker, waiter)
@@ -241,6 +286,10 @@ final nonisolated class MeetingStreamingPCMController: @unchecked Sendable {
                 reply.resume(returning: value)
             case .discard(_, let sample, let reply):
                 try await session.discardActivity(beforeSample: sample)
+                try self.resolve(command.id)
+                reply.resume()
+            case .processed(_, let feedback, let reply):
+                try await session.recordWindowProcessing(feedback)
                 try self.resolve(command.id)
                 reply.resume()
             case .finish:

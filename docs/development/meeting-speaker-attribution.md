@@ -61,13 +61,20 @@ The user-selected reading policy permits these bounded inferences:
 - A short unresolved run between direct A and A may inherit A.
 - A short unresolved run between direct A and B may inherit incoming B, provided actual evidence
   does not contradict it. A real continuing tail from A takes precedence over blindly choosing B.
-- If direct A continues before and after a short, recognized B interruption, actual A/B activity
-  overlaps, and no third source or conflicting evidence exists, B may own the indivisible mixed
-  word fragment. B must also pass the existing candidate support gate within each word. A few
-  milliseconds of B at a neighboring word's edge cannot take that whole word merely because
-  B's complete interruption is long enough. Suppressed edge words retain their acoustic decision;
-  eligible mixed words still use the full bout's context. A remains recorded as the background
-  source on words attributed to B.
+- If independent A anchors enclose a bounded mixed bout, the readable turn continues as A,
+  including a brief B interruption and adjacent unresolved words. This final continuation rule
+  takes precedence over the earlier per-word interruption selection. It does not claim which
+  person's words an ASR model extracted from the mixture. An unknown-only run or an ordinary
+  clean B reply cannot activate this rule. The nearest preceding independent anchor owns the
+  bout; an older A cannot cross a newer B anchor to claim B's interruption.
+- When that continuation cannot be established, the earlier interruption stage may select B
+  for an indivisible mixed word only with its own per-word acoustic support. A few milliseconds
+  at a neighboring word's edge cannot take the whole word. Otherwise uncertainty is retained.
+
+Independent anchors include the native sole-source assignment and policy-admitted acoustic
+selection such as residual suppression or dominance. Contextual neighbor and continuation
+inferences cannot become anchors for later inferences. The attempt freezes whether independent
+acoustic selection is admitted; missing flags in older attempts retain their former behavior.
 
 These are presentation heuristics, not separated ASR of the interrupting voice. Their duration,
 gap and residual tolerances are named, versioned policy parameters. They are not universal facts
@@ -174,11 +181,11 @@ the metadata records this scope explicitly.
 
 The readable paragraph projection is separate from canonical timed evidence. A direct
 word and a neighboring estimated word from the same foreground speaker belong to the
-same paragraph. Per-word rule names and suppressed candidate lists remain available in
-JSON and correction rows, but do not create extra speaker headers. The paragraph keeps
-an estimated label if any member used a heuristic. Changes in foreground identity,
-overlap or known background on an identified turn, unsafe identified attribution,
-source, status, completeness or an explicit policy fingerprint remain boundaries.
+same paragraph. Per-word rule names, overlap and suppressed candidate lists remain available
+in JSON and correction rows, but do not create extra speaker headers for that same foreground
+participant. Visible labels use the participant's name without an estimated prefix. An unresolved
+candidate set is displayed as an unknown participant rather than a separate multiple-speakers
+label. Changes in foreground identity, source, status or completeness remain boundaries.
 Consecutive unidentified fragments can still flow under one unknown-speaker header;
 their separate uncertainty states remain on the original correction/JSON members.
 
@@ -196,10 +203,15 @@ blocks nested/enclosing envelopes and start ties, including an earlier hidden ro
 half-open end touches remain admissible. Invalid source timing disables compatibility
 bridging. Different-speaker gaps remain unknown.
 
-This compatibility projection qualifies the paragraph with the existing localized
-estimated-speaker label. It does not assign a native speaker, fabricate word times,
+This compatibility projection retains its estimated ownership in the evidence while displaying
+the ordinary participant name. It does not assign a native speaker, fabricate word times,
 change the stored pipeline/policy, rewrite an archive, or alter JSON evidence. The
 mobile paragraph editor still opens the original independently revision-checked
 members. Correcting a formerly unknown member makes it a compatibility barrier;
 Undo restores its original eligibility through the existing correction operation.
 Current attempts continue to use only their canonical attribution decisions.
+
+Manual speaker aliases are user metadata. Privacy filtering applies to captured speech text and
+speech-derived identity evidence, not explicit names entered by the user. Text edits have a
+durable `isUserTextEdited` flag; such edits remain a contextual inference barrier after saving
+and reloading, and Undo restores their prior eligibility.

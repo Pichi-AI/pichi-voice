@@ -1,8 +1,10 @@
 # Streaming meeting processing
 
-The experimental speaker-processing mode is registered for GigaAM in-room meetings. It is
-off by default. Recognition, text privacy and speaker attribution share the existing meeting
-pipeline, resource owners, session store and native capture engines.
+Continuous speaker processing is the default for a new in-room meeting when the registered
+backend advertises streaming support and no explicit processing preference exists. An existing
+preference is preserved. Online-call and unsupported backend defaults remain after-recording.
+Recognition, text privacy and speaker attribution share the existing meeting pipeline,
+resource owners, session store and native capture engines.
 
 ## Why continuous speaker state
 
@@ -64,6 +66,30 @@ activity limits. A long pause alone is not a failure. Input gaps, exhausted budg
 unsupported native timings or failed inference stop the attempt explicitly and preserve
 completed protected text. There is no silent frame dropping or hidden full-audio fallback.
 
+## Capture admission and interface work
+
+The capture owner freezes the request and completes required installation, permission and
+audio-session checks. Native model loading then belongs to the processing attempt, rather
+than a throwaway ASR warm-up before microphone activation. Streaming preparation begins
+when the first progressive PCM window arrives. The existing bounded transport holds initial
+samples during preparation; it does not add a second audio queue. Both PCM modes prepare
+their pinned privacy capability before publishing recognized text. Cancellation joins native
+preparation even when the underlying load cannot stop cooperatively. Hardware activation
+and first-time permission prompts still have real latency.
+
+Protected transcript history is separate from the bounded acoustic and privacy working tails.
+The interface can retain every approved word while model context stays bounded. Reading
+projection and paragraph composition run outside MainActor, with generation checks before
+publication. Lazy lists render visible paragraphs. Health-level changes do not invalidate
+saved transcript reading caches. Manual scrolling pauses automatic following until the user
+returns to the bottom or explicitly requests the latest text.
+
+Speech redaction applies to recognized transcript content, including correction text and
+external identity suggestions. Explicit participant aliases, meeting titles and input display
+metadata remain user data. Renaming a participant or title does not change transcript bytes
+or rerun NER over the meeting. Transcript edits and speech publication keep their privacy
+admission; metadata exemption does not authorize publishing new unprotected words.
+
 ## Stop, retained audio and compatibility
 
 Normal Stop joins native capture, queued inference, the diarizer's final context and the
@@ -75,9 +101,49 @@ receives the same capture alongside the bounded consumer. A later retained-file 
 the pinned recording mode and profile. When disabled, audio remains in bounded memory and
 cannot be recovered after process termination.
 
-The optional mode decodes old sessions as `afterRecording`. Legacy configuration identities
-remain unchanged; streaming identities include the mode and exact model profile. An
+Missing mode fields in old serialized sessions still decode as `afterRecording`. The new
+meeting default does not reinterpret saved sessions or checkpoints. Legacy configuration
+identities remain unchanged; streaming identities include the mode and exact model profile. An
 unsupported backend or two-source capture is rejected before permissions and preparation.
+
+## Enrolled owner identity
+
+An attempt freezes the existing enrolled reference and collects bounded, disjoint clean
+voice excerpts alongside the continuous speaker state. Verification runs after the acoustic
+worker closes its ASR and diarizer scopes. It is a final identity refinement, not a live claim
+that an anonymous slot belongs to the owner. Only an accepted comparison marks an existing
+participant as the local user. Protected words, native timing, stable IDs and explicit aliases
+remain unchanged. Missing, insufficient, ambiguous or inconsistent voice evidence retains an
+ordinary participant label.
+
+Enrollment, encoder installation and the private profile store use the existing service
+operations. Streaming never enrolls a meeting voice automatically or downloads an optional
+encoder before admitting capture. The composite attempt identity includes the evidence
+policy. Exact older anonymous streaming recipes remain resumable with owner verification
+disabled, even if a profile has since been enrolled. See the owner-identity contract in
+[mobile meetings](mobile-meetings.md#streaming-owner-voice-identity).
+
+## Continuing participant reading convention
+
+The displayed transcript assigns a short mixed insertion to the continuing main participant.
+For `A / mixed / B / mixed / A`, the complete bounded insertion reads as A. The closest clean
+participant before the interruption owns the pending bout; an older participant cannot claim
+it merely by appearing inside the insertion. A clean `A / B / A` exchange remains three turns.
+At a genuine change of participant, an unresolved short prefix can still follow the incoming
+participant under the existing neighbor rule. Missing audio, manual corrections, incompatible
+tracks or speaker epochs, temporal conflicts and long insertions block inference.
+
+This is a reading convention, not source separation or proof of who spoke each recognized word.
+Labels show plain participant names. They do not show multiple-speaker, interrupting or
+estimated annotations. An unresolved passage without defensible context retains the ordinary
+unknown-participant label. Word times, raw candidate voices and overlap evidence remain intact
+in the canonical JSON. A shared batch projection supplies history, live captions, desktop,
+text export, CLI labels and summary citations. Reading an archive never rewrites its manifest.
+
+New attempts freeze `enableMainSpeakerContinuation` in their attribution policy. Missing keys
+decode to false, preserving old checkpoint identities and processing on resume. The current
+reading projection can apply the convention to old archives independently of their raw evidence.
+Legacy inferred identities cannot act as independent anchors for another contextual guess.
 
 ## Verification boundaries
 
@@ -86,8 +152,20 @@ holds, bounded protected history, long silence, late speaker revisions and joine
 cleanup. The opt-in mobile E2E test separately measures paced joint inference, pre-Stop safe
 publication, native word preservation, no-audio-file behavior, resource samples and Stop tail.
 Detailed profiling is explicitly gated and records scalar timing/resource metadata.
+The paced diagnostic also records configuration admission, synthetic capture-command latency
+and bounded MainActor queue-entry samples, separated from utility continuation delays and
+sampling gaps. Phase aggregates separate capture, Stop and metadata saves from the test's
+own synchronous artifact checks after completion. Queue-entry samples measure scheduler
+availability, not physical touch latency or rendered frame rate. Startup diagnostics distinguish command
+admission, capture request and capture return without recording speech or participant names.
+
+Short recordings need not emit a complete protected word before Stop. Longer paced tests
+must observe protected canonical output during capture and final cursor convergence. Silence
+tests include long empty intervals and a returning voice, and are scored separately for
+hallucinated text, participant continuity and identity verification. A successful test runner
+exit alone does not establish any of those quality measures.
 
 Automatic Fathom annotations are a weak comparison reference, not manually verified DER
 ground truth. One ASR stream also cannot reliably recover both word sequences in overlapping
-speech. Short-interrupter attribution remains an evidence-gated heuristic rather than source
+speech. Contextual reading ownership remains an evidence-gated heuristic rather than source
 separation or proof of the words spoken by each voice.

@@ -17,7 +17,8 @@ public struct GigaAMWordTiming: Sendable, Equatable {
 public struct GigaAMTranscript: Sendable {
     public let text: String
     public let confidence: Float
-    /// Approximate CTC emission spans at 40 ms resolution, not forced alignment.
+    /// Approximate lexical CTC emission spans at 40 ms resolution, not forced alignment.
+    /// Separate punctuation emissions do not extend a word containing letters or digits.
     public let words: [GigaAMWordTiming]
     public let endOfUtteranceProbability: Float?
     public let processingDuration: TimeInterval
@@ -107,11 +108,21 @@ struct GigaAMCTC {
         var start = 0.0
         var end = 0.0
         var probabilities: [Float] = []
+        var lexicalStart: TimeInterval?
+        var lexicalEnd: TimeInterval?
         func flush() {
             guard !currentText.isEmpty else { return }
-            words.append(GigaAMWordTiming(text: currentText, start: min(start, audioDuration), end: min(max(start + Self.frameDuration, end), audioDuration), confidence: probabilities.reduce(0, +) / Float(max(1, probabilities.count))))
+            // A punctuation token can be emitted much later than the spoken word, or
+            // remain selected through a pause. Preserve its text and confidence, but
+            // do not use that separate emission as acoustic evidence for the word.
+            // Punctuation-only units retain their original complete emission span.
+            let wordStart = lexicalStart ?? start
+            let wordEnd = lexicalEnd ?? end
+            words.append(GigaAMWordTiming(text: currentText, start: min(wordStart, audioDuration), end: min(max(wordStart + Self.frameDuration, wordEnd), audioDuration), confidence: probabilities.reduce(0, +) / Float(max(1, probabilities.count))))
             currentText = ""
             probabilities = []
+            lexicalStart = nil
+            lexicalEnd = nil
         }
         for token in tokens {
             let wordBoundary = vocabulary.subword ? token.piece.hasPrefix("▁") : token.piece == " "
@@ -122,6 +133,10 @@ struct GigaAMCTC {
             if currentText.isEmpty { start = Double(token.startFrame) * Self.frameDuration }
             currentText += body
             end = Double(token.endFrame + 1) * Self.frameDuration
+            if body.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) {
+                if lexicalStart == nil { lexicalStart = Double(token.startFrame) * Self.frameDuration }
+                lexicalEnd = end
+            }
             probabilities.append(token.probability)
         }
         flush()
@@ -145,7 +160,7 @@ public enum GigaAMError: LocalizedError {
         case .invalidVocabulary: return "GigaAM vocabulary is invalid or incomplete."
         case .invalidOutput: return "GigaAM returned an incompatible tensor."
         case .invalidAudio: return "GigaAM expects finite 16 kHz mono PCM samples."
-        case .missingModels(let directory): return "Import the Pichi GigaAM model folder in Settings. Expected model files in \(directory.path)."
+        case .missingModels(let directory): return "Import the GigaAM model folder in Settings. Expected model files in \(directory.path)."
         case .checksumMismatch(let file): return "GigaAM checksum verification failed for \(file)."
         case .notPrepared: return "GigaAM is not loaded."
         case .incompatibleModel: return "This ONNX export is not a supported GigaAM v3 CTC model."

@@ -28,10 +28,27 @@ extension MeetingPCMProgressiveWindow {
     }
 }
 '''
-Path(sys.argv[1]).write_text('import Foundation\n' + source[start:end] + helper)
+query = next(line for line in source.splitlines() if line.startswith('typealias MeetingConfidentNonSpeechQuery'))
+Path(sys.argv[1]).write_text('import Foundation\n' + query + '\n' + source[start:end] + helper)
 PY
 swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
     -module-cache-path "$pichi_build/ModuleCache" "$pichi_build/ActualPCMWindow.swift" \
     Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift \
     Tests/MeetingStreamingPCMControllerTests.swift -o "$pichi_build/streaming-tests"
 "$pichi_build/streaming-tests"
+
+# Compile the whole production attempt owner with inert external resource types. This verifies
+# deferred NER ownership without starting a native model or creating an audio file.
+python3 - "$pichi_build/ActualMemoryAttempt.swift" <<'PY'
+from pathlib import Path
+import sys
+source = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipelineMemoryAttempt.swift').read_text()
+transport = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipeline+MemoryAudio.swift').read_text()
+query = next(line for line in transport.splitlines() if line.startswith('typealias MeetingConfidentNonSpeechQuery'))
+Path(sys.argv[1]).write_text('import Foundation\n' + query + '\n' + source[:source.index('extension MeetingProcessingPipeline {')])
+PY
+swiftc -swift-version 6 -parse-as-library -default-isolation MainActor \
+    -module-cache-path "$pichi_build/ModuleCache" "$pichi_build/ActualMemoryAttempt.swift" \
+    Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift \
+    Tests/MeetingMemoryPreparationTests.swift -o "$pichi_build/preparation-tests"
+"$pichi_build/preparation-tests"

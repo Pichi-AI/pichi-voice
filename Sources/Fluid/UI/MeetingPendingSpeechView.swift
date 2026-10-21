@@ -6,7 +6,7 @@ struct MeetingPendingSpeechView: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        let animatedIDs = Set(pending.tokens.suffix(3).map(\.id))
+        let animatedIDs = pending.animatedTokenIDs
         FlowLayout(spacing: theme.metrics.spacing.xs) {
             ForEach(pending.tokens) { token in
                 MeetingPendingSpeechTokenView(token: token, isAnimating: animatedIDs.contains(token.id))

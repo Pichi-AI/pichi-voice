@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "piiRedactionEnabled": true,
   "id": "1AD3258B-41DC-426A-A9CA-0FB6531A9016",
   "title": "Синтетическая проверка атрибуции",
   "languageCode": "ru",

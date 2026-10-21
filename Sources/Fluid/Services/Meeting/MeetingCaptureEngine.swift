@@ -244,6 +244,9 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .runtimeStop, status: -1)
                 #endif
             }
+            // Recording ends when the audio runtime joins, before writer/model finalization.
+            // Keep this same boundary on partial failure; inference latency is not capture time.
+            let stoppedAt = Date()
             #if DEBUG
             AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .writerStop)
             #endif
@@ -255,7 +258,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             // Stop cannot hand the session back before that tail has joined.
             do { try await activeCapture.memoryConsumer?.finish() }
             catch { runtimeFailure = runtimeFailure ?? error }
-            let result = MeetingCaptureStopResult(tracks: tracks, stoppedAt: Date())
+            let result = MeetingCaptureStopResult(tracks: tracks, stoppedAt: stoppedAt)
             if let runtimeFailure {
                 throw MeetingCaptureError.captureStopFailed(
                     runtimeFailure.localizedDescription,

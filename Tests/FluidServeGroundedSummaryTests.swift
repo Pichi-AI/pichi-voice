@@ -17,6 +17,7 @@ struct FluidServeGroundedSummaryTests {
             checks += 1
         }
         try self.checkSpeakerTurnPresentation(check)
+        try self.checkContinuingMainSpeakerReading(check)
         try self.checkLegacyReadingAndEvidenceTurns(check)
         try self.checkSpeakerAttributionProjection(check, root: base.appendingPathComponent("AttributionMeetings"))
         try self.checkLongWordManifest(check, root: base.appendingPathComponent("LongMeetings"))
@@ -103,16 +104,36 @@ struct FluidServeGroundedSummaryTests {
         try manager.copyItem(at: URL(fileURLWithPath: CommandLine.arguments[1]), to: tool)
         try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": suiteName, "CFBundleDisplayName": "Synthetic voice app"], format: .xml, options: 0).write(to: contents.appendingPathComponent("Info.plist"))
         func run(_ arguments: [String], environment: [String: String]? = nil) throws -> (Int32, String, Process.TerminationReason) {
-            let process = Process(); let output = Pipe()
+            let process = Process()
+            let outputURL = base.appendingPathComponent("cli-output-\(UUID().uuidString).txt")
+            guard manager.createFile(atPath: outputURL.path, contents: nil,
+                                     attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
+            defer { try? manager.removeItem(at: outputURL) }
+            let output = try FileHandle(forWritingTo: outputURL)
+            defer { try? output.close() }
             process.executableURL = tool; process.arguments = arguments
             if let environment { process.environment = environment }
+            // Waiting before draining a Pipe can stall even small replies when Darwin
+            // reduces its capacity. An owned file lets the child finish under the same
+            // deadline; read the complete synthetic reply with an explicit memory bound.
             process.standardOutput = output; process.standardError = output
             try process.run()
             let deadline = Date().addingTimeInterval(10)
             while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
             if process.isRunning { process.terminate() }
             process.waitUntilExit()
-            return (process.terminationStatus, String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self), process.terminationReason)
+            let reader = try FileHandle(forReadingFrom: outputURL)
+            defer { try? reader.close() }
+            let maximumOutputBytes = 8 * 1024 * 1024
+            var captured = Data()
+            while let bytes = try reader.read(upToCount: min(65_536, maximumOutputBytes + 1 - captured.count)), !bytes.isEmpty {
+                captured.append(bytes)
+                guard captured.count <= maximumOutputBytes else {
+                    throw NSError(domain: "FluidServeTestOutput", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "Synthetic CLI output exceeded its 8 MiB test bound"])
+                }
+            }
+            return (process.terminationStatus, String(decoding: captured, as: UTF8.self), process.terminationReason)
         }
         let capabilities = ModelTemperatureSupport(defaults: defaults)
         let endpoint = "https://gateway.test/TeamA/v1?Scope=AbC"
@@ -244,8 +265,8 @@ struct FluidServeGroundedSummaryTests {
                             relation: .simultaneous, rule: .ambiguous)
         let conflict = unit(4, text: "Conflict fixture.", selected: nil, raw: .ambiguous([a, b]),
                             relation: .conflict, rule: .conflict)
-        for (member, expected) in [(multiple, "Simultaneous speech: First + You"),
-                                   (conflict, "Speaker evidence conflicts: First + You")] {
+        for (member, expected) in [(multiple, "Unknown speaker"),
+                                   (conflict, "Unknown speaker")] {
             let paragraph = MeetingTranscriptExporter.DisplayParagraph(segments: [member])
             check(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: session,
                 speakerNames: [first: "First", second: "Saved owner alias"]) == expected,
@@ -275,7 +296,7 @@ struct FluidServeGroundedSummaryTests {
         let meeting = entries[0].meeting
         check(FluidServeMeetings.transcript(for: meeting) == MeetingTranscriptExporter.text(for: session),
               "CLI text shares the application's foreground, estimate, multi-speaker and corrected labels")
-        let expectedLabels = ["You (interrupting; background: First)", "First", "Simultaneous speech: First + You", "First"]
+        let expectedLabels = ["You", "First", "Unknown speaker", "First"]
         check(meeting.turns.map { FluidServeMeetings.speakerLabel(for: $0, in: meeting) } == expectedLabels,
               "Labels retain unknown/background states and resolved owner/merged aliases")
         let show = FluidServeCommand.run(arguments: ["meet", "show", "latest"], root: root, accessEnabled: true)
@@ -307,6 +328,80 @@ struct FluidServeGroundedSummaryTests {
     }
 
     /// Real production projection of synthetic legacy archives and current word provenance.
+    private static func checkContinuingMainSpeakerReading(_ check: (Bool, String) -> Void) throws {
+        let a = UUID(), b = UUID(), track = UUID()
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic continuing speaker",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture")),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1,
+                            firstPresentationTime: nil))
+        session.state = .completed; session.endedAt = session.startedAt.addingTimeInterval(10)
+        session.processingAttempts = [.init(id: UUID(), startedAt: session.startedAt, completedAt: session.endedAt,
+                                            stage: .completed, pipelineVersion: 13)]
+        session.speakers = [(a, "Основной участник"), (b, "Другой участник")].map {
+            .init(id: $0.0, displayName: $0.1, diarizationClusterID: nil, trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        func word(_ index: Int, _ text: String, _ speaker: UUID?, mixed: Bool = false) -> MeetingTranscriptSegment {
+            .init(id: UUID(), start: .init(value: Int64(index * 300), timescale: 1000),
+                  end: .init(value: Int64(index * 300 + 200), timescale: 1000), sourceTrackID: track,
+                  speakerID: speaker, text: text, revision: 0, status: .final,
+                  overlap: mixed ? .ambiguous : .none, completeness: .complete,
+                  attributionState: mixed ? .overlappingSpeakers : speaker == nil ? .unassigned : .assigned)
+        }
+        let rows = [word(0, "Начало", a), word(1, "короткая", nil, mixed: true),
+                    word(2, "вставка", b, mixed: true), word(3, "и", nil, mixed: true), word(4, "продолжение.", a)]
+        session.transcriptSegments = rows
+        let original = try MeetingTranscriptExporter.json(for: session)
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session)
+        check(paragraphs.count == 1 && paragraphs[0].segments == rows,
+              "A genuinely mixed bout stays with continuing A; independent replies are tested separately")
+        let presentations = MeetingTranscriptExporter.speakerPresentations(in: session)
+        check(rows.allSatisfy { presentations[$0.id]?.participantID == a },
+              "Every reading member has the same owner for labels, styling and actions")
+        check(presentations.values.allSatisfy { MeetingTranscriptExporter.speakerLabel(for: $0) == "Основной участник" },
+              "No mixed or interrupting annotations appear in reading labels")
+        let meeting = FluidServeMeetings.Meeting(source: session)
+        check(meeting.turns.allSatisfy { FluidServeMeetings.speakerLabel(for: $0, in: meeting) == "Основной участник" },
+              "CLI JSON, search and individual lines reuse the full-session reading owner")
+        let clipped = FluidServeMeetings.transcript(for: meeting, from: 0.6, to: 0.8)
+        check(clipped == "[00:00] Основной участник: вставка",
+              "Clipping out the context anchors does not change the selected reading participant")
+        let json = try FluidServeMeetings.jsonTurns(for: meeting)
+        check(json.allSatisfy { $0["speaker"] as? String == "Основной участник" }
+            && (json[2]["speakerID"] as? String) == b.uuidString,
+              "The CLI reading label changes without replacing original canonical speaker IDs")
+        let citations = PichiMeetingSummaryInput.turns(for: session)
+        check(citations.map(\.id) == rows.map(\.id) && citations.map(\.seconds) == rows.map { $0.start.seconds }
+            && citations.map(\.text) == rows.map(\.text) && citations.allSatisfy { $0.speaker == "Основной участник" },
+              "Summary sources keep exact IDs, times and text while using the shared participant")
+        check(try MeetingTranscriptExporter.json(for: session) == original,
+              "All reading surfaces preserve canonical JSON and original evidence")
+        var clean = session
+        for index in 1...3 {
+            clean.transcriptSegments[index].speakerID = b
+            clean.transcriptSegments[index].attributionState = .assigned
+            clean.transcriptSegments[index].overlap = .none
+        }
+        let cleanTurns = MeetingTranscriptExporter.displayParagraphs(for: clean.transcriptSegments, in: clean)
+        check(cleanTurns.count == 3 && cleanTurns[1].segments.count == 3,
+              "A normal clean reply is retained as a real different participant's turn")
+        var manual = session; manual.transcriptSegments[2].revision = 1
+        manual.transcriptSegments[2].attributionState = .assigned
+        manual.transcriptSegments[2].overlap = .none
+        check(MeetingTranscriptExporter.speakerPresentations(in: manual)[rows[2].id]?.participantID == b,
+              "An explicit correction is not absorbed by surrounding reading context")
+        var inferred = session
+        inferred.transcriptSegments[0].speakerAttributionInference = .init(rule: .surroundingSpeaker,
+            originalState: .unassigned, originalOverlap: .none,
+            precedingSegmentID: UUID(), followingSegmentID: rows[4].id)
+        check(MeetingTranscriptExporter.speakerPresentations(in: inferred)[rows[2].id]?.participantID != a,
+              "A legacy inferred identity cannot anchor a new contextual ownership guess")
+        var missing = session
+        missing.transcriptCoverageGaps = [.init(trackID: track, start: 0.55, end: 0.58, reason: .missingOrUnreadableAudio)]
+        check(MeetingTranscriptExporter.speakerPresentations(in: missing)[rows[2].id]?.participantID != a,
+              "A missing-audio barrier blocks contextual ownership")
+    }
+
     private static func checkLegacyReadingAndEvidenceTurns(_ check: (Bool, String) -> Void) throws {
         let track = UUID(), speaker = UUID(), other = UUID()
         var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic reading compatibility",
@@ -340,16 +435,17 @@ struct FluidServeGroundedSummaryTests {
         let after = try MeetingTranscriptExporter.json(for: session)
         check(try JSONSerialization.jsonObject(with: before) as! NSDictionary == JSONSerialization.jsonObject(with: after) as! NSDictionary,
               "Reading projection never changes JSON evidence semantics")
-        func staysSplit(_ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil) {
+        func staysSplit(_ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil, line: UInt = #line) {
             check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed ?? session).count == rows.count,
-                  "Unsafe, manual or nonlegacy evidence must remain a boundary")
+                  "Unsafe, manual or nonlegacy evidence must remain a boundary at line \(line)")
         }
         for index in 0..<3 {
             var rows = originals; rows[index].revision = 1; staysSplit(rows)
             rows = originals; rows[index].originalText = "Original"; staysSplit(rows)
             rows = originals; rows[index].status = .provisional; staysSplit(rows)
             rows = originals; rows[index].completeness = .incompleteTrack; staysSplit(rows)
-            rows = originals; rows[index].overlap = .ambiguous; staysSplit(rows)
+            rows = originals; rows[index].overlap = .ambiguous
+            if index != 1 { staysSplit(rows) }
             rows = originals; rows[index].sourceTrackID = UUID(); staysSplit(rows)
             rows = originals; rows[index].attributionState = .timingUncertain; staysSplit(rows)
             rows = originals; rows[index].nativePrecision = .word; staysSplit(rows)
@@ -376,7 +472,9 @@ struct FluidServeGroundedSummaryTests {
         }
         check(incoming.flatMap(\.segments) == rows && rows[1].speakerID == nil,
               "Incoming projection preserves exact member IDs, text, timing and original unknown evidence")
-        var mixed = rows; mixed[1].attributionState = .overlappingSpeakers; staysSplit(mixed)
+        var mixed = rows; mixed[1].attributionState = .overlappingSpeakers
+        check(MeetingTranscriptExporter.displayParagraphs(for: mixed, in: session).count == 2,
+              "A short historical mixed prefix follows the incoming participant at a real voice change")
         rows = originals; rows[1].start = .init(value: 2000, timescale: 1000); staysSplit(rows)
         rows = originals; rows[2].start = .init(value: 8200, timescale: 1000); rows[2].end = .init(value: 8300, timescale: 1000); staysSplit(rows)
         rows = originals; rows[1].end = .init(value: 7000, timescale: 1000); rows[2].start = .init(value: 7100, timescale: 1000); rows[2].end = .init(value: 7200, timescale: 1000); staysSplit(rows)
@@ -425,7 +523,8 @@ struct FluidServeGroundedSummaryTests {
         check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed).count == 1,
               "Per-word heuristic names and suppressed candidate sets do not invent speaker changes")
         rows = [originals[0], provenance(originals[1], rule: .briefInterruption, backgroundTokens: [background]), originals[2]]
-        staysSplit(rows, in: changed)
+        check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed).count == 1,
+              "A bounded mixed insertion is read with its continuing main participant")
     }
 
     /// Genuine production codec payload, not whitespace padding: long word-level transcripts
@@ -515,8 +614,9 @@ struct FluidServeGroundedSummaryTests {
         let dialogueTurns = MeetingTranscriptExporter.displayParagraphs(for: dialogue, in: session)
         check(dialogueTurns.map(\.segments) == [Array(dialogue[0...1]), [dialogue[2]], [dialogue[3]], [dialogue[4]], [dialogue[5]]],
               "Actual speaker switches and unknown attribution remain distinct turns")
-        check(MeetingTranscriptExporter.text(for: session).contains("[00:43] Unknown speaker: to"),
-              "An unknown word never acquires the neighboring speaker's name")
+        check(MeetingTranscriptExporter.text(for: session).contains("[00:43] to")
+              && !MeetingTranscriptExporter.text(for: session).contains("Unknown speaker"),
+              "An unresolved word keeps its text and time without an invented participant caption")
 
         let changedSource = [segment("Source one.", 0), segment("Source two.", 1, source: UUID())]
         check(MeetingTranscriptExporter.displayParagraphs(for: changedSource, in: session).count == 2,
