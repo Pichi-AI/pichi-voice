@@ -15,6 +15,11 @@ protocol MeetingProcessingControlling: AnyObject {
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
                             preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
                             confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws
     func cancelMemoryAudio(sessionID: MeetingSessionID) async
     func process(
         session: MeetingSession,
@@ -24,6 +29,16 @@ protocol MeetingProcessingControlling: AnyObject {
 }
 
 extension MeetingProcessingControlling {
+    /// Recording admission can pass its exact privacy capability through async model
+    /// preparation. Older controllers keep their existing preparation implementation.
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudio(session: session, sessionDirectory: sessionDirectory,
+            checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech)
+    }
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
                             preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,

@@ -731,8 +731,9 @@ struct MobileMeetingRoot: View {
         run {
             let output: MeetingSession
             if settings.meetingPIIRedactionEnabled {
-                if !(await privacy.isReady) { try await privacy.prepare() }
-                output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: session, using: privacy)
+                let redactor = try settings.transcriptPrivacyRedactor(wrapping: privacy)
+                try await redactor.prepareForMeeting()
+                output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: session, using: redactor)
             } else { output = session }
             UIPasteboard.general.string = MeetingTranscriptExporter.text(for: output)
         }
@@ -740,11 +741,12 @@ struct MobileMeetingRoot: View {
 
     private func exportTranscript(_ session: MeetingSession, json: Bool) {
         run {
+            let redactor = settings.meetingPIIRedactionEnabled ? try settings.transcriptPrivacyRedactor(wrapping: privacy) : nil
             guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
             let output: MeetingSession
-            if settings.meetingPIIRedactionEnabled {
-                if !(await privacy.isReady) { try await privacy.prepare() }
-                output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: fresh, using: privacy)
+            if let redactor {
+                try await redactor.prepareForMeeting()
+                output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: fresh, using: redactor)
             } else { output = fresh }
             let data = json ? try MeetingTranscriptExporter.json(for: output) : Data(MeetingTranscriptExporter.text(for: output).utf8)
             share = try MeetingSharePayload.transcript(data: data, title: output.title, fileExtension: json ? "json" : "txt")

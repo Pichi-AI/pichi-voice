@@ -722,7 +722,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             if Self.usesPCMProcessing(configuration) {
                 self.memoryCheckpointGeneration = generation
                 _ = try await self.processing.prepareMemoryAudio(
-                    session: session, sessionDirectory: sessionDirectory, checkpoint: { [weak self] batch in
+                    session: session, sessionDirectory: sessionDirectory, privacyRedactor: recordingRedactor, checkpoint: { [weak self] batch in
                     guard let self, self.memoryCheckpointGeneration == generation else { throw CancellationError() }
                     try await self.checkpointMemoryTranscript(batch, sessionID: session.id, generation: generation)
                 }, preview: { [weak self] partial in

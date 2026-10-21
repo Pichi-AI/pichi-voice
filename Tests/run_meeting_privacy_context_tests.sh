@@ -73,7 +73,8 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Sources/Fluid/Services/Meeting/MeetingPCMTranscriptBatch.swift \
     Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift \
+    Sources/Fluid/Services/Privacy/TranscriptSensitiveDictionary.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptPrivacyPolicy.swift \
-    "$task_test_dir/EvidenceTypes.swift" Tests/MeetingPrivacyContextTests.swift \
+    "$task_test_dir/EvidenceTypes.swift" Tests/MeetingPrivacyContextTests.swift Tests/TranscriptSensitiveDictionaryTests.swift \
     -o "$task_test_dir/privacy-context-tests"
 "$task_test_dir/privacy-context-tests"

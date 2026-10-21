@@ -81,7 +81,7 @@ final class AppServices: ObservableObject {
             try await privacy.prepare(progress: progress)
         })
         let pipeline = MeetingProcessingPipeline(asrServiceProvider: { asr }, settings: settings,
-            privacyRedactorProvider: { meetingRedactor },
+            privacyRedactorProvider: { try settings.transcriptPrivacyRedactor(wrapping: meetingRedactor) },
             prepareDiarizationModel: { _ = try await MeetingDiarizationModelStore.shared.ensureInstalled(includingVoiceEncoder: true) },
             prepareDiarizationDependencies: { try await MeetingDiarizationModelStore.shared.prepare(dependencies: $0) })
         self.meetingProcessingPipeline = pipeline
@@ -128,7 +128,7 @@ final class AppServices: ObservableObject {
                       settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
                 return configuration
             },
-            redactorProvider: { meetingRedactor },
+            redactorProvider: { try settings.transcriptPrivacyRedactor(wrapping: meetingRedactor) },
             validateRecordingModels: {
                 try await asr.prepareSelectedModelForRecording()
             },

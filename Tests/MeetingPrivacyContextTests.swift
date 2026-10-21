@@ -306,6 +306,7 @@ struct MeetingPrivacyContextTests {
     }
 
     static func main() async throws {
+        try await sensitiveDictionarySuite()
         try await speechBoundaryAdmissionSuite()
         try completedSpeechBoundaryPrecisionSuite()
         try await completedSpeechBoundaryContextSuite(using: StructuredPrivacyRedactor())

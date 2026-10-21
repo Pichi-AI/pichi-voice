@@ -185,9 +185,13 @@ extension MeetingProcessingPipeline {
     private func prepareMemoryAudioAttempt(session: MeetingSession, sessionDirectory: URL,
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
                             preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?,
-                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil) async throws {
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery? = nil,
+                            frozenPrivacyProvider: (@MainActor () throws -> (any TranscriptTextRedacting)?)? = nil) async throws {
         guard session.audioStorageMode == .memoryOnly || session.effectiveSpeakerProcessingMode == .streaming,
               self.memoryAttempts[session.id] == nil else { throw MeetingMemoryAudioError.invalidBudget }
+        // Freeze local publication rules before backend discovery can suspend.
+        let redactor = session.piiRedactionEnabled == true ? try (frozenPrivacyProvider ?? self.privacyRedactorProvider)() : nil
+        if session.piiRedactionEnabled == true, redactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
         let backendID = session.recordingBackendID.map(MeetingBackendID.init(rawValue:)) ?? .productionDefault
         let attemptID = UUID()
         let admissionContext = self.pcmAdmissionContextProvider(session.piiRedactionEnabled == true)
@@ -235,8 +239,6 @@ extension MeetingProcessingPipeline {
         try descriptor.validateSpeakerProcessingMode(configuration: request.configuration,
             mode: session.mode)
         try backend.validatePCMInput(configuration: request.configuration, mode: session.mode, admissionContext: admissionContext)
-        let redactor = session.piiRedactionEnabled == true ? try self.privacyRedactorProvider() : nil
-        if session.piiRedactionEnabled == true, redactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
         let runtime = try backend.makePCMRuntime(request)
         let configuration = request.configuration
         if configuration.effectiveSpeakerProcessingMode == .streaming, !runtime.supportsStreamingPCMProcessing {
@@ -273,6 +275,16 @@ extension MeetingProcessingPipeline {
                             confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
         try await self.prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory,
             checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech)
+    }
+
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            privacyRedactor: (any TranscriptTextRedacting)?,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void,
+                            confidentlyNonSpeech: MeetingConfidentNonSpeechQuery?) async throws {
+        try await self.prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory,
+            checkpoint: checkpoint, preview: preview, confidentlyNonSpeech: confidentlyNonSpeech,
+            frozenPrivacyProvider: { privacyRedactor })
     }
 
     func memoryConsumer(for sessionID: UUID, track: MeetingAudioTrack,
