@@ -54,7 +54,7 @@ nonisolated enum FluidServeMeetings {
         }
 
         var id: UUID { self.source.id }
-        var title: String { self.source.title }
+        var title: String { self.source.displayTitle }
         var languageCode: String { self.source.languageCode }
         var startedAt: Date { self.source.startedAt }
         var endedAt: Date? { self.source.endedAt }
