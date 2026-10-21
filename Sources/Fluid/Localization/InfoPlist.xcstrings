@@ -108,6 +108,42 @@
           }
         }
       }
+    },
+    "NSLocationWhenInUseUsageDescription": {
+      "comment": "System permission purpose string. Location is requested once at meeting start; reverse geocoding uses Apple services.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use your location once when an in-room meeting starts to save its address. Apple resolves the address from the location."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Геопозиция запрашивается один раз в начале очной встречи, чтобы сохранить её адрес. Адрес определяется сервисом Apple по геопозиции."
+          }
+        }
+      }
+    },
+    "NSLocationUsageDescription": {
+      "comment": "System permission purpose string. Location is requested once at meeting start; reverse geocoding uses Apple services.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use your location once when an in-room meeting starts to save its address. Apple resolves the address from the location."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Геопозиция запрашивается один раз в начале очной встречи, чтобы сохранить её адрес. Адрес определяется сервисом Apple по геопозиции."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

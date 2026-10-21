@@ -898,7 +898,7 @@ nonisolated enum MeetingTranscriptExporter {
             }
         let document = ExportedTranscript(
             schemaVersion: 2,
-            title: session.title,
+            title: session.displayTitle,
             languageCode: session.languageCode,
             startedAt: session.startedAt,
             endedAt: session.endedAt,
@@ -947,7 +947,8 @@ nonisolated enum MeetingTranscriptExporter {
         let maximumBytes = 750_000
         let maximumTextUnits = 100_000
         let durationSeconds = session.duration
-        guard session.title.utf16.count <= 200, session.languageCode.utf16.count <= 35,
+        let title = session.displayTitle
+        guard title.utf16.count <= 200, session.languageCode.utf16.count <= 35,
               session.activeSpeakers.allSatisfy({ $0.displayName.utf16.count <= 200 })
         else { throw PortableExportError.limitExceeded }
         guard session.startedAt.timeIntervalSince1970.isFinite,
@@ -988,7 +989,7 @@ nonisolated enum MeetingTranscriptExporter {
                 text: paragraph.text)
         }
         let document = PortableTranscript(
-            sessionID: session.id, title: session.title, languageCode: session.languageCode,
+            sessionID: session.id, title: title, languageCode: session.languageCode,
             startedAt: session.startedAt, endedAt: session.endedAt, durationSeconds: durationSeconds,
             speakers: session.activeSpeakers.map {
                 .init(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser)

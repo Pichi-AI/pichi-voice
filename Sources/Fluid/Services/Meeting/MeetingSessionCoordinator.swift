@@ -128,6 +128,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     private let processing: any MeetingProcessingControlling
     private let audioArbiter: any MeetingAudioActivityArbitrating
     private let settings: SettingsStore
+    private let locationResolver: (any MeetingLocationResolving)?
+    private var locationTask: Task<Void, Never>?
     private let defaultConfigurationResolver: (@MainActor (MeetingCaptureMode, String) async throws -> MeetingCaptureConfiguration)?
     private let redactorProvider: @MainActor () throws -> (any TranscriptTextRedacting)?
     private let preferredMicrophoneUID: @MainActor () -> String?
@@ -156,6 +158,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var captureGeneration: UUID? {
         didSet {
             if self.captureGeneration != oldValue {
+                self.locationTask?.cancel()
                 self.logPendingSpeechState("generation_reset")
                 self.lastLiveSourceRevision = 0
                 if let pending = self.pendingSpeechCapture {
@@ -258,6 +261,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         preferredMicrophoneUID: @escaping @MainActor () -> String? = { nil },
         speechActivityModel: MeetingCaptureSpeechActivityWorker.Factory? = nil,
         settings: SettingsStore = .shared,
+        locationResolver: (any MeetingLocationResolving)? = nil,
         defaultConfigurationResolver: (@MainActor (MeetingCaptureMode, String) async throws -> MeetingCaptureConfiguration)? = nil,
         redactorProvider: @escaping @MainActor () throws -> (any TranscriptTextRedacting)? = { nil },
         validateRecordingModels: @escaping @MainActor () async throws -> Void = {},
@@ -273,6 +277,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.speechActivityModel = speechActivityModel
         self.preferredMicrophoneUID = preferredMicrophoneUID
         self.settings = settings
+        self.locationResolver = locationResolver
         self.defaultConfigurationResolver = defaultConfigurationResolver
         self.redactorProvider = redactorProvider
         self.validateRecordingModels = validateRecordingModels
@@ -860,6 +865,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 throw CancellationError()
             }
             Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
+            self.beginLocationCapture(for: session, generation: generation)
             return session
         } catch {
             MeetingTimelineTrace.shared?.record("meeting_start_failed", fields: ["sessionID": session.id.uuidString])
@@ -933,6 +939,8 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     @discardableResult
     func stopAndTranscribe() async throws -> MeetingSession {
+        // Close metadata publication before Stop takes any full session snapshot.
+        self.locationTask?.cancel()
         if let stopTask = self.stopTask { return try await stopTask.value }
         guard let session = self.activeSession else { throw MeetingCoordinatorError.noActiveMeeting }
         guard self.interruptionTask == nil, self.terminationTask == nil else {
@@ -1441,7 +1449,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
-        guard target.title != trimmed else { return target }
+        guard target.title != trimmed, target.displayTitle != trimmed else { return target }
 
         target.title = trimmed
         target.defaultTitleBase = nil
@@ -1899,6 +1907,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func performShutdownForTermination() async {
+        self.locationTask?.cancel()
+        await self.locationTask?.value
+        self.locationTask = nil
         // Invalidate a suspended permission/lease start before draining capture. Its
         // post-await ownership checks will then release any acquired lease and abort.
         self.startReservation = nil
@@ -2793,6 +2804,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Must complete before any code path that calls into `processing.process`, so both live
     /// engines' CoreML models are released before the batch pipeline's `ensureAsrReady()` loads.
     private func tearDownLiveTranscription() async {
+        self.locationTask?.cancel()
+        await self.locationTask?.value
+        self.locationTask = nil
         if let pending = self.liveTranscriptionTeardownTask {
             await pending.value
             return
@@ -2820,6 +2834,31 @@ final class MeetingSessionCoordinator: ObservableObject {
         await cleanup.value
         self.liveTranscriptionTeardownTask = nil
         self.liveTranscript = .empty
+    }
+
+    /// Optional metadata uses the existing authoritative snapshot and save queue. It never
+    /// owns audio, blocks admission, changes a custom title or publishes after Stop.
+    private func beginLocationCapture(for session: MeetingSession, generation: UUID) {
+        guard session.mode == .inRoom, let resolver = self.locationResolver else { return }
+        // Session creation precedes native/model startup and can be much earlier than
+        // actual capture. Freshness is measured from this newly admitted location request.
+        let requestedAt = Date()
+        let selected = PichiLocalization.language
+        let languages = [selected] + PichiInterfaceLanguage.allCases.filter { $0 != selected }
+        let previous = self.locationTask
+        previous?.cancel()
+        self.locationTask = Task { @MainActor [weak self] in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            let location = await resolver.locate(startedAt: requestedAt, languages: languages)
+            guard !Task.isCancelled, let self, let location,
+                  self.captureGeneration == generation, self.isRecording,
+                  var current = self.activeSession, current.id == session.id else { return }
+            current.location = location
+            current.updatedAt = Date()
+            self.activeSession = current
+            self.enqueuePersistence(current)
+        }
     }
 
     private func releaseActivityLease() async {

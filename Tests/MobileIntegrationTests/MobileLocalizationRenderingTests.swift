@@ -3,6 +3,71 @@ import XCTest
 @testable import PichiVoiceMobile
 
 final class MobileLocalizationRenderingTests: XCTestCase {
+    private func locationSession() -> MeetingSession {
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "In-room meeting",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone"),
+            timestampDefaultTitle: true), startedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1))
+        session.location = .init(latitude: 37.3317, longitude: -122.0301, horizontalAccuracy: 12,
+            capturedAt: session.startedAt, addresses: ["en": "1 Example Street, Example City",
+                "ru": "ул. Примерная, 1, Примерск"])
+        return session
+    }
+
+    @MainActor
+    func testNativeMeetingLocationFromControlledSimulator() async throws {
+        #if targetEnvironment(simulator)
+        guard ProcessInfo.processInfo.environment["PICHI_LOCATION_SIMULATOR_TEST"] == "1" else {
+            throw XCTSkip("Opt-in: uses the controlled simulator location and Apple's network geocoder")
+        }
+        let startedAt = Date()
+        let result = await MeetingLocationService().locate(startedAt: startedAt, languages: [.russian, .english])
+        let location = try XCTUnwrap(result)
+        XCTAssertEqual(location.latitude, 37.3317, accuracy: 0.005)
+        XCTAssertEqual(location.longitude, -122.0301, accuracy: 0.005)
+        XCTAssertNotNil(location.address(for: .russian))
+        XCTAssertNotNil(location.address(for: .english))
+        XCTAssertGreaterThanOrEqual(location.capturedAt.timeIntervalSince(startedAt), -5)
+        #else
+        throw XCTSkip("Physical location requests require separate runtime review")
+        #endif
+    }
+
+    func testSavedLocationFollowsInterfaceLanguageWithoutChangingTranscriptLanguage() throws {
+        let session = locationSession()
+        XCTAssertTrue(session.displayTitle(language: .russian).hasPrefix("ул. Примерная, 1, Примерск · "))
+        XCTAssertTrue(session.displayTitle(language: .english).hasPrefix("1 Example Street, Example City · "))
+        XCTAssertNotEqual(session.displayTitle(language: .english), session.displayTitle(language: .russian))
+        let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(restored.location, session.location)
+        XCTAssertEqual(restored.languageCode, session.languageCode)
+        XCTAssertEqual(restored.title, session.title)
+    }
+
+    func testCustomAndLegacyTitlesDoNotBecomeAddresses() throws {
+        var session = locationSession()
+        session.defaultTitleBase = nil
+        session.title = "Мой план Ёё / My plan"
+        XCTAssertEqual(session.displayTitle(language: .russian), session.title)
+        XCTAssertEqual(session.displayTitle(language: .english), session.title)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(session)) as? [String: Any])
+        object.removeValue(forKey: "location")
+        object.removeValue(forKey: "defaultTitleBase")
+        let restored = try JSONDecoder().decode(MeetingSession.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(restored.location)
+        XCTAssertEqual(restored.displayTitle(language: .english), session.title)
+    }
+
+    func testMissingAddressUsesLocalizedFallbackAndDateWithoutAnotherLanguage() {
+        var session = locationSession()
+        session.location?.addresses.removeValue(forKey: "ru")
+        XCTAssertTrue(session.displayTitle(language: .russian).hasPrefix("Встреча в одной комнате · "))
+        XCTAssertFalse(session.displayTitle(language: .russian).contains("Example Street"))
+        session.location = nil
+        XCTAssertTrue(session.displayTitle(language: .english).hasPrefix("In-room meeting · "))
+    }
+
     func testWarmedCatalogKeepsPreferenceAndExplicitLocaleChangesLive() throws {
         let suite = "MobileLocalizationRenderingTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

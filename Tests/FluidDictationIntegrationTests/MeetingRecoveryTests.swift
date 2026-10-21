@@ -6633,6 +6633,192 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(reloaded, before)
     }
 
+    // MARK: - Meeting location lifecycle
+
+    func testLocationLookupWaitsForCaptureAndDoesNotDelayRecordingStart() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        let captureEntered = PermissionPreflightGate(), captureReleased = PermissionPreflightGate()
+        capture.onStart = { await captureEntered.open(); await captureReleased.wait() }
+        let resolver = GatedMeetingLocationResolver()
+        defer {
+            resolver.finishAll(with: nil)
+            Task { await captureReleased.open() }
+        }
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), locationResolver: resolver)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        var startReturned = false
+        let start = Task { @MainActor in
+            defer { startReturned = true }
+            return try await coordinator.startRecording(configuration: self.makeConfiguration())
+        }
+        defer { start.cancel() }
+        try await self.waitForLocationCondition("Capture must enter its suspended start") {
+            await captureEntered.hasOpened()
+        }
+        await self.drainCaptureEvents()
+        XCTAssertTrue(resolver.requests.isEmpty, "Location authorization cannot run before capture starts")
+        await captureReleased.open()
+        try await self.waitForLocationCondition("Recording start must return while location is unresolved") { startReturned }
+        let session = try await start.value
+        try await self.waitForLocationCondition("A started in-room recording must request its location") {
+            resolver.requests.count == 1
+        }
+        XCTAssertEqual(coordinator.state, .recording(session.id))
+        XCTAssertNil(coordinator.activeSession?.location)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(resolver.requests.first?.startedAt), session.startedAt)
+        XCTAssertFalse(resolver.requests.first?.languages.isEmpty ?? true)
+
+        let location = self.makeSyntheticMeetingLocation()
+        resolver.finishRequest(0, with: location)
+        try await self.waitForLocationCondition("The active recording must publish its resolved location") {
+            coordinator.activeSession?.location == location
+        }
+        capture.stopResult = .init(tracks: [track], stoppedAt: session.startedAt.addingTimeInterval(2))
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(completed.state, .completed)
+        XCTAssertEqual(completed.location, location, "Stop must preserve the latest location snapshot")
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved?.location, location, "The existing persistence queue must retain the location")
+    }
+
+    func testStopJoinsLocationLookupAndRejectsItsCancelledResultBeforeNextSession() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        let resolver = GatedMeetingLocationResolver()
+        defer { resolver.finishAll(with: nil) }
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), locationResolver: resolver)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        let first = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await self.waitForLocationCondition("The first location lookup must be in flight") { resolver.requests.count == 1 }
+        capture.stopResult = .init(tracks: [track], stoppedAt: first.startedAt.addingTimeInterval(2))
+        var stopReturned = false
+        let stop = Task { @MainActor in
+            defer { stopReturned = true }
+            return try await coordinator.stopAndTranscribe()
+        }
+        try await self.waitForLocationCondition("Stop must cancel its location owner") { resolver.cancelledRequests.contains(0) }
+        XCTAssertFalse(stopReturned, "Stop must join location cleanup before completing")
+        resolver.finishRequest(0, with: self.makeSyntheticMeetingLocation())
+        let completed = try await stop.value
+        XCTAssertTrue(resolver.returnedAfterCancellation[0] == true)
+        XCTAssertNil(completed.location, "A resolver that ignores cancellation cannot change the stopped snapshot")
+        let savedFirst = try await store.load(id: first.id)
+        XCTAssertNil(savedFirst?.location)
+
+        try await self.waitForLocationCondition("The completed coordinator must become ready for another recording") {
+            coordinator.isQuiescent
+        }
+        let second = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await self.waitForLocationCondition("The next session must own a separate lookup") { resolver.requests.count == 2 }
+        XCTAssertNotEqual(second.id, first.id)
+        XCTAssertNil(coordinator.activeSession?.location, "The cancelled previous lookup cannot leak into a new recording")
+        let secondLocation = self.makeSyntheticMeetingLocation(address: "20 Second Example Street, Sample City")
+        resolver.finishRequest(1, with: secondLocation)
+        try await self.waitForLocationCondition("Only the current lookup may update the next recording") {
+            coordinator.activeSession?.location == secondLocation
+        }
+        capture.stopResult = .init(tracks: [track], stoppedAt: second.startedAt.addingTimeInterval(2))
+        let secondCompleted = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(secondCompleted.location, secondLocation)
+        let unchangedFirst = try await store.load(id: first.id)
+        let savedSecond = try await store.load(id: second.id)
+        XCTAssertNil(unchangedFirst?.location)
+        XCTAssertEqual(savedSecond?.location, secondLocation)
+    }
+
+    func testTerminationJoinsLocationLookupAndRejectsItsCancelledResult() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        let resolver = GatedMeetingLocationResolver()
+        defer { resolver.finishAll(with: nil) }
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), locationResolver: resolver)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        try await self.waitForLocationCondition("Location must be pending before termination") { resolver.requests.count == 1 }
+        capture.stopResult = .init(tracks: [track], stoppedAt: session.startedAt.addingTimeInterval(2))
+        var terminationReturned = false
+        let termination = Task { @MainActor in
+            await coordinator.shutdownForTermination()
+            terminationReturned = true
+        }
+        try await self.waitForLocationCondition("Termination must cancel its location owner") { resolver.cancelledRequests.contains(0) }
+        XCTAssertFalse(terminationReturned, "Termination cannot finish with a detached location task")
+        resolver.finishRequest(0, with: self.makeSyntheticMeetingLocation())
+        await termination.value
+        XCTAssertTrue(resolver.returnedAfterCancellation[0] == true)
+        XCTAssertNil(coordinator.currentSession?.location)
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved?.state, .interrupted)
+        XCTAssertNil(saved?.location, "A cancelled result cannot rewrite the termination manifest")
+    }
+
+    func testOnlineCallNeverRequestsMeetingLocation() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        var applicationTrack = track
+        applicationTrack.id = UUID()
+        applicationTrack.kind = .applicationAudio
+        applicationTrack.sourceIdentifier = "system-audio"
+        let tracks = [track, applicationTrack]
+        capture.startResult = .init(tracks: tracks, firstPresentationTime: nil)
+        let resolver = GatedMeetingLocationResolver()
+        defer { resolver.finishAll(with: nil) }
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture,
+            processing: StubProcessingController(), audioArbiter: StubArbiter(), locationResolver: resolver)
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        var configuration = self.makeConfiguration()
+        configuration.mode = .onlineCall
+        configuration.applicationAudioScope = .systemAudio
+        let session = try await coordinator.startRecording(configuration: configuration)
+        await self.drainCaptureEvents()
+        XCTAssertTrue(resolver.requests.isEmpty, "Online calls must not request a physical meeting address")
+        capture.stopResult = .init(tracks: tracks, stoppedAt: session.startedAt.addingTimeInterval(2))
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertTrue(resolver.requests.isEmpty)
+        XCTAssertNil(completed.location)
+        let saved = try await store.load(id: session.id)
+        XCTAssertNil(saved?.location)
+    }
+
+    private func makeSyntheticMeetingLocation(address: String = "10 Example Street, Sample City") -> MeetingLocation {
+        MeetingLocation(latitude: 51.5, longitude: -0.1, horizontalAccuracy: 25,
+            capturedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            addresses: ["en": address, "ru": "Примерная улица, 10, Тестовый город"])
+    }
+
+    private func waitForLocationCondition(
+        _ message: String,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        condition: @MainActor () async -> Bool
+    ) async throws {
+        for _ in 0..<1_000 {
+            if await condition() { return }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail(message, file: file, line: line)
+        throw NSError(domain: "MeetingLocationTestTimeout", code: 1)
+    }
+
     // MARK: - Default meeting title
 
     func testDefaultTitleUsesApplicationName() {
@@ -6936,6 +7122,43 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     }
 
     func shutdownForTermination() async {}
+}
+
+/// Deliberately ignores cancellation until the test releases the response. The owner must
+/// join it and reject that response rather than relying on the system adapter to cooperate.
+@MainActor
+private final class GatedMeetingLocationResolver: MeetingLocationResolving {
+    struct Request {
+        let startedAt: Date
+        let languages: [PichiInterfaceLanguage]
+    }
+
+    private(set) var requests: [Request] = []
+    private(set) var cancelledRequests: Set<Int> = []
+    private(set) var returnedAfterCancellation: [Int: Bool] = [:]
+    private var continuations: [Int: CheckedContinuation<MeetingLocation?, Never>] = [:]
+
+    func locate(startedAt: Date, languages: [PichiInterfaceLanguage]) async -> MeetingLocation? {
+        let request = self.requests.count
+        self.requests.append(Request(startedAt: startedAt, languages: languages))
+        return await withTaskCancellationHandler {
+            let result = await withCheckedContinuation { self.continuations[request] = $0 }
+            self.returnedAfterCancellation[request] = Task.isCancelled
+            return result
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelledRequests.insert(request) }
+        }
+    }
+
+    func finishRequest(_ request: Int, with location: MeetingLocation?) {
+        self.continuations.removeValue(forKey: request)?.resume(returning: location)
+    }
+
+    func finishAll(with location: MeetingLocation?) {
+        let pending = self.continuations.values
+        self.continuations.removeAll()
+        for continuation in pending { continuation.resume(returning: location) }
+    }
 }
 
 @MainActor

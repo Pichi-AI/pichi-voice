@@ -98,6 +98,7 @@ final class AppServices: ObservableObject {
             preferredMicrophoneUID: { settings.meetingRecordingDefaults.microphoneCoreAudioUID },
             speechActivityModel: MeetingSileroActivityArtifacts.open,
             settings: settings,
+            locationResolver: injectedCapture == nil ? MeetingLocationService() : nil,
             defaultConfigurationResolver: { mode, title in
                 // Preferences are one immutable request snapshot. Async discovery/preparation
                 // cannot substitute later Settings values into a running meeting.

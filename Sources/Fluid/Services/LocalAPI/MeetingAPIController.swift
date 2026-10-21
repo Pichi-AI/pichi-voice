@@ -48,7 +48,7 @@ struct MeetingAPIController: LocalAPIRouteHandler {
             let items = sessions.prefix(LocalAPI.boundedLimit(from: request)).map { session in
                 MeetingItem(
                     id: session.id,
-                    title: session.title,
+                    title: session.displayTitle,
                     startedAt: session.startedAt,
                     endedAt: session.endedAt,
                     updatedAt: session.updatedAt,

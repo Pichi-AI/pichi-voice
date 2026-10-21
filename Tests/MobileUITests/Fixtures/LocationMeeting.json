@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "A02B2152-C9AF-4E50-88A5-BE1B97120210",
+  "title": "In-room meeting",
+  "languageCode": "en",
+  "mode": "inRoom",
+  "selectedMicrophone": {
+    "captureDeviceID": "synthetic-navigation-microphone",
+    "displayName": "Synthetic microphone",
+    "role": "unknown"
+  },
+  "startedAt": "2026-10-13T12:00:00Z",
+  "endedAt": "2026-10-13T12:00:30Z",
+  "updatedAt": "2026-10-13T12:00:30Z",
+  "timebase": {
+    "startedHostTime": 0,
+    "machTimebaseNumerator": 1,
+    "machTimebaseDenominator": 1
+  },
+  "state": "completed",
+  "events": [],
+  "failures": [],
+  "audioStorageMode": "memoryOnly",
+  "audioTracks": [
+    {
+      "id": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "kind": "microphone",
+      "sourceIdentifier": "synthetic-navigation-microphone",
+      "sourceDisplayName": "Synthetic microphone",
+      "timebase": {
+        "startedHostTime": 0,
+        "machTimebaseNumerator": 1,
+        "machTimebaseDenominator": 1
+      },
+      "health": {
+        "status": "stopped",
+        "level": 0,
+        "droppedSampleCount": 0
+      },
+      "chunks": []
+    }
+  ],
+  "speakers": [],
+  "transcriptSegments": [],
+  "retention": {},
+  "processingAttempts": [],
+  "defaultTitleBase": "In-room meeting",
+  "location": {
+    "latitude": 37.3317,
+    "longitude": -122.0301,
+    "horizontalAccuracy": 12,
+    "capturedAt": "2026-10-13T12:00:00Z",
+    "addresses": {
+      "en": "1 Example Street, Example City",
+      "ru": "ул. Примерная, 1, Примерск"
+    }
+  }
+}

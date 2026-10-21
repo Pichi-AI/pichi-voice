@@ -1402,6 +1402,35 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
+    func testMeetingLocationTitlesInBothLanguagesAndThemes() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Synthetic address presentation is verified only in owned simulators")
+        #else
+        let fixtureID = "A02B2152-C9AF-4E50-88A5-BE1B97120210"
+        for (language, appearance, historyTitle, expected) in [
+            ("en", "light", "History", "1 Example Street, Example City"),
+            ("ru", "dark", "История", "ул. Примерная, 1, Примерск"),
+            ("en", "dark", "History", "1 Example Street, Example City"),
+            ("ru", "light", "История", "ул. Примерная, 1, Примерск")
+        ] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                "-MobileSetupVersion", "1"]
+            app.launch()
+            capture("location-\(language)-\(appearance)-launched")
+            openNavigation("history", title: historyTitle)
+            let meeting = app.buttons["history.session.\(fixtureID)"]
+            XCTAssertTrue(meeting.waitForExistence(timeout: 10), "Stage LocationMeeting.json in the owned simulator")
+            XCTAssertTrue(meeting.label.contains(expected), meeting.label)
+            capture("location-\(language)-\(appearance)-history")
+            meeting.tap()
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", expected))
+                .firstMatch.waitForExistence(timeout: 5))
+            capture("location-\(language)-\(appearance)-detail")
+        }
+        #endif
+    }
+
     func testNativeRussianGlyphCoverage() throws {
         let letters = Array("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя".utf16)
         let designs: [UIFontDescriptor.SystemDesign] = [.default, .serif, .rounded, .monospaced]

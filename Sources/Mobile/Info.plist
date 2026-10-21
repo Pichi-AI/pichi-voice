@@ -12,6 +12,7 @@
 <key>AppSourceRevision</key><string>$(PICHI_SOURCE_REVISION)</string>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>NSMicrophoneUsageDescription</key><string>Record in-room meetings and transcribe speech on this device.</string>
+<key>NSLocationWhenInUseUsageDescription</key><string>Use your location once when an in-room meeting starts to save its address. Apple resolves the address from the location.</string>
 <key>UIBackgroundModes</key><array><string>audio</string></array>
 <key>UILaunchScreen</key><dict/>
 <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><true/></dict>
