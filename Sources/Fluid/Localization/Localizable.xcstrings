@@ -1,6 +1,74 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Mark as You": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark as You"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это я"
+          }
+        }
+      }
+    },
+    "Remove You designation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove You designation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Убрать отметку «Вы»"
+          }
+        }
+      }
+    },
+    "Participant actions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Participant actions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Действия с участником"
+          }
+        }
+      }
+    },
+    "The You label applies only to this meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The You label applies only to this meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отметка «Вы» применяется только к этой встрече."
+          }
+        }
+      }
+    },
     "Change speaker": {
       "extractionState": "manual",
       "localizations": {

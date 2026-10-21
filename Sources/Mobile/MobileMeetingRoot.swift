@@ -632,6 +632,8 @@ struct MobileMeetingRoot: View {
                 if !session.activeSpeakers.isEmpty {
                     Text(PichiLocalization.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    Text(PichiLocalization.text("The You label applies only to this meeting."))
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     if UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact {
                         ScrollView(.horizontal) {
                             HStack(spacing: theme.metrics.spacing.sm) {
@@ -671,14 +673,34 @@ struct MobileMeetingRoot: View {
     }
 
     private func participantButton(_ speaker: MeetingSessionSpeaker, session: MeetingSession, expands: Bool) -> some View {
-        Button {
-            edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
-        } label: {
-            Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language), systemImage: "person.crop.circle")
-                .font(theme.typography.captionStrong)
-                .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
-        }.disabled(!coordinator.isQuiescent)
-            .accessibilityIdentifier("transcript.speaker.\(speaker.id)")
+        HStack(spacing: theme.metrics.spacing.xs) {
+            Button {
+                edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
+            } label: {
+                Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language), systemImage: "person.crop.circle")
+                    .font(theme.typography.captionStrong)
+                    .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
+            }.accessibilityIdentifier("transcript.speaker.\(speaker.id)")
+            Menu {
+                Button(PichiLocalization.text("Rename Speaker"), systemImage: "pencil") {
+                    edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
+                }
+                Button(PichiLocalization.text(speaker.isLocalUser ? "Remove You designation" : "Mark as You"),
+                       systemImage: speaker.isLocalUser ? "person.crop.circle.badge.minus" : "person.crop.circle.badge.checkmark") {
+                    guard coordinator.isQuiescent, !isBusy else { return }
+                    run {
+                        let updated = try await coordinator.setLocalUserSpeaker(sessionID: session.id,
+                            speakerID: speaker.isLocalUser ? nil : speaker.id)
+                        acceptCommittedSession(updated)
+                    }
+                }.accessibilityIdentifier("transcript.participant.\(speaker.isLocalUser ? "removeYou" : "markYou").\(speaker.id)")
+            } label: {
+                Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44)
+            }
+            .accessibilityLabel(PichiLocalization.text("Participant actions"))
+            .accessibilityHint(PichiLocalization.text("The You label applies only to this meeting."))
+            .accessibilityIdentifier("transcript.participant.actions.\(speaker.id)")
+        }.disabled(!coordinator.isQuiescent || isBusy)
     }
 
     private func transcriptParagraph(_ paragraph: MeetingTranscriptExporter.DisplayParagraph, session: MeetingSession,

@@ -361,6 +361,7 @@ struct MeetingResultCanvas: View {
 
     /// Opens FluidMeet settings on Integrations, so adding an agent is one step from any meeting.
     var onOpenIntegrations: (() -> Void)? = nil
+    var onSetLocalUserSpeaker: ((SessionSpeakerID?) -> Void)? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
@@ -758,6 +759,14 @@ struct MeetingResultCanvas: View {
             self.pendingRenameText = speaker.displayName
         }
         .disabled(!self.isQuiescent)
+        if let onSetLocalUserSpeaker = self.onSetLocalUserSpeaker {
+            Button(PichiLocalization.text(speaker.isLocalUser ? "Remove You designation" : "Mark as You"),
+                   systemImage: speaker.isLocalUser ? "person.crop.circle.badge.minus" : "person.crop.circle.badge.checkmark") {
+                onSetLocalUserSpeaker(speaker.isLocalUser ? nil : speaker.id)
+            }
+            .disabled(!self.isQuiescent)
+            .help(PichiLocalization.text("The You label applies only to this meeting."))
+        }
         if !speaker.isLocalUser {
             let eligibleTargets = self.session.activeSpeakers.filter {
                 $0.id != speaker.id && !$0.isLocalUser && $0.trackKind == speaker.trackKind
