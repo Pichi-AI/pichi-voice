@@ -1339,6 +1339,13 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             }
             if streaming {
                 checkpointBeforeStop = coordinator.activeSession?.transcriptSegments ?? []
+                let ownerMetrics: [String: Any] = ["event": "streamingOwnerBeforeStop",
+                    "sourceFrames": offset,
+                    "firstOwnerProtectedWordSeconds": firstOwnerProtectedWordSeconds as Any? ?? NSNull(),
+                    "firstOwnerDeliveredFrames": firstOwnerDeliveredFrames as Any? ?? NSNull(),
+                    "maximumLiveOwnerSpeakerCount": maximumLiveOwnerSpeakerCount,
+                    "protectedCanonicalSegments": checkpointBeforeStop.count]
+                print(String(decoding: try JSONSerialization.data(withJSONObject: ownerMetrics, options: [.sortedKeys]), as: UTF8.self))
                 if streamingOptions?.requiresPreStopOutput == true,
                    streamingOptions?.requiresRecognizedSpeech(referenceProvenance: reference.provenance) == true {
                     XCTAssertGreaterThan(canonicalCheckpointsObserved, 0, "Streaming must publish canonical protected checkpoints before Stop")
@@ -2107,7 +2114,12 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let beforeStop = rows.filter { $0.uptimeMS < stopMS }
         if requiresPreStopOutput {
             XCTAssertFalse(beforeStop.isEmpty, "Diarization must execute while input is still paced, not begin after Stop")
-            XCTAssertTrue(beforeStop.contains { $0.processed > 0 && $0.asrStable > 0 && $0.committed > 0 })
+            XCTAssertTrue(beforeStop.contains { $0.processed > 0 && $0.asrStable > 0 })
+            // Published protected tail words are real canonical output even when a held
+            // privacy phrase keeps the immutable prefix at zero. Never invent coverage
+            // to make a short speech followed by silence satisfy a watermark assertion.
+            XCTAssertGreaterThan(canonicalCheckpointsObserved, 0)
+            XCTAssertFalse(checkpoint.isEmpty)
         }
         let afterStop = rows.filter { $0.uptimeMS >= stopMS }
         let throughStop = beforeStop.last
