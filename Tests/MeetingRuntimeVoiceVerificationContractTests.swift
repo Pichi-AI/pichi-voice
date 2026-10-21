@@ -64,6 +64,18 @@ private nonisolated enum Refusal: Error { case notUsed }
     }
     static func main() async throws {
         for profile in MeetingNemotronModelProfile.allCases {
+            let ownerV1 = profile.implementationFingerprint + (profile.supportsOwnerVoiceVerification
+                ? ";voice=wespeaker@synthetic-pinned-voice-revision;owner-stream=bounded-two-3s-v1" : "")
+            let ownerV2 = profile.implementationFingerprint + (profile.supportsOwnerVoiceVerification
+                ? ";voice=wespeaker@synthetic-pinned-voice-revision;owner-stream=first-latest-3to5s-v2;owner-ref=0.65;owner-self=0.45;owner-margin=0.10;owner-quality-block=0.5s;owner-lookback=16s;owner-horizon=0.36s" : "")
+            let ownerV3 = ownerV2 + (profile.supportsOwnerVoiceVerification
+                ? ";owner-live=serial-v3;owner-retry=2s-to10s-then10s" : "")
+            let ownerV4 = ownerV3 + (profile.supportsOwnerVoiceVerification ? ";owner-confirm=full-two-5s-v4" : "")
+            try require(profile.legacyOwnerStreamingImplementationFingerprint == ownerV1
+                        && profile.ownerV2StreamingImplementationFingerprint == ownerV2
+                        && profile.ownerV3StreamingImplementationFingerprint == ownerV3
+                        && profile.streamingImplementationFingerprint == ownerV4,
+                        "Exact V1/V2/V3 recipes remain frozen while the current full-evidence recipe is explicit V4")
             try require(profile.acceptsStreamingImplementationFingerprint(profile.implementationFingerprint),
                         "An exact anonymous streaming recipe remains admissible")
             try require(profile.acceptsStreamingImplementationFingerprint(profile.streamingImplementationFingerprint),
@@ -72,8 +84,14 @@ private nonisolated enum Refusal: Error { case notUsed }
                         "An old anonymous fingerprint cannot authorize owner confirmation")
             try require(profile.verifiesStreamingOwner(implementationFingerprint: profile.streamingImplementationFingerprint)
                         == profile.supportsOwnerVoiceVerification, "Only the exact supported composite enables owner verification")
-            for changed in [profile.implementationFingerprint + "-changed", profile.streamingImplementationFingerprint + ";compute=cpuAndGPU"] {
+            for changed in [profile.implementationFingerprint + "-changed", ownerV1 + ";changed", ownerV2 + ";changed",
+                            ownerV3 + ";changed", ownerV4 + ";compute=cpuAndGPU", ownerV4 + ";owner-confirm=full-two-5s-v4"] {
                 try require(!profile.acceptsStreamingImplementationFingerprint(changed), "Unregistered recipe changes remain refused")
+                try require(!profile.verifiesStreamingOwner(implementationFingerprint: changed)
+                            && !profile.verifiesLiveStreamingOwner(implementationFingerprint: changed)
+                            && !profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: changed)
+                            && !profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: changed),
+                            "Mutated recipes cannot acquire owner capabilities")
             }
             try require(profile.acceptsStreamingImplementationFingerprint(profile.legacyOwnerStreamingImplementationFingerprint),
                         "Exact owner-v1 retained recipes remain admissible")
@@ -82,14 +100,27 @@ private nonisolated enum Refusal: Error { case notUsed }
             try require(!profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: profile.legacyOwnerStreamingImplementationFingerprint),
                         "Owner-v1 cannot silently acquire new clip selection or verification")
             try require(profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: profile.streamingImplementationFingerprint)
-                        == profile.supportsOwnerVoiceVerification, "Only the exactV2recipe opts into adaptive evidence")
+                        == profile.supportsOwnerVoiceVerification, "Exact current V4 keeps adaptive evidence")
             try require(profile.acceptsStreamingImplementationFingerprint(profile.ownerV2StreamingImplementationFingerprint),
                         "Frozen V2 remains admitted without acquiring live inference")
             try require(!profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.ownerV2StreamingImplementationFingerprint)
                         && !profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.legacyOwnerStreamingImplementationFingerprint),
                         "Earlier saved owner recipes preserve final-only verification")
             try require(profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.streamingImplementationFingerprint)
-                        == profile.supportsOwnerVoiceVerification, "Only the exact V3 capability enables live inference")
+                        == profile.supportsOwnerVoiceVerification, "Exact V4 capability enables live inference")
+            try require(profile.acceptsStreamingImplementationFingerprint(ownerV3)
+                        && profile.verifiesStreamingOwner(implementationFingerprint: ownerV3) == profile.supportsOwnerVoiceVerification
+                        && profile.verifiesLiveStreamingOwner(implementationFingerprint: ownerV3) == profile.supportsOwnerVoiceVerification
+                        && profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: ownerV3) == profile.supportsOwnerVoiceVerification,
+                        "Frozen V3 remains admitted with its live adaptive owner behavior")
+            try require(profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: ownerV2) == profile.supportsOwnerVoiceVerification,
+                        "Frozen V2 keeps adaptive evidence")
+            try require(!profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: profile.implementationFingerprint)
+                        && !profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: ownerV1)
+                        && !profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: ownerV2)
+                        && !profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: ownerV3)
+                        && profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: ownerV4) == profile.supportsOwnerVoiceVerification,
+                        "Only exact supported V4 requires full query evidence")
             let locator: any MeetingNemotronModelLocating = MeetingNemotronModelLocator(profile: profile)
             let enabled = locator.supportsOwnerVoiceVerification
             let runtime = VoiceVerificationProbe(verificationEnabled: enabled)
@@ -119,8 +150,140 @@ private nonisolated enum Refusal: Error { case notUsed }
         cancelled.cancel()
         do { _ = try await cancelled.value; throw Refusal.notUsed } catch is CancellationError {}
         try ownerPolicyContracts()
+        try ownerV4EvidenceContracts()
+        try ownerEvidenceBindingContracts()
         try ownerDiagnosticContracts()
         print("PASS actual runtime voice admission, three immutable profiles, legacy existential compatibility and cancellation")
+    }
+
+    private static func ownerEvidenceBindingContracts() throws {
+        let first = MeetingSpeakerVoiceProfile()
+        let second = MeetingSpeakerVoiceProfile()
+        let short = MeetingSpeakerVoiceSamples(token: first.token, clips: [[0], [0, 0]])
+        let other = MeetingSpeakerVoiceSamples(token: second.token, clips: [[0, 0, 0], [0, 0, 0, 0]])
+        try require(MeetingOwnerVoiceVerifier.clipFramesByToken(samples: [other, short], profiles: [first, second])
+                    == [first.token: [1, 2], second.token: [3, 4]],
+                    "Frame provenance binds each encoded result to its matching actual input instead of array order")
+        try require(MeetingOwnerVoiceVerifier.clipFramesByToken(samples: [other], profiles: [first]).isEmpty,
+                    "A skipped or missing encoder input cannot manufacture frame provenance")
+        try require(MeetingOwnerVoiceVerifier.clipFramesByToken(samples: [short, short, other], profiles: [first, second])
+                    == [second.token: [3, 4]], "Duplicate input tokens invalidate only their own frame provenance")
+        try require(MeetingOwnerVoiceVerifier.clipFramesByToken(samples: [short, other], profiles: [first, first, second])
+                    == [second.token: [3, 4]], "Duplicate encoded result tokens cannot acquire ambiguous frame provenance")
+        for clips in [[], [[Float](repeating: 0, count: 80_000)],
+                      [[Float](repeating: 0, count: 80_000), [Float](repeating: 0, count: 80_000), [0]]] {
+            try require(MeetingOwnerVoiceVerifier.clipFramesByToken(samples: [.init(token: first.token, clips: clips)], profiles: [first]).isEmpty,
+                        "A non-two-clip input stays unknown rather than reporting a mature two-element prefix")
+        }
+        let full = MeetingSpeakerVoiceSamples(token: first.token,
+            clips: [[Float](repeating: 0, count: 80_000), [Float](repeating: 0, count: 80_000)])
+        try require(MeetingOwnerVoiceVerifier.clipFramesByToken(samples: [full], profiles: [first]) == [first.token: [80_000, 80_000]],
+                    "Exactly two full encoded input clips retain their actual scalar lengths")
+        try require(MeetingOwnerVoiceVerifier.clipFramesByToken(samples: Array(repeating: short, count: 129), profiles: [first]).isEmpty
+                    && MeetingOwnerVoiceVerifier.clipFramesByToken(samples: [short], profiles: Array(repeating: first, count: 129)).isEmpty,
+                    "Frame binding refuses work outside the existing profile bound")
+        print("PASS unique bounded encoder-input/result scalar provenance binding")
+    }
+
+    private static func ownerV4EvidenceContracts() throws {
+        let track = UUID()
+        func vector(_ distance: Float) -> [Float] {
+            let angle = acos(1 - distance)
+            return [cos(angle), sin(angle)] + [Float](repeating: 0, count: 254)
+        }
+        func profile(_ slot: Int, _ distance: Float, epoch: Int = 0) -> MeetingSpeakerVoiceProfile {
+            .init(token: .init(analysisEpochID: .init(trackID: track, ordinal: epoch), label: "slot-\(slot)"),
+                  embeddings: [vector(distance), vector(distance)])
+        }
+        let owner = MeetingOwnerVoiceProfileSnapshot(embeddings: [vector(0), vector(0)])
+        let short = profile(0, 0.55)
+        let mature = profile(1, 0.58)
+        let full = [80_000, 80_000]
+        let frames = [short.token: [48_000, 48_000], mature.token: full]
+        func check(_ profiles: [MeetingSpeakerVoiceProfile], _ evidence: [MeetingBackendSpeakerToken: [Int]],
+                   outcome: MeetingOwnerVoiceVerifier.Diagnostics.Outcome,
+                   expected: Set<MeetingBackendSpeakerToken> = [], links: [MeetingSpeakerIdentityLink] = [],
+                   reference: MeetingOwnerVoiceProfileSnapshot? = owner
+        ) throws -> MeetingOwnerVoiceVerifier.Diagnostics {
+            var reports: [MeetingOwnerVoiceVerifier.Diagnostics] = []
+            let plain = MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: profiles, identityLinks: links,
+                policy: .streamingV4, clipFramesByToken: evidence)
+            let observed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: reference, profiles: profiles, identityLinks: links,
+                policy: .streamingV4, clipFramesByToken: evidence, diagnostics: { reports.append($0) })
+            try require(plain == expected && observed == plain && reports.count == 1 && reports[0].outcome == outcome,
+                        "Actual V4 result/diagnostic parity: expected=\(outcome.rawValue) actual=\(reports.first?.outcome.rawValue ?? "none")")
+            try require(reports[0].diagnosticFields.contains("policy=streamingV4 outcome=\(outcome.rawValue)")
+                        && !reports[0].diagnosticFields.contains("slot-")
+                        && !reports[0].diagnosticFields.contains(track.uuidString)
+                        && reports[0].queries.allSatisfy { ($0.clipFrames?.count ?? 0) <= 2 },
+                        "V4 reports its final gate with bounded scalar metadata and no token identity")
+            return reports[0]
+        }
+        let ambiguous = try check([short, mature], frames, outcome: .winnerMargin)
+        try require(ambiguous.validProfileCount == 2 && ambiguous.validGroupCount == 2
+                    && abs((ambiguous.bestReferenceDistance ?? 0) - 0.55) < 0.0001
+                    && abs((ambiguous.runnerReferenceDistance ?? 0) - 0.58) < 0.0001,
+                    "A valid short rival participates in actual scoring and margin before maturity")
+        let worse = profile(1, 0.64)
+        _ = try check([profile(0, 0.20), worse], [short.token: [48_000, 48_000], worse.token: full], outcome: .insufficientEvidence)
+        let winner = profile(0, 0.20)
+        _ = try check([winner], [winner.token: full], outcome: .missingOwner, reference: nil)
+        _ = try check([winner], [winner.token: full], outcome: .invalidOwner,
+                      reference: .init(embeddings: [vector(0), vector(1)]))
+        let confirmed = try check([winner, worse], [winner.token: full, worse.token: [48_000, 48_000]],
+                                  outcome: .confirmed, expected: [winner.token])
+        try require(confirmed.queries.first { $0.ordinal == 0 }?.hasFullEvidence == true
+                    && confirmed.queries.first { $0.ordinal == 1 }?.hasFullEvidence == false,
+                    "Each query's maturity comes from its own bound entry, including short competitors")
+        for invalid in [[], [80_000], [48_000, 48_000], [80_000, 79_999], [80_000, 80_001],
+                        [0, 80_000], [-1, 80_000], [80_000, 80_000, 80_000]] {
+            let report = try check([winner], [winner.token: invalid], outcome: .insufficientEvidence)
+            try require(report.queries.first?.hasFullEvidence == false
+                        && report.queries.first?.clipCount == invalid.count
+                        && report.queries.first?.clipFrames == Array(invalid.prefix(2)),
+                        "Only exactly two actual full five-second clip lengths make the winning evidence mature")
+        }
+        let unknown = try check([winner], [:], outcome: .insufficientEvidence)
+        try require(unknown.queries.first?.clipCount == nil && unknown.queries.first?.clipFrames == nil
+                    && unknown.queries.first?.hasFullEvidence == false,
+                    "Missing cache provenance cannot be inferred from two embeddings")
+        _ = try check([winner], [worse.token: full], outcome: .insufficientEvidence)
+        _ = try check([winner, winner], [winner.token: full], outcome: .duplicateTokens)
+        let colliding = profile(1, 0.20)
+        _ = try check([winner, colliding], [winner.token: full, colliding.token: full], outcome: .invalidLinks,
+                      links: [.init(token: colliding.token, canonicalToken: winner.token)])
+        _ = try check([profile(0, 0.70)], [winner.token: full], outcome: .referenceDistance)
+        var inconsistent = winner
+        inconsistent.embeddings = [vector(0), vector(1)]
+        _ = try check([inconsistent], [winner.token: full], outcome: .noValidCandidates)
+        var malformed = winner; malformed.embeddings = [[0], [0]]
+        _ = try check([malformed], [winner.token: full], outcome: .noValidCandidates)
+        let later = profile(2, 0.20, epoch: 1)
+        let links = [MeetingSpeakerIdentityLink(token: later.token, canonicalToken: winner.token)]
+        _ = try check([winner, later], [winner.token: full, later.token: [48_000, 48_000]],
+                      outcome: .insufficientEvidence, links: links)
+        _ = try check([winner, later], [winner.token: full], outcome: .insufficientEvidence, links: links)
+        _ = try check([winner, later], [winner.token: full, later.token: full],
+                      outcome: .confirmed, expected: [winner.token, later.token], links: links)
+        let farLater = profile(2, 0.70, epoch: 1)
+        _ = try check([winner, farLater], [winner.token: full, farLater.token: full], outcome: .referenceDistance,
+                      links: [.init(token: farLater.token, canonicalToken: winner.token)])
+        for policy in [MeetingOwnerVoiceVerifier.Policy.legacy, .streamingV2] {
+            for evidence in [[:], [winner.token: [-1]]] {
+                try require(MeetingOwnerVoiceVerifier.confirmedTokens(owner: owner, profiles: [winner], policy: policy,
+                    clipFramesByToken: evidence) == [winner.token], "Legacy and V2 ignore new clip metadata")
+            }
+        }
+        let many = (0..<300).map { profile($0, 0.20) }
+        let bounded = try check(many, Dictionary(uniqueKeysWithValues: many.map { ($0.token, full) }), outcome: .winnerMargin)
+        try require(bounded.queries.count == 128 && bounded.validProfileCount == 300
+                    && bounded.diagnosticFields.count < 20_000 && bounded.diagnosticFields.contains("omittedQueries=172"),
+                    "V4 duration diagnostics retain the existing scalar count and output bounds")
+        try require(MeetingOwnerVoiceVerifier.Policy.streamingV4.maximumReferenceDistance == 0.65
+                    && MeetingOwnerVoiceVerifier.Policy.streamingV4.maximumQuerySelfDistance == 0.45
+                    && MeetingOwnerVoiceVerifier.Policy.streamingV4.ambiguityMargin == 0.10,
+                    "V4 changes full-evidence admission without tuning score thresholds")
+        print("PASS actual V4 scoring before maturity, short rivals, no fallback, linked evidence and frozen thresholds")
     }
     private static func ownerPolicyContracts() throws {
         let track = UUID()
@@ -180,9 +343,16 @@ private nonisolated enum Refusal: Error { case notUsed }
         }
         let owner = MeetingOwnerVoiceProfileSnapshot(embeddings: [vector(0), vector(0)])
         let originalAPI: (MeetingOwnerVoiceProfileSnapshot?, [MeetingSpeakerVoiceProfile], [MeetingSpeakerIdentityLink],
-                          MeetingOwnerVoiceVerifier.Policy) -> Set<MeetingBackendSpeakerToken> = MeetingOwnerVoiceVerifier.confirmedTokens
+                          MeetingOwnerVoiceVerifier.Policy) -> Set<MeetingBackendSpeakerToken> = { owner, profiles, links, policy in
+            MeetingOwnerVoiceVerifier.confirmedTokens(owner: owner, profiles: profiles, identityLinks: links, policy: policy)
+        }
         try require(originalAPI(owner, [profile(0)], [], .legacy) == [profile(0).token],
-                    "The original four-argument function API remains source-compatible")
+                    "Original four-argument calls retain source compatibility through defaulted metadata")
+        let evidenceAPI: (MeetingOwnerVoiceProfileSnapshot?, [MeetingSpeakerVoiceProfile], [MeetingSpeakerIdentityLink],
+                          MeetingOwnerVoiceVerifier.Policy, [MeetingBackendSpeakerToken: [Int]]) -> Set<MeetingBackendSpeakerToken>
+            = MeetingOwnerVoiceVerifier.confirmedTokens
+        try require(evidenceAPI(owner, [profile(0)], [], .streamingV4, [profile(0).token: [80_000, 80_000]]) == [profile(0).token],
+                    "The evidence function API binds the full metadata input")
         func check(_ profiles: [MeetingSpeakerVoiceProfile], _ expected: MeetingOwnerVoiceVerifier.Diagnostics.Outcome,
                    policy: MeetingOwnerVoiceVerifier.Policy = .streamingV2,
                    links: [MeetingSpeakerIdentityLink] = [], reference: MeetingOwnerVoiceProfileSnapshot? = owner

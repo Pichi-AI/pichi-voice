@@ -413,6 +413,355 @@ private nonisolated struct StreamingEvaluationOptions {
     }
 }
 
+/// Opt-in identity acceptance is independent of ASR text, canonical labels and final
+/// speaker count. Only reviewed local source intervals supply identity; slot numbers do not.
+private nonisolated enum StreamingOwnerIdentityOracle {
+    enum Failure: String, Error {
+        case options, manifest, digest, size, trace, status, sequence, scope, sourceRevision
+        case attempt, watermark, slots, activity, decision, missingEvaluation, missingEOF
+    }
+    enum Identity: String, Codable, Hashable { case owner, nonowner, silence }
+    struct Interval: Codable {
+        let startFrame: Int
+        let endFrame: Int
+        let identity: Identity
+    }
+    struct Manifest: Codable {
+        let schema: Int
+        let audioSHA256: String
+        let referenceSHA256: String
+        let sourceFrames: Int
+        let expectedFinalOwnerCount: Int
+        let requireCandidateEvaluation: Bool
+        let reviewedIntervals: [Interval]
+
+        func validate(audioDigest: String, referenceDigest: String, frames: Int) throws {
+            guard schema == 1, sourceFrames > 0, sourceFrames <= 16_000 * 7_200,
+                  sourceFrames == frames, (0...1).contains(expectedFinalOwnerCount),
+                  !reviewedIntervals.isEmpty, reviewedIntervals.count <= 64 else { throw Failure.manifest }
+            func digest(_ value: String) -> Bool {
+                value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+            }
+            guard digest(audioSHA256), digest(referenceSHA256), audioSHA256 == audioDigest,
+                  referenceSHA256 == referenceDigest else { throw Failure.digest }
+            var through = 0
+            for interval in reviewedIntervals {
+                guard interval.startFrame == through, interval.endFrame > interval.startFrame,
+                      interval.endFrame <= sourceFrames else { throw Failure.manifest }
+                through = interval.endFrame
+            }
+            guard through == sourceFrames,
+                  expectedFinalOwnerCount == 0 || reviewedIntervals.contains(where: { $0.identity == .owner }) else {
+                throw Failure.manifest
+            }
+        }
+    }
+    struct Status {
+        let accepted: Int
+        let written: Int
+        let dropped: Int
+        let truncated: Int
+        let writeFailed: Bool
+        let closed: Bool
+        let flushTimedOut: Bool
+    }
+    struct Event: Codable {
+        struct Word: Codable { let text: String; let start: Double; let end: Double }
+        let schema: Int
+        let runID: UUID
+        let sequence: Int
+        let uptimeSeconds: Double
+        let kind: String
+        let fields: [String: String]
+        let text: String?
+        let words: [Word]?
+    }
+    struct Decision: Encodable {
+        let sequence: Int
+        let attemptID: UUID
+        let kind: String
+        let acceptedThroughSample: Int
+        let processedThroughSample: Int
+        let confirmedSlots: [String]
+        let final: Bool
+        let outcome: String?
+        let elapsedSeconds: Double
+    }
+    struct SlotSupport: Encodable {
+        let attemptID: UUID
+        let slot: String
+        let classification: String
+    }
+    struct Report: Encodable {
+        let schema = 1
+        let scope = "Every real V4 core decision and emitted owner observation; native clean-range identity support from human-reviewed source intervals. No transcription or embedding in this report."
+        let accepted: Bool
+        let sourceFrames: Int
+        let expectedFinalOwnerCount: Int
+        let verificationCalls: Int
+        let candidateEvaluationCalls: Int
+        let observationCalls: Int
+        let insufficientEvidenceDecisionCalls: Int
+        let unconfirmedDecisionCalls: Int
+        let confirmedDecisionCalls: Int
+        let confirmedObservationCalls: Int
+        let firstConfirmedDecisionSeconds: Double?
+        let firstConfirmedObservationSeconds: Double?
+        let canonicalFirstOwnerSeconds: Double?
+        let slotSupport: [SlotSupport]
+        let decisions: [Decision]
+        let failures: [String]
+    }
+    private struct SlotKey: Hashable { let attempt: UUID; let label: String }
+    private struct Support {
+        var identities: Set<Identity> = []
+        var firstOwnerFrame: Int?
+        var classification: String {
+            if identities == [.owner] { return "owner" }
+            if identities == [.nonowner] { return "nonowner" }
+            return identities.isEmpty ? "unknown" : "ambiguous"
+        }
+    }
+    private struct Cursor { let accepted: Int; let processed: Int }
+
+    static func boundedRead(_ url: URL, maximumBytes: Int) throws -> Data {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        var result = Data()
+        while let part = try file.read(upToCount: min(65_536, maximumBytes + 1 - result.count)), !part.isEmpty {
+            result.append(part)
+            guard result.count <= maximumBytes else { throw Failure.size }
+        }
+        return result
+    }
+
+    static func manifest(environment: [String: String], streaming: Bool, options: CombinedEvaluationOptions,
+        assets: URL, audioDigest: String, referenceDigest: String, frames: Int) throws -> Manifest? {
+        guard let flag = environment["PICHI_MEETING_OWNER_IDENTITY_ORACLE"] else { return nil }
+        guard flag == "1", streaming, options.privateEvaluation, options.repetitions == 1,
+              environment["PICHI_MEETING_DETAILED_PROFILE"] == "1",
+              environment["PICHI_MEETING_TIMELINE_PROFILE"] == "1",
+              MeetingPCMRuntimeDiagnostics.detailedProfilingEnabled, MeetingTimelineTrace.enabled else { throw Failure.options }
+        let data = try boundedRead(assets.appendingPathComponent("audio/owner-identity-oracle.json"), maximumBytes: 65_536)
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              Set(object.keys) == ["schema", "audioSHA256", "referenceSHA256", "sourceFrames", "expectedFinalOwnerCount",
+                  "requireCandidateEvaluation", "reviewedIntervals"],
+              let intervals = object["reviewedIntervals"] as? [[String: Any]],
+              intervals.allSatisfy({ Set($0.keys) == ["startFrame", "endFrame", "identity"] }) else { throw Failure.manifest }
+        let manifest = try JSONDecoder().decode(Manifest.self, from: data)
+        try manifest.validate(audioDigest: audioDigest, referenceDigest: referenceDigest, frames: frames)
+        return manifest
+    }
+
+    static func evaluate(data: Data, status: Status, manifest: Manifest, sourceRevision: String,
+        sessionID: UUID, completedAttempts: Set<UUID>, captureStarted: Double,
+        canonicalFirstOwnerSeconds: Double?) throws -> Report {
+        guard !data.isEmpty, data.count <= 16 * 1_024 * 1_024, data.last == 0x0A else { throw Failure.size }
+        guard status.closed, !status.writeFailed, !status.flushTimedOut,
+              status.dropped == 0, status.truncated == 0, status.accepted == status.written,
+              (1...30_000).contains(status.accepted) else { throw Failure.status }
+        guard sourceRevision.utf8.count == 40,
+              sourceRevision.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              captureStarted.isFinite, captureStarted >= 0 else { throw Failure.sourceRevision }
+        guard !completedAttempts.isEmpty, completedAttempts.count <= 8 else { throw Failure.attempt }
+        let lines = data.split(separator: 0x0A, omittingEmptySubsequences: false).dropLast()
+        guard lines.count <= 30_065 else { throw Failure.size }
+        let decoder = JSONDecoder()
+        var runID: UUID?
+        var eventCount = 0
+        var statusCount = 0
+        var scopeCount = 0
+        var finalStatus = false
+        var attempts: Set<UUID> = []
+        var verificationAttempts: Set<UUID> = []
+        var candidateEvaluationAttempts: Set<UUID> = []
+        var cursors: [UUID: Cursor] = [:]
+        var consumedThrough: [UUID: Int] = [:]
+        var support: [SlotKey: Support] = [:]
+        var latestConfirmed: [UUID: [String]] = [:]
+        var finalObservations: [UUID: [String]] = [:]
+        var decisions: [Decision] = []
+        var verificationCalls = 0
+        var candidateEvaluations = 0
+        var observations = 0
+        var insufficient = 0
+        var unconfirmed = 0
+        let totalFrames = manifest.sourceFrames + 88
+        func integer(_ event: Event, _ field: String, maximum: Int = Int.max) throws -> Int {
+            guard let raw = event.fields[field], let value = Int(raw), value >= 0, value <= maximum,
+                  String(value) == raw else { throw Failure.trace }
+            return value
+        }
+        func boolean(_ event: Event, _ field: String) throws -> Bool {
+            switch event.fields[field] { case "true": return true; case "false": return false; default: throw Failure.trace }
+        }
+        func slotIndex(_ label: String) throws -> Int {
+            guard label.utf8.count == 6, label.hasPrefix("slot-"),
+                  let index = Int(label.suffix(1)), (0..<8).contains(index) else { throw Failure.slots }
+            return index
+        }
+        for (lineIndex, line) in lines.enumerated() {
+            guard !line.isEmpty, line.count <= 400_000 else { throw Failure.trace }
+            let event = try decoder.decode(Event.self, from: Data(line))
+            guard event.schema == 1, event.uptimeSeconds.isFinite, event.uptimeSeconds >= 0,
+                  !event.kind.isEmpty, event.kind.utf8.count <= 96, event.fields.count <= 40,
+                  event.fields.allSatisfy({ $0.key.utf8.count <= 96 && $0.value.utf8.count <= 2_048 }),
+                  event.fields["payloadTruncated"] == nil, (event.text?.utf8.count ?? 0) <= 32_768,
+                  (event.words?.count ?? 0) <= 256,
+                  event.words?.allSatisfy({ $0.text.utf8.count <= 512 && $0.start.isFinite && $0.end.isFinite }) ?? true else {
+                throw Failure.trace
+            }
+            if lineIndex == 0 {
+                guard event.kind == "trace_start", event.sequence == 0 else { throw Failure.sequence }
+                guard event.fields["sourceRevision"] == sourceRevision else { throw Failure.sourceRevision }
+                runID = event.runID
+                continue
+            }
+            guard event.runID == runID, event.kind != "trace_start", !finalStatus else { throw Failure.sequence }
+            if event.kind == "trace_status" {
+                statusCount += 1
+                let accepted = try integer(event, "accepted", maximum: 30_000)
+                let written = try integer(event, "written", maximum: 30_000)
+                guard statusCount <= 64, event.sequence == accepted, written == eventCount, accepted >= written,
+                      try integer(event, "dropped") == 0, try integer(event, "truncated") == 0,
+                      try !boolean(event, "fileLimitReached"), try !boolean(event, "flushTimedOut") else { throw Failure.status }
+                if try boolean(event, "closed") {
+                    guard lineIndex == lines.count - 1, accepted == written,
+                          accepted == status.accepted, written == status.written else { throw Failure.status }
+                    finalStatus = true
+                }
+                continue
+            }
+            eventCount += 1
+            guard event.sequence == eventCount, eventCount <= 30_000 else { throw Failure.sequence }
+            if event.kind == "meeting_scope" {
+                scopeCount += 1
+                guard scopeCount == 1, event.fields["sessionID"].flatMap(UUID.init(uuidString:)) == sessionID else { throw Failure.scope }
+            }
+            guard ["diarizer_append_end", "owner_verification", "owner_observation"].contains(event.kind) else { continue }
+            guard scopeCount == 1, let rawAttempt = event.fields["attemptID"], let attemptID = UUID(uuidString: rawAttempt),
+                  completedAttempts.contains(attemptID) else { throw Failure.attempt }
+            guard finalObservations[attemptID] == nil else { throw Failure.missingEOF }
+            attempts.insert(attemptID)
+            let accepted = try integer(event, "acceptedThroughSample", maximum: totalFrames)
+            let processed = try integer(event, "processedThroughSample", maximum: accepted)
+            let prior = cursors[attemptID]
+            guard accepted >= (prior?.accepted ?? 0), processed >= (prior?.processed ?? 0) else { throw Failure.watermark }
+            let isFinal = try boolean(event, event.kind == "diarizer_append_end" ? "isFinal" : "final")
+            guard !isFinal || (accepted == totalFrames && processed == totalFrames) else { throw Failure.watermark }
+            if event.kind == "diarizer_append_end" {
+                cursors[attemptID] = .init(accepted: accepted, processed: processed)
+                let retained = try integer(event, "retainedFromSample", maximum: processed)
+                let words = event.words ?? []
+                guard try integer(event, "activityCount", maximum: 256) == words.count else { throw Failure.activity }
+                let activity = try words.map { word -> MeetingNemotronSpeakerSegment in
+                    let index = try slotIndex(word.text)
+                    guard word.start >= Double(retained) / 16_000, word.end > word.start,
+                          word.end <= Double(processed) / 16_000 + 0.000_001 else { throw Failure.activity }
+                    return .init(slotIndex: index, start: word.start, end: word.end)
+                }
+                // Reuse the production admission rule and its native-open-turn horizon.
+                // Cumulative support is conservative: a slot touching both people is
+                // inconclusive, even if its final label or majority appears correct.
+                let lower = max(retained, consumedThrough[attemptID] ?? 0)
+                let through = max(consumedThrough[attemptID] ?? 0, processed - (isFinal ? 2_560 : 5_760))
+                if through > lower {
+                    for entry in MeetingStreamingOwnerVoiceSamples.cleanRanges(activity: activity, lower: lower,
+                        through: through, sourceEnd: processed) {
+                        let key = SlotKey(attempt: attemptID, label: "slot-\(entry.slot)")
+                        var value = support[key] ?? Support()
+                        for range in entry.ranges {
+                            for interval in manifest.reviewedIntervals where interval.identity != .silence {
+                                let start = max(range.lowerBound, interval.startFrame)
+                                if start < min(range.upperBound, interval.endFrame) {
+                                    value.identities.insert(interval.identity)
+                                    if interval.identity == .owner { value.firstOwnerFrame = min(value.firstOwnerFrame ?? start, start) }
+                                }
+                            }
+                        }
+                        support[key] = value
+                    }
+                    consumedThrough[attemptID] = through
+                }
+                continue
+            }
+            guard let prior, prior.accepted == accepted, prior.processed == processed,
+                  event.uptimeSeconds >= captureStarted else { throw Failure.watermark }
+            let count = try integer(event, "confirmedCount", maximum: 1)
+            guard let rawSlots = event.fields["confirmedSlots"] else { throw Failure.slots }
+            let slots = rawSlots.isEmpty ? [] : rawSlots.components(separatedBy: ",")
+            guard slots.count == count, Set(slots).count == slots.count else { throw Failure.slots }
+            for slot in slots { _ = try slotIndex(slot) }
+            var outcome: String?
+            if event.kind == "owner_verification" {
+                verificationCalls += 1
+                verificationAttempts.insert(attemptID)
+                let encoded = try integer(event, "encodedProfiles", maximum: 8)
+                let candidates = try integer(event, "candidateProfiles", maximum: 8)
+                let fullEvidence = try integer(event, "fullEvidenceProfiles", maximum: candidates)
+                guard event.fields["policy"] == "streamingV4", let decision = event.fields["decisionOutcome"],
+                      ["missingOwner", "invalidOwner", "duplicateTokens", "invalidLinks", "noValidCandidates",
+                       "referenceDistance", "winnerMargin", "insufficientEvidence", "encoderUnavailable", "confirmed"].contains(decision),
+                      (decision == "confirmed") == (count > 0), count == 0 || fullEvidence > 0 else { throw Failure.decision }
+                if candidates > 0 && encoded > 0 {
+                    candidateEvaluations += 1
+                    candidateEvaluationAttempts.insert(attemptID)
+                }
+                if decision == "insufficientEvidence" { insufficient += 1 }
+                if count == 0 { unconfirmed += 1 }
+                outcome = decision
+                latestConfirmed[attemptID] = slots
+            } else {
+                observations += 1
+                guard slots == (latestConfirmed[attemptID] ?? []) else { throw Failure.decision }
+                if isFinal {
+                    guard finalObservations[attemptID] == nil else { throw Failure.missingEOF }
+                    finalObservations[attemptID] = slots
+                }
+            }
+            decisions.append(.init(sequence: event.sequence, attemptID: attemptID, kind: event.kind,
+                acceptedThroughSample: accepted, processedThroughSample: processed, confirmedSlots: slots,
+                final: isFinal, outcome: outcome, elapsedSeconds: event.uptimeSeconds - captureStarted))
+        }
+        guard finalStatus, eventCount == status.written, scopeCount == 1 else { throw Failure.status }
+        guard attempts == completedAttempts else { throw Failure.attempt }
+        guard verificationCalls > 0, observations > 0, verificationAttempts == completedAttempts,
+              !manifest.requireCandidateEvaluation || candidateEvaluationAttempts == completedAttempts else { throw Failure.missingEvaluation }
+        guard Set(finalObservations.keys) == completedAttempts else { throw Failure.missingEOF }
+        var failures: Set<String> = []
+        let firstOwnerFrame = manifest.reviewedIntervals.first(where: { $0.identity == .owner })?.startFrame ?? manifest.sourceFrames
+        let negativeOnly = !manifest.reviewedIntervals.contains { $0.identity == .owner }
+        for decision in decisions where !decision.confirmedSlots.isEmpty {
+            if negativeOnly || decision.acceptedThroughSample <= firstOwnerFrame { failures.insert("confirmedBeforeAnyReviewedOwner") }
+            for label in decision.confirmedSlots {
+                let value = support[SlotKey(attempt: decision.attemptID, label: label)] ?? Support()
+                switch value.classification {
+                case "nonowner": failures.insert("confirmedReviewedNonowner")
+                case "ambiguous": failures.insert("confirmedAmbiguousNativeSlot")
+                case "unknown": failures.insert("confirmedUnknownNativeSlot")
+                default:
+                    if (value.firstOwnerFrame ?? Int.max) >= decision.processedThroughSample { failures.insert("confirmedBeforeOwnerSourceSupport") }
+                }
+            }
+        }
+        if finalObservations.values.contains(where: { $0.count != manifest.expectedFinalOwnerCount }) {
+            failures.insert("unexpectedFinalInternalOwnerCount")
+        }
+        let confirmedDecisions = decisions.filter { $0.kind == "owner_verification" && !$0.confirmedSlots.isEmpty }
+        let confirmedObservations = decisions.filter { $0.kind == "owner_observation" && !$0.confirmedSlots.isEmpty }
+        return .init(accepted: failures.isEmpty, sourceFrames: manifest.sourceFrames, expectedFinalOwnerCount: manifest.expectedFinalOwnerCount,
+            verificationCalls: verificationCalls, candidateEvaluationCalls: candidateEvaluations, observationCalls: observations,
+            insufficientEvidenceDecisionCalls: insufficient, unconfirmedDecisionCalls: unconfirmed,
+            confirmedDecisionCalls: confirmedDecisions.count, confirmedObservationCalls: confirmedObservations.count,
+            firstConfirmedDecisionSeconds: confirmedDecisions.first?.elapsedSeconds,
+            firstConfirmedObservationSeconds: confirmedObservations.first?.elapsedSeconds,
+            canonicalFirstOwnerSeconds: canonicalFirstOwnerSeconds,
+            slotSupport: support.map { .init(attemptID: $0.key.attempt, slot: $0.key.label, classification: $0.value.classification) }
+                .sorted { ($0.attemptID.uuidString, $0.slot) < ($1.attemptID.uuidString, $1.slot) },
+            decisions: decisions, failures: failures.sorted())
+    }
+}
+
 /// Scalar-only executor diagnostics. Queue entry is timestamped inside MainActor;
 /// utility resumption and sampler cadence are separate measurements, never FPS.
 private nonisolated final class CombinedMainActorSamples: @unchecked Sendable {
@@ -1026,6 +1375,194 @@ private struct SyntheticSpeechBoundaryRedactor: TranscriptTextRedacting {
 
 @MainActor
 final class MobileMeetingEndToEndTests: XCTestCase {
+    private struct OwnerOracleFixture {
+        let manifest: StreamingOwnerIdentityOracle.Manifest
+        let revision = String(repeating: "a", count: 40)
+        let session = UUID()
+        let attempt = UUID()
+
+        init(intervals: [StreamingOwnerIdentityOracle.Interval], expectedOwner: Int) {
+            manifest = .init(schema: 1, audioSHA256: String(repeating: "b", count: 64),
+                referenceSHA256: String(repeating: "c", count: 64),
+                sourceFrames: intervals.last?.endFrame ?? 0, expectedFinalOwnerCount: expectedOwner,
+                requireCandidateEvaluation: true, reviewedIntervals: intervals)
+        }
+        func fields(accepted: Int? = nil, final: Bool = true, slots: [String] = [], outcome: String? = nil) -> [String: String] {
+            let frames = accepted ?? manifest.sourceFrames + 88
+            var fields = ["attemptID": attempt.uuidString, "acceptedThroughSample": String(frames),
+                "processedThroughSample": String(frames), "final": String(final),
+                "confirmedCount": String(slots.count), "confirmedSlots": slots.joined(separator: ",")]
+            if let outcome {
+                fields.merge(["encodedProfiles": "1", "candidateProfiles": "1", "fullEvidenceProfiles": "1",
+                    "policy": "streamingV4", "decisionOutcome": outcome]) { _, new in new }
+            }
+            return fields
+        }
+        func activity(_ rows: [(Int, Int, Int)], accepted: Int? = nil, final: Bool = true) -> StreamingOwnerIdentityOracle.Event {
+            var fields = fields(accepted: accepted, final: final)
+            fields["isFinal"] = String(final); fields["retainedFromSample"] = "0"
+            fields["activityCount"] = String(rows.count)
+            return event("diarizer_append_end", fields: fields,
+                words: rows.map { .init(text: "slot-\($0.0)", start: Double($0.1) / 16_000, end: Double($0.2) / 16_000) })
+        }
+        func event(_ kind: String, fields: [String: String], words: [StreamingOwnerIdentityOracle.Event.Word]? = nil) -> StreamingOwnerIdentityOracle.Event {
+            .init(schema: 1, runID: session, sequence: 0, uptimeSeconds: 2, kind: kind, fields: fields, text: nil, words: words)
+        }
+        func trace(_ events: [StreamingOwnerIdentityOracle.Event], includeStatus: Bool = true) throws -> Data {
+            let encoder = JSONEncoder()
+            var rows = [event("trace_start", fields: ["sourceRevision": revision]),
+                        event("meeting_scope", fields: ["sessionID": session.uuidString])] + events
+            rows = rows.enumerated().map { offset, value in
+                .init(schema: value.schema, runID: value.runID, sequence: offset,
+                    uptimeSeconds: value.uptimeSeconds, kind: value.kind, fields: value.fields,
+                    text: value.text, words: value.words)
+            }
+            if includeStatus {
+                let count = rows.count - 1
+                rows.append(.init(schema: 1, runID: session, sequence: count, uptimeSeconds: 3, kind: "trace_status",
+                    fields: ["accepted": String(count), "written": String(count), "dropped": "0", "truncated": "0",
+                        "fileLimitReached": "false", "closed": "true", "flushTimedOut": "false"], text: nil, words: nil))
+            }
+            var data = Data()
+            for row in rows { data.append(try encoder.encode(row)); data.append(0x0A) }
+            return data
+        }
+        func evaluate(_ events: [StreamingOwnerIdentityOracle.Event], includeStatus: Bool = true,
+            dropped: Int = 0, revision: String? = nil) throws -> StreamingOwnerIdentityOracle.Report {
+            try StreamingOwnerIdentityOracle.evaluate(data: trace(events, includeStatus: includeStatus),
+                status: .init(accepted: events.count + 1, written: events.count + 1, dropped: dropped,
+                    truncated: 0, writeFailed: false, closed: true, flushTimedOut: false),
+                manifest: manifest, sourceRevision: revision ?? self.revision, sessionID: session,
+                completedAttempts: [attempt], captureStarted: 1, canonicalFirstOwnerSeconds: nil)
+        }
+        func finalEvents(slot: String, activity: [(Int, Int, Int)], confirmed: Bool) -> [StreamingOwnerIdentityOracle.Event] {
+            let slots = confirmed ? [slot] : []
+            return [self.activity(activity),
+                event("owner_verification", fields: fields(slots: slots, outcome: confirmed ? "confirmed" : "referenceDistance")),
+                event("owner_observation", fields: fields(slots: slots))]
+        }
+    }
+
+    func testOwnerIdentityOracleManifestRejectsWrongHashesMalformedIdentityAndPartition() throws {
+        let fixture = OwnerOracleFixture(intervals: [.init(startFrame: 0, endFrame: 320_000, identity: .nonowner)], expectedOwner: 0)
+        let original = fixture.manifest
+        XCTAssertNoThrow(try original.validate(audioDigest: original.audioSHA256, referenceDigest: original.referenceSHA256, frames: 320_000))
+        XCTAssertThrowsError(try original.validate(audioDigest: String(repeating: "d", count: 64), referenceDigest: original.referenceSHA256, frames: 320_000))
+        XCTAssertThrowsError(try original.validate(audioDigest: original.audioSHA256, referenceDigest: original.referenceSHA256, frames: 319_999))
+        let invalidPartitions: [[StreamingOwnerIdentityOracle.Interval]] = [
+            [.init(startFrame: 1, endFrame: 320_000, identity: .nonowner)],
+            [.init(startFrame: 0, endFrame: 160_000, identity: .nonowner), .init(startFrame: 160_001, endFrame: 320_000, identity: .silence)],
+            [.init(startFrame: 0, endFrame: 160_001, identity: .nonowner), .init(startFrame: 160_000, endFrame: 320_000, identity: .silence)],
+            [.init(startFrame: 0, endFrame: 0, identity: .nonowner)], []]
+        for intervals in invalidPartitions {
+            let invalid = OwnerOracleFixture(intervals: intervals, expectedOwner: 0).manifest
+            XCTAssertThrowsError(try invalid.validate(audioDigest: original.audioSHA256, referenceDigest: original.referenceSHA256, frames: invalid.sourceFrames))
+        }
+        let data = try JSONEncoder().encode(original)
+        let malformed = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "nonowner", with: "unknown")
+        XCTAssertThrowsError(try JSONDecoder().decode(StreamingOwnerIdentityOracle.Manifest.self, from: Data(malformed.utf8)))
+    }
+
+    func testOwnerIdentityOracleRejectsEmptyIncompleteDroppedAndWrongSourceTrace() throws {
+        let fixture = OwnerOracleFixture(intervals: [.init(startFrame: 0, endFrame: 320_000, identity: .nonowner)], expectedOwner: 0)
+        let events = fixture.finalEvents(slot: "slot-0", activity: [(0, 0, 320_000)], confirmed: false)
+        XCTAssertTrue(try fixture.evaluate(events).accepted)
+        XCTAssertThrowsError(try fixture.evaluate(events, includeStatus: false))
+        XCTAssertThrowsError(try fixture.evaluate(events, dropped: 1))
+        XCTAssertThrowsError(try fixture.evaluate(events, revision: String(repeating: "d", count: 40)))
+        XCTAssertThrowsError(try fixture.evaluate([]))
+        XCTAssertThrowsError(try StreamingOwnerIdentityOracle.evaluate(data: Data(),
+            status: .init(accepted: 0, written: 0, dropped: 0, truncated: 0, writeFailed: false, closed: true, flushTimedOut: false),
+            manifest: fixture.manifest, sourceRevision: fixture.revision, sessionID: fixture.session,
+            completedAttempts: [fixture.attempt], captureStarted: 1, canonicalFirstOwnerSeconds: nil))
+        XCTAssertThrowsError(try fixture.evaluate(Array(events.prefix(2))))
+    }
+
+    func testOwnerIdentityOracleRejectsTransientNegativeConfirmationAfterRevocation() throws {
+        let fixture = OwnerOracleFixture(intervals: [.init(startFrame: 0, endFrame: 384_000, identity: .nonowner)], expectedOwner: 0)
+        let early = 320_000
+        let events = [fixture.activity([(5, 0, early)], accepted: early, final: false),
+            fixture.event("owner_verification", fields: fixture.fields(accepted: early, final: false, slots: ["slot-5"], outcome: "confirmed")),
+            fixture.event("owner_observation", fields: fixture.fields(accepted: early, final: false, slots: ["slot-5"]))]
+            + fixture.finalEvents(slot: "slot-5", activity: [(5, 0, 384_000)], confirmed: false)
+        let report = try fixture.evaluate(events)
+        XCTAssertFalse(report.accepted)
+        XCTAssertEqual(report.confirmedDecisionCalls, 1)
+        XCTAssertEqual(report.confirmedObservationCalls, 1)
+        XCTAssertTrue(report.failures.contains("confirmedReviewedNonowner"))
+        XCTAssertEqual(report.decisions.last?.confirmedSlots, [])
+    }
+
+    func testOwnerIdentityOracleUsesNativeSourceSupportInsteadOfSlotOrdinal() throws {
+        let fixture = OwnerOracleFixture(intervals: [
+            .init(startFrame: 0, endFrame: 192_000, identity: .nonowner),
+            .init(startFrame: 192_000, endFrame: 384_000, identity: .owner)], expectedOwner: 1)
+        // Native owner slot 7 is deliberately after the negative slot 3 numerically.
+        let good = try fixture.evaluate(fixture.finalEvents(slot: "slot-7", activity: [(3, 0, 192_000), (7, 192_000, 384_000)], confirmed: true))
+        XCTAssertTrue(good.accepted)
+        XCTAssertEqual(good.slotSupport.first(where: { $0.slot == "slot-7" })?.classification, "owner")
+        let bad = try fixture.evaluate(fixture.finalEvents(slot: "slot-3", activity: [(3, 0, 192_000), (7, 192_000, 384_000)], confirmed: true))
+        XCTAssertFalse(bad.accepted)
+        XCTAssertTrue(bad.failures.contains("confirmedReviewedNonowner"))
+        let ambiguous = try fixture.evaluate(fixture.finalEvents(slot: "slot-7", activity: [(7, 0, 384_000)], confirmed: true))
+        XCTAssertFalse(ambiguous.accepted)
+        XCTAssertTrue(ambiguous.failures.contains("confirmedAmbiguousNativeSlot"))
+        let unknown = try fixture.evaluate(fixture.finalEvents(slot: "slot-6", activity: [(7, 192_000, 384_000)], confirmed: true))
+        XCTAssertFalse(unknown.accepted)
+        XCTAssertTrue(unknown.failures.contains("confirmedUnknownNativeSlot"))
+    }
+
+    func testOwnerIdentityOracleRejectsPreOwnerConfirmationEvenWhenSlotLaterLooksOwnerOnly() throws {
+        let fixture = OwnerOracleFixture(intervals: [
+            .init(startFrame: 0, endFrame: 192_000, identity: .nonowner),
+            .init(startFrame: 192_000, endFrame: 384_000, identity: .owner)], expectedOwner: 1)
+        let early = 160_000
+        let events = [fixture.activity([(3, 0, early)], accepted: early, final: false),
+            fixture.event("owner_verification", fields: fixture.fields(accepted: early, final: false, slots: ["slot-7"], outcome: "confirmed")),
+            fixture.event("owner_observation", fields: fixture.fields(accepted: early, final: false, slots: ["slot-7"]))]
+            + fixture.finalEvents(slot: "slot-7", activity: [(7, 192_000, 384_000)], confirmed: true)
+        let report = try fixture.evaluate(events)
+        XCTAssertFalse(report.accepted)
+        XCTAssertTrue(report.failures.contains("confirmedBeforeAnyReviewedOwner"))
+    }
+
+    func testOwnerIdentityOracleKeepsValidConfirmationAcrossSilentUnchangedEOF() throws {
+        let fixture = OwnerOracleFixture(intervals: [
+            .init(startFrame: 0, endFrame: 320_000, identity: .owner),
+            .init(startFrame: 320_000, endFrame: 720_000, identity: .silence)], expectedOwner: 1)
+        let events = [fixture.activity([(4, 0, 320_000)], accepted: 320_000, final: false),
+            fixture.event("owner_verification", fields: fixture.fields(accepted: 320_000, final: false, slots: ["slot-4"], outcome: "confirmed")),
+            fixture.event("owner_observation", fields: fixture.fields(accepted: 320_000, final: false, slots: ["slot-4"])),
+            fixture.activity([]), fixture.event("owner_observation", fields: fixture.fields(slots: ["slot-4"]))]
+        let report = try fixture.evaluate(events)
+        XCTAssertTrue(report.accepted)
+        XCTAssertEqual(report.verificationCalls, 1)
+        XCTAssertEqual(report.observationCalls, 2)
+        XCTAssertEqual(report.confirmedDecisionCalls, 1)
+        XCTAssertEqual(report.confirmedObservationCalls, 2)
+        XCTAssertNil(report.canonicalFirstOwnerSeconds, "Internal confirmation does not manufacture canonical/UI evidence")
+    }
+
+    func testOwnerIdentityOracleRequiresRealCandidateEvaluationAndDistinctInsufficientDenominator() throws {
+        let fixture = OwnerOracleFixture(intervals: [.init(startFrame: 0, endFrame: 128_000, identity: .owner)], expectedOwner: 0)
+        var fields = fixture.fields(outcome: "insufficientEvidence")
+        fields["fullEvidenceProfiles"] = "0"
+        let events = [fixture.activity([(1, 0, 128_000)]), fixture.event("owner_verification", fields: fields),
+            fixture.event("owner_observation", fields: fixture.fields())]
+        let report = try fixture.evaluate(events)
+        XCTAssertTrue(report.accepted)
+        XCTAssertEqual(report.insufficientEvidenceDecisionCalls, 1)
+        XCTAssertEqual(report.candidateEvaluationCalls, 1)
+        fields["candidateProfiles"] = "0"; fields["encodedProfiles"] = "0"
+        XCTAssertThrowsError(try fixture.evaluate([events[0], fixture.event("owner_verification", fields: fields), events[2]]))
+        fields["candidateProfiles"] = "1"; fields["encodedProfiles"] = "1"; fields["policy"] = "streamingV2"
+        XCTAssertThrowsError(try fixture.evaluate([events[0], fixture.event("owner_verification", fields: fields), events[2]]))
+        var badSlots = fixture.fields(slots: ["slot-8"], outcome: "confirmed")
+        XCTAssertThrowsError(try fixture.evaluate([events[0], fixture.event("owner_verification", fields: badSlots), events[2]]))
+        badSlots["confirmedSlots"] = "slot-1,slot-1"
+        XCTAssertThrowsError(try fixture.evaluate([events[0], fixture.event("owner_verification", fields: badSlots), events[2]]))
+    }
+
     func testObservationWrapperPreservesSpeechBoundaryCapabilityAndMaskAccounting() async throws {
         let observation = CombinedPrivacyObservations(wrapping: SyntheticSpeechBoundaryRedactor(), aliases: [["Иван Тестов"]])
         XCTAssertTrue(observation.supportsSpeechBoundaryAdmission)
@@ -1182,6 +1719,14 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             try streamingOptions.validatePCM(frameCount: Int64(input.length), fileBytes: audioBytes, combined: options)
         } else {
             try options.validatePCM(frameCount: Int64(input.length), fileBytes: audioBytes)
+        }
+        let ownerIdentityOracle = try StreamingOwnerIdentityOracle.manifest(environment: environment,
+            streaming: streaming, options: options, assets: assets, audioDigest: audioDigest,
+            referenceDigest: referenceDigest, frames: Int(input.length))
+        if let ownerIdentityOracle, let expectedOwnerCount = streamingOptions?.expectedOwnerCount {
+            guard ownerIdentityOracle.expectedFinalOwnerCount == expectedOwnerCount else {
+                throw StreamingOwnerIdentityOracle.Failure.options
+            }
         }
         let duration = Double(input.length) / 16_000
         try reference.validate(duration: duration, privateEvaluation: options.privateEvaluation)
@@ -1442,6 +1987,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let completed = try await coordinator.stopAndTranscribe()
             let stopSeconds = ProcessInfo.processInfo.systemUptime - stopStart
             let completedWallSeconds = ProcessInfo.processInfo.systemUptime - started
+            if let ownerIdentityOracle {
+                try validateOwnerIdentityOracle(ownerIdentityOracle, completed: completed,
+                    captureStarted: captureStart, canonicalFirstOwnerSeconds: firstOwnerProtectedWordSeconds)
+            }
             progress?.update(phase: "postStopEnd", deliveredFrames: offset,
                 protectedUtterances: 0, protectedPartials: 0,
                 protectedFinalSegments: completed.transcriptSegments.count)
@@ -2080,6 +2629,43 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             previous = current
         }
         return previous[second.count]
+    }
+
+    private func validateOwnerIdentityOracle(_ manifest: StreamingOwnerIdentityOracle.Manifest,
+        completed: MeetingSession, captureStarted: Double, canonicalFirstOwnerSeconds: Double?) throws {
+        do {
+            let trace = try XCTUnwrap(MeetingTimelineTrace.shared, "Identity oracle requires this process's actual private timeline")
+            let status = trace.status
+            let data = try StreamingOwnerIdentityOracle.boundedRead(trace.fileURL, maximumBytes: 16 * 1_024 * 1_024)
+            // Preserve the full private trace before decoding. A rejected transient decision
+            // must remain inspectable even when a later decision revokes its token.
+            let raw = XCTAttachment(data: data, uniformTypeIdentifier: "public.jsonl")
+            raw.name = "Owner-identity-oracle-private-raw-timeline"
+            raw.lifetime = .keepAlways
+            add(raw)
+            let report = try StreamingOwnerIdentityOracle.evaluate(data: data,
+                status: .init(accepted: status.accepted, written: status.written, dropped: status.dropped,
+                    truncated: status.truncated, writeFailed: status.writeFailed, closed: status.closed,
+                    flushTimedOut: status.flushTimedOut), manifest: manifest,
+                sourceRevision: RuntimeBuildProvenance.sanitizedSourceRevision(Bundle.main.object(forInfoDictionaryKey: "AppSourceRevision")),
+                sessionID: completed.id, completedAttempts: Set(completed.processingAttempts.map(\.id)),
+                captureStarted: captureStarted, canonicalFirstOwnerSeconds: canonicalFirstOwnerSeconds)
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let scalar = XCTAttachment(data: try encoder.encode(report), uniformTypeIdentifier: "public.json")
+            scalar.name = "Owner-identity-oracle-private-scalars"
+            scalar.lifetime = .keepAlways
+            add(scalar)
+            XCTAssertTrue(report.accepted, "Every real decision and emitted token must respect reviewed source identity: \(report.failures.joined(separator: ","))")
+        } catch {
+            let reason = (error as? StreamingOwnerIdentityOracle.Failure)?.rawValue ?? "decodeOrIO"
+            let scalar = XCTAttachment(data: try JSONSerialization.data(withJSONObject:
+                ["schema": 1, "accepted": false, "failure": reason, "scope": "Identity oracle failed closed before acceptance"],
+                options: [.sortedKeys]), uniformTypeIdentifier: "public.json")
+            scalar.name = "Owner-identity-oracle-private-scalars-rejected"
+            scalar.lifetime = .keepAlways
+            add(scalar)
+            throw error
+        }
     }
 
     private func streamingEvaluation(completed: MeetingSession, checkpoint: [MeetingTranscriptSegment],
