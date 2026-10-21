@@ -21571,20 +21571,19 @@
         }
       }
     },
-    "Live captions for this language on Intel require a compatible local model. Your recording is preserved.": {
-      "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments.",
+    "Live captions support English only. Your transcript will be generated after recording.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Live captions for this language on Intel require a compatible local model. Your recording is preserved."
+            "value": "Live captions support English only. Your transcript will be generated after recording."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Для субтитров на этом языке на Intel нужна совместимая локальная модель. Запись сохранена."
+            "value": "Субтитры во время записи доступны только на английском. Расшифровка появится после записи."
           }
         }
       }
@@ -21640,19 +21639,19 @@
         }
       }
     },
-    "Live captions use English streaming or buffered transcription for supported languages. Russian captions support GigaAM and Parakeet v3.": {
+    "Models with meeting captions show them in their supported languages. Other models show English live captions on Apple Silicon only.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Live captions use English streaming or buffered transcription for supported languages. Russian captions support GigaAM and Parakeet v3."
+            "value": "Models with meeting captions show them in their supported languages. Other models show English live captions on Apple Silicon only."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Для английского языка субтитры используют потоковое распознавание; для остальных поддерживаемых языков - обработку фрагментов. Русские субтитры работают с GigaAM и Parakeet v3."
+            "value": "Модели с субтитрами встреч показывают их на поддерживаемых языках. Остальные модели показывают субтитры только на английском и только на Apple Silicon."
           }
         }
       }
@@ -32414,23 +32413,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "По умолчанию русский. Языки распознавания и итогов встречи настраиваются отдельно."
-          }
-        }
-      }
-    },
-    "Russian live captions on Intel require selecting GigaAM. Your recording is preserved.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Russian live captions on Intel require selecting GigaAM. Your recording is preserved."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для русских субтитров на Intel выберите GigaAM. Аудиозапись сохраняется."
           }
         }
       }
