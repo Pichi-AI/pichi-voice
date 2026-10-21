@@ -118,14 +118,15 @@ struct MeetingStreamingTranscriptStateTests {
     static func observation(_ words: [MeetingTranscriptSegment] = [], accepted: Double,
                             processed: Double? = nil, asr: Double? = nil,
                             final: Bool = false, activity: [MeetingBackendSpeakerActivity]? = nil,
-                            retained: Int = 0, emptyASR: Range<Int>? = nil) -> MeetingStreamingPCMObservation {
+                            retained: Int = 0, emptyASR: Range<Int>? = nil,
+                            ownerTokens: Set<MeetingBackendSpeakerToken>? = nil) -> MeetingStreamingPCMObservation {
         let processed = processed ?? accepted
         return .init(batch: .init(segments: words), activity: activity ?? (processed > 0 ? [
             .init(token: .init(analysisEpochID: epoch, label: "a"), start: 0, end: processed)] : []),
             acceptedThroughSample: Int((accepted * 16_000).rounded()),
             processedThroughSample: Int((processed * 16_000).rounded()), retainedFromSample: retained,
             isFinal: final, asrStableThroughSample: asr.map { Int(($0 * 16_000).rounded()) },
-            sealedEmptyASRRange: emptyASR)
+            sealedEmptyASRRange: emptyASR, confirmedLocalUserTokens: ownerTokens)
     }
     static func expect(_ error: State.Failure, _ work: () async throws -> Void) async {
         do { try await work(); check(false, "Expected \(error)") }
@@ -151,6 +152,7 @@ struct MeetingStreamingTranscriptStateTests {
         try await privacyCueAcrossWindowAndLongPause()
         try await identityRefinementWithoutTextRollback()
         try await ownerIdentityWithoutNewSpeech()
+        try await acousticOwnerBeforeProtectedIdentity()
         try await longBoundedStream()
         try await guardsAndLimits()
         try await cancellationAndReentry()
@@ -628,6 +630,34 @@ struct MeetingStreamingTranscriptStateTests {
         check(all.map(\.nativeTiming) == source.map(\.nativeTiming))
         check(all[2].text == "<EMAIL>")
         check(all.allSatisfy { $0.originalText == nil })
+    }
+
+    static func acousticOwnerBeforeProtectedIdentity() async throws {
+        let value = try state(privacy: .init(redactor: SyntheticMaskingRedactor()))
+        let owner = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")
+        let early = try await value.observe(observation(accepted: 10, ownerTokens: [owner]))
+        check(early.safeBatch.speakers.isEmpty && early.safeBatch.segments.isEmpty,
+              "Acoustic evidence cannot create identities or publish unprotected words")
+        let source = (0..<40).map { word($0, text: $0 == 2 ? "private@example.test" : nil) }
+        let first = try await value.observe(observation(source, accepted: 20, asr: 20))
+        check(first.safeBatch.speakers.count == 1 && first.safeBatch.speakers[0].isLocalUser,
+              "An earlier acoustic decision must apply when privacy first admits its speaker")
+        let id = first.safeBatch.speakers[0].id
+        let pause = try await value.observe(observation(accepted: 100, asr: 100,
+            activity: [.init(token: owner, start: 0, end: 20)]))
+        check(pause.safeBatch.speakers.first?.id == id && pause.safeBatch.speakers.first?.isLocalUser == true)
+        let revoked = try await value.observe(observation(accepted: 100, asr: 100, ownerTokens: []))
+        check(revoked.hasSpeakerIdentityChanges && revoked.safeBatch.speakers.first?.isLocalUser == false,
+              "New ambiguous evidence revokes the owner without renaming or minting identities")
+        let final = try await value.finish(observation(accepted: 100, asr: 100, final: true))
+        check(final.safeBatch.speakers.first?.isLocalUser == false)
+        check((first.safeBatch.segments + pause.safeBatch.segments + final.safeBatch.segments).map(\.id) == source.map(\.id))
+        check(first.safeBatch.segments[2].text == "<EMAIL>")
+        let invalid = try state()
+        await expect(.invalidObservation) {
+            _ = try await invalid.observe(observation(accepted: 1,
+                ownerTokens: [.init(analysisEpochID: .init(trackID: UUID(), ordinal: 0), label: "a")]))
+        }
     }
 
     static func longBoundedStream() async throws {

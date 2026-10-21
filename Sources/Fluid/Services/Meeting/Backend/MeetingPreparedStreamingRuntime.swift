@@ -12,6 +12,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     private let configuration: MeetingFinalProcessingConfiguration
     private let speakerNameFormat: String
     private let useAdaptiveOwnerEvidence: Bool
+    private let verifyOwnerDuringCapture: Bool
     private let onProgress: @Sendable (MeetingStreamingPCMObservation) async throws -> Void
     private let lock = NSLock()
     private var busy = false
@@ -23,6 +24,9 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         processedThroughSample: 0, retainedFromSample: 0, isFinal: false)
     private var speakers: [MeetingSessionSpeaker] = []
     private var ownerSamples: MeetingStreamingOwnerVoiceSamples?
+    private var ownerProfiles: [MeetingBackendSpeakerToken: MeetingSpeakerVoiceProfile] = [:]
+    private var confirmedOwnerTokens: Set<MeetingBackendSpeakerToken> = []
+    private var ownerEncoderUnavailable = false
 
     struct OwnerEvidence: Sendable {
         let samples: [MeetingSpeakerVoiceSamples]
@@ -34,6 +38,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
          diarizer: any MeetingIncrementalNemotronDiarizerSession, trackID: MeetingAudioTrackID,
          attemptID: UUID, configuration: MeetingFinalProcessingConfiguration, speakerNameFormat: String,
          collectOwnerEvidence: Bool = false, useAdaptiveOwnerEvidence: Bool = false,
+         verifyOwnerDuringCapture: Bool = false,
          onProgress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void) {
         self.runtime = runtime
         self.asr = asr
@@ -43,6 +48,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         self.configuration = configuration
         self.speakerNameFormat = speakerNameFormat
         self.useAdaptiveOwnerEvidence = useAdaptiveOwnerEvidence
+        self.verifyOwnerDuringCapture = verifyOwnerDuringCapture && collectOwnerEvidence
         self.onProgress = onProgress
         self.ownerSamples = collectOwnerEvidence
             ? .init(epoch: .init(trackID: trackID, ordinal: 0), useAdaptiveOwnerEvidence: useAdaptiveOwnerEvidence) : nil
@@ -92,6 +98,11 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
                         self.traceDiarizer(next, since: began)
                         try Task.checkCancellation()
                         try self.accept(next, expectedAccepted: start + end, final: false)
+                        let priorOwner = self.confirmedOwnerTokens
+                        try await self.verifyLiveOwner()
+                        if priorOwner != self.confirmedOwnerTokens {
+                            try await self.onProgress(self.observation())
+                        }
                     }
                 } else {
                     self.ownerSamples?.append(samples, sourceStartSample: start)
@@ -131,8 +142,9 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
             activity: self.activity(), epoch: self.globalEpoch, attemptID: self.attemptID,
             duration: Double(self.update.acceptedThroughSample) / 16_000,
             speakerNameFormat: self.speakerNameFormat,
+            confirmedLocalUserTokens: self.confirmedOwnerTokens,
             speakerAttributionPolicy: self.configuration.speakerAttributionPolicy)
-        self.speakers = attributed.mergingSpeakers(into: self.speakers)
+        self.speakers = attributed.mergingSpeakers(into: self.speakers, speakerNameFormat: self.speakerNameFormat)
         // Do not sample pacing here: canonical privacy, persistence and UI projection have
         // not run yet. Their joined cost is charged when the transport acknowledges this
         // exact window. Retain only a clock and scalar identity, never the PCM or text.
@@ -172,6 +184,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         self.traceDiarizer(next, since: began)
         try Task.checkCancellation()
         try self.accept(next, expectedAccepted: self.update.acceptedThroughSample, final: true)
+        try await self.verifyLiveOwner(final: true)
         self.lock.withLock { self.finished = true }
         return self.observation(asrStableThroughSample: self.update.acceptedThroughSample)
     }
@@ -209,6 +222,8 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         await self.diarizer.cleanupStreaming()
         self.speakers.removeAll()
         self.ownerSamples = nil
+        self.ownerProfiles.removeAll(keepingCapacity: false)
+        self.confirmedOwnerTokens.removeAll(keepingCapacity: false)
         self.pendingWindowTiming = nil
         self.update = .init(activity: [], acceptedThroughSample: 0, processedThroughSample: 0,
                             retainedFromSample: 0, isFinal: false)
@@ -240,7 +255,45 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         .init(batch: batch, activity: self.activity(), acceptedThroughSample: self.update.acceptedThroughSample,
             processedThroughSample: self.update.processedThroughSample, retainedFromSample: self.update.retainedFromSample,
             isFinal: self.update.isFinal, asrStableThroughSample: asrStableThroughSample,
-            sealedEmptyASRRange: sealedEmptyASRRange)
+            sealedEmptyASRRange: sealedEmptyASRRange,
+            confirmedLocalUserTokens: self.verifyOwnerDuringCapture ? self.confirmedOwnerTokens : nil)
+    }
+
+    /// The same controller worker joins diarizer, optional voice inference and publication.
+    /// The encoder is scoped to this call; only eight two-vector profiles survive it. Scoring
+    /// waits for novel admitted speech, so silence and repeated progress never reload weights.
+    private func verifyLiveOwner(final: Bool = false) async throws {
+        guard self.verifyOwnerDuringCapture, !self.ownerEncoderUnavailable,
+              let samples = self.ownerSamples?.liveExcerpts(final: final), !samples.isEmpty else { return }
+        try Task.checkCancellation()
+        let began = ProcessInfo.processInfo.systemUptime
+        let profiles: [MeetingSpeakerVoiceProfile]
+        do { profiles = try await self.runtime.speakerVoiceProfiles(samples: samples) }
+        catch {
+            try Task.checkCancellation()
+            self.ownerEncoderUnavailable = true
+            self.ownerProfiles.removeAll(keepingCapacity: false)
+            self.confirmedOwnerTokens.removeAll(keepingCapacity: false)
+            DebugLogger.shared.info("mode=streaming owner_verification=unavailable preservedAnonymousSpeech=true", source: "MeetingPCMRuntime")
+            return
+        }
+        try Task.checkCancellation()
+        let returned = Dictionary(grouping: profiles, by: \.token)
+        for sample in samples {
+            self.ownerProfiles[sample.token] = returned[sample.token]?.count == 1 ? returned[sample.token]?.first : nil
+        }
+        let candidates = self.ownerProfiles.values.sorted { $0.token.label < $1.token.label }
+        self.confirmedOwnerTokens = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.runtime.ownerVoiceProfileSnapshot,
+            profiles: candidates, policy: .streamingV2,
+            diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: samples, profiles: candidates, streaming: true))
+        MeetingTimelineTrace.shared?.record("owner_verification", fields: [
+            "attemptID": self.attemptID.uuidString,
+            "acceptedThroughSample": String(self.update.acceptedThroughSample),
+            "processedThroughSample": String(self.update.processedThroughSample),
+            "encodedProfiles": String(profiles.count), "candidateProfiles": String(candidates.count),
+            "confirmedCount": String(self.confirmedOwnerTokens.count),
+            "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000),
+            "final": String(final)])
     }
 
     private func traceDiarizer(_ next: MeetingIncrementalDiarizationUpdate, since began: Double) {
@@ -307,6 +360,7 @@ nonisolated struct MeetingStreamingOwnerVoiceSamples: Sendable {
     private var first = [[Float]](repeating: [], count: 8)
     private var latest = [[Float]](repeating: [], count: 8)
     private var cleanFrameCounts = [Int](repeating: 0, count: 8)
+    private var encodedFrameCounts = [Int](repeating: 0, count: 8)
     private var enabled = true
 
     init(epoch: MeetingAnalysisEpochID, useAdaptiveOwnerEvidence: Bool = false) {
@@ -338,6 +392,25 @@ nonisolated struct MeetingStreamingOwnerVoiceSamples: Sendable {
         }
     }
 
+    /// First decision uses two independent 3s clips. Retry after 2s of new clean speech
+    /// until 10s, then after each additional 10s. A final flush scores a changed tail once.
+    /// Eight counters and the existing fixed PCM/clip budgets bound all retained evidence.
+    mutating func liveExcerpts(final: Bool = false) -> [MeetingSpeakerVoiceSamples] {
+        guard self.enabled, self.useAdaptiveOwnerEvidence else { return [] }
+        if final { self.flushAdaptivePending() }
+        let slots = Set((0..<8).filter { slot in
+            let count = self.cleanFrameCounts[slot], prior = self.encodedFrameCounts[slot]
+            return count >= 2 * Self.clipFrames && count > prior
+                && (prior == 0 || final || count - prior >= (prior < 2 * Self.adaptiveClipFrames ? 2 * Self.sampleRate : 10 * Self.sampleRate))
+        }.map { "slot-\($0)" })
+        guard !slots.isEmpty else { return [] }
+        let result = self.excerpts.filter { slots.contains($0.token.label) }
+        for slot in 0..<8 where result.contains(where: { $0.token.label == "slot-\(slot)" }) {
+            self.encodedFrameCounts[slot] = self.cleanFrameCounts[slot]
+        }
+        return result
+    }
+
     /// The finished owner transfers its arrays before native model cleanup, avoiding a
     /// second full copy of all eight voices while ASR and diarizer weights still reside.
     mutating func takeExcerpts() -> [MeetingSpeakerVoiceSamples] {
@@ -347,12 +420,7 @@ nonisolated struct MeetingStreamingOwnerVoiceSamples: Sendable {
             self.clips.removeAll(keepingCapacity: false); self.pending.removeAll(keepingCapacity: false)
             return result
         }
-        for slot in 0..<8 where !self.pending[slot].isEmpty {
-            if self.pending[slot].count >= 800, Self.hasUsableOwnerSignal(self.pending[slot]) {
-                self.retainAdaptive(self.pending[slot][...], slot: slot)
-            }
-            self.pending[slot].removeAll(keepingCapacity: false)
-        }
+        self.flushAdaptivePending()
         var result: [MeetingSpeakerVoiceSamples] = []
         for slot in 0..<8 {
             let frames = min(Self.adaptiveClipFrames, self.cleanFrameCounts[slot] / 2)
@@ -367,6 +435,15 @@ nonisolated struct MeetingStreamingOwnerVoiceSamples: Sendable {
         self.latest = [[Float]](repeating: [], count: 8)
         self.cleanFrameCounts = [Int](repeating: 0, count: 8)
         return result
+    }
+
+    private mutating func flushAdaptivePending() {
+        for slot in 0..<8 where !self.pending[slot].isEmpty {
+            if self.pending[slot].count >= 800, Self.hasUsableOwnerSignal(self.pending[slot]) {
+                self.retainAdaptive(self.pending[slot][...], slot: slot)
+            }
+            self.pending[slot].removeAll(keepingCapacity: false)
+        }
     }
 
     static func isUsableOwnerClip(_ clip: [Float]) -> Bool {

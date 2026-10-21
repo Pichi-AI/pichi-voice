@@ -249,7 +249,8 @@ enum PichiMeetingProviderFactory {
         // Streaming capture needs only the continuous speaker graph. Enrollment and the
         // explicit Settings download own optional voice-encoder installation; losing that
         // optional resource must not block capture or trigger a network wait before the mic.
-        // The frozen runtime validates it locally and verifies the owner after model cleanup.
+        // The frozen runtime validates it locally; live-capable recipes join bounded
+        // owner inference on the existing worker without opening another capture pipeline.
         let dependencies: Set<MeetingDiarizationDependency> = configuration.effectiveSpeakerProcessingMode == .streaming
             ? [.speakerSeparation] : (locator.supportsOwnerVoiceVerification
                 ? [.speakerSeparation, .voiceMatching] : [.speakerSeparation])

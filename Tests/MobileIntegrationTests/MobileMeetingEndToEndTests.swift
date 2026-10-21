@@ -1243,6 +1243,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         var observedNewAudioPaths: Set<String> = []
         var checkpointBeforeStop: [MeetingTranscriptSegment] = []
         var firstKnownSpeakerSeconds: Double?
+        var firstOwnerProtectedWordSeconds: Double?
+        var firstOwnerDeliveredFrames: Int?
+        var maximumLiveOwnerSpeakerCount = 0
         var canonicalCheckpointsObserved = 0
         var maximumProtectedSegmentsBeforeStop = 0
         var streamingEvidence: [String: Any] = [:]
@@ -1330,6 +1333,13 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                            segment.speakerID.map { id in current.speakers.contains { $0.id == id } } == true
                        }) {
                         firstKnownSpeakerSeconds = ProcessInfo.processInfo.systemUptime - captureStart
+                    }
+                    let ownerIDs = Set(current.speakers.filter(\.isLocalUser).map(\.id))
+                    maximumLiveOwnerSpeakerCount = max(maximumLiveOwnerSpeakerCount, ownerIDs.count)
+                    if firstOwnerProtectedWordSeconds == nil,
+                       protectedSegments.contains(where: { $0.speakerID.map(ownerIDs.contains) == true }) {
+                        firstOwnerProtectedWordSeconds = ProcessInfo.processInfo.systemUptime - captureStart
+                        firstOwnerDeliveredFrames = offset
                     }
                     let sourceSeconds = Double(offset) / 16_000
                     if sourceSeconds >= nextAudioInventorySample {
@@ -1430,6 +1440,11 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     let actualOwnerCount = completed.speakers.filter(\.isLocalUser).count
                     XCTAssertEqual(actualOwnerCount, expectedOwnerCount, "Compare the enrolled owner's actual production verification with the reviewed fixture expectation")
                     streamingEvidence["expectedOwnerCount"] = expectedOwnerCount
+                    if expectedOwnerCount == 0 {
+                        XCTAssertEqual(maximumLiveOwnerSpeakerCount, 0, "A reviewed negative voice cannot become the owner during capture")
+                    } else if streamingOptions?.requiresPreStopOutput == true {
+                        XCTAssertNotNil(firstOwnerProtectedWordSeconds, "A reviewed owner must label actual protected words before Stop")
+                    }
                 }
                 let ownerProfileGenerationAfterStop = try MeetingOwnerVoiceProfileStore().load()?.metadata.generation
                 XCTAssertEqual(ownerProfileGenerationAfterStop, ownerProfileGenerationAtStart,
@@ -1438,7 +1453,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 streamingEvidence["ownerEnrollmentUnchangedAfterStop"] = ownerProfileGenerationAfterStop == ownerProfileGenerationAtStart
                 streamingEvidence["ownerVerificationExpectationApplied"] = streamingOptions?.expectedOwnerCount != nil
                 streamingEvidence["verifiedOwnerSpeakerCount"] = completed.speakers.filter(\.isLocalUser).count
-                streamingEvidence["ownerVerificationScope"] = "Production enrolled profile and completed session only; the test neither creates nor replaces an owner profile and exports no identity or embeddings. A local-user label alone does not establish voice-identity accuracy."
+                streamingEvidence["firstOwnerProtectedWordSeconds"] = firstOwnerProtectedWordSeconds.map { $0 as Any } ?? NSNull()
+                streamingEvidence["firstOwnerDeliveredFrames"] = firstOwnerDeliveredFrames.map { $0 as Any } ?? NSNull()
+                streamingEvidence["maximumLiveOwnerSpeakerCount"] = maximumLiveOwnerSpeakerCount
+                streamingEvidence["ownerVerificationScope"] = "Production enrolled profile, paced live protected words and completed session; no profile replacement or exported identity/embeddings. Identity accuracy requires independently reviewed voice labels."
                 streamingEvidence["expectedSourceAudioFrames"] = streamingOptions?.expectedSourceFrames
                 streamingEvidence["recognizedSpeechAssertionsApplied"] = requiresRecognizedSpeech
                 streamingEvidence["preStopOutputAssertionsApplied"] = streamingOptions?.requiresPreStopOutput == true && requiresRecognizedSpeech

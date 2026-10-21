@@ -69,6 +69,7 @@ actor MeetingStreamingTranscriptState {
     private var tail: MeetingStreamingProtectedWordTail
     private var pending: [MeetingTranscriptSegment] = []
     private var speakers: [MeetingSessionSpeaker]
+    private var confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken>?
     private var phase: Phase = .active
     private var isProcessing = false
     private var acceptedThroughSample = 0
@@ -123,6 +124,7 @@ actor MeetingStreamingTranscriptState {
         self.phase = .cancelled
         self.pending.removeAll(keepingCapacity: false)
         self.speakers.removeAll(keepingCapacity: false)
+        self.confirmedLocalUserTokens = nil
         self.preview = nil
         self.tail.cancel()
     }
@@ -135,6 +137,13 @@ actor MeetingStreamingTranscriptState {
         do {
             try self.validate(observation, final: final)
             let priorIdentities = self.speakers
+            if let tokens = observation.confirmedLocalUserTokens {
+                guard tokens.count <= self.limits.tail.maximumSpeakers,
+                      tokens.allSatisfy({ $0.analysisEpochID == self.epoch && !$0.label.isEmpty }) else {
+                    throw Failure.invalidObservation
+                }
+                self.confirmedLocalUserTokens = tokens
+            }
             let priorPreview = self.preview
             var privacyMilliseconds = 0.0
             let oldASRCursor = self.asrStableThroughSample
@@ -143,8 +152,7 @@ actor MeetingStreamingTranscriptState {
             self.processedThroughSample = observation.processedThroughSample
             self.isComplete = self.isComplete && observation.batch.isComplete
 
-            // The optional owner encoder publishes existing identities after native model
-            // scopes close. Identity-only revisions must survive even without a new word.
+            // Legacy identity-only revisions still refine already admitted participants.
             if observation.batch.segments.isEmpty, !observation.batch.speakers.isEmpty {
                 let existingIDs = Set(self.speakers.map(\.id))
                 guard observation.batch.speakers.allSatisfy({ existingIDs.contains($0.id) }),
@@ -272,6 +280,11 @@ actor MeetingStreamingTranscriptState {
             }
             var safe = MeetingPCMTranscriptBatch(segments: admitted, speakers: self.speakers,
                 isComplete: self.isComplete)
+            if let tokens = self.confirmedLocalUserTokens {
+                safe.speakers = MeetingTranscriptAssembler.applyingLocalUserTokens(to: safe.speakers,
+                    attemptID: self.attemptID, tokens: tokens, speakerNameFormat: self.tail.speakerNameFormat)
+                try self.mergeSpeakers(safe, updatesOwnerIdentity: true)
+            }
             safe.speechObservationIdentity = .init(attemptID: self.attemptID, epochID: self.epoch)
             let marks = MeetingStreamingProtectedWordTail.Watermarks(asrStableThrough: asrSeconds,
                 diarizationProcessedThrough: diarizationSeconds,
@@ -305,7 +318,11 @@ actor MeetingStreamingTranscriptState {
                     activityAvailableFrom: Double(observation.retainedFromSample) / 16_000)
             }
             let attributionMilliseconds = Self.milliseconds(since: attributionStarted)
-            var batch = MeetingPCMTranscriptBatch(segments: updated.inserted, speakers: updated.speakers,
+            let identities = self.confirmedLocalUserTokens.map {
+                MeetingTranscriptAssembler.applyingLocalUserTokens(to: updated.speakers,
+                    attemptID: self.attemptID, tokens: $0, speakerNameFormat: self.tail.speakerNameFormat)
+            } ?? updated.speakers
+            var batch = MeetingPCMTranscriptBatch(segments: updated.inserted, speakers: identities,
                 isComplete: self.isComplete)
             batch.speakerRevisions = updated.revisions
             batch.sourceTrack = self.track
@@ -326,9 +343,14 @@ actor MeetingStreamingTranscriptState {
                 heldStart ?? updated.retainActivityFrom, pendingStart ?? updated.retainActivityFrom))
             guard retain >= self.acknowledgedThroughSample else { throw Failure.regressedCursor }
             self.acknowledgedThroughSample = retain
-            try self.mergeSpeakers(batch)
+            try self.mergeSpeakers(batch, updatesOwnerIdentity: self.confirmedLocalUserTokens != nil)
+            batch.speakers = self.speakers
             let hasSpeakerIdentityChanges = self.speakers != priorIdentities
-            if final { self.phase = .finished; self.speakers.removeAll(keepingCapacity: false) }
+            if final {
+                self.phase = .finished
+                self.speakers.removeAll(keepingCapacity: false)
+                self.confirmedLocalUserTokens = nil
+            }
             try Task.checkCancellation()
             let diagnostics = Diagnostics(acceptedThroughSample: self.acceptedThroughSample,
                     asrStableThroughSample: self.asrStableThroughSample,
@@ -366,6 +388,7 @@ actor MeetingStreamingTranscriptState {
             if case .cancelled = self.phase {} else { self.phase = .failed }
             self.pending.removeAll(keepingCapacity: false)
             self.speakers.removeAll(keepingCapacity: false)
+            self.confirmedLocalUserTokens = nil
             self.preview = nil
             self.tail.cancel()
             throw error
@@ -482,7 +505,8 @@ actor MeetingStreamingTranscriptState {
                 }
             }
         }
-        self.speakers = Self.identityOnly(identities.mergingSpeakers(into: self.speakers))
+        self.speakers = Self.identityOnly(identities.mergingSpeakers(into: self.speakers,
+            speakerNameFormat: self.tail.speakerNameFormat))
     }
 
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {

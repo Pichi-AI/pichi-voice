@@ -83,6 +83,13 @@ private nonisolated enum Refusal: Error { case notUsed }
                         "Owner-v1 cannot silently acquire new clip selection or verification")
             try require(profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: profile.streamingImplementationFingerprint)
                         == profile.supportsOwnerVoiceVerification, "Only the exactV2recipe opts into adaptive evidence")
+            try require(profile.acceptsStreamingImplementationFingerprint(profile.ownerV2StreamingImplementationFingerprint),
+                        "Frozen V2 remains admitted without acquiring live inference")
+            try require(!profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.ownerV2StreamingImplementationFingerprint)
+                        && !profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.legacyOwnerStreamingImplementationFingerprint),
+                        "Earlier saved owner recipes preserve final-only verification")
+            try require(profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.streamingImplementationFingerprint)
+                        == profile.supportsOwnerVoiceVerification, "Only the exact V3 capability enables live inference")
             let locator: any MeetingNemotronModelLocating = MeetingNemotronModelLocator(profile: profile)
             let enabled = locator.supportsOwnerVoiceVerification
             let runtime = VoiceVerificationProbe(verificationEnabled: enabled)
