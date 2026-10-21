@@ -1,6 +1,6 @@
 # Mobile first-run setup and consolidated preferences
 
-Work starts from `255039931e9578c0f1daf74e4ea3267c20047896`, the installed continuity branch, rather than current main. This report records implementation scope and open native validation gates. It does not establish model accuracy, latency or physical-device acceptance.
+Work starts from `255039931e9578c0f1daf74e4ea3267c20047896`, the installed continuity branch, rather than current main. This report records the implementation, native simulator acceptance and measured limitations. Physical-device acceptance and speaker-identity accuracy remain open.
 
 ## Product flow
 
@@ -29,7 +29,7 @@ Custom sensitive phrases live in the existing settings namespace. A bounded immu
 
 ## Measured artifact inventory, 2026-10-20
 
-Counts are logical file bytes from current owning manifests, pinned Hugging Face tree metadata and read-only installed-cache checks where stated. Download columns count payload, excluding protocol overhead. Installed bytes exclude APFS allocation and runtime-generated caches. No weights were downloaded for this inventory. Current engine RAM was not measured.
+Counts are logical file bytes from current owning manifests, pinned Hugging Face tree metadata and read-only installed-cache checks where stated. Download columns count payload, excluding protocol overhead. Installed bytes exclude APFS allocation and runtime-generated caches. Inventory research did not download weights. Later native acceptance used the normal first-run downloads and verified public cache copies. Isolated engine RAM was not measured.
 
 | Artifact | Version / source revision | Download bytes | Installed bytes | Redistribution source |
 | --- | --- | ---: | ---: | --- |
@@ -48,7 +48,7 @@ The retired `russianTiny` privacy descriptor is 30,334,469 bytes but is not the 
 
 ## Packaging decision
 
-The current implementation retains automatic first-run downloads. It changes no signing, distribution or App Store policy. Weights remain outside Git.
+The user selected automatic first-run downloads for required resources. ASR downloads follow the selected model; privacy downloads only after explicit activation. Distribution packaging and App Store policy are unchanged. Weights remain outside Git.
 
 | Candidate | Additional uncompressed payload | Resulting package before compression |
 | --- | ---: | --- |
@@ -62,8 +62,65 @@ The participant graph alone is 189.873 MiB. With its owner encoder, participants
 
 VAD is a small MIT-licensed bundling candidate. The 198.473 MiB mandatory kit can be considered in a separate distribution decision, retaining required license/attribution notices. CC-BY-4.0 obligations and the actual distribution channel must be reviewed together. Privacy remains opt-in download; its disclosed provenance does not support claiming unrestricted clearance. ASR stays replaceable in Settings.
 
-## Validation gates
+## Completed verification
 
-Portable repository checks pass at the initial implementation checkpoint. Native build, new hosted transaction tests, actual utterance streaming regressions, independent review of the final integrated revision, iPad/iPhone light/dark Russian screenshots and combined owner-live integration remain required. The owner-live session currently owns the heavy resource slot. No physical device, microphone or user's recording was used for this implementation stage.
+Application source was independently reviewed through `e63eec9e7bae3aa61192b64a7bc3de5c785764c4`. Material findings were fixed and affected checks repeated. The review covered extension-point reuse, immutable model/rules selection, cancellation, resource ownership, locale-stable speaker numbering, privacy publication and upstream impact. The last source delta is an explicit conditional Combine import required by the macOS compiler; behavior is unchanged from the native runtime revision below.
 
-Parakeet and Tiny registration now selects the same existing streaming runtime/profile. Native utterances keep their real interval/precision/ID; word-specific sponsorship rules stay word-specific, and one utterance containing two voices stays uncertain. Registration changes and synthetic tests alone do not establish throughput, RAM, accuracy or live owner-label latency for these combinations.
+| Check | Result and scope |
+| --- | --- |
+| Repository/setup, localization, plist/project syntax, diff whitespace | PASS. English/Russian catalog contains 3,081 complete keys. |
+| Shared privacy/dictionary policy | PASS, including Unicode source offsets, boundaries, overlapping masks, immutable rules and sparse speech tails. |
+| Streaming policy probes | PASS: protected tail 28,990 assertions; registry 133; admission 175; state 3,244. |
+| Prepared runtime and runtime voice verification | PASS; prepared runtime covers 19 contract groups. |
+| Mobile hosted native tests | 45/45 PASS, zero skipped, on `a98a6fd375f9311c205530e9b3d1205400eca613`, including actual A1 privacy inference and three enrollment admission/cancellation tests that never construct a microphone capture. |
+| Native first-run acceptance | Fresh iPhone passed Welcome through real model/resource preparation, privacy OFF/ON/ready/OFF, voice Skip, normal app and restart on `712639820f546131161569511927d1e5167c082b`. iPad first-run preparation and interrupted privacy-step continuation also passed. |
+| Native dictionary CRUD | Both simulators passed add, exact phrase replacement with Ё, save, delete and dark-theme restart on `71263982`. |
+| Native layout review | All six Russian setup pages in light/dark on iPad and iPhone passed. Recording preferences passed English/light and Russian/dark in portrait/landscape on `a2a561ea811e430e48682203642a642871a76516`. |
+| Real registered streaming composition | Parakeet and Tiny passed paced PCM, actual A1, fast128 speaker inference, protected publication before Stop, persistence and no full-recording replay on `a98a6fd3`. See limits below. |
+| macOS Debug build-for-testing and focused regressions | PASS on `e63eec9e`: 25/25 tests in configuration, privacy publication and privacy readiness lifecycle. A separate test bundle namespace and disabled audio-service startup protected the installed Mac app's preferences and audio devices. The full upstream suite was not run. |
+
+The native application was copied to immutable ignored test storage, signed with an existing valid development identity and verified before each interactive acceptance revision. Source revision, file sizes and SHA-256 hashes were recorded. Tests did not rebuild or re-sign the running copy. This is Debug simulator evidence, not an IPA or physical-device performance claim.
+
+First-run cache inspection on both simulators found exactly 17 public resource files, totaling 433,009,358 bytes for GigaAM plus the required kit, and no TextPrivacy files before privacy activation. Parakeet/Tiny public cache copies used for separate inference cases were hash-checked and were not part of that first-run measurement.
+
+Native review found and corrected a container accessibility identifier overriding Next, button contrast, a missing Russian completion label, dictionary row hit areas, Section-owned sheet presentation and editor toolbar sizing. The dictionary editor's presentation now belongs to the stable Form; its isolated draft retains errors and Cancel leaves saved rules unchanged. Normal participant settings expose status and preserve microphone/language/enrollment controls.
+
+The test-only inference viewport uses the same adaptive theme as the app. Both privacy diagnostic decorators forward optional speech-boundary admission. A regression test catches the previous capability loss. Generic streaming checks require each canonical unit's actual interval, native precision and ID; an utterance is not converted into invented word times.
+
+## Measured streaming sample and limitations
+
+These are simulator whole-composition measurements from the final runtime revision `a98a6fd3`. The source is an ignored, reproducibly generated fictional RU/EN recording: 736,000 PCM16 frames at 16 kHz, 46 seconds, SHA-256 `02b8f38b1cda996b3b761d5b15816013a27a55e3a152acfe3b9cb1edb9e8784f`. Each paced test adds 88 terminal silence samples. No microphone, personal recording or enrolled voice profile was used.
+
+| Metric | Parakeet v3 | Whisper Tiny |
+| --- | ---: | ---: |
+| First protected text after PCM starts | 15.63 s | 20.31 s |
+| First labelled canonical speech | 22.50 s | 40.00 s |
+| Canonical units before Stop / final | 37 / 37 words | 2 / 2 utterances |
+| Non-sensitive reference anchors retained | 4 / 4 | 2 / 4 |
+| Observed fictional sensitive case fully masked | 1 / 1 | 1 / 1 |
+| Sampled whole-process peak footprint | 518.96 MiB | 228.08 MiB |
+| Completion after Stop | 1.69 s | 0.64 s |
+
+Both paths admitted all 736,088 frames through contiguous transport, preserved native unit identities and produced no whole-recording replay. Filesystem inventory observed no new audio/media paths before preparation, every 15 seconds during PCM and after completion; transient create/delete between observations was not proved absent. Resource and MainActor sampling describe these runs, not touch latency or FPS. Peak footprint includes the app, UI, models and inference and is not per-engine RAM.
+
+Tiny omitted the entire English turn in this mixed-language window. All 320,000 frames of the first 20-second inference window reached its native backend; no 10-second truncation was found in the Swift routing or pinned native implementation. This result does not distinguish compact-model quality from native decoder behavior. No model-specific common-layer workaround, threshold tuning or fabricated timing was introduced.
+
+Both models produced one anonymous cluster for two synthetic TTS voices. The tests establish the functional streaming and privacy contracts, not diarization accuracy, WER, DER or owner identity acceptance. Owner verification thresholds were unchanged. Actual owner-voice quality and long recordings on physical iPad/iPhone remain separate validation work.
+
+Privacy and custom rules can keep a bounded short tail provisional until more context, a supported sealed boundary or Stop. The live caption now says labels appear after enough speech is collected, without promising a short fixed delay.
+
+## Native evidence coverage
+
+Ignored artifacts are under `.build/settings-onboarding/`, with per-case xcresult bundles, logs, frozen-bundle proofs, protected synthetic exports and capture indexes. The final stream summary is `final-native-streaming-summary.json`; mobile native counts are in `native-unit-ipad-a98a-summary.json`, and macOS evidence is under `macos/`.
+
+| Final setup/CRUD capture | Saved | Changed | Unique decoded frames | Missed slots | Capture errors |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| iPad dictionary | 145 | 51 | 50 | 38 | 0 |
+| iPhone dictionary | 184 | 44 | 44 | 1 | 0 |
+| iPhone first run | 179 | 53 | 41 | 6 | 1 |
+| iPad setup layouts | 180 | 98 | 58 | 36 | 0 |
+| iPhone setup layouts | 344 | 127 | 75 | 0 | 0 |
+
+Every gated native screen was inspected before its next action. An independent visual review also inspected all 25 contact sheets covering 268 unique decoded frames from these five cases and found no additional persistent material layout, contrast or Cyrillic issues in the saved coverage. Capture uses the simulator screenshot fallback and does not establish complete one-second coverage. Every saved frame, error and missed slot was retained. Earlier unsuccessful acceptance runs are preserved and are not counted as final passes.
+
+Physical tests were not started. Native screenshots are the review stage required before a physical install. No TestFlight upload, distribution archive, main merge or change to the prepared distribution build was performed.
