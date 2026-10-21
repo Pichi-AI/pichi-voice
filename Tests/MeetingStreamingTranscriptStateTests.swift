@@ -731,13 +731,21 @@ struct MeetingStreamingTranscriptStateTests {
                 retained = silence.retainActivityFromSample
                 activity.removeAll { $0.end < Double(retained) / 16_000 }
                 activity.append(.init(token: token, start: start, end: start + 10))
-                let words = (0..<20).map { index in
-                    word(turn * 20 + index, start: start + Double(index) * 0.5,
-                        end: start + Double(index) * 0.5 + 0.4,
-                        text: index == 18 ? "закрытый" : index == 19 ? "проект" : "слово")
+                var words: [MeetingTranscriptSegment] = []
+                for index in 0..<20 {
+                    let wordStart = start + Double(index) * 0.5
+                    let text: String
+                    if index == 18 { text = "закрытый" }
+                    else if index == 19 { text = "проект" }
+                    else { text = "слово" }
+                    words.append(word(turn * 20 + index, start: wordStart, end: wordStart + 0.4, text: text))
                 }
-                let units = precision == .word ? words : [word(turn, start: start, end: start + 10,
-                    text: words.map(\.text).joined(separator: " "), precision: .utterance)]
+                let units: [MeetingTranscriptSegment]
+                if precision == .word { units = words }
+                else {
+                    let text = words.map { $0.text }.joined(separator: " ")
+                    units = [word(turn, start: start, end: start + 10, text: text, precision: .utterance)]
+                }
                 source += units
                 let result = try await value.observe(observation(units, accepted: start + 10, asr: start + 10,
                     activity: activity, retained: retained))

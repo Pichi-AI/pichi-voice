@@ -161,6 +161,7 @@ final class MobilePrivacyActivation: ObservableObject {
     private let canPrepare: () -> Bool
     private var operation: Task<Void, Never>?
     private var generation = UUID()
+    private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     var isRequested: Bool { settings.meetingPIIRedactionRequested }
     var isPreparing: Bool { state == .enabling }
 
@@ -177,6 +178,7 @@ final class MobilePrivacyActivation: ObservableObject {
     func setEnabled(_ enabled: Bool) {
         if enabled, state == .active { return }
         if enabled, isRequested, state == .enabling, operation != nil { return }
+        finishWaiters(.failure(CancellationError()))
         settings.meetingPIIRedactionRequested = enabled
         settings.meetingPIIRedactionEnabled = false
         let previous = operation
@@ -193,6 +195,7 @@ final class MobilePrivacyActivation: ObservableObject {
             guard self.canPrepare() else {
                 self.state = .failed(MeetingModelResidencyError.busy.localizedDescription)
                 self.operation = nil
+                self.finishWaiters(.failure(MeetingProcessingError.modelUnavailable))
                 return
             }
             do {
@@ -210,15 +213,34 @@ final class MobilePrivacyActivation: ObservableObject {
                 guard self.generation == selected else { return }
                 self.state = error is CancellationError ? .off : .failed(error.localizedDescription)
             }
-            if self.generation == selected { self.operation = nil; self.downloadProgress = nil }
+            if self.generation == selected {
+                self.operation = nil; self.downloadProgress = nil
+                self.finishWaiters(self.state == .active ? .success(()) : .failure(MeetingProcessingError.modelUnavailable))
+            }
         }
     }
 
     func waitUntilReadyIfRequested() async throws {
+        try Task.checkCancellation()
         guard isRequested else { return }
         if operation == nil, state != .active { setEnabled(true) }
-        await operation?.value
+        if state == .active { return }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+                else { waiters[id] = continuation }
+            }
+        } onCancel: {
+            Task { @MainActor in self.waiters.removeValue(forKey: id)?.resume(throwing: CancellationError()) }
+        }
         try Task.checkCancellation()
         guard state == .active else { throw MeetingProcessingError.modelUnavailable }
+    }
+
+    private func finishWaiters(_ result: Result<Void, Error>) {
+        let joined = Array(waiters.values)
+        waiters.removeAll()
+        for waiter in joined { waiter.resume(with: result) }
     }
 }

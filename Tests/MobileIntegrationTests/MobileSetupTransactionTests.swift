@@ -152,6 +152,30 @@ final class MobileSetupTransactionTests: XCTestCase {
         XCTAssertEqual(activation.state, .off)
     }
 
+    func testCancellingFinalSetupWaitDoesNotWaitForOrCancelSharedPrivacyLoader() async throws {
+        let settings = try settings()
+        settings.meetingPIIRedactionRequested = true
+        settings.mobileSetupStep = 5
+        var continuation: CheckedContinuation<Void, Never>?
+        let activation = MobilePrivacyActivation(settings: settings) { _ in
+            await withCheckedContinuation { continuation = $0 }
+        }
+        activation.restore()
+        for _ in 0..<1_000 where continuation == nil { await Task.yield() }
+        let loader = try XCTUnwrap(continuation)
+        let foreground = Task { try await activation.waitUntilReadyIfRequested() }
+        for _ in 0..<10 { await Task.yield() }
+        foreground.cancel()
+        do { try await foreground.value; XCTFail("A cancelled final-page waiter must detach immediately") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(activation.state, .enabling)
+        XCTAssertTrue(settings.meetingPIIRedactionRequested)
+        XCTAssertFalse(settings.meetingPIIRedactionEnabled)
+        loader.resume()
+        try await activation.waitUntilReadyIfRequested()
+        XCTAssertEqual(activation.state, .active)
+    }
+
     func testBusyCaptureDoesNotStartUnrelatedPrivacyLoading() async throws {
         let settings = try settings()
         var calls = 0
