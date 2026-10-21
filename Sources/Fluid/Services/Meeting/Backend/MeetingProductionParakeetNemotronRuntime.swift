@@ -720,7 +720,9 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let ownerEvidence = StreamingOwnerEvidenceBox()
         let adaptiveOwnerEvidence = artifact.profile.usesAdaptiveStreamingOwnerEvidence(
             implementationFingerprint: configuration.diarizationFingerprint)
-        let ownerPolicy: MeetingOwnerVoiceVerifier.Policy = adaptiveOwnerEvidence ? .streamingV2 : .legacy
+        let ownerPolicy: MeetingOwnerVoiceVerifier.Policy = artifact.profile.requiresFullStreamingOwnerEvidence(
+            implementationFingerprint: configuration.diarizationFingerprint) ? .streamingV4
+            : adaptiveOwnerEvidence ? .streamingV2 : .legacy
         let collectOwnerEvidence = self.ownerVoiceProfileSnapshot != nil
             && artifact.profile.verifiesStreamingOwner(implementationFingerprint: configuration.diarizationFingerprint)
         let liveOwnerVerification = artifact.profile.verifiesLiveStreamingOwner(
@@ -740,7 +742,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                         trackID: trackID, attemptID: attemptID, configuration: configuration,
                         speakerNameFormat: self.pcmSpeakerNameFormat, collectOwnerEvidence: collectOwnerEvidence,
                         useAdaptiveOwnerEvidence: adaptiveOwnerEvidence,
-                        verifyOwnerDuringCapture: liveOwnerVerification, onProgress: onProgress)
+                        verifyOwnerDuringCapture: liveOwnerVerification,
+                        ownerVerificationPolicy: ownerPolicy, onProgress: onProgress)
                     do {
                         try await body(session)
                         try Task.checkCancellation()
@@ -778,9 +781,11 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 return
             }
             try Task.checkCancellation()
+            let clipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: evidence.samples, profiles: profiles)
             let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot,
-                profiles: profiles, policy: ownerPolicy,
-                diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: evidence.samples, profiles: profiles, streaming: true))
+                profiles: profiles, policy: ownerPolicy, clipFramesByToken: clipFrames,
+                diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: evidence.samples, profiles: profiles,
+                    streaming: true, clipFramesByToken: clipFrames))
             DebugLogger.shared.info("mode=streaming owner_verification=completed profileCount=\(profiles.count) confirmedCount=\(confirmed.count)", source: "MeetingPCMRuntime")
             let identities = MeetingTranscriptAssembler.applyingLocalUserTokens(to: evidence.speakers,
                 attemptID: attemptID, tokens: confirmed)
@@ -1147,11 +1152,22 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                         guard let slot = Int(activity.token.label.dropFirst("slot-".count)) else { return nil }
                         return .init(slotIndex: slot, start: activity.start, end: activity.end)
                     }
-                    let excerpts = try await MeetingSpeakerVoiceSamples.collect(epoch: epoch, source: source, segments: segments)
+                    // This entry point historically applies the legacy batch policy. Keep
+                    // that behavior for saved recipes; a direct V4 streaming request must
+                    // still carry the same full-clip eligibility as its live/retry route.
+                    let fullOwnerEvidence = configuration.effectiveSpeakerProcessingMode == .streaming
+                        && artifact.profile.requiresFullStreamingOwnerEvidence(
+                            implementationFingerprint: configuration.diarizationFingerprint)
+                    let excerpts = fullOwnerEvidence
+                        ? try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(epoch: epoch, source: source, segments: segments)
+                        : try await MeetingSpeakerVoiceSamples.collect(epoch: epoch, source: source, segments: segments)
                     do {
                         let profiles = try await self.speakerVoiceProfiles(samples: excerpts)
+                        let clipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: excerpts, profiles: profiles)
                         confirmedOwner = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles,
-                            diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: excerpts, profiles: profiles, streaming: false))
+                            policy: fullOwnerEvidence ? .streamingV4 : .legacy, clipFramesByToken: clipFrames,
+                            diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: excerpts, profiles: profiles,
+                                streaming: false, clipFramesByToken: clipFrames))
                     } catch { try Task.checkCancellation() }
                 }
                 try Task.checkCancellation()
@@ -1334,13 +1350,18 @@ nonisolated enum MeetingPCMRuntimeDiagnostics {
     /// Reuses the existing explicit local profiling opt-in in ordinary signed Release builds.
     /// Capture scalar lengths before enqueueing; neither this closure nor the log retains PCM.
     static func ownerVerificationObserver(
-        samples: [MeetingSpeakerVoiceSamples], profiles: [MeetingSpeakerVoiceProfile], streaming: Bool
+        samples: [MeetingSpeakerVoiceSamples], profiles: [MeetingSpeakerVoiceProfile], streaming: Bool,
+        clipFramesByToken: [MeetingBackendSpeakerToken: [Int]]? = nil
     ) -> ((MeetingOwnerVoiceVerifier.Diagnostics) -> Void)? {
         guard self.detailedProfilingEnabled else { return nil }
         // The encoder may omit unusable inputs. Align lengths to admitted profile ordinals
         // internally; ambiguous duplicate inputs have unavailable lengths, never guessed ones.
         let inputs = Dictionary(grouping: samples.prefix(MeetingSpeakerVoiceSamples.maximumProfiles), by: \.token)
         let frames = profiles.prefix(MeetingSpeakerVoiceSamples.maximumProfiles).enumerated().map { ordinal, profile in
+            if let clipFramesByToken {
+                guard let frames = clipFramesByToken[profile.token] else { return "\(ordinal):unavailable" }
+                return "\(ordinal):" + frames.prefix(2).map(String.init).joined(separator: "+")
+            }
             guard let matches = inputs[profile.token], matches.count == 1, let sample = matches.first else { return "\(ordinal):unavailable" }
             return "\(ordinal):" + sample.clips.prefix(2).map { String($0.count) }.joined(separator: "+")
         }.joined(separator: ",")

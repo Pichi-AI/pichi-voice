@@ -13,6 +13,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     private let speakerNameFormat: String
     private let useAdaptiveOwnerEvidence: Bool
     private let verifyOwnerDuringCapture: Bool
+    private let ownerVerificationPolicy: MeetingOwnerVoiceVerifier.Policy
     private let onProgress: @Sendable (MeetingStreamingPCMObservation) async throws -> Void
     private let lock = NSLock()
     private var busy = false
@@ -24,7 +25,14 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         processedThroughSample: 0, retainedFromSample: 0, isFinal: false)
     private var speakers: [MeetingSessionSpeaker] = []
     private var ownerSamples: MeetingStreamingOwnerVoiceSamples?
-    private var ownerProfiles: [MeetingBackendSpeakerToken: MeetingSpeakerVoiceProfile] = [:]
+    /// The clip lengths belong to this exact encoded profile, including when another
+    /// slot alone supplies the next inference batch. Keeping one value prevents stale
+    /// eligibility from surviving a missing, invalid or replaced encoder result.
+    private nonisolated struct OwnerProfileEvidence: Sendable {
+        let profile: MeetingSpeakerVoiceProfile
+        let clipFrames: [Int]?
+    }
+    private var ownerProfiles: [MeetingBackendSpeakerToken: OwnerProfileEvidence] = [:]
     private var confirmedOwnerTokens: Set<MeetingBackendSpeakerToken> = []
     private var ownerEncoderUnavailable = false
 
@@ -39,6 +47,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
          attemptID: UUID, configuration: MeetingFinalProcessingConfiguration, speakerNameFormat: String,
          collectOwnerEvidence: Bool = false, useAdaptiveOwnerEvidence: Bool = false,
          verifyOwnerDuringCapture: Bool = false,
+         ownerVerificationPolicy: MeetingOwnerVoiceVerifier.Policy = .streamingV2,
          onProgress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void) {
         self.runtime = runtime
         self.asr = asr
@@ -49,6 +58,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         self.speakerNameFormat = speakerNameFormat
         self.useAdaptiveOwnerEvidence = useAdaptiveOwnerEvidence
         self.verifyOwnerDuringCapture = verifyOwnerDuringCapture && collectOwnerEvidence
+        self.ownerVerificationPolicy = ownerVerificationPolicy
         self.onProgress = onProgress
         self.ownerSamples = collectOwnerEvidence
             ? .init(epoch: .init(trackID: trackID, ordinal: 0), useAdaptiveOwnerEvidence: useAdaptiveOwnerEvidence) : nil
@@ -252,11 +262,21 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     private func observation(batch: MeetingPCMTranscriptBatch = .init(segments: []),
                              asrStableThroughSample: Int? = nil,
                              sealedEmptyASRRange: Range<Int>? = nil) -> MeetingStreamingPCMObservation {
-        .init(batch: batch, activity: self.activity(), acceptedThroughSample: self.update.acceptedThroughSample,
+        let value = MeetingStreamingPCMObservation(batch: batch, activity: self.activity(), acceptedThroughSample: self.update.acceptedThroughSample,
             processedThroughSample: self.update.processedThroughSample, retainedFromSample: self.update.retainedFromSample,
             isFinal: self.update.isFinal, asrStableThroughSample: asrStableThroughSample,
             sealedEmptyASRRange: sealedEmptyASRRange,
             confirmedLocalUserTokens: self.verifyOwnerDuringCapture ? self.confirmedOwnerTokens : nil)
+        if self.verifyOwnerDuringCapture {
+            MeetingTimelineTrace.shared?.record("owner_observation", fields: [
+                "attemptID": self.attemptID.uuidString,
+                "acceptedThroughSample": String(self.update.acceptedThroughSample),
+                "processedThroughSample": String(self.update.processedThroughSample),
+                "confirmedCount": String(self.confirmedOwnerTokens.count),
+                "confirmedSlots": self.confirmedOwnerTokens.map(\.label).sorted().joined(separator: ","),
+                "final": String(self.update.isFinal)])
+        }
+        return value
     }
 
     /// The same controller worker joins diarizer, optional voice inference and publication.
@@ -279,19 +299,28 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         }
         try Task.checkCancellation()
         let returned = Dictionary(grouping: profiles, by: \.token)
+        let encodedClipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: samples, profiles: profiles)
         for sample in samples {
-            self.ownerProfiles[sample.token] = returned[sample.token]?.count == 1 ? returned[sample.token]?.first : nil
+            if let matches = returned[sample.token], matches.count == 1, let profile = matches.first {
+                self.ownerProfiles[sample.token] = .init(profile: profile, clipFrames: encodedClipFrames[sample.token])
+            } else { self.ownerProfiles[sample.token] = nil }
         }
-        let candidates = self.ownerProfiles.values.sorted { $0.token.label < $1.token.label }
+        let evidence = self.ownerProfiles.values.sorted { $0.profile.token.label < $1.profile.token.label }
+        let candidates = evidence.map(\.profile)
+        let clipFramesByToken = Dictionary(uniqueKeysWithValues: evidence.compactMap { entry in
+            entry.clipFrames.map { (entry.profile.token, $0) }
+        })
         self.confirmedOwnerTokens = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.runtime.ownerVoiceProfileSnapshot,
-            profiles: candidates, policy: .streamingV2,
-            diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: samples, profiles: candidates, streaming: true))
+            profiles: candidates, policy: self.ownerVerificationPolicy, clipFramesByToken: clipFramesByToken,
+            diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: samples, profiles: candidates,
+                streaming: true, clipFramesByToken: clipFramesByToken))
         MeetingTimelineTrace.shared?.record("owner_verification", fields: [
             "attemptID": self.attemptID.uuidString,
             "acceptedThroughSample": String(self.update.acceptedThroughSample),
             "processedThroughSample": String(self.update.processedThroughSample),
             "encodedProfiles": String(profiles.count), "candidateProfiles": String(candidates.count),
             "confirmedCount": String(self.confirmedOwnerTokens.count),
+            "confirmedSlots": self.confirmedOwnerTokens.map(\.label).sorted().joined(separator: ","),
             "wallMilliseconds": String((ProcessInfo.processInfo.systemUptime - began) * 1_000),
             "final": String(final)])
     }
