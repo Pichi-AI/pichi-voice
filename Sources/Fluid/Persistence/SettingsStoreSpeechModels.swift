@@ -727,7 +727,7 @@ extension SettingsStore {
         /// Brand color for the provider badge
         var brandColorHex: String {
             switch self {
-            case .gigaam: return "#21A038" // SaluteDevices (Sber group) green
+            case .gigaam: return "#8E8E93" // Neutral: no bundled publisher logo or color
             case .fluidParakeetMini, .fluidParakeetPico:
                 return "#1A75FF" // FluidBrandColors.blue
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
