@@ -22,7 +22,7 @@ struct MobileSensitiveDictionarySettings: View {
                         Text(entry.phrase).foregroundStyle(theme.palette.primaryText)
                         Spacer()
                         Image(systemName: "pencil").foregroundStyle(theme.palette.secondaryText)
-                    }
+                    }.contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.entry.\(entry.id)")
                     .swipeActions {
                         Button(PichiLocalization.text("Delete"), role: .destructive) {
@@ -50,10 +50,13 @@ struct MobileSensitiveDictionarySettings: View {
                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     if let error { Text(error).foregroundStyle(theme.palette.warning) }
                     if let editing {
-                        Button(PichiLocalization.text("Delete"), role: .destructive) {
+                        Button(role: .destructive) {
                             do { try settings.removeSensitiveDataDictionaryPhrase(id: editing.id); close() }
                             catch { self.error = PichiLocalization.text("Could not update the private dictionary.") }
-                        }.accessibilityIdentifier("privacy.dictionary.delete")
+                        } label: {
+                            Text(PichiLocalization.text("Delete"))
+                                .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.delete")
                     }
                 }.navigationTitle(PichiLocalization.text(editing == nil ? "Add word or phrase" : "Edit word or phrase"))
                     .toolbar {
