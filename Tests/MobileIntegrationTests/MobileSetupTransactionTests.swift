@@ -70,6 +70,40 @@ final class MobileSetupTransactionTests: XCTestCase {
         if case .failed = resources.phase {} else { XCTFail("Expected resource failure") }
     }
 
+    func testBackgroundAndEnrollmentJoinTheCanonicalVoiceInstallation() async throws {
+        let voice = SetupVoiceResourceProbe()
+        let (started, startSignal) = AsyncStream<Void>.makeStream()
+        let (release, releaseSignal) = AsyncStream<Void>.makeStream()
+        let artifact = MeetingNemotronModelArtifact(packageURL: URL(fileURLWithPath: "/synthetic-unused"),
+            totalByteCount: 1, fileCount: 1, manifestSHA256: "synthetic", entryMetadataSHA256: "synthetic",
+            profile: .experimentalFast128FP16CPU)
+        let selected = MeetingDiarizationModelStore(validate: { artifact },
+            validateVoice: { throw URLError(.unsupportedURL) },
+            installVoice: { _ in throw URLError(.unsupportedURL) })
+        let canonical = MeetingDiarizationModelStore(validate: { artifact }, validateVoice: {
+            if !voice.isReady { throw URLError(.fileDoesNotExist) }
+        }, installVoice: { _ in
+            voice.begin()
+            startSignal.yield(())
+            for await _ in release { break }
+            voice.finish()
+        })
+        let resources = MobileRequiredResources(prepareSpeech: {}, voiceStore: canonical, speakerStore: { _ in selected })
+        let background = Task { try await resources.prepare(modelID: "synthetic") }
+        var events = started.makeAsyncIterator()
+        _ = await events.next()
+        let enrollment = Task { try await canonical.prepare(dependencies: [.voiceMatching]) }
+        for _ in 0..<10 { await Task.yield() }
+        releaseSignal.yield(())
+        try await background.value
+        try await enrollment.value
+        XCTAssertEqual(resources.phase, .ready)
+        XCTAssertTrue(canonical.voiceMatchingReady)
+        XCTAssertEqual(voice.starts, 1)
+        XCTAssertFalse(selected.voiceMatchingReady, "Profile-specific installation must not own the shared encoder")
+        startSignal.finish(); releaseSignal.finish()
+    }
+
     func testPrivacyActivationCommitsOnlyAfterActualPreparationAndJoinsRepeatedEnable() async throws {
         let settings = try settings()
         var continuation: CheckedContinuation<Void, Error>?
@@ -170,4 +204,14 @@ final class MobileSetupTransactionTests: XCTestCase {
         XCTAssertEqual(restored.state, .active)
         XCTAssertTrue(settings.meetingPIIRedactionEnabled)
     }
+}
+
+private final nonisolated class SetupVoiceResourceProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var ready = false
+    var starts: Int { lock.withLock { count } }
+    var isReady: Bool { lock.withLock { ready } }
+    func begin() { lock.withLock { count += 1 } }
+    func finish() { lock.withLock { ready = true } }
 }

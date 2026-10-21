@@ -19,7 +19,7 @@ flowchart LR
     V --> D[Ready]
 ```
 
-The mobile flow uses the portable brand mark, theme typography and String Catalog. The inherited desktop onboarding was inspected in `WelcomeView.swift` and `Theme/Components/OnboardingComponents.swift`; its AppKit window, shortcut and Accessibility controls cannot host an iPhone flow. ASR preparation continues through `ASRService`, participant installation through the registered `MeetingDiarizationModelStore`, VAD through `MeetingSpeechActivityResources`, and enrollment through `MeetingOwnerVoiceSettingsContent` and its existing service.
+The mobile flow uses the portable brand mark, theme typography and String Catalog. The inherited desktop onboarding was inspected in `WelcomeView.swift` and `Theme/Components/OnboardingComponents.swift`; its AppKit window, shortcut and Accessibility controls cannot host an iPhone flow. ASR preparation continues through `ASRService`, participant separation through the registered `MeetingDiarizationModelStore`, shared voice-encoder installation through the same canonical `.shared` operation as enrollment, VAD through `MeetingSpeechActivityResources`, and enrollment through `MeetingOwnerVoiceSettingsContent` and its existing service.
 
 The initial mobile migration retires known disabled/after-recording participant preferences for new requests. It preserves unknown future timing values, explicit privacy, audio retention, selected ASR, stored voice profiles and encoded sessions/checkpoints. Existing installations continue into the ordinary app. New installations resume the last setup step and pending model selection. Privacy defaults off only when no choice exists.
 

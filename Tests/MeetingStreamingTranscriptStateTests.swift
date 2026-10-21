@@ -136,6 +136,7 @@ struct MeetingStreamingTranscriptStateTests {
         try await speechBoundaryCancellationAndProofGuards()
         try await speechThenSealedEmptyWindowDrainsWhileCapturing()
         try await nativeUtteranceTimingAndPrivacy()
+        try await sparseDictionaryStreamPreservesNativeIntervals()
         try await shortRecordingAndSilenceMatrix()
         try await longSilenceSpeakerMatrix()
         try await sparseEightHourStream()
@@ -679,6 +680,49 @@ struct MeetingStreamingTranscriptStateTests {
         check(all.count == 1 && all[0].nativePrecision == .utterance)
         check(all[0].speakerID == nil, "One utterance containing two voices cannot be assigned to one participant")
         check(all[0].nativeTiming == whole.nativeTiming && all[0].text == whole.text)
+    }
+
+    static func sparseDictionaryStreamPreservesNativeIntervals() async throws {
+        for precision: MeetingTextUnitPrecision in [.word, .utterance] {
+            let rules = try TranscriptSensitiveDictionarySnapshot(entries: [.init(phrase: "закрытый проект")])
+            let redactor = TranscriptDictionaryRedactor(wrapped: SyntheticMaskingRedactor(), dictionary: rules)
+            let value = try state(privacy: .init(redactor: redactor))
+            let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")
+            var retained = 0
+            var activity: [MeetingBackendSpeakerActivity] = []
+            var source: [MeetingTranscriptSegment] = []
+            var published: [MeetingTranscriptSegment] = []
+            for turn in 0..<12 {
+                let start = Double(turn) * 480
+                let silence = try await value.observe(observation(accepted: start, asr: start,
+                    activity: activity, retained: retained))
+                retained = silence.retainActivityFromSample
+                activity.removeAll { $0.end < Double(retained) / 16_000 }
+                activity.append(.init(token: token, start: start, end: start + 10))
+                let words = (0..<20).map { index in
+                    word(turn * 20 + index, start: start + Double(index) * 0.5,
+                        end: start + Double(index) * 0.5 + 0.4,
+                        text: index == 18 ? "закрытый" : index == 19 ? "проект" : "слово")
+                }
+                let units = precision == .word ? words : [word(turn, start: start, end: start + 10,
+                    text: words.map(\.text).joined(separator: " "), precision: .utterance)]
+                source += units
+                let result = try await value.observe(observation(units, accepted: start + 10, asr: start + 10,
+                    activity: activity, retained: retained))
+                published += result.safeBatch.segments
+                retained = result.retainActivityFromSample
+                activity.removeAll { $0.end < Double(retained) / 16_000 }
+                check(result.diagnostics.pendingProtectedWords <= 64)
+            }
+            let final = try await value.finish(observation(accepted: 5_300, asr: 5_300, final: true,
+                activity: activity, retained: retained))
+            published += final.safeBatch.segments
+            check(published.map(\.id) == source.map(\.id), "Sparse dictionary processing lost or duplicated native units")
+            check(published.map(\.nativeTiming) == source.map(\.nativeTiming))
+            check(published.map(\.nativePrecision) == source.map(\.nativePrecision))
+            check(published.allSatisfy { !$0.text.contains("закрытый") && !$0.text.contains("проект") })
+            check(final.diagnostics.pendingProtectedWords == 0 && final.diagnostics.retainedAttributionWords == 0)
+        }
     }
 
     static func guardsAndLimits() async throws {

@@ -83,6 +83,8 @@ struct MobileOnboarding: View {
         case 2:
             Text(PichiLocalization.text("Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."))
                 .font(theme.typography.body)
+            Text(PichiLocalization.text("Text and participant labels update in fragments. A delay is normal while enough speech is collected."))
+                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             MobileRequiredResourcesStatus(resources: required)
             Text(PichiLocalization.text("Speech detection and speaker resources prepare automatically. This installs files without loading every speech model into memory."))
                 .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
@@ -127,7 +129,7 @@ struct MobileOnboarding: View {
                 Button(PichiLocalization.text("Cancel")) { operation?.cancel(); asr.cancelModelDownload() }
                     .accessibilityIdentifier("onboarding.cancel")
             }
-            Button(PichiLocalization.text(step == 5 ? "Get started" : "Next")) { next() }
+            Button(PichiLocalization.text(step == 5 ? "Get started" : error == nil ? "Next" : "Try again")) { next() }
                 .buttonStyle(.borderedProminent).disabled(advancing || (step == 3 && privacy.isPreparing))
                 .accessibilityIdentifier("onboarding.next")
         }.controlSize(.large).padding(20).frame(maxWidth: 680).frame(maxWidth: .infinity)
@@ -197,7 +199,7 @@ struct MobileRequiredResourcesStatus: View {
                     Task { try? await resources.prepare(modelID: modelID) }
                 }
             default:
-                Text(PichiLocalization.text(resources.phase == .speakers ? "Preparing speaker resources…" : "Preparing speech detection…"))
+                Text(PichiLocalization.text((resources.phase == .speakers || resources.phase == .speakerVoice) ? "Preparing speaker resources…" : "Preparing speech detection…"))
                 if let progress = resources.progress { ProgressView(value: progress) }
                 else { ProgressView() }
             }

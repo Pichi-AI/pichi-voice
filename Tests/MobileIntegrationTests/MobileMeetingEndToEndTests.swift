@@ -1037,6 +1037,32 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         #endif
     }
 
+    /// Same real pipeline for any registered streaming provider. The caller pins an
+    /// explicit model and reviewed local fixture; no default-provider substitution occurs.
+    func testRegisteredStreamingMeetingPrivacySpeakersAndFootprint() async throws {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_REGISTERED_STREAMING_E2E"] == "1" else {
+            throw XCTSkip("Explicitly enable registered-provider streaming fixture inference")
+        }
+        let options = try CombinedEvaluationOptions(environment: environment)
+        guard options.privateEvaluation, options.repetitions == 1,
+              environment["PICHI_MEETING_DETAILED_PROFILE"] == "1",
+              let model = environment["PICHI_COMBINED_MEETING_ASR"],
+              PichiMeetingProviderFactory.registeredBackendDescriptor(for: model)?.supportedSpeakerProcessingModes.contains(.streaming) == true else {
+            throw NSError(domain: "RegisteredStreamingRequiresExplicitSupportedModelAndFixture", code: 1)
+        }
+        let revision = RuntimeBuildProvenance.sanitizedSourceRevision(environment["PICHI_COMBINED_MEETING_TESTED_REVISION"])
+        guard revision != "unavailable",
+              RuntimeBuildProvenance.sanitizedSourceRevision(Bundle.main.object(forInfoDictionaryKey: "AppSourceRevision")) == revision else {
+            throw NSError(domain: "StreamingMeetingRequiresMatchingFrozenRevision", code: 1)
+        }
+        try await runCombinedRussianMeeting(environment: environment, options: options, repetition: 1, streaming: true)
+        #else
+        throw XCTSkip("Registered streaming fixture evaluation requires a Debug test host")
+        #endif
+    }
+
     /// A retained recording still streams live. Recovery then uses a different coordinator
     /// and pipeline against those real test-owned files, with no in-memory attempt to adopt.
     func testRetainedStreamingRussianMeetingAndFreshPipelineRetry() async throws {

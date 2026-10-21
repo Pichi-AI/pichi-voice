@@ -131,6 +131,7 @@ subprocess.run([
     str(meeting / "Backend/MeetingCanonicalEvidenceTypes.swift"), str(meeting / "Backend/MeetingSpeakerAttribution.swift"),
     str(meeting / "MeetingProcessingConfiguration.swift"), str(meeting / "MeetingPCMTranscriptBatch.swift"),
     str(ROOT / "Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift"),
+    str(ROOT / "Sources/Fluid/Services/Privacy/TranscriptSensitiveDictionary.swift"),
     str(meeting / "MeetingTranscriptPrivacyPolicy.swift"),
     str(BUILD / "PCMAssembly.swift"), str(meeting / "Backend/MeetingStreamingProtectedWordTail.swift"),
     str(meeting / "MeetingTimelineTrace.swift"),

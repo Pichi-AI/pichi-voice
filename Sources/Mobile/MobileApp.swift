@@ -140,7 +140,7 @@ final class AppServices: ObservableObject {
                 try PichiMeetingProviderFactory.validateRecordingConfiguration($0, isAppleSilicon: CPUArchitecture.isAppleSilicon)
             }
         )
-        for publisher in [settings.objectWillChange, asr.objectWillChange, meetingSessionCoordinator.objectWillChange] {
+        for publisher in [settings.objectWillChange, asr.objectWillChange, meetingSessionCoordinator.objectWillChange, requiredResources.objectWillChange] {
             publisher.sink { [weak self] in
                 Task { @MainActor in
                     // objectWillChange arrives before its new setting/activity is committed.
@@ -221,7 +221,7 @@ final class AppServices: ObservableObject {
     }
 
     private var isPreparingIdleResources: Bool {
-        if MeetingSpeechActivityResources.shared.isPreparing { return true }
+        if requiredResources.isPreparing || MeetingSpeechActivityResources.shared.isPreparing { return true }
         switch observedSpeakerStore?.state {
         case .checking?, .downloading?: return true
         default: return false
@@ -234,7 +234,8 @@ final class AppServices: ObservableObject {
         guard idleResourceObservers.isEmpty || store !== observedSpeakerStore else { return }
         observedSpeakerStore = store
         idleResourceObservers.removeAll()
-        let publishers = [store?.objectWillChange, MeetingSpeechActivityResources.shared.objectWillChange].compactMap { $0 }
+        let publishers = [store?.objectWillChange, MeetingSpeechActivityResources.shared.objectWillChange,
+                          MeetingDiarizationModelStore.shared.objectWillChange].compactMap { $0 }
         for publisher in publishers {
             publisher.sink { [weak self] in
                 Task { @MainActor in await Task.yield(); await self?.idleResourcesChanged() }

@@ -49,7 +49,7 @@ extension SettingsStore {
 /// inference engines or captures PCM. Background setup, onboarding and Start share one job.
 @MainActor
 final class MobileRequiredResources: ObservableObject {
-    enum Phase: Equatable { case idle, speechActivity, speakers, ready, failed(String) }
+    enum Phase: Equatable { case idle, speechActivity, speakers, speakerVoice, ready, failed(String) }
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var modelID: String?
     private var operation: (id: UUID, modelID: String, task: Task<Void, Never>)?
@@ -57,14 +57,16 @@ final class MobileRequiredResources: ObservableObject {
     private var progressObservers: Set<AnyCancellable> = []
     private let speech: MeetingSpeechActivityResources
     private let prepareSpeech: () async throws -> Void
+    private let voiceStore: MeetingDiarizationModelStore
     private let speakerStore: (String) -> MeetingDiarizationModelStore?
 
     init(speech: MeetingSpeechActivityResources = .shared,
          prepareSpeech: (() async throws -> Void)? = nil,
+         voiceStore: MeetingDiarizationModelStore = .shared,
          speakerStore: @escaping (String) -> MeetingDiarizationModelStore? = {
              PichiMeetingProviderFactory.speakerModelStore(for: $0, speakerProcessingMode: .streaming)
          }) {
-        self.speech = speech; self.speakerStore = speakerStore
+        self.speech = speech; self.speakerStore = speakerStore; self.voiceStore = voiceStore
         self.prepareSpeech = prepareSpeech ?? { try await speech.prepare() }
     }
 
@@ -74,6 +76,9 @@ final class MobileRequiredResources: ObservableObject {
         case .speechActivity: return speech.isPreparing ? speech.progress : nil
         case .speakers:
             if let modelID, case .downloading(let fraction) = speakerStore(modelID)?.state { return fraction }
+            return nil
+        case .speakerVoice:
+            if case .downloading(let fraction) = voiceStore.state { return fraction }
             return nil
         default: return nil
         }
@@ -91,7 +96,7 @@ final class MobileRequiredResources: ObservableObject {
         // Cancelling a foreground waiter leaves the app-owned background job intact.
         modelID = requested
         progressObservers.removeAll()
-        for publisher in [speech.objectWillChange, speakerStore(requested)?.objectWillChange].compactMap({ $0 }) {
+        for publisher in [speech.objectWillChange, speakerStore(requested)?.objectWillChange, voiceStore.objectWillChange].compactMap({ $0 }) {
             publisher.sink { [weak self] in self?.objectWillChange.send() }.store(in: &progressObservers)
         }
         let id = UUID()
@@ -103,8 +108,15 @@ final class MobileRequiredResources: ObservableObject {
                 try Task.checkCancellation()
                 guard let store = self.speakerStore(requested) else { throw MeetingProcessingError.modelUnavailable }
                 self.phase = .speakers
-                _ = try await store.ensureInstalled(includingVoiceEncoder: store.supportsOwnerVoiceVerification)
+                _ = try await store.ensureInstalled()
                 try Task.checkCancellation()
+                if store.supportsOwnerVoiceVerification {
+                    // The same canonical operation as enrollment owns the shared encoder
+                    // destination. Profile-specific separation stores must not race it.
+                    self.phase = .speakerVoice
+                    try await self.voiceStore.prepare(dependencies: [.voiceMatching])
+                    try Task.checkCancellation()
+                }
                 self.phase = .ready
                 result = .success(())
             } catch {

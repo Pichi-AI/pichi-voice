@@ -119,6 +119,8 @@ struct MobileRecordingSettings: View {
             }
             Section(PichiLocalization.text("Speaker labels")) {
                 Text(PichiLocalization.text("Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."))
+                Text(PichiLocalization.text("Text and participant labels update in fragments. A delay is normal while enough speech is collected."))
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 MobileRequiredResourcesStatus(resources: required)
             }
             Section(PichiLocalization.text("My voice")) {

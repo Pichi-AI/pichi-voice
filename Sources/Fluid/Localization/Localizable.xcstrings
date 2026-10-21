@@ -53156,6 +53156,23 @@
           }
         }
       }
+    },
+    "Text and participant labels update in fragments. A delay is normal while enough speech is collected.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text and participant labels update in fragments. A delay is normal while enough speech is collected."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст и подписи участников появляются фрагментами. Для накопления достаточного объёма речи требуется время."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
