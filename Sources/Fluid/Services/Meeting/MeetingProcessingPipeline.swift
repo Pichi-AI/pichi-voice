@@ -1489,7 +1489,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     func prepareSpeakerDependencies(for descriptor: MeetingBackendDescriptor, session: MeetingSession) async throws {
         guard session.speakerLabelsEnabled != false else { return }
         if session.effectiveSpeakerProcessingMode == .streaming {
-            let configuration = PichiMeetingProviderFactory.configuration(backendID: descriptor.id,
+            let configuration = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: descriptor.id,
                 languageCode: session.languageCode, artifactFingerprintOverride: session.recordingASRArtifactFingerprint,
                 diarizationEnabled: true, speakerProcessingMode: session.effectiveSpeakerProcessingMode)
             try descriptor.validateSpeakerProcessingMode(configuration: configuration, mode: session.mode)
@@ -1575,17 +1575,23 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         //
         // The request is frozen first, so the host capability handed to the factory can be bound to
         // this exact value.
-        let request = MeetingBackendRequest(
-            attemptID: Self.resolvedAttemptID(session: session),
-            session: session,
-            sessionDirectory: sessionDirectory,
-            configuration: retainedPin?.configuration ?? PichiMeetingProviderFactory.configuration(
+        let configuration: MeetingFinalProcessingConfiguration
+        if let retainedPin {
+            configuration = retainedPin.configuration
+        } else {
+            configuration = try await PichiMeetingProviderFactory.frozenConfiguration(
                 backendID: backendID,
                 languageCode: session.languageCode,
                 artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil,
                 diarizationEnabled: session.speakerLabelsEnabled ?? true,
                 speakerProcessingMode: session.effectiveSpeakerProcessingMode
-            ),
+            )
+        }
+        let request = MeetingBackendRequest(
+            attemptID: Self.resolvedAttemptID(session: session),
+            session: session,
+            sessionDirectory: sessionDirectory,
+            configuration: configuration,
             privacyFingerprint: attemptRedactor?.checkpointIdentity
         )
         let backend = try self.backendRegistry.makeBackend(

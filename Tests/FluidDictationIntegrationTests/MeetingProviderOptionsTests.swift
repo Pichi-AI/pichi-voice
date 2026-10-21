@@ -186,6 +186,49 @@ final class MeetingProviderOptionsTests: XCTestCase {
             configuration: override, selectedModelID: PichiMeetingProviderFactory.gigaamModelID), PichiMeetingProviderFactory.gigaamModelID)
     }
 
+    /// Attempt owners freeze through the detached variant. It must bind exactly the snapshot the
+    /// synchronous builder produces on this machine, with and without a frozen session identity.
+    @MainActor
+    func testFrozenConfigurationMatchesSynchronousSnapshotForEveryRegistration() async throws {
+        for backendID in [MeetingBackendID.gigaam, .whisperTiny, .parakeetV3, .legacyCompatibility] {
+            for override in [nil, "sha256:synthetic-frozen-session"] as [String?] {
+                for diarizationEnabled in [false, true] {
+                    let frozen = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: backendID, languageCode: "ru",
+                        artifactFingerprintOverride: override, diarizationEnabled: diarizationEnabled)
+                    let synchronous = PichiMeetingProviderFactory.configuration(backendID: backendID, languageCode: "ru",
+                        artifactFingerprintOverride: override, diarizationEnabled: diarizationEnabled)
+                    XCTAssertEqual(frozen, synchronous, "\(backendID.rawValue) override=\(override ?? "nil")")
+                    if let override, backendID != .legacyCompatibility { XCTAssertEqual(frozen.asrArtifactFingerprint, override) }
+                }
+            }
+        }
+        for model: SettingsStore.SpeechModel in [.gigaam, .whisperTiny, .parakeetTDT] {
+            let frozen = try await PichiMeetingProviderFactory.frozenConfiguration(asrModel: model.rawValue, languageCode: "auto")
+            XCTAssertEqual(frozen, PichiMeetingProviderFactory.configuration(asrModel: model.rawValue, languageCode: "auto"))
+        }
+    }
+
+    /// The path is resolved on the caller's actor; the digest itself can run detached.
+    @MainActor
+    func testWhisperFingerprintOperationMatchesInstalledIdentityOffTheMainActor() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("WhisperFingerprint-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = SettingsStore.SpeechModel.whisperTiny
+        let file = root.appendingPathComponent(try XCTUnwrap(model.whisperModelFile))
+        XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: Data("synthetic".utf8)))
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: UInt64(model.expectedDownloadBytes))
+        try handle.close()
+
+        let expected = try XCTUnwrap(try WhisperProvider.installedArtifactFingerprint(for: model, directory: root))
+        let operation = WhisperProvider.installedArtifactFingerprintOperation(for: model, directory: root)
+        let detached = try await Task.detached(priority: .userInitiated) { try operation() }.value
+        XCTAssertEqual(detached, expected)
+        try FileHandle(forWritingTo: file).truncate(atOffset: UInt64(model.expectedDownloadBytes - 1))
+        XCTAssertNil(try operation(), "A partial artifact has no identity")
+    }
+
     @MainActor
     func testGigaAMMeetingPolicyPinsRussianAndRejectsOtherLanguages() throws {
         let configuration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "ru")

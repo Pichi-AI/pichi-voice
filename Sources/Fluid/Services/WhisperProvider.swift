@@ -745,10 +745,18 @@ final class WhisperProvider: TranscriptionProvider {
     /// The loader consumes GGUF, not legacy whisper.cpp GGML `.bin` exports. Inspect the
     /// installed selected artifact once at attempt snapshot/preparation, never on UI render.
     static func installedArtifactFingerprint(for model: SettingsStore.SpeechModel, directory: URL? = nil) throws -> String? {
-        guard let file = model.whisperModelFile else { return nil }
+        try self.installedArtifactFingerprintOperation(for: model, directory: directory)()
+    }
+
+    /// Resolves the artifact path on the caller's actor. The returned digest reads the whole
+    /// file, so attempt owners on the main actor run it detached.
+    static func installedArtifactFingerprintOperation(for model: SettingsStore.SpeechModel,
+                                                      directory: URL? = nil) -> @Sendable () throws -> String? {
+        guard let file = model.whisperModelFile else { return { nil } }
         let root = directory ?? AppBrand.cachesDirectory.appendingPathComponent("WhisperModels", isDirectory: true)
         let url = root.appendingPathComponent(file)
-        return try self.artifactFingerprint(at: url, expectedBytes: model.expectedDownloadBytes)
+        let expectedBytes = model.expectedDownloadBytes
+        return { try Self.artifactFingerprint(at: url, expectedBytes: expectedBytes) }
     }
 
     private nonisolated static func artifactFingerprint(at url: URL, expectedBytes: Int64) throws -> String? {

@@ -111,6 +111,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     @Published private(set) var trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth] = [:]
     @Published private(set) var liveTranscript: MeetingLiveTranscriptSnapshot = .empty
     @Published private(set) var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
+    /// Advances when a retention sweep commits an audio deletion. History projections reload on
+    /// it instead of running their own sweep; healing alone changes no stored manifest.
+    @Published private(set) var retentionSweepRevision = 0
     /// When live captions last heard words in the current recording. Nil without live captions.
     private(set) var lastLiveSpeechAt: Date?
 
@@ -200,6 +203,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private var sweepPending = false
+    private var isReadingRetentionSessions = false
     private var retentionTimerTask: Task<Void, Never>?
 
     private enum TranscriptCorrection {
@@ -520,7 +524,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         // before any dependency work or permission prompt and retain this exact snapshot.
         let explicitRecordingConfiguration: MeetingFinalProcessingConfiguration?
         if configuration.transcriptionBackendID != nil {
-            let snapshot = PichiMeetingProviderFactory.configuration(backendID: requestedBackendID,
+            let snapshot = try await PichiMeetingProviderFactory.frozenConfiguration(backendID: requestedBackendID,
                 languageCode: configuration.languageCode, diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
                 speakerProcessingMode: configuration.effectiveSpeakerProcessingMode)
             let registeredOverride = PichiMeetingProviderFactory.registeredBackendDescriptor(for: snapshot.asrModel)?.id == requestedBackendID
@@ -610,12 +614,20 @@ final class MeetingSessionCoordinator: ObservableObject {
                       self.settings.meetingTranscriptionBackendID == savedBackendID,
                       self.terminationTask == nil, !self.isMutatingSession else { throw CancellationError() }
             }
-            recordingASRConfiguration = explicitRecordingConfiguration ?? PichiMeetingProviderFactory.configuration(
-                backendID: recordingBackendID,
-                languageCode: configuration.languageCode,
-                diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
-                speakerProcessingMode: configuration.effectiveSpeakerProcessingMode
-            )
+            if let explicitRecordingConfiguration {
+                recordingASRConfiguration = explicitRecordingConfiguration
+            } else {
+                recordingASRConfiguration = try await PichiMeetingProviderFactory.frozenConfiguration(
+                    backendID: recordingBackendID,
+                    languageCode: configuration.languageCode,
+                    diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
+                    speakerProcessingMode: configuration.effectiveSpeakerProcessingMode
+                )
+                guard self.startReservation == reservation,
+                      self.settings.selectedSpeechModel.rawValue == recordingModelID,
+                      self.settings.meetingTranscriptionBackendID == savedBackendID,
+                      self.terminationTask == nil, !self.isMutatingSession else { throw CancellationError() }
+            }
             _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
             try self.validateFrozenRecordingConfiguration(recordingASRConfiguration)
         } catch {
@@ -1497,10 +1509,60 @@ final class MeetingSessionCoordinator: ObservableObject {
         Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
     }
 
-    /// Skips (pending) while another mutation holds the gate; the releasing op reschedules it.
+    /// Skips (pending) while another sweep or mutation is in flight; the releasing op reschedules it.
+    /// Manifests are decoded before the mutation gate that Start and the other mutations check, so a
+    /// long history does not hold them. The gate covers only revalidation, healing and deletion.
     func sweepExpiredAudio() async {
+        guard !self.isMutatingSession, !self.isReadingRetentionSessions else {
+            self.sweepPending = true
+            return
+        }
+        self.isReadingRetentionSessions = true
+        // A queued tail save landing after this read would hide a newly eligible session.
+        await self.flushQueuedPersistence()
+
+        let sessions: [MeetingSession]
+        do {
+            sessions = try await self.store.loadAll()
+        } catch {
+            self.finishRetentionRead()
+            DebugLogger.shared.warning(
+                "Retention sweep could not load sessions; leaving the current timer as-is: \(error)",
+                source: "MeetingSessionCoordinator"
+            )
+            return
+        }
+        var leftovers: [(id: MeetingSessionID, leftover: LeftoverAudio)] = []
+        for session in sessions {
+            if let leftover = await self.leftoverAudio(for: session) { leftovers.append((session.id, leftover)) }
+        }
+        self.isReadingRetentionSessions = false
+        let policy = self.settings.meetingAudioRetentionPolicy
+        let now = Date()
+        var nextDeadline: Date?
+        var expiredIDs: [MeetingSessionID] = []
+        for session in sessions where session.retention.audioDeletedAt == nil && Self.isSweepEligible(session) {
+            guard let deadline = policy.deadline(endedAt: session.endedAt, startedAt: session.startedAt) else { continue }
+            if deadline <= now {
+                expiredIDs.append(session.id)
+            } else if nextDeadline.map({ deadline < $0 }) ?? true {
+                nextDeadline = deadline
+            }
+        }
+        guard !leftovers.isEmpty || !expiredIDs.isEmpty else {
+            self.scheduleRetentionTimer(nextDeadline: nextDeadline)
+            self.finishRetentionRead()
+            return
+        }
+        guard self.terminationTask == nil else { return }
         guard !self.isMutatingSession else {
             self.sweepPending = true
+            return
+        }
+        guard self.startReservation == nil else {
+            // Recording admission takes precedence over maintenance; a short re-arm finishes it.
+            self.sweepPending = false
+            self.scheduleRetentionTimer(nextDeadline: min(nextDeadline ?? .distantFuture, now.addingTimeInterval(60)))
             return
         }
         self.isMutatingSession = true
@@ -1509,40 +1571,35 @@ final class MeetingSessionCoordinator: ObservableObject {
         // A queued tail save landing after our deletes would resurrect the audio manifest.
         await self.flushQueuedPersistence()
 
-        let sessions: [MeetingSession]
-        do {
-            sessions = try await self.store.loadAll()
-        } catch {
-            DebugLogger.shared.warning(
-                "Retention sweep could not load sessions; leaving the current timer as-is: \(error)",
-                source: "MeetingSessionCoordinator"
-            )
-            return
-        }
-        let policy = self.settings.meetingAudioRetentionPolicy
-        let now = Date()
-        var nextDeadline: Date?
-
-        for session in sessions {
-            await self.healLeftoverAudio(for: session)
-
-            guard session.retention.audioDeletedAt == nil else { continue }
-            guard Self.isSweepEligible(session) else { continue }
-            guard let deadline = policy.deadline(endedAt: session.endedAt, startedAt: session.startedAt) else { continue }
-
-            guard deadline <= now else {
-                if nextDeadline.map({ deadline < $0 }) ?? true { nextDeadline = deadline }
-                continue
+        for (id, leftover) in leftovers where self.isSafeToSweep(sessionID: id) {
+            switch leftover {
+            case let .workingState(directory): try? MeetingRetainedProcessingCheckpoint.remove(in: directory)
+            case .audioFiles: try? await self.store.deleteAudioFiles(for: id)
             }
-            guard self.isSafeToSweep(sessionID: session.id) else {
+        }
+
+        var deletedAudio = false
+        for id in expiredIDs {
+            guard self.isSafeToSweep(sessionID: id) else {
                 // Contended, not expired: retry soon.
                 nextDeadline = min(nextDeadline ?? .distantFuture, Date().addingTimeInterval(60))
+                continue
+            }
+            // The decoded snapshot predates the gate. Delete only what is still expired now.
+            let currentPolicy = self.settings.meetingAudioRetentionPolicy
+            guard let session = try? await self.resolveSession(id),
+                  session.retention.audioDeletedAt == nil, Self.isSweepEligible(session),
+                  let deadline = currentPolicy.deadline(endedAt: session.endedAt, startedAt: session.startedAt)
+            else { continue }
+            guard deadline <= Date() else {
+                if nextDeadline.map({ deadline < $0 }) ?? true { nextDeadline = deadline }
                 continue
             }
 
             do {
                 let target = try await self.applyAudioDeletion(to: session)
                 self.refreshSlots(with: target)
+                deletedAudio = true
             } catch {
                 DebugLogger.shared.warning(
                     "Retention sweep failed for \(session.id): \(error)",
@@ -1551,30 +1608,41 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
         }
 
+        if deletedAudio { self.retentionSweepRevision &+= 1 }
         self.scheduleRetentionTimer(nextDeadline: nextDeadline)
     }
 
-    /// An empty recreated tracks directory alone is not crash residue. Working-state files
-    /// can outlive tracks after interruption and must also trigger the existing cleanup.
-    private func healLeftoverAudio(for session: MeetingSession) async {
+    /// A request that arrived while manifests were being read runs once this read is finished.
+    private func finishRetentionRead() {
+        self.isReadingRetentionSessions = false
+        guard self.sweepPending, !self.isMutatingSession else { return }
+        self.sweepPending = false
+        guard self.terminationTask == nil else { return }
+        Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
+    }
+
+    private enum LeftoverAudio {
+        case workingState(URL)
+        case audioFiles
+    }
+
+    /// Read-only. An empty recreated tracks directory alone is not crash residue. Working-state
+    /// files can outlive tracks after interruption and must also trigger the existing cleanup.
+    private func leftoverAudio(for session: MeetingSession) async -> LeftoverAudio? {
         let fullyCompleted = session.state == .completed && session.transcriptIsComplete == true
         guard session.retention.audioDeletedAt != nil || fullyCompleted,
-              self.isSafeToSweep(sessionID: session.id),
               let directory = try? await self.store.existingSessionDirectory(for: session.id)
-        else { return }
-        guard self.isSafeToSweep(sessionID: session.id) else { return }
+        else { return nil }
+        let hasWorkingState = (try? MeetingRetainedProcessingCheckpoint.hasWorkingState(in: directory)) ?? false
         if session.retention.audioDeletedAt == nil {
             // Completion is already durable. A crash before cache removal must not retain
             // sensitive working text indefinitely under a never-delete-audio policy.
-            try? MeetingRetainedProcessingCheckpoint.remove(in: directory)
-            return
+            return hasWorkingState ? .workingState(directory) : nil
         }
         let tracksPath = directory.appendingPathComponent("tracks", isDirectory: true).path
         let hasAudio = (try? FileManager.default.contentsOfDirectory(atPath: tracksPath).isEmpty == false) ?? false
-        let hasWorkingState = (try? MeetingRetainedProcessingCheckpoint.hasWorkingState(in: directory)) ?? false
         let hasLegacyCheckpoint = FileManager.default.fileExists(atPath: directory.appendingPathComponent("checkpoint.json").path)
-        guard hasAudio || hasWorkingState || hasLegacyCheckpoint else { return }
-        try? await self.store.deleteAudioFiles(for: session.id)
+        return hasAudio || hasWorkingState || hasLegacyCheckpoint ? .audioFiles : nil
     }
 
     /// A quiescent active slot (resolved offer, parked completed session) is safe to sweep.
