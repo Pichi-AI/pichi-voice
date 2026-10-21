@@ -81,6 +81,33 @@ struct MeetingSessionStoreCheckpointTests {
         let decodedLegacyWord = try JSONDecoder().decode(MeetingTranscriptSegment.self,
             from: JSONSerialization.data(withJSONObject: legacyWordRecord))
         check(decodedLegacyWord.isUserSpeakerAssigned == nil, "An older word retains legacy assignment provenance")
+        var roleOwner = generated
+        roleOwner.isLocalUser = true
+        roleOwner.generatedParticipantNumber = 0
+        var roleOther = generated
+        roleOther.id = UUID()
+        var roleAlias = named.speakers[0]
+        roleAlias.id = UUID()
+        // Explicit alias provenance remains authoritative even with a historical number.
+        roleAlias.generatedParticipantNumber = 7
+        var roleLegacy = generated
+        roleLegacy.id = UUID()
+        roleLegacy.displayName = "Preserved legacy name"
+        roleLegacy.generatedParticipantNumber = nil
+        var roleSession = session
+        roleSession.speakers = [roleOwner, roleOther, roleAlias, roleLegacy]
+        try roleSession.setLocalUserSpeaker(id: nil, speakerNameFormat: "Captured %lld")
+        check(roleSession.speakers.prefix(2).map(\.displayName) == ["Captured 1", "Captured 2"],
+              "Clearing the owner renumbers generated names that previously shared one raw label")
+        check(roleSession.speakers.prefix(2).map(\.generatedParticipantNumber) == [1, 2],
+              "A cleared owner cannot retain the generated zero owner marker")
+        check(roleSession.speakers[2].displayName == roleAlias.displayName
+              && roleSession.speakers[2].usesCustomDisplayName == true
+              && roleSession.speakers[2].generatedParticipantNumber == nil,
+              "An explicit custom alias cannot be reformatted as a generated participant")
+        check(roleSession.speakers[3] == roleLegacy, "Legacy nil-number names remain verbatim")
+        let savedRoles = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(roleSession))
+        check(savedRoles.speakers == roleSession.speakers, "Meeting-local role corrections survive the session codec")
         try Self.checkReadableTranscriptContract(check)
 
         try Self.checkPlainParticipantLabels(template: session, check: check)

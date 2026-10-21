@@ -235,6 +235,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                       previousUserTextEdited: Bool?, previousRevision: Int)
         case rename(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?, previousCustomDisplayName: Bool?)
         case reassign([SpeakerAssignmentCorrection])
+        case localUserRole([(speakerID: SessionSpeakerID, previousIsLocalUser: Bool,
+                             previousName: String, previousGeneratedNumber: Int?)])
         case nameUnknown(
             segmentID: MeetingTranscriptSegmentID,
             createdSpeakerID: SessionSpeakerID,
@@ -255,7 +257,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         var requiresTranscriptPrivacyPublication: Bool {
             switch self {
             case .editText: return true
-            case .rename, .renameBatch, .reassign, .nameUnknown, .merge: return false
+            case .rename, .renameBatch, .reassign, .localUserRole, .nameUnknown, .merge: return false
             }
         }
     }
@@ -1332,6 +1334,26 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
+    /// Changes only this meeting's participant roster. It never enrolls a voice or changes
+    /// a transcript member's native evidence, wording or participant identity.
+    @discardableResult
+    func setLocalUserSpeaker(
+        sessionID: MeetingSessionID,
+        speakerID: SessionSpeakerID?
+    ) async throws -> MeetingSession {
+        // This explicit user operation deliberately renumbers generated labels using its
+        // own interface snapshot, independently of background attempts' frozen templates.
+        let speakerNameFormat = PichiLocalization.text("Speaker %lld")
+        return try await self.performCorrection(sessionID: sessionID) { session in
+            let previous = session.speakers.map { speaker in
+                (speakerID: speaker.id, previousIsLocalUser: speaker.isLocalUser,
+                 previousName: speaker.displayName, previousGeneratedNumber: speaker.generatedParticipantNumber)
+            }
+            try session.setLocalUserSpeaker(id: speakerID, speakerNameFormat: speakerNameFormat)
+            return .localUserRole(previous)
+        }
+    }
+
     @discardableResult
     func reassignSegment(
         sessionID: MeetingSessionID,
@@ -1734,6 +1756,16 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.speakers[index].displayName = previousName
             session.speakers[index].generatedParticipantNumber = previousGeneratedNumber
             session.speakers[index].usesCustomDisplayName = previousCustomDisplayName
+            return true
+        case let .localUserRole(entries):
+            let indices = Dictionary(uniqueKeysWithValues: session.speakers.enumerated().map { ($0.element.id, $0.offset) })
+            guard !entries.isEmpty, entries.allSatisfy({ indices[$0.speakerID] != nil }) else { return false }
+            for entry in entries {
+                guard let index = indices[entry.speakerID] else { return false }
+                session.speakers[index].isLocalUser = entry.previousIsLocalUser
+                session.speakers[index].displayName = entry.previousName
+                session.speakers[index].generatedParticipantNumber = entry.previousGeneratedNumber
+            }
             return true
         case let .reassign(entries):
             let indices = Dictionary(uniqueKeysWithValues: session.transcriptSegments.enumerated().map { ($0.element.id, $0.offset) })

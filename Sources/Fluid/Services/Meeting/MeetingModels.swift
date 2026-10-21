@@ -1134,6 +1134,37 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = Date()
     }
 
+    /// A meeting-local user assertion, separate from the enrolled voice profile and native
+    /// acoustic evidence. Corrections run only after capture and processing have joined.
+    /// The manual action supplies one captured interface template for renumbering generated
+    /// labels. Background observations instead retain their producing attempt's template.
+    mutating func setLocalUserSpeaker(id: SessionSpeakerID?, speakerNameFormat: String) throws {
+        if let id {
+            guard self.activeSpeakers.contains(where: { $0.id == id }) else {
+                throw MeetingDomainError.speakerNotFound
+            }
+        }
+        var changed = false
+        for index in self.speakers.indices {
+            let isLocalUser = self.speakers[index].mergedIntoSpeakerID == nil && self.speakers[index].id == id
+            if self.speakers[index].isLocalUser != isLocalUser {
+                self.speakers[index].isLocalUser = isLocalUser
+                changed = true
+            }
+        }
+        guard changed else { return }
+        // Explicit aliases and legacy nil-number names are user data. Only generated
+        // provenance participates in this intentional role-change renumbering.
+        let numberedSources = self.speakers.map { source in
+            var speaker = source
+            if speaker.usesCustomDisplayName == true { speaker.generatedParticipantNumber = nil }
+            return speaker
+        }
+        self.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(numberedSources,
+            speakerNameFormat: speakerNameFormat)
+        self.updatedAt = Date()
+    }
+
     /// The reading projection can group a raw speaker into another participant's continuing
     /// turn. Selecting the raw speaker again is then an explicit correction, not a no-op.
     /// The same confirmation also resolves legacy uncertainty without modern provenance.
