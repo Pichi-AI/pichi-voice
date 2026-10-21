@@ -324,6 +324,7 @@ actor MeetingStreamingTranscriptState {
             } ?? updated.speakers
             var batch = MeetingPCMTranscriptBatch(segments: updated.inserted, speakers: identities,
                 isComplete: self.isComplete)
+            batch.speakerNameFormat = self.tail.speakerNameFormat
             batch.speakerRevisions = updated.revisions
             batch.sourceTrack = self.track
             // Physical coverage can retire estimates spanning native word gaps, but only

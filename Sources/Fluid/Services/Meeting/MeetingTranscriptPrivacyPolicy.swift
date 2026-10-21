@@ -791,6 +791,7 @@ actor MeetingTranscriptPrivacyContext {
     private var prefix = ""
     private var pending: [MeetingTranscriptSegment] = []
     private var pendingIsComplete = true
+    private var speakerNameFormat: String?
     private var isProcessing = false
     private let provisionalPreviewID = UUID()
     private var lastSafePreview: MeetingLivePartial?
@@ -843,6 +844,7 @@ actor MeetingTranscriptPrivacyContext {
             speechAdmissionDiagnosticFields = "rawUTF16=\(diagnosticRawUTF16) stableUTF16=\(diagnosticStableUTF16) previewUTF16=\(diagnosticPreviewUTF16) pendingSegments=\(pending.count) sealed=\(batch.speechObservationIsFinal) completed=\(completed)"
         }
         try Task.checkCancellation()
+        if self.speakerNameFormat == nil { self.speakerNameFormat = batch.speakerNameFormat }
         let tracks = Set(batch.segments.map(\.sourceTrackID))
         guard tracks.count <= 1 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         let ordered = batch.segments.sorted { $0.start < $1.start }
@@ -881,6 +883,7 @@ actor MeetingTranscriptPrivacyContext {
             return visible
         }
         var combined = batch
+        combined.speakerNameFormat = self.speakerNameFormat
         combined.segments = pending + batch.segments
         var remaining = Self.maximumPendingUTF16
         guard combined.segments.count <= Self.maximumPendingSegments else {
@@ -966,6 +969,7 @@ actor MeetingTranscriptPrivacyContext {
         var completed = false
         defer { if !completed { lastSafePreview = nil; lastSafePreviewIdentity = nil }; isProcessing = false }
         try Task.checkCancellation()
+        if self.speakerNameFormat == nil { self.speakerNameFormat = batch.speakerNameFormat }
         let tracks = Set(batch.segments.map(\.sourceTrackID))
         guard tracks.count <= 1 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         let ordered = batch.segments.sorted { $0.start < $1.start }
@@ -977,6 +981,7 @@ actor MeetingTranscriptPrivacyContext {
         let context = continues ? prefix : ""
         guard let last = ordered.last else {
             var safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor)
+            safe.speakerNameFormat = self.speakerNameFormat
             try Task.checkCancellation()
             // An empty forward window has no new hypothesis to invalidate the
             // already approved display. No-source silence belongs to this owned
@@ -988,6 +993,7 @@ actor MeetingTranscriptPrivacyContext {
             return safe
         }
         var combined = batch
+        combined.speakerNameFormat = self.speakerNameFormat
         combined.segments = pending + batch.segments
         combined.isComplete = combined.isComplete && pendingIsComplete
         let combinedOrdered = combined.segments.sorted { $0.start < $1.start }
@@ -1035,7 +1041,8 @@ actor MeetingTranscriptPrivacyContext {
         isProcessing = true
         defer { isProcessing = false }
         let source = pending
-        let batch = MeetingPCMTranscriptBatch(segments: source, isComplete: pendingIsComplete)
+        var batch = MeetingPCMTranscriptBatch(segments: source, isComplete: pendingIsComplete)
+        batch.speakerNameFormat = self.speakerNameFormat
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor,
             contextPrefixes: trackID.map { [$0: prefix] } ?? [:], atSpeechBoundary: true)
         try Task.checkCancellation()
@@ -1056,7 +1063,8 @@ actor MeetingTranscriptPrivacyContext {
         guard !pending.isEmpty else { return nil }
         isProcessing = true
         defer { isProcessing = false }
-        let batch = MeetingPCMTranscriptBatch(segments: pending, isComplete: pendingIsComplete)
+        var batch = MeetingPCMTranscriptBatch(segments: pending, isComplete: pendingIsComplete)
+        batch.speakerNameFormat = self.speakerNameFormat
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor,
             contextPrefixes: trackID.map { [$0: prefix] } ?? [:])
         try Task.checkCancellation()
