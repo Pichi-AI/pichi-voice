@@ -138,7 +138,10 @@ final class MeetingRecoveryTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = SettingsStore(defaults: defaults)
-        settings.selectedSpeechModel = .whisperTiny
+        // Tiny and registered Parakeet v3 support streaming. The inherited v2 composite
+        // remains an actual after-recording-only backend for both storage policies.
+        settings.selectedSpeechModel = .parakeetTDTv2
+        settings.meetingTranscriptionBackendID = .parakeetNemotron
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
@@ -154,7 +157,7 @@ final class MeetingRecoveryTests: XCTestCase {
         for storage in [MeetingAudioStorageMode.memoryOnly, .retainedFiles] {
             var configuration = self.makeConfiguration()
             configuration.mode = .inRoom
-            configuration.languageCode = "ru"
+            configuration.languageCode = "en"
             configuration.audioStorageMode = storage
             configuration.speakerLabelsEnabled = true
             configuration.speakerProcessingMode = .streaming
@@ -163,7 +166,7 @@ final class MeetingRecoveryTests: XCTestCase {
                 XCTFail("A saved recording must not silently downgrade unsupported streaming")
             } catch {
                 XCTAssertEqual(error as? MeetingBackendError,
-                    .unsupportedSpeakerProcessingMode(backend: .whisperTiny, mode: .streaming))
+                    .unsupportedSpeakerProcessingMode(backend: .parakeetNemotron, mode: .streaming))
             }
         }
         XCTAssertEqual(preparations, 0)
@@ -4258,8 +4261,8 @@ final class MeetingRecoveryTests: XCTestCase {
             word.speakerID = index == 2 ? speakerB : speakerA
             word.overlap = .none
             word.attributionState = .assigned
-            if index == 1 || index == 3 {
-                word.speakerID = nil
+            if index == 1 || index == 2 || index == 3 {
+                if index != 2 { word.speakerID = nil }
                 word.overlap = .ambiguous
                 word.attributionState = .overlappingSpeakers
             }
@@ -4280,7 +4283,11 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(MeetingTranscriptExporter.speakerPresentations(in: corrected)[targetID]?.participantID, speakerB)
         for index in session.transcriptSegments.indices {
             var expected = session.transcriptSegments[index]
-            if index == 2 { expected.revision = 1 }
+            if index == 2 {
+                expected.revision = 1
+                expected.overlap = .none
+                expected.attributionState = .assigned
+            }
             XCTAssertEqual(corrected.transcriptSegments[index], expected)
         }
         let persisted = try await store.load(id: session.id)

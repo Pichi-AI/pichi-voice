@@ -1853,6 +1853,15 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
     }
 
     func testFrozenArtifactAndPIIRestrictionRejectBeforeResourcePreparation() async {
+        struct UnpreparedRedactor: TranscriptTextRedacting {
+            func prepareForMeeting() async throws {
+                XCTFail("Unsupported input must not prepare the privacy model")
+            }
+            func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+                XCTFail("Unsupported input must not redact text")
+                return .init(text: text, spans: [])
+            }
+        }
         let restriction = self.syntheticRestriction()
         // A synthetic factory at a registered configuration boundary exercises the real frozen
         // artifact override without depending on restrictions in the current production catalog.
@@ -1862,10 +1871,12 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         registry.register(descriptor.id, descriptor: descriptor) { context in
             PCMBackend(descriptor: descriptor, context: context, probe: probe)
         }
+        var privacyLookups = 0
         let pipeline = MeetingProcessingPipeline(asrServiceProvider: {
             probe.service += 1; XCTFail("Admission must precede ASR residency"); return ASRService()
         }, managesModelResidency: false, privacyRedactorProvider: {
-            XCTFail("Unsupported input must not prepare the privacy model"); return nil
+            privacyLookups += 1
+            return UnpreparedRedactor()
         }, pcmAdmissionContextProvider: { pii in
             .init(physicalDeviceModel: restriction.physicalDeviceModel,
                 operatingSystemVersion: restriction.operatingSystemVersion, piiRedactionEnabled: pii)
@@ -1878,6 +1889,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         session.recordingASRArtifactFingerprint = restriction.asrArtifactFingerprint
         await self.reject(pipeline, session: session,
             expected: .unsupportedPCMConfiguration(backend: descriptor.id, restriction: restriction), probe: probe)
+        XCTAssertEqual(privacyLookups, 1, "Freezing an inert capability must not prepare its model")
         XCTAssertEqual(probe.pcmExecutor, 0)
     }
 
@@ -1932,7 +1944,7 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
                     continue
                 }
             }
-            XCTAssertEqual(probe.dependencies, 1)
+            XCTAssertEqual(probe.dependencies, privacyAvailable ? 1 : 0)
             XCTAssertEqual(privacyLookups, 1)
             XCTAssertEqual(probe.runtime, privacyAvailable ? 1 : 0)
             XCTAssertEqual(probe.service, 0)
