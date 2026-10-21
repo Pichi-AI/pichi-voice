@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 /// Opt-in native acceptance on an explicitly owned simulator. No microphone or
@@ -33,6 +34,15 @@ final class MobileSetupUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.3"].firstMatch.waitForExistence(timeout: 180))
         capture("flow-04-privacy-default")
         XCTAssertEqual(app.switches["privacy.pii"].value as? String, "0")
+        if ProcessInfo.processInfo.environment["PICHI_SETUP_PREPARE_PRIVACY_E2E"] == "1" {
+            app.switches["privacy.pii"].tap()
+            capture("flow-04a-privacy-enabling")
+            XCTAssertTrue(app.descendants(matching: .any)["privacy.pii.active"].firstMatch.waitForExistence(timeout: 180))
+            capture("flow-04b-privacy-ready")
+            app.switches["privacy.pii"].tap()
+            XCTAssertFalse(app.descendants(matching: .any)["privacy.pii.active"].firstMatch.exists)
+            capture("flow-04c-privacy-off")
+        }
         app.buttons["onboarding.next"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.4"].firstMatch.waitForExistence(timeout: 10))
         capture("flow-05-voice-offer")
@@ -74,5 +84,26 @@ final class MobileSetupUITests: XCTestCase {
         attachment.name = "setup-\(step)-\(revision)"
         attachment.lifetime = .keepAlways
         add(attachment)
+        // Simulator-only review gates let each real UI step be inspected before the
+        // next action. This changes no production flow and never opens a microphone.
+        if let directory = ProcessInfo.processInfo.environment["PICHI_SETUP_STEP_REVIEW_DIRECTORY"] {
+            let root = URL(fileURLWithPath: directory, isDirectory: true)
+            let name = "setup-\(step)-\(revision)"
+            let frame = root.appendingPathComponent(name + ".png")
+            let acknowledgement = root.appendingPathComponent(name + ".continue")
+            do {
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                try XCUIScreen.main.screenshot().pngRepresentation.write(to: frame, options: .atomic)
+                let marker = ["step": step, "revision": revision, "screenshot": frame.path,
+                              "acknowledgement": acknowledgement.path]
+                try JSONEncoder().encode(marker).write(to: root.appendingPathComponent("current-step.json"), options: .atomic)
+                let deadline = Date().addingTimeInterval(300)
+                while !FileManager.default.fileExists(atPath: acknowledgement.path), Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
+                XCTAssertTrue(FileManager.default.fileExists(atPath: acknowledgement.path),
+                              "The exact native frame must be reviewed before the next step")
+            } catch { XCTFail("Native review evidence could not be saved") }
+        }
     }
 }

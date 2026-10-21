@@ -82,7 +82,6 @@ struct MobileOnboarding: View {
                     MobileModelDetails(modelID: model.id).padding(.horizontal, 16)
                 }
             }
-            if advancing { MobileASRPreparationStatus(asr: asr) }
         case 2:
             Text(PichiLocalization.text("Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."))
                 .font(theme.typography.body)
@@ -122,6 +121,10 @@ struct MobileOnboarding: View {
     }
 
     private var footer: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if advancing && (step == 1 || asr.modelPreparationPhase != nil) {
+                MobileASRPreparationStatus(asr: asr)
+            }
         HStack(spacing: 16) {
             if step > 0 {
                 Button(PichiLocalization.text("Back")) { error = nil; settings.mobileSetupStep -= 1 }
@@ -139,7 +142,8 @@ struct MobileOnboarding: View {
             Button(PichiLocalization.text(step == 5 ? "Get started" : error == nil ? "Next" : "Try again")) { next() }
                 .buttonStyle(.borderedProminent).disabled(advancing || (step == 3 && privacy.isPreparing))
                 .accessibilityIdentifier("onboarding.next")
-        }.controlSize(.large).padding(20).frame(maxWidth: 680).frame(maxWidth: .infinity)
+        }.controlSize(.large)
+        }.padding(20).frame(maxWidth: 680).frame(maxWidth: .infinity)
             .background(theme.palette.windowBackground)
     }
 
