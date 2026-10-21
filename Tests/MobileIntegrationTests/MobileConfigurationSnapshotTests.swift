@@ -49,7 +49,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         let settings = SettingsStore(defaults: defaults)
         settings.selectedSpeechModel = .whisperTiny
         settings.meetingSaveAudio = false
-        settings.meetingSpeakerLabelsEnabled = false
+        settings.meetingSpeakerLabelsEnabled = true
         settings.meetingPIIRedactionEnabled = false
         settings.meetingRecordingDefaults = MeetingRecordingDefaults(
             isConfigured: true,
@@ -90,7 +90,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
             try await entered.wait()
             XCTAssertEqual(requestedUID, "initial-microphone")
             settings.meetingSaveAudio = true
-            settings.meetingSpeakerLabelsEnabled = true
+            settings.meetingSpeakerLabelsEnabled = false
             settings.meetingPIIRedactionEnabled = true
             var changedDefaults = settings.meetingRecordingDefaults
             changedDefaults.microphoneCaptureDeviceID = "replacement-microphone"
@@ -106,7 +106,7 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
             throw error
         }
         XCTAssertEqual(configuration.audioStorageMode, .memoryOnly)
-        XCTAssertEqual(configuration.speakerLabelsEnabled, false)
+        XCTAssertEqual(configuration.speakerLabelsEnabled, true)
         XCTAssertEqual(configuration.piiRedactionEnabled, false)
         XCTAssertEqual(configuration.microphone, microphone)
         XCTAssertEqual(configuration.languageCode, "ru")
