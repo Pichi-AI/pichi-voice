@@ -285,6 +285,7 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
     private var factory: IOSMeetingCaptureEngine.MemoryConsumerFactory?
     private var consumer: (any MeetingMemoryAudioConsuming)?
     private var retainedWriter: MeetingAudioChunkWriter?
+    private var liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     private var active: (MeetingSessionID, MeetingAudioTrack)?
     func setFactory(_ factory: IOSMeetingCaptureEngine.MemoryConsumerFactory?) { self.factory = factory }
     func preflightPermissions() async throws { }
@@ -310,6 +311,7 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
             throw error
         }
         active = (session.id, track)
+        self.liveAudioHandler = liveAudioHandler
         return .init(tracks: [track], firstPresentationTime: nil)
     }
     func deliver(_ samples: [Float], startingAt sampleOffset: Int = 0) throws {
@@ -324,6 +326,9 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
             for frame in start..<end { target[frame - start] = samples[frame] }
             let buffer = try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm,
                 presentationTime: CMTime(value: Int64(sampleOffset + start), timescale: 16_000))
+            // Match production capture's live tee: VAD and pending-wave projection
+            // must observe the same source clock as the strict PCM consumer.
+            self.liveAudioHandler?(.microphone, buffer)
             if let retainedWriter, !retainedWriter.enqueue(buffer) { throw MeetingMemoryAudioError.overload }
             guard consumer.enqueue(buffer) else { throw MeetingMemoryAudioError.overload }
         }
@@ -333,7 +338,7 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
         var track = if let retainedWriter { await retainedWriter.stop() } else { original }
         try await consumer?.finish()
         track.health.status = .stopped
-        active = nil; consumer = nil; retainedWriter = nil
+        active = nil; consumer = nil; retainedWriter = nil; liveAudioHandler = nil
         return .init(tracks: [track], stoppedAt: Date())
     }
     func shutdownForTermination() async {
