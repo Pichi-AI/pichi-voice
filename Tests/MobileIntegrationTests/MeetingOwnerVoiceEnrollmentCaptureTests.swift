@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import CoreMedia
+import Combine
 import XCTest
 #if os(iOS)
 @testable import PichiVoiceMobile
@@ -8,6 +9,100 @@ import XCTest
 #endif
 
 final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
+    @MainActor
+    func testEnrollmentJoinsIdleRetirementBeforeMicrophoneAndCancellationHandback() async throws {
+        let residency = MeetingModelResidencyCoordinator()
+        let idleOwner = MeetingIdlePreparedResourceOwner(residency: residency)
+        let resource = EnrollmentIdleRetirementProbe()
+        let prepared = try await idleOwner.prepare(identity: resource.configurationIdentity) { resource }
+        let token = try XCTUnwrap(prepared)
+        let audio = EnrollmentAudioLeaseProbe(residency: residency)
+        var captureConstructions = 0
+        let model = MeetingOwnerVoiceEnrollmentModel(audioArbiter: audio, modelResidency: residency,
+            makeCapture: { captureConstructions += 1; throw EnrollmentCaptureProbeFailure.unexpectedHardware })
+        model.start(microphone: .init(captureDeviceID: "synthetic-unopened", displayName: "Synthetic"))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !(await resource.cleanupStarted), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        let beganRetirement = await resource.cleanupStarted
+        XCTAssertTrue(beganRetirement)
+        XCTAssertEqual(model.phase, .preparing)
+        XCTAssertEqual(audio.acquisitions, 1)
+        XCTAssertEqual(audio.releases, 0)
+        XCTAssertEqual(captureConstructions, 0)
+        model.cancel()
+        XCTAssertEqual(audio.releases, 0, "The audio lease must outlive the joined idle drain")
+        await resource.finishCleanup()
+        await self.waitForEnrollmentCleanup(model)
+        await idleOwner.cancel(token)
+        XCTAssertEqual(captureConstructions, 0)
+        XCTAssertEqual(audio.releases, 1)
+        XCTAssertFalse(audio.releaseHadModelWork)
+        XCTAssertFalse(residency.hasOrdinaryOperations)
+        XCTAssertNil(model.error)
+    }
+
+    @MainActor
+    func testEnrollmentAdmissionRejectsQueuedIdleAndReleasesTokenBeforeAudio() async {
+        let residency = MeetingModelResidencyCoordinator()
+        let audio = EnrollmentAudioLeaseProbe(residency: residency)
+        var captureConstructions = 0
+        let model = MeetingOwnerVoiceEnrollmentModel(audioArbiter: audio, modelResidency: residency,
+            makeCapture: { captureConstructions += 1; throw EnrollmentCaptureProbeFailure.unexpectedHardware })
+        var observedAdmission = false
+        var rejectedQueuedIdle = false
+        let observer = residency.ordinaryOperationEvents.sink {
+            MainActor.assumeIsolated {
+                guard residency.hasOrdinaryOperations, !observedAdmission else { return }
+                observedAdmission = true
+                do {
+                    try residency.beginIdlePreparation(token: .init(id: UUID()), identity: "queued-idle",
+                        adopt: { nil }, retire: {})
+                    XCTFail("A queued idle load cannot enter during enrollment admission")
+                } catch MeetingModelResidencyError.busy { rejectedQueuedIdle = true }
+                catch { XCTFail("Unexpected admission error") }
+                // Cancel before the capture factory, after a real ordinary token exists.
+                model.cancel()
+            }
+        }
+        defer { observer.cancel() }
+        model.start(microphone: .init(captureDeviceID: "synthetic-unopened", displayName: "Synthetic"))
+        await self.waitForEnrollmentCleanup(model)
+        XCTAssertTrue(observedAdmission)
+        XCTAssertTrue(rejectedQueuedIdle)
+        XCTAssertEqual(captureConstructions, 0)
+        XCTAssertEqual(audio.releases, 1)
+        XCTAssertFalse(audio.releaseHadModelWork)
+        XCTAssertFalse(residency.hasOrdinaryOperations)
+        XCTAssertNil(model.error)
+    }
+
+    @MainActor
+    func testEnrollmentAdmissionFailureNeverConstructsCaptureAndReleasesAudio() async {
+        let residency = MeetingModelResidencyCoordinator()
+        residency.beginTermination()
+        let audio = EnrollmentAudioLeaseProbe(residency: residency)
+        var captureConstructions = 0
+        let model = MeetingOwnerVoiceEnrollmentModel(audioArbiter: audio, modelResidency: residency,
+            makeCapture: { captureConstructions += 1; throw EnrollmentCaptureProbeFailure.unexpectedHardware })
+        model.start(microphone: .init(captureDeviceID: "synthetic-unopened", displayName: "Synthetic"))
+        await self.waitForEnrollmentCleanup(model)
+        XCTAssertEqual(captureConstructions, 0)
+        XCTAssertEqual(audio.acquisitions, 1)
+        XCTAssertEqual(audio.releases, 1)
+        XCTAssertFalse(residency.hasOrdinaryOperations)
+        XCTAssertNotNil(model.error)
+    }
+
+    @MainActor
+    private func waitForEnrollmentCleanup(_ model: MeetingOwnerVoiceEnrollmentModel) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while model.isBusy, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(2)) }
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertEqual(model.seconds, 0)
+    }
+
     func testSampleIsBoundedAndDrainedBeforeItIsTaken() async throws {
         let owner = try MeetingOwnerVoiceSampleBuffer()
         for second in 0..<21 {
@@ -206,6 +301,44 @@ final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
         let output = try XCTUnwrap(pcm.floatChannelData?[0])
         for index in 0..<16_000 { output[index] = 0.05 * sin(Float(index) * 2 * .pi * 180 / 16_000) }
         return pcm
+    }
+}
+
+private enum EnrollmentCaptureProbeFailure: Error { case unexpectedHardware }
+
+private actor EnrollmentIdleRetirementProbe: MeetingIdlePreparedResource {
+    nonisolated let configurationIdentity = "owner-enrollment-test"
+    private(set) var cleanupStarted = false
+    private var released = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func cleanup() async {
+        cleanupStarted = true
+        guard !released else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func finishCleanup() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@MainActor
+private final class EnrollmentAudioLeaseProbe: MeetingAudioActivityArbitrating {
+    let residency: MeetingModelResidencyCoordinator
+    let lease = MeetingAudioActivityLease(id: UUID())
+    private(set) var acquisitions = 0
+    private(set) var releases = 0
+    private(set) var releaseHadModelWork = true
+    init(residency: MeetingModelResidencyCoordinator) { self.residency = residency }
+    func acquireMeetingCapture() async throws -> MeetingAudioActivityLease {
+        acquisitions += 1
+        return lease
+    }
+    func release(_ lease: MeetingAudioActivityLease) async {
+        XCTAssertEqual(lease, self.lease)
+        releaseHadModelWork = residency.hasOrdinaryOperations
+        releases += 1
     }
 }
 
