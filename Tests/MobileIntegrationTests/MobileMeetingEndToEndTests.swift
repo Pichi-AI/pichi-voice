@@ -217,13 +217,22 @@ private final class CombinedPrivacyObservations: TranscriptTextRedacting {
         self.wrapped = wrapped; self.aliases = aliases
     }
     nonisolated var checkpointIdentity: String? { wrapped.checkpointIdentity }
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { wrapped.supportsSpeechBoundaryAdmission }
     @MainActor func prepareForMeeting() async throws { try await wrapped.prepareForMeeting() }
     @MainActor func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        try await redact(text, speechBoundary: false)
+    }
+    @MainActor func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        try await redact(text, speechBoundary: true)
+    }
+    @MainActor private func redact(_ text: String, speechBoundary: Bool) async throws -> TranscriptTextRedaction {
         let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.privacyRedact)
         var succeeded = false
         defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.privacyRedact, since: began,
             samples: text.utf16.count, succeeded: succeeded) }
-        let result = try await wrapped.redactWithSpans(text)
+        let result: TranscriptTextRedaction
+        if speechBoundary { result = try await wrapped.redactSpeechBoundaryWithSpans(text) }
+        else { result = try await wrapped.redactWithSpans(text) }
         succeeded = true
         let source = text as NSString
         for (index, alternatives) in aliases.enumerated() {
@@ -994,8 +1003,31 @@ private nonisolated enum CombinedStreamingAudioInventory {
     }
 }
 
+private struct SyntheticSpeechBoundaryRedactor: TranscriptTextRedacting {
+    nonisolated var checkpointIdentity: String? { "synthetic-boundary-v1" }
+    nonisolated var supportsSpeechBoundaryAdmission: Bool { true }
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        .init(text: text, spans: [])
+    }
+    func redactSpeechBoundaryWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        .init(text: "[ИМЯ]", spans: [.init(range: NSRange(location: 0, length: text.utf16.count), replacement: "[ИМЯ]")],
+              provisionalSafeUTF16: text.utf16.count)
+    }
+}
+
 @MainActor
 final class MobileMeetingEndToEndTests: XCTestCase {
+    func testObservationWrapperPreservesSpeechBoundaryCapabilityAndMaskAccounting() async throws {
+        let observation = CombinedPrivacyObservations(wrapping: SyntheticSpeechBoundaryRedactor(), aliases: [["Иван Тестов"]])
+        XCTAssertTrue(observation.supportsSpeechBoundaryAdmission)
+        XCTAssertEqual(observation.checkpointIdentity, "synthetic-boundary-v1")
+        let result = try await observation.redactSpeechBoundaryWithSpans("Иван Тестов")
+        XCTAssertEqual(result.text, "[ИМЯ]")
+        XCTAssertEqual(observation.observed, [0])
+        XCTAssertEqual(observation.fullyMasked, [0])
+        XCTAssertEqual(observation.unmaskedPublishableObservations, 0)
+    }
+
     /// No audio, preparation, or model downloads occur without this separate gate.
     /// PCM injection measures the actual shared inference composition. It does not
     /// claim microphone, background execution, power, or acoustic capture validation.
@@ -2049,7 +2081,13 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         XCTAssertEqual(Set(nativeIDs).count, nativeIDs.count, "Native ASR units must not be readmitted after streaming finish")
         let words = segments.filter { $0.nativePrecision == .word }
         if requiresRecognizedSpeech {
-            XCTAssertFalse(words.isEmpty, "Streaming attribution must retain actual native word boundaries")
+            let nativeUnits = segments.filter {
+                ($0.nativePrecision == .word || $0.nativePrecision == .utterance)
+                    && $0.nativeTiming != nil && $0.nativeUnitID != nil
+            }
+            XCTAssertFalse(nativeUnits.isEmpty, "Streaming attribution must retain actual native ASR boundaries")
+            XCTAssertEqual(nativeUnits.count, segments.count,
+                           "Every canonical segment must retain its actual interval, precision and native unit ID")
         }
         XCTAssertTrue(segments.allSatisfy { segment in
             guard let timing = segment.nativeTiming else { return true }
