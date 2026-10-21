@@ -318,7 +318,7 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 /// Narrow adapter onto the upstream provider contract. All inference runs in the
 /// package actor, so dictation, file processing and the local API share one backend.
 final class PichiGigaAMProvider: TranscriptionProvider {
-    let name = "Pichi GigaAM v3"
+    let name = "GigaAM v3"
     let isAvailable = true
     let supportsWordTimings = true
     let shouldClearCacheAfterCancellation = false

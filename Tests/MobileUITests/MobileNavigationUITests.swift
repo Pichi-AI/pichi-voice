@@ -887,7 +887,7 @@ final class MobileNavigationUITests: XCTestCase {
         openNavigation("settings", title: "Настройки")
         app.buttons["settings.models"].tap()
         capture("02-russian-dark-models-top")
-        XCTAssertTrue(app.staticTexts["Pichi GigaAM v3"].exists)
+        XCTAssertTrue(app.staticTexts["GigaAM v3"].exists)
         for step in 0..<3 where !app.staticTexts["Whisper Tiny"].exists {
             app.collectionViews.firstMatch.swipeUp()
             capture("02-models-scroll-\(step)")

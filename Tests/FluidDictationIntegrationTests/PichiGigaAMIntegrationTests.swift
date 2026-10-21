@@ -238,8 +238,15 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         XCTAssertFalse(model.isWhisperModel)
         XCTAssertFalse(model.requiresAppleSilicon)
         XCTAssertTrue(model.hasPerformanceRatings)
-        XCTAssertEqual(model.provider, .pichi)
+        XCTAssertEqual(model.provider, .saluteDevices)
         XCTAssertEqual(model.analyticsDescriptor.model, "gigaam-v3-eou")
+        XCTAssertEqual(model.analyticsDescriptor.provider, "salutedevices")
+        // The publisher is credited; the host product's brand never names a third-party model.
+        XCTAssertEqual(model.displayName, "GigaAM v3")
+        XCTAssertEqual(PichiGigaAMProvider(modelStore: .init(directory: FileManager.default.temporaryDirectory)).name, model.displayName)
+        XCTAssertEqual(model.brandName, "SaluteDevices")
+        XCTAssertEqual(model.creditLine, "Built on GigaAM-v3 by SaluteDevices.")
+        XCTAssertNil(model.badgeText)
         XCTAssertTrue(SettingsStore.SpeechModel.availableModels.contains(model))
         let russian = try XCTUnwrap(VoiceEngineLanguageCatalog.language(id: "ru", availableModels: [model]))
         XCTAssertEqual(VoiceEngineLanguageCatalog.routes(for: russian, availableModels: [model]).map(\.model), [model])
@@ -251,7 +258,7 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         var receivedURL: URL?
         let controller = InferenceAPIController { url in
             receivedURL = url
-            return .init(text: "Обсудили план встречи.", confidence: 0.9, sampleCount: 16_000, provider: "Pichi GigaAM v3")
+            return .init(text: "Обсудили план встречи.", confidence: 0.9, sampleCount: 16_000, provider: "GigaAM v3")
         }
         let payload = try JSONSerialization.data(withJSONObject: ["path": "/tmp/synthetic-meeting.wav"])
         let response = await controller.handle(.init(
@@ -262,7 +269,7 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         XCTAssertEqual(receivedURL?.path, "/tmp/synthetic-meeting.wav")
         let result = try XCTUnwrap(JSONSerialization.jsonObject(with: response.body) as? [String: Any])
         XCTAssertEqual(result["text"] as? String, "Обсудили план встречи.")
-        XCTAssertEqual(result["provider"] as? String, "Pichi GigaAM v3")
+        XCTAssertEqual(result["provider"] as? String, "GigaAM v3")
         XCTAssertEqual(result["sampleCount"] as? Int, 16_000)
     }
 
@@ -271,7 +278,7 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         var called = false
         let controller = InferenceAPIController { _ in
             called = true
-            return .init(text: "", confidence: 0, sampleCount: 0, provider: "Pichi GigaAM v3")
+            return .init(text: "", confidence: 0, sampleCount: 0, provider: "GigaAM v3")
         }
         let payload = try JSONSerialization.data(withJSONObject: ["audioBase64": "not base64!"])
         let response = await controller.handle(.init(

@@ -3,13 +3,8 @@ import SwiftUI
 // Only unrelated app dependencies are stubbed; the provider descriptor and mark resolver are real.
 enum SettingsStore {
     enum SpeechModel {
-        enum Provider { case pichi, nvidia, apple, openai, cohere, qwen, futureProvider }
+        enum Provider { case saluteDevices, nvidia, apple, openai, cohere, qwen, futureProvider }
     }
-}
-struct PichiBrandMark: View {
-    let size: CGFloat
-    let color: Color
-    var body: some View { EmptyView() }
 }
 struct FixtureTheme {
     struct Palette {
@@ -38,10 +33,10 @@ struct SpeechModelProviderPresentationTests {
         precondition(missing.resolvedMark(assetAvailable: { _ in queries += 1; return false }) == .systemSymbol("waveform"))
         precondition(queries == 1)
         precondition(missing.resolvedMark(assetAvailable: { _ in true }) == .asset("MissingModelProviderAsset"))
-        let owned = SettingsStore.SpeechModel.Provider.pichi.presentation
-        precondition(owned.resolvedMark(assetAvailable: { _ in fatalError("A package-driven mark must not probe provider assets") }) == .appBrand)
+        let publisher = SettingsStore.SpeechModel.Provider.saluteDevices.presentation
+        precondition(publisher.resolvedMark(assetAvailable: { _ in fatalError("A provider without a bundled logo must not probe assets") }) == .systemSymbol("waveform"))
         let future = SettingsStore.SpeechModel.Provider.futureProvider.presentation
         precondition(future.resolvedMark(assetAvailable: { _ in fatalError("Unknown providers use the generic symbol") }) == .systemSymbol("waveform"))
-        print("Missing provider assets and unknown providers have a generic mark; owned marks use the brand package")
+        print("Missing provider assets and providers without a bundled logo have a generic mark")
     }
 }
