@@ -88,8 +88,32 @@ private nonisolated enum Refusal: Error { case notUsed }
             try require(!profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.ownerV2StreamingImplementationFingerprint)
                         && !profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.legacyOwnerStreamingImplementationFingerprint),
                         "Earlier saved owner recipes preserve final-only verification")
+            let exactV3 = profile.ownerV2StreamingImplementationFingerprint + (profile.supportsOwnerVoiceVerification
+                ? ";owner-live=serial-v3;owner-retry=2s-to10s-then10s" : "")
+            try require(profile.ownerV3StreamingImplementationFingerprint == exactV3,
+                        "Frozen V3 retains the exact previously deployed identity")
+            try require(profile.streamingImplementationFingerprint == exactV3 + (profile.supportsOwnerVoiceVerification
+                ? ";owner-final=live-cadence-v1" : ""),
+                        "Only the independently versioned final cadence changes the current recipe")
+            try require(profile.acceptsStreamingImplementationFingerprint(exactV3)
+                        && profile.verifiesLiveStreamingOwner(implementationFingerprint: exactV3) == profile.supportsOwnerVoiceVerification
+                        && profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: exactV3) == profile.supportsOwnerVoiceVerification
+                        && profile.verifiesStreamingOwner(implementationFingerprint: exactV3) == profile.supportsOwnerVoiceVerification,
+                        "Exact old V3 remains admitted with its original live owner resource contract")
+            for old in [profile.implementationFingerprint, profile.legacyOwnerStreamingImplementationFingerprint,
+                        profile.ownerV2StreamingImplementationFingerprint, exactV3] {
+                try require(!profile.preservesStreamingOwnerCadenceAtEOF(implementationFingerprint: old),
+                            "Existing saved recipes cannot silently acquire changed final cadence")
+            }
             try require(profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.streamingImplementationFingerprint)
-                        == profile.supportsOwnerVoiceVerification, "Only the exact V3 capability enables live inference")
+                        == profile.supportsOwnerVoiceVerification
+                        && profile.preservesStreamingOwnerCadenceAtEOF(implementationFingerprint: profile.streamingImplementationFingerprint)
+                            == profile.supportsOwnerVoiceVerification,
+                        "Only the exact supported new recipe enables live owner cadence at EOF")
+            let changedFinal = profile.streamingImplementationFingerprint + ";owner-final=unknown"
+            try require(!profile.acceptsStreamingImplementationFingerprint(changedFinal)
+                        && !profile.preservesStreamingOwnerCadenceAtEOF(implementationFingerprint: changedFinal),
+                        "Arbitrary final-cadence suffixes remain inadmissible")
             let locator: any MeetingNemotronModelLocating = MeetingNemotronModelLocator(profile: profile)
             let enabled = locator.supportsOwnerVoiceVerification
             let runtime = VoiceVerificationProbe(verificationEnabled: enabled)
