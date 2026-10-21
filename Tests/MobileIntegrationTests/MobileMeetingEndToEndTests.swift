@@ -23,11 +23,12 @@ private final class CombinedVisibleMeetingUI {
         self.previous = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
         window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
-        window.rootViewController = UIHostingController(rootView: MobileMeetingRoot(
-            coordinator: services.meetingSessionCoordinator, asr: services.asr,
-            store: services.meetingStore, privacy: services.transcriptPrivacy,
-            required: services.requiredResources, privacyActivation: services.privacyActivation,
-            microphones: { .init(identities: [], defaultCoreAudioUID: nil) }))
+        window.rootViewController = UIHostingController(rootView: AdaptiveAppTheme(accent: SettingsStore.shared.accentColor) {
+            MobileMeetingRoot(coordinator: services.meetingSessionCoordinator, asr: services.asr,
+                store: services.meetingStore, privacy: services.transcriptPrivacy,
+                required: services.requiredResources, privacyActivation: services.privacyActivation,
+                microphones: { .init(identities: [], defaultCoreAudioUID: nil) })
+        })
         self.window = window
         window.makeKeyAndVisible()
     }
