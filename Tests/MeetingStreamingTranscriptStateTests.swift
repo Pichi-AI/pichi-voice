@@ -119,9 +119,12 @@ struct MeetingStreamingTranscriptStateTests {
                             processed: Double? = nil, asr: Double? = nil,
                             final: Bool = false, activity: [MeetingBackendSpeakerActivity]? = nil,
                             retained: Int = 0, emptyASR: Range<Int>? = nil,
-                            ownerTokens: Set<MeetingBackendSpeakerToken>? = nil) -> MeetingStreamingPCMObservation {
+                            ownerTokens: Set<MeetingBackendSpeakerToken>? = nil, complete: Bool = true,
+                            speechIdentity: MeetingPCMTranscriptBatch.SpeechObservationIdentity? = nil) -> MeetingStreamingPCMObservation {
         let processed = processed ?? accepted
-        return .init(batch: .init(segments: words), activity: activity ?? (processed > 0 ? [
+        var batch = MeetingPCMTranscriptBatch(segments: words, isComplete: complete)
+        batch.speechObservationIdentity = speechIdentity
+        return .init(batch: batch, activity: activity ?? (processed > 0 ? [
             .init(token: .init(analysisEpochID: epoch, label: "a"), start: 0, end: processed)] : []),
             acceptedThroughSample: Int((accepted * 16_000).rounded()),
             processedThroughSample: Int((processed * 16_000).rounded()), retainedFromSample: retained,
@@ -178,8 +181,7 @@ struct MeetingStreamingTranscriptStateTests {
             _ = try await invalid.observe(observation(accepted: 40, asr: 40, emptyASR: 0..<640_000))
         }
         let incomplete = try state(privacy: .init(redactor: SyntheticMaskingRedactor()))
-        var input = observation(accepted: 20, asr: 20, emptyASR: 0..<320_000)
-        input.batch.isComplete = false
+        let input = observation(accepted: 20, asr: 20, emptyASR: 0..<320_000, complete: false)
         await expect(.invalidObservation) { _ = try await incomplete.observe(input) }
     }
 
@@ -766,8 +768,8 @@ struct MeetingStreamingTranscriptStateTests {
         _ = try await regression.observe(observation(accepted: 10, asr: 10))
         await expect(.regressedCursor) { _ = try await regression.observe(observation(accepted: 11, asr: 9)) }
         let stale = try state()
-        var source = observation([word(0)], accepted: 1, asr: 1)
-        source.batch.speechObservationIdentity = .init(attemptID: UUID(), epochID: epoch)
+        let source = observation([word(0)], accepted: 1, asr: 1,
+            speechIdentity: .init(attemptID: UUID(), epochID: epoch))
         await expect(.staleObservation) { _ = try await stale.observe(source) }
         let duplicate = try state()
         await expect(.invalidObservation) { _ = try await duplicate.observe(observation([word(0), word(0)], accepted: 1, asr: 1)) }

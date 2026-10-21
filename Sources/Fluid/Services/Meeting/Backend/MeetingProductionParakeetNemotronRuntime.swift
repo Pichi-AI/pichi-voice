@@ -609,6 +609,20 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         do {
             try await speakerScope.waitUntilReady()
             try Task.checkCancellation()
+            if self.ownerVoiceProfileSnapshot != nil,
+               artifact.profile.verifiesLiveStreamingOwner(implementationFingerprint: configuration.diarizationFingerprint) {
+                let began = MeetingPCMRuntimeDiagnostics.begin(.voicePrepare)
+                defer { MeetingPCMRuntimeDiagnostics.completed(.voicePrepare, since: began) }
+                do {
+                    try MeetingSpeakerVoiceEncoder.prepare(directory: self.voiceModelDirectory,
+                        validateDefaultRoot: self.usesDefaultVoiceModelDirectory)
+                } catch {
+                    try Task.checkCancellation()
+                    // Optional voice preparation never replaces a valid anonymous recording.
+                    DebugLogger.shared.info("idle_preparation=owner_encoder_unavailable", source: "MeetingPCMRuntime")
+                }
+            }
+            try Task.checkCancellation()
             guard try self.modelLocator.recheck(artifact) == artifact else {
                 throw MeetingNemotronModelReadinessError.artifactChanged(path: artifact.packageURL.path)
             }
@@ -1335,6 +1349,7 @@ nonisolated enum MeetingPCMRuntimeDiagnostics {
         case load = "nemotron.load"
         case diarize = "nemotron.diarize"
         case voice = "voice.encode"
+        case voicePrepare = "voice.prepare"
         case asrPrepare = "asr.prepare"
         case asrInfer = "asr.infer"
         case recordingDiarize = "recording.diarization"
