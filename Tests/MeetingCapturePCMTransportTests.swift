@@ -471,6 +471,7 @@ struct MeetingCapturePCMTransportTests {
         try require(wrongFormatProbe.snapshot.2 == 1, "malformed PCM emits one terminal event")
         try await progressiveTransport()
         try await pauseEndpointTransport()
+        try await fractionalSourceClockTransport()
         try await postCheckpointWindowFeedback()
         try await checkpointReleasesPCM()
         try await longMeetingTransport()
@@ -1060,6 +1061,110 @@ struct MeetingCapturePCMTransportTests {
             } catch MeetingMemoryAudioError.invalidBudget { }
         }
         print("Pause endpoint PCM: full VAD coverage, short-tail suffix races, quiet successors, speech veto, Stop/cap, opt-out and joined overload cancellation passed.")
+    }
+
+    static func fractionalSourceClockTransport() async throws {
+        // This measured sequence formerly accumulated 7.1 + 1.2 + ten 1s pauses into
+        // 18.299999999999997. A local word beginning at zero then preceded the closed prefix.
+        let sizes = [113_600, 19_200] + Array(repeating: 16_000, count: 10) + [67_200]
+        let starts = sizes.dropLast().reduce(into: [0]) { $0.append($0.last! + $1) }
+        let ends = zip(starts, sizes).map(+)
+        let reads = sizes.map { _ in Latch() }, queries = sizes.map { _ in Latch() }
+        let probe = ProgressiveProbe(), feedback = WindowFeedbackProbe()
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            chunkSeconds: 20, maximumPendingSeconds: 60, initialPreviewSeconds: 0.5, previewIntervalSeconds: 0.5,
+            confidentlyNonSpeech: { _, end in
+                let endSample = Int((end * 16_000).rounded())
+                guard let index = ends.firstIndex(of: endSample) else { return false }
+                await queries[index].wait()
+                return true
+            }, pauseEndpointSilenceSeconds: 0.768,
+            recognize: { window, start in
+                let ordinal = probe.snapshot.1.count
+                try require(ordinal < sizes.count, "fractional pause sequence has no extra window")
+                probe.begin(start)
+                try require(start == Double(starts[ordinal]) / 16_000,
+                            "every source offset equals the admitted integer PCM clock exactly")
+                await reads[ordinal].wait()
+                var frames = 0
+                while let update = try await window.next() {
+                    for (index, value) in update.samples.enumerated() {
+                        try require(value == Float(starts[ordinal] + frames + index) / 32_000,
+                                    "fractional rotations preserve every admitted sample in order")
+                    }
+                    frames += update.samples.count
+                    probe.record(update, start: start)
+                    if !update.isFinal {
+                        try require(frames == sizes[ordinal] && update.totalFrames == frames,
+                                    "the endpoint examines exactly the scheduled physical prefix")
+                        try require(await window.sealAtSpeechBoundaryIfConfident(totalFrames: frames, offset: start),
+                                    "fully measured fractional pause closes its exact delivered prefix")
+                    } else {
+                        try require(update.speechBoundarySample == ends[ordinal],
+                                    "speech boundary receipt and successor share one integer source clock")
+                    }
+                }
+                return .init(segments: [], speakers: [])
+            }, checkpoint: { _ in probe.checkpoint() }, didProcessWindow: { feedback.record($0) },
+            failure: { _ in probe.failed() })
+        var admitted = 0
+        for index in sizes.indices {
+            while admitted < ends[index] {
+                let frames = min(64_000, ends[index] - admitted)
+                try require(consumer.enqueue(try sequenceSample(frames: frames, startFrame: Int64(admitted))),
+                            "fractional source-clock fixture is accepted as normalized 16k PCM")
+                admitted += frames
+            }
+            try await awaitEntered(reads[index], "fractional recognizer owns its source window")
+            await reads[index].release()
+            try await awaitEntered(queries[index], "fractional pause query owns the delivered prefix")
+            if index < sizes.count - 1 {
+                // Force every successor through the pending suffix transfer path.
+                try require(consumer.enqueue(try sequenceSample(frames: 1_600, startFrame: Int64(admitted))),
+                            "sub-preview suffix stays owned while VAD completes")
+                admitted += 1_600
+            }
+            await queries[index].release()
+            try await awaitCheckpoints(probe, count: index + 1, "fractional pause checkpoints before its successor")
+        }
+        try await consumer.finish()
+        try require(probe.snapshot.1 == starts.map { Double($0) / 16_000 } && probe.snapshot.1.last == 18.3,
+                    "a zero-local-time last word cannot precede the already closed source prefix")
+        try require(probe.snapshot.0.map(\.delta).reduce(0, +) == sizes.reduce(0, +)
+                    && probe.speechBoundaries == ends && probe.snapshot.3 == 0,
+                    "pause rotations preserve complete PCM and exact boundary receipts without rejection")
+        try require(feedback.snapshot.map(\.sourceStartSample) == starts
+                    && feedback.snapshot.map(\.sourceFrameCount) == sizes
+                    && feedback.snapshot.last?.chargedPendingFrames == 0,
+                    "checkpoint feedback retains exact integer source ranges and releases every frame")
+
+        // One packet crosses a 0.3s cap after an earlier 0.1s packet. Both transport modes
+        // must derive the within-packet successor from sample 4800, rather than 0.1 + 0.2.
+        for progressive in [false, true] {
+            let offsets = ProgressiveProbe()
+            let packetConsumer: any MeetingMemoryAudioConsuming
+            if progressive {
+                packetConsumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+                    chunkSeconds: 0.3, maximumPendingSeconds: 1, initialPreviewSeconds: 0.25, previewIntervalSeconds: 0.25,
+                    recognize: { window, start in
+                        offsets.begin(start)
+                        while let update = try await window.next() { offsets.record(update, start: start) }
+                        return .init(segments: [], speakers: [])
+                    }, checkpoint: { _ in offsets.checkpoint() }, failure: { _ in offsets.failed() })
+            } else {
+                packetConsumer = try MeetingProcessingPipeline.makeMemoryAudioConsumer(chunkSeconds: 0.3, maximumPendingSeconds: 1,
+                    recognize: { samples, start in
+                        offsets.begin(start)
+                        return .init(segments: [], speakers: [])
+                    }, checkpoint: { _ in offsets.checkpoint() }, failure: { _ in offsets.failed() })
+            }
+            try require(packetConsumer.enqueue(try sequenceSample(frames: 1_600)), "fractional packet prefix accepted")
+            try require(packetConsumer.enqueue(try sequenceSample(frames: 8_000, startFrame: 1_600)), "crossing fractional packet accepted")
+            try await packetConsumer.finish()
+            try require(offsets.snapshot.1 == [0, Double(4_800) / 16_000] && offsets.snapshot.2 == 2 && offsets.snapshot.3 == 0,
+                        "new windows inside a packet use exact cumulative source frames in both transport modes")
+        }
+        print("PCM source clock: fractional pause rotations, pending suffixes, exact feedback and within-packet starts passed.")
     }
 
     static func postCheckpointWindowFeedback() async throws {

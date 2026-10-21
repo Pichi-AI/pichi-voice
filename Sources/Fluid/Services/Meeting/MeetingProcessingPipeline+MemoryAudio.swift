@@ -304,7 +304,9 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private var jobs: [Job] = []
     private var pendingFrames = 0
     private var peakPendingFrames = 0
-    private var origin: CMTime?
+    // Source offsets share the admitted PCM clock, including after fractional pause splits.
+    // Converting once avoids accumulating seconds just below an already closed sample prefix.
+    private var acceptedSourceFrames = 0
     private var expectedPTS: CMTime?
     private var worker: Task<Void, Never>?
     private var finishTask: Task<Void, Error>?
@@ -388,13 +390,17 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                 rejected = MeetingMemoryAudioError.timelineDiscontinuity
                 return false
             }
-            if self.origin == nil { self.origin = pts }
-            let start = CMTimeGetSeconds(pts - (self.origin ?? pts))
+            guard frameCount <= Int.max - self.acceptedSourceFrames else {
+                rejected = MeetingMemoryAudioError.invalidPCM
+                return false
+            }
+            let sourceStartFrame = self.acceptedSourceFrames
             guard (0..<frameCount).allSatisfy({ data[$0].isFinite }) else {
                 rejected = MeetingMemoryAudioError.invalidPCM
                 return false
             }
             self.expectedPTS = pts + CMTime(value: Int64(frameCount), timescale: 16_000)
+            self.acceptedSourceFrames += frameCount
             self.pendingFrames += frameCount
             self.peakPendingFrames = max(self.peakPendingFrames, self.pendingFrames)
             var position = 0
@@ -402,7 +408,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                 if let intervalFrames = self.previewIntervalFrames {
                     if self.openProgressiveWindow == nil {
                         self.openProgressiveWindow = self.makeProgressiveWindow(intervalFrames: intervalFrames)
-                        self.openProgressiveStart = start + Double(position) / 16_000
+                        self.openProgressiveStart = Double(sourceStartFrame + position) / 16_000
                         self.openProgressiveScheduled = false
                     }
                     let window = self.openProgressiveWindow!
@@ -418,7 +424,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
                     if isFinal { self.openProgressiveWindow = nil }
                 } else {
                     let windowFrames = self.emittedInitialWindow ? self.chunkFrames : self.initialChunkFrames
-                    if self.tail.isEmpty { self.tailStart = start + Double(position) / 16_000 }
+                    if self.tail.isEmpty { self.tailStart = Double(sourceStartFrame + position) / 16_000 }
                     let count = min(windowFrames - self.tail.count, frameCount - position)
                     self.tail.append(contentsOf: UnsafeBufferPointer(start: data.advanced(by: position), count: count))
                     position += count
@@ -452,15 +458,16 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         self.lock.withLock {
             guard self.accepting, self.terminalError == nil,
                   self.openProgressiveWindow === window, self.openProgressiveStart == offset,
-                  let intervalFrames = self.previewIntervalFrames,
-                  let suffix = window.detachSuffixAndSeal(totalFrames: frames,
-                      boundarySample: Int((offset * 16_000).rounded()) + frames) else { return false }
+                  let intervalFrames = self.previewIntervalFrames else { return false }
+            let boundarySample = Int((offset * 16_000).rounded()) + frames
+            guard let suffix = window.detachSuffixAndSeal(totalFrames: frames,
+                boundarySample: boundarySample) else { return false }
             self.openProgressiveWindow = nil
             self.openProgressiveScheduled = false
             if !suffix.isEmpty {
                 let successor = self.makeProgressiveWindow(intervalFrames: intervalFrames, pending: suffix)
                 self.openProgressiveWindow = successor
-                self.openProgressiveStart = offset + Double(frames) / 16_000
+                self.openProgressiveStart = Double(boundarySample) / 16_000
                 if suffix.count >= self.initialChunkFrames {
                     self.jobs.append(.progressive(successor, self.openProgressiveStart))
                     self.openProgressiveScheduled = true
