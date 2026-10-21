@@ -1150,20 +1150,35 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         else {
             throw MeetingDomainError.speakerNotFound
         }
-        guard self.transcriptSegments[segmentIndex].speakerID != speakerID
-            || self.transcriptSegments[segmentIndex].speakerAttribution != nil
-            || self.transcriptSegments[segmentIndex].speakerAttributionInference != nil
-            || self.transcriptSegments[segmentIndex].attributionState.map({ $0 != .assigned }) == true
-            || self.transcriptSegments[segmentIndex].overlap != .none
-            || replacingReadingSpeakerID.map({ $0 != speakerID }) == true else { return }
-        self.transcriptSegments[segmentIndex].speakerID = speakerID
-        self.transcriptSegments[segmentIndex].isUserSpeakerAssigned = true
-        self.transcriptSegments[segmentIndex].speakerAttribution = nil
-        self.transcriptSegments[segmentIndex].speakerAttributionInference = nil
-        self.transcriptSegments[segmentIndex].attributionState = .assigned
-        self.transcriptSegments[segmentIndex].overlap = .none
-        self.transcriptSegments[segmentIndex].revision += 1
+        self.reassignValidatedSegment(at: segmentIndex, to: speakerID,
+            replacingReadingSpeakerID: replacingReadingSpeakerID)
+    }
+
+    /// Single and grouped corrections share the same assignment semantics. The caller
+    /// validates the active target and member indices once before a group is mutated, so
+    /// changing a long paragraph never repeats full transcript or participant scans.
+    @discardableResult
+    mutating func reassignValidatedSegment(
+        at index: Int,
+        to speakerID: SessionSpeakerID,
+        replacingReadingSpeakerID: SessionSpeakerID? = nil
+    ) -> Bool {
+        precondition(self.transcriptSegments.indices.contains(index))
+        guard self.transcriptSegments[index].speakerID != speakerID
+            || self.transcriptSegments[index].speakerAttribution != nil
+            || self.transcriptSegments[index].speakerAttributionInference != nil
+            || self.transcriptSegments[index].attributionState.map({ $0 != .assigned }) == true
+            || self.transcriptSegments[index].overlap != .none
+            || replacingReadingSpeakerID.map({ $0 != speakerID }) == true else { return false }
+        self.transcriptSegments[index].speakerID = speakerID
+        self.transcriptSegments[index].isUserSpeakerAssigned = true
+        self.transcriptSegments[index].speakerAttribution = nil
+        self.transcriptSegments[index].speakerAttributionInference = nil
+        self.transcriptSegments[index].attributionState = .assigned
+        self.transcriptSegments[index].overlap = .none
+        self.transcriptSegments[index].revision += 1
         self.updatedAt = Date()
+        return true
     }
 
     /// Gives one unresolved segment its own manual speaker identity. The identity is intentionally

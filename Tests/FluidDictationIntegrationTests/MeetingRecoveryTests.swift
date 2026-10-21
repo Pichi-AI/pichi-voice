@@ -4296,6 +4296,62 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(ownerCorrected.speakers.filter(\.isLocalUser).map(\.id), [speakerA])
     }
 
+    func testThousandWordParticipantCorrectionKeepsNativeMembersAndUsesOneTransactionAndUndo() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let realStore = MeetingSessionStore(rootDirectory: dir)
+        var (session, _, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        let template = session.transcriptSegments[0]
+        let epoch = MeetingAnalysisEpochID(trackID: template.sourceTrackID, ordinal: 0)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "synthetic-owner")
+        let selectedCount = 1_000
+        let flags: [Bool?] = [nil, false, true]
+        session.endedAt = session.startedAt.addingTimeInterval(Double(selectedCount + 1))
+        session.transcriptSegments = (0...selectedCount).map { index in
+            var word = template
+            word.id = UUID()
+            word.start = .init(value: Int64(index), timescale: 1)
+            word.end = .init(value: Int64(index + 1), timescale: 1)
+            word.text = "Synthetic \(index)"
+            word.isUserSpeakerAssigned = flags[index % flags.count]
+            word.attributionState = .assigned
+            word.nativePrecision = .word
+            word.nativeUnitID = "synthetic-native-\(index)"
+            word.nativeSpeakerAssignment = .assigned(token)
+            word.nativeTiming = .init(start: Double(index), end: Double(index + 1))
+            return word
+        }
+        try await realStore.create(session)
+        let store = GatedThrowingSaveStore(inner: realStore, recorder: EventRecorder())
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let selectedIDs = Array(session.transcriptSegments.prefix(selectedCount).map(\.id).reversed())
+        let corrected = try await coordinator.reassignSegments(sessionID: session.id,
+            segmentIDs: selectedIDs + [selectedIDs[0]], to: speakerB)
+        var expected = session.transcriptSegments
+        for index in 0..<selectedCount {
+            expected[index].speakerID = speakerB
+            expected[index].isUserSpeakerAssigned = true
+            expected[index].revision += 1
+        }
+        XCTAssertEqual(corrected.transcriptSegments, expected,
+                       "Selected words change participant provenance only; the unselected sentinel stays exact")
+        XCTAssertEqual(corrected.audioTracks, session.audioTracks)
+        XCTAssertEqual(corrected.speakers, session.speakers)
+        let savesAfterCorrection = await store.savedEventCounts.count
+        XCTAssertEqual(savesAfterCorrection, 1, "A long group still owns one save")
+        let saved = try await realStore.load(id: session.id)
+        XCTAssertEqual(saved?.transcriptSegments, expected)
+        let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments,
+                       "One gesture has one inverse for all selected words and their prior optional flags")
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+        let savesAfterUndo = await store.savedEventCounts.count
+        XCTAssertEqual(savesAfterUndo, 2)
+        let restored = try await realStore.load(id: session.id)
+        XCTAssertEqual(restored?.transcriptSegments, session.transcriptSegments)
+    }
+
     func testBatchSpeakerCorrectionValidatesAllMembersAndTargetBeforeSaving() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

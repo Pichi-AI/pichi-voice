@@ -1353,18 +1353,23 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard session.activeSpeakers.contains(where: { $0.id == speakerID }) else {
                 throw MeetingDomainError.speakerNotFound
             }
-            let selected = Set(segmentIDs)
-            let selectedSegments = session.transcriptSegments.filter { selected.contains($0.id) }
+            let indicesByID = Dictionary(uniqueKeysWithValues:
+                session.transcriptSegments.enumerated().map { ($0.element.id, $0.offset) })
+            var selectedIDs = Set<MeetingTranscriptSegmentID>()
+            var selectedIndices: [Int] = []
             // Validate every requested identity before touching the mutation copy. Repeated
             // member IDs are naturally one selection rather than repeated revisions.
-            guard selectedSegments.count == selected.count else { throw MeetingDomainError.segmentNotFound }
-            guard !selected.isEmpty else { return .reassign([]) }
+            for id in segmentIDs where selectedIDs.insert(id).inserted {
+                guard let index = indicesByID[id] else { throw MeetingDomainError.segmentNotFound }
+                selectedIndices.append(index)
+            }
+            guard !selectedIndices.isEmpty else { return .reassign([]) }
             let presentations = MeetingTranscriptExporter.speakerPresentations(in: session)
             var inverse: [SpeakerAssignmentCorrection] = []
-            for previous in selectedSegments {
-                try session.reassignSegment(id: previous.id, to: speakerID,
-                    replacingReadingSpeakerID: presentations[previous.id]?.participantID)
-                if session.transcriptSegments.first(where: { $0.id == previous.id }) != previous {
+            for index in selectedIndices {
+                let previous = session.transcriptSegments[index]
+                if session.reassignValidatedSegment(at: index, to: speakerID,
+                    replacingReadingSpeakerID: presentations[previous.id]?.participantID) {
                     inverse.append(SpeakerAssignmentCorrection(previous))
                 }
             }
