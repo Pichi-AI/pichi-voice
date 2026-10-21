@@ -1317,7 +1317,7 @@ final class MobileNavigationUITests: XCTestCase {
         let lastID = "00000000-0000-0000-0000-202610210105"
         for (language, appearance, history, ownerName, otherName) in [
             ("en", "light", "History", "You", "Participant 1"),
-            ("ru", "dark", "История", "Вы", "Участник 1")
+            ("ru", "dark", "История", "Вы", "Participant 1")
         ] {
             func openFixture() throws {
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
