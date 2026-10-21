@@ -6782,6 +6782,7 @@ final class MeetingRecoveryTests: XCTestCase {
         self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
         var configuration = self.makeConfiguration()
         configuration.mode = .onlineCall
+        configuration.applicationAudioScope = .systemAudio
         let session = try await coordinator.startRecording(configuration: configuration)
         await self.drainCaptureEvents()
         XCTAssertTrue(resolver.requests.isEmpty, "Online calls must not request a physical meeting address")
