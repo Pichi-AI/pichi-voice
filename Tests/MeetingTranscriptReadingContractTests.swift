@@ -278,7 +278,7 @@ extension MeetingSessionStoreCheckpointTests {
             session.speakers[0].usesCustomDisplayName = custom
             for language in [PichiInterfaceLanguage.english, .russian] {
                 let expected = custom == true ? session.speakers[0].displayName
-                    : PichiLocalization.text("You", language: language)
+                    : PichiLocalization.text("You", language: language, bundle: .main)
                 check(MeetingTranscriptExporter.speakerDisplayName(session.speakers[0], language: language) == expected,
                       "An explicit owner alias replaces the localized owner marker without inspecting the name")
                 let presentation = MeetingTranscriptExporter.speakerPresentation(for: incoming, in: session)
