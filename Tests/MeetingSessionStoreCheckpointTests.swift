@@ -49,6 +49,7 @@ struct MeetingSessionStoreCheckpointTests {
         var named = session
         named.speakers = [generated]
         try named.renameSpeaker(id: generated.id, to: "Ручное имя Ёё")
+        check(named.speakers[0].usesCustomDisplayName == true, "Renaming records explicit alias provenance")
         check(named.speakers[0].generatedParticipantNumber == nil,
               "An explicit alias must leave automatic participant numbering")
         let alias = MeetingSessionSpeaker.numberingGeneratedParticipants(named.speakers, speakerNameFormat: "Speaker %lld")
@@ -59,10 +60,54 @@ struct MeetingSessionStoreCheckpointTests {
         check(decodedNumbered == generated, "Generated participant metadata failed to survive the saved-data codec")
         var legacyObject = try JSONSerialization.jsonObject(with: numberedData) as! [String: Any]
         legacyObject.removeValue(forKey: "generatedParticipantNumber")
+        legacyObject.removeValue(forKey: "usesCustomDisplayName")
         let decodedLegacy = try JSONDecoder().decode(MeetingSessionSpeaker.self,
             from: JSONSerialization.data(withJSONObject: legacyObject))
+        check(decodedLegacy.usesCustomDisplayName == nil, "An older speaker cannot invent explicit alias provenance")
         check(decodedLegacy.generatedParticipantNumber == nil && decodedLegacy.displayName == generated.displayName,
               "An older saved speaker must decode as a preserved alias")
+        for flag: Bool? in [nil, false, true] {
+            var alias = named.speakers[0]
+            alias.usesCustomDisplayName = flag
+            let decoded = try JSONDecoder().decode(MeetingSessionSpeaker.self, from: JSONEncoder().encode(alias))
+            check(decoded == alias, "Alias provenance must survive the production codec exactly")
+            var word = session.transcriptSegments[0]
+            word.isUserSpeakerAssigned = flag
+            let decodedWord = try JSONDecoder().decode(MeetingTranscriptSegment.self, from: JSONEncoder().encode(word))
+            check(decodedWord == word, "Manual participant provenance must survive the production codec exactly")
+        }
+        var legacyWordRecord = try JSONSerialization.jsonObject(with: JSONEncoder().encode(session.transcriptSegments[0])) as! [String: Any]
+        legacyWordRecord.removeValue(forKey: "isUserSpeakerAssigned")
+        let decodedLegacyWord = try JSONDecoder().decode(MeetingTranscriptSegment.self,
+            from: JSONSerialization.data(withJSONObject: legacyWordRecord))
+        check(decodedLegacyWord.isUserSpeakerAssigned == nil, "An older word retains legacy assignment provenance")
+        var roleOwner = generated
+        roleOwner.isLocalUser = true
+        roleOwner.generatedParticipantNumber = 0
+        var roleOther = generated
+        roleOther.id = UUID()
+        var roleAlias = named.speakers[0]
+        roleAlias.id = UUID()
+        // Explicit alias provenance remains authoritative even with a historical number.
+        roleAlias.generatedParticipantNumber = 7
+        var roleLegacy = generated
+        roleLegacy.id = UUID()
+        roleLegacy.displayName = "Preserved legacy name"
+        roleLegacy.generatedParticipantNumber = nil
+        var roleSession = session
+        roleSession.speakers = [roleOwner, roleOther, roleAlias, roleLegacy]
+        try roleSession.setLocalUserSpeaker(id: nil, speakerNameFormat: "Captured %lld")
+        check(roleSession.speakers.prefix(2).map(\.displayName) == ["Captured 1", "Captured 2"],
+              "Clearing the owner renumbers generated names that previously shared one raw label")
+        check(roleSession.speakers.prefix(2).map(\.generatedParticipantNumber) == [1, 2],
+              "A cleared owner cannot retain the generated zero owner marker")
+        check(roleSession.speakers[2].displayName == roleAlias.displayName
+              && roleSession.speakers[2].usesCustomDisplayName == true
+              && roleSession.speakers[2].generatedParticipantNumber == nil,
+              "An explicit custom alias cannot be reformatted as a generated participant")
+        check(roleSession.speakers[3] == roleLegacy, "Legacy nil-number names remain verbatim")
+        let savedRoles = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(roleSession))
+        check(savedRoles.speakers == roleSession.speakers, "Meeting-local role corrections survive the session codec")
         try Self.checkReadableTranscriptContract(check)
 
         try Self.checkPlainParticipantLabels(template: session, check: check)

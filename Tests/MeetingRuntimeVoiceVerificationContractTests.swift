@@ -71,56 +71,47 @@ private nonisolated enum Refusal: Error { case notUsed }
             let ownerV3 = ownerV2 + (profile.supportsOwnerVoiceVerification
                 ? ";owner-live=serial-v3;owner-retry=2s-to10s-then10s" : "")
             let ownerV4 = ownerV3 + (profile.supportsOwnerVoiceVerification ? ";owner-confirm=full-two-5s-v4" : "")
+            let cadenceV1 = ownerV3 + (profile.supportsOwnerVoiceVerification ? ";owner-final=live-cadence-v1" : "")
+            let combined = ownerV4 + (profile.supportsOwnerVoiceVerification ? ";owner-final=live-cadence-v1" : "")
             try require(profile.legacyOwnerStreamingImplementationFingerprint == ownerV1
                         && profile.ownerV2StreamingImplementationFingerprint == ownerV2
                         && profile.ownerV3StreamingImplementationFingerprint == ownerV3
-                        && profile.streamingImplementationFingerprint == ownerV4,
-                        "Exact V1/V2/V3 recipes remain frozen while the current full-evidence recipe is explicit V4")
-            try require(profile.acceptsStreamingImplementationFingerprint(profile.implementationFingerprint),
-                        "An exact anonymous streaming recipe remains admissible")
-            try require(profile.acceptsStreamingImplementationFingerprint(profile.streamingImplementationFingerprint),
-                        "The exact current composite recipe remains admissible")
-            try require(!profile.verifiesStreamingOwner(implementationFingerprint: profile.implementationFingerprint),
-                        "An old anonymous fingerprint cannot authorize owner confirmation")
-            try require(profile.verifiesStreamingOwner(implementationFingerprint: profile.streamingImplementationFingerprint)
-                        == profile.supportsOwnerVoiceVerification, "Only the exact supported composite enables owner verification")
-            for changed in [profile.implementationFingerprint + "-changed", ownerV1 + ";changed", ownerV2 + ";changed",
-                            ownerV3 + ";changed", ownerV4 + ";compute=cpuAndGPU", ownerV4 + ";owner-confirm=full-two-5s-v4"] {
-                try require(!profile.acceptsStreamingImplementationFingerprint(changed), "Unregistered recipe changes remain refused")
-                try require(!profile.verifiesStreamingOwner(implementationFingerprint: changed)
-                            && !profile.verifiesLiveStreamingOwner(implementationFingerprint: changed)
-                            && !profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: changed)
-                            && !profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: changed),
-                            "Mutated recipes cannot acquire owner capabilities")
+                        && profile.ownerV4StreamingImplementationFingerprint == ownerV4
+                        && profile.ownerCadenceStreamingImplementationFingerprint == cadenceV1
+                        && profile.streamingImplementationFingerprint == combined,
+                        "Earlier literal recipes remain frozen; current recipe composes full evidence and final cadence")
+            let recipes: [(String, Bool, Bool, Bool, Bool, Bool)] = [
+                (profile.implementationFingerprint, false, false, false, false, false),
+                (ownerV1, true, false, false, false, false),
+                (ownerV2, true, true, false, false, false),
+                (ownerV3, true, true, true, false, false),
+                (ownerV4, true, true, true, true, false),
+                (cadenceV1, true, true, true, false, true),
+                (combined, true, true, true, true, true)
+            ]
+            for (fingerprint, owner, adaptive, live, full, cadence) in recipes {
+                let supported = profile.supportsOwnerVoiceVerification
+                try require(profile.acceptsStreamingImplementationFingerprint(fingerprint),
+                            "Each exact frozen recipe remains admitted")
+                try require(profile.verifiesStreamingOwner(implementationFingerprint: fingerprint) == (supported && owner)
+                            && profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: fingerprint) == (supported && adaptive)
+                            && profile.verifiesLiveStreamingOwner(implementationFingerprint: fingerprint) == (supported && live)
+                            && profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: fingerprint) == (supported && full)
+                            && profile.preservesStreamingOwnerCadenceAtEOF(implementationFingerprint: fingerprint) == (supported && cadence),
+                            "Frozen recipes preserve their independent evidence, live and EOF capabilities")
             }
-            try require(profile.acceptsStreamingImplementationFingerprint(profile.legacyOwnerStreamingImplementationFingerprint),
-                        "Exact owner-v1 retained recipes remain admissible")
-            try require(profile.verifiesStreamingOwner(implementationFingerprint: profile.legacyOwnerStreamingImplementationFingerprint)
-                        == profile.supportsOwnerVoiceVerification, "Owner-v1 keeps its original optional encoder")
-            try require(!profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: profile.legacyOwnerStreamingImplementationFingerprint),
-                        "Owner-v1 cannot silently acquire new clip selection or verification")
-            try require(profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: profile.streamingImplementationFingerprint)
-                        == profile.supportsOwnerVoiceVerification, "Exact current V4 keeps adaptive evidence")
-            try require(profile.acceptsStreamingImplementationFingerprint(profile.ownerV2StreamingImplementationFingerprint),
-                        "Frozen V2 remains admitted without acquiring live inference")
-            try require(!profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.ownerV2StreamingImplementationFingerprint)
-                        && !profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.legacyOwnerStreamingImplementationFingerprint),
-                        "Earlier saved owner recipes preserve final-only verification")
-            try require(profile.verifiesLiveStreamingOwner(implementationFingerprint: profile.streamingImplementationFingerprint)
-                        == profile.supportsOwnerVoiceVerification, "Exact V4 capability enables live inference")
-            try require(profile.acceptsStreamingImplementationFingerprint(ownerV3)
-                        && profile.verifiesStreamingOwner(implementationFingerprint: ownerV3) == profile.supportsOwnerVoiceVerification
-                        && profile.verifiesLiveStreamingOwner(implementationFingerprint: ownerV3) == profile.supportsOwnerVoiceVerification
-                        && profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: ownerV3) == profile.supportsOwnerVoiceVerification,
-                        "Frozen V3 remains admitted with its live adaptive owner behavior")
-            try require(profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: ownerV2) == profile.supportsOwnerVoiceVerification,
-                        "Frozen V2 keeps adaptive evidence")
-            try require(!profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: profile.implementationFingerprint)
-                        && !profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: ownerV1)
-                        && !profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: ownerV2)
-                        && !profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: ownerV3)
-                        && profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: ownerV4) == profile.supportsOwnerVoiceVerification,
-                        "Only exact supported V4 requires full query evidence")
+            for fingerprint in [profile.implementationFingerprint, ownerV1, ownerV2, ownerV3, ownerV4, cadenceV1, combined] {
+                for suffix in [";changed", ";compute=cpuAndGPU", ";owner-final=unknown"] {
+                    let changed = fingerprint + suffix
+                    try require(!profile.acceptsStreamingImplementationFingerprint(changed)
+                                && !profile.verifiesStreamingOwner(implementationFingerprint: changed)
+                                && !profile.verifiesLiveStreamingOwner(implementationFingerprint: changed)
+                                && !profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: changed)
+                                && !profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: changed)
+                                && !profile.preservesStreamingOwnerCadenceAtEOF(implementationFingerprint: changed),
+                                "Arbitrary suffixes cannot acquire any owner capability")
+                }
+            }
             let locator: any MeetingNemotronModelLocating = MeetingNemotronModelLocator(profile: profile)
             let enabled = locator.supportsOwnerVoiceVerification
             let runtime = VoiceVerificationProbe(verificationEnabled: enabled)

@@ -831,6 +831,9 @@ nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Send
     /// Present only for assembler-generated names. Zero marks the confirmed owner, who
     /// consumes no participant number. Nil preserves legacy names and manual aliases.
     var generatedParticipantNumber: Int? = nil
+    /// Explicit user alias, independent of automatic owner recognition and generated labels.
+    /// Nil retains the display convention of sessions saved before this provenance existed.
+    var usesCustomDisplayName: Bool? = nil
 
     /// Admission order is stable across windows. Recompute only generated labels when
     /// acoustic owner evidence changes; names are never inspected to infer their origin.
@@ -940,6 +943,9 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     /// speaker patches also increment revision. Neither can erase this reading boundary.
     /// Optional so existing archives decode without inventing a correction history.
     var isUserTextEdited: Bool? = nil
+    /// Explicit participant correction. Kept separate from text/privacy revisions and raw
+    /// acoustic evidence so attribution rebuilding cannot reinterpret a manual selection.
+    var isUserSpeakerAssigned: Bool? = nil
     var revision: Int
     var status: MeetingTranscriptStatus
     var overlap: MeetingTranscriptOverlap
@@ -1157,6 +1163,38 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         guard self.speakers[index].displayName != trimmed else { return }
         self.speakers[index].displayName = trimmed
         self.speakers[index].generatedParticipantNumber = nil
+        self.speakers[index].usesCustomDisplayName = true
+        self.updatedAt = Date()
+    }
+
+    /// A meeting-local user assertion, separate from the enrolled voice profile and native
+    /// acoustic evidence. Corrections run only after capture and processing have joined.
+    /// The manual action supplies one captured interface template for renumbering generated
+    /// labels. Background observations instead retain their producing attempt's template.
+    mutating func setLocalUserSpeaker(id: SessionSpeakerID?, speakerNameFormat: String) throws {
+        if let id {
+            guard self.activeSpeakers.contains(where: { $0.id == id }) else {
+                throw MeetingDomainError.speakerNotFound
+            }
+        }
+        var changed = false
+        for index in self.speakers.indices {
+            let isLocalUser = self.speakers[index].mergedIntoSpeakerID == nil && self.speakers[index].id == id
+            if self.speakers[index].isLocalUser != isLocalUser {
+                self.speakers[index].isLocalUser = isLocalUser
+                changed = true
+            }
+        }
+        guard changed else { return }
+        // Explicit aliases and legacy nil-number names are user data. Only generated
+        // provenance participates in this intentional role-change renumbering.
+        let numberedSources = self.speakers.map { source in
+            var speaker = source
+            if speaker.usesCustomDisplayName == true { speaker.generatedParticipantNumber = nil }
+            return speaker
+        }
+        self.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(numberedSources,
+            speakerNameFormat: speakerNameFormat)
         self.updatedAt = Date()
     }
 
@@ -1176,19 +1214,35 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         else {
             throw MeetingDomainError.speakerNotFound
         }
-        guard self.transcriptSegments[segmentIndex].speakerID != speakerID
-            || self.transcriptSegments[segmentIndex].speakerAttribution != nil
-            || self.transcriptSegments[segmentIndex].speakerAttributionInference != nil
-            || self.transcriptSegments[segmentIndex].attributionState.map({ $0 != .assigned }) == true
-            || self.transcriptSegments[segmentIndex].overlap != .none
-            || replacingReadingSpeakerID.map({ $0 != speakerID }) == true else { return }
-        self.transcriptSegments[segmentIndex].speakerID = speakerID
-        self.transcriptSegments[segmentIndex].speakerAttribution = nil
-        self.transcriptSegments[segmentIndex].speakerAttributionInference = nil
-        self.transcriptSegments[segmentIndex].attributionState = .assigned
-        self.transcriptSegments[segmentIndex].overlap = .none
-        self.transcriptSegments[segmentIndex].revision += 1
+        self.reassignValidatedSegment(at: segmentIndex, to: speakerID,
+            replacingReadingSpeakerID: replacingReadingSpeakerID)
+    }
+
+    /// Single and grouped corrections share the same assignment semantics. The caller
+    /// validates the active target and member indices once before a group is mutated, so
+    /// changing a long paragraph never repeats full transcript or participant scans.
+    @discardableResult
+    mutating func reassignValidatedSegment(
+        at index: Int,
+        to speakerID: SessionSpeakerID,
+        replacingReadingSpeakerID: SessionSpeakerID? = nil
+    ) -> Bool {
+        precondition(self.transcriptSegments.indices.contains(index))
+        guard self.transcriptSegments[index].speakerID != speakerID
+            || self.transcriptSegments[index].speakerAttribution != nil
+            || self.transcriptSegments[index].speakerAttributionInference != nil
+            || self.transcriptSegments[index].attributionState.map({ $0 != .assigned }) == true
+            || self.transcriptSegments[index].overlap != .none
+            || replacingReadingSpeakerID.map({ $0 != speakerID }) == true else { return false }
+        self.transcriptSegments[index].speakerID = speakerID
+        self.transcriptSegments[index].isUserSpeakerAssigned = true
+        self.transcriptSegments[index].speakerAttribution = nil
+        self.transcriptSegments[index].speakerAttributionInference = nil
+        self.transcriptSegments[index].attributionState = .assigned
+        self.transcriptSegments[index].overlap = .none
+        self.transcriptSegments[index].revision += 1
         self.updatedAt = Date()
+        return true
     }
 
     /// Gives one unresolved segment its own manual speaker identity. The identity is intentionally
@@ -1219,9 +1273,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
             diarizationClusterID: nil,
             trackKind: trackKind,
             isLocalUser: false,
-            identityCandidates: []
+            identityCandidates: [],
+            usesCustomDisplayName: true
         ))
         self.transcriptSegments[segmentIndex].speakerID = speakerID
+        self.transcriptSegments[segmentIndex].isUserSpeakerAssigned = true
         self.transcriptSegments[segmentIndex].overlap = .none
         self.transcriptSegments[segmentIndex].speakerAttribution = nil
         self.transcriptSegments[segmentIndex].speakerAttributionInference = nil
@@ -1247,6 +1303,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         }
         for index in self.transcriptSegments.indices where self.transcriptSegments[index].speakerID == sourceID {
             self.transcriptSegments[index].speakerID = targetID
+            self.transcriptSegments[index].isUserSpeakerAssigned = true
             self.transcriptSegments[index].speakerAttribution = nil
             self.transcriptSegments[index].speakerAttributionInference = nil
             self.transcriptSegments[index].revision += 1

@@ -361,6 +361,7 @@ struct MeetingResultCanvas: View {
 
     /// Opens FluidMeet settings on Integrations, so adding an agent is one step from any meeting.
     var onOpenIntegrations: (() -> Void)? = nil
+    var onSetLocalUserSpeaker: ((SessionSpeakerID?) -> Void)? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
@@ -504,7 +505,7 @@ struct MeetingResultCanvas: View {
                                         }
                                     },
                                     isLocalUser: row.speaker?.isLocalUser == true,
-                                    reassignTargets: activeSpeakers.filter { $0.id != row.presentation.participantID },
+                                    reassignTargets: self.session.activeSpeakers.filter { $0.id != row.presentation.participantID },
                                     isQuiescent: self.isQuiescent,
                                     onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) },
                                     canPlayAudio: self.session.retention.audioDeletedAt == nil && self.session.hasFinalizedAudio && self.isQuiescent,
@@ -758,6 +759,14 @@ struct MeetingResultCanvas: View {
             self.pendingRenameText = speaker.displayName
         }
         .disabled(!self.isQuiescent)
+        if let onSetLocalUserSpeaker = self.onSetLocalUserSpeaker {
+            Button(PichiLocalization.text(speaker.isLocalUser ? "Remove You designation" : "Mark as You"),
+                   systemImage: speaker.isLocalUser ? "person.crop.circle.badge.minus" : "person.crop.circle.badge.checkmark") {
+                onSetLocalUserSpeaker(speaker.isLocalUser ? nil : speaker.id)
+            }
+            .disabled(!self.isQuiescent)
+            .help(PichiLocalization.text("The You label applies only to this meeting."))
+        }
         if !speaker.isLocalUser {
             let eligibleTargets = self.session.activeSpeakers.filter {
                 $0.id != speaker.id && !$0.isLocalUser && $0.trackKind == speaker.trackKind
@@ -1179,7 +1188,7 @@ private struct MeetingTranscriptSegmentRow: View {
                 Button("Rename Speaker", systemImage: "person.crop.circle", action: onRenameSpeakerTapped)
                     .disabled(!self.isQuiescent)
             }
-            Menu("Reassign to") {
+            Menu(PichiLocalization.text("Reassign to")) {
                 ForEach(self.reassignTargets) { target in
                     Button(MeetingTranscriptExporter.speakerDisplayName(target, language: PichiLocalization.language)) {
                         self.onReassign(target.id)

@@ -291,7 +291,8 @@ struct MeetingTranscriptionView: View {
                         isRetrying: self.isRetrying,
                         onCloseSelection: self.closeCanvasAction,
                         summaryASRService: self.asrService,
-                        onOpenIntegrations: self.openMeetingIntegrations
+                        onOpenIntegrations: self.openMeetingIntegrations,
+                        onSetLocalUserSpeaker: self.setLocalUserSpeaker
                     )
                     .padding(.trailing, self.isMeetingHistoryVisible && geometry.size.width >= 900 ? 272 : 0)
                     .allowsHitTesting(!self.isMeetingHistoryVisible || geometry.size.width >= 900)
@@ -902,6 +903,19 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    private func setLocalUserSpeaker(sessionID: MeetingSessionID, speakerID: SessionSpeakerID?) {
+        guard self.coordinator.isQuiescent, self.summaryActivity.selectionLock == nil else { return }
+        self.actionErrorMessage = nil
+        Task {
+            do {
+                _ = try await self.coordinator.setLocalUserSpeaker(sessionID: sessionID, speakerID: speakerID)
+            } catch {
+                self.actionErrorMessage = error.localizedDescription
+            }
+            await self.loadMeetingHistory()
+        }
+    }
+
     private func nameUnknownSegment(
         sessionID: MeetingSessionID,
         segmentID: MeetingTranscriptSegmentID,
@@ -1443,6 +1457,7 @@ struct MeetingTranscriptionCanvas: View {
     let onCloseSelection: (() -> Void)?
     var summaryASRService: ASRService? = nil
     var onOpenIntegrations: (() -> Void)? = nil
+    var onSetLocalUserSpeaker: ((MeetingSessionID, SessionSpeakerID?) -> Void)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -1555,7 +1570,10 @@ struct MeetingTranscriptionCanvas: View {
                         onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
                         onClose: self.onCloseSelection,
                         summaryASRService: self.summaryASRService,
-                        onOpenIntegrations: self.onOpenIntegrations
+                        onOpenIntegrations: self.onOpenIntegrations,
+                        onSetLocalUserSpeaker: self.onSetLocalUserSpeaker.map { callback in
+                            { speakerID in callback(session.id, speakerID) }
+                        }
                     )
                 }
             case let .failed(session, message):

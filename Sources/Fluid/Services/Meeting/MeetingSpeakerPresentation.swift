@@ -6,6 +6,14 @@ nonisolated struct MeetingSpeakerPresentation: Sendable, Equatable {
     struct Name: Sendable, Equatable {
         let displayName: String
         let isLocalUser: Bool
+        /// An explicit alias replaces the localized owner label without changing identity.
+        let usesCustomDisplayName: Bool?
+
+        init(displayName: String, isLocalUser: Bool, usesCustomDisplayName: Bool? = nil) {
+            self.displayName = displayName
+            self.isLocalUser = isLocalUser
+            self.usesCustomDisplayName = usesCustomDisplayName
+        }
     }
 
     enum CandidateRelation: Sendable, Equatable {

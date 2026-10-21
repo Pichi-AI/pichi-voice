@@ -6,6 +6,12 @@ final class MobileNavigationUITests: XCTestCase {
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
+        if name.contains("testFragmentParticipantCorrectionScopesUndoAndReopen")
+            || name.contains("testManualYouDesignationSwitchClearUndoAndReopen") {
+            #if !targetEnvironment(simulator)
+            throw XCTSkip("Participant correction fixtures are simulator-only")
+            #endif
+        }
         if name.contains("testSavedTranscriptCaptionContractInBothAppearances") {
             #if !targetEnvironment(simulator)
             throw XCTSkip("This staged-session UI contract is simulator-only; physical saved-session review is separately guarded")
@@ -1295,6 +1301,221 @@ final class MobileNavigationUITests: XCTestCase {
             capture("explicit-alias-\(language)-persisted")
             rename("Иван Петров", to: "Анна")
         }
+    }
+
+    /// Covers a saved meeting where the automatic owner designation was lost entirely.
+    func testManualYouDesignationSwitchClearUndoAndReopen() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Participant correction fixtures are simulator-only")
+        #else
+        let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9026"
+        let firstID = "00000000-0000-0000-0000-000000000065"
+        let secondID = "00000000-0000-0000-0000-000000000066"
+        for (language, appearance, history, ownerName) in [
+            ("en", "light", "History", "You"),
+            ("ru", "dark", "История", "Вы")
+        ] {
+            func openFixture() throws {
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+                app.launch()
+                capture("manual-you-\(language)-ready")
+                openNavigation("history", title: history)
+                capture("manual-you-\(language)-history")
+                let meeting = app.buttons["history.session.\(fixtureID)"]
+                guard meeting.waitForExistence(timeout: 5) else {
+                    throw XCTSkip("Stage ManualOwnerDesignationMeeting.json in the isolated simulator store")
+                }
+                meeting.tap()
+                XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+                capture("manual-you-\(language)-opened")
+            }
+            func assertOnlyOwner(_ id: String?, step: String) {
+                if let id {
+                    let participant = app.buttons["transcript.speaker.\(id)"]
+                    let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", ownerName), object: participant)
+                    XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed,
+                                   "The chosen participant must receive the owner label after the correction commits")
+                }
+                let owners = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
+                    "transcript.speaker.", ownerName))
+                let count = id == nil ? 0 : 1
+                let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == %d", count), object: owners)
+                XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed,
+                               "A meeting must have exactly the manually chosen owner, or none after clearing")
+                capture("manual-you-\(language)-\(step)")
+            }
+            func selectRole(_ id: String, removing: Bool = false, step: String) throws {
+                let menu = app.buttons["transcript.participant.actions.\(id)"]
+                try revealParagraphAboveNavigation(menu, step: "manual-you-\(language)-\(step)-reveal")
+                XCTAssertTrue(menu.isEnabled)
+                menu.tap()
+                capture("manual-you-\(language)-\(step)-menu")
+                let action = app.buttons["transcript.participant.\(removing ? "removeYou" : "markYou").\(id)"]
+                XCTAssertTrue(action.waitForExistence(timeout: 5) && action.isEnabled)
+                action.tap()
+                capture("manual-you-\(language)-\(step)-committed")
+            }
+            func undo(step: String) throws {
+                let more = app.buttons["transcript.more"]
+                try revealParagraphAboveNavigation(more, step: "manual-you-\(language)-\(step)-reveal")
+                more.tap()
+                capture("manual-you-\(language)-\(step)-menu")
+                let action = app.buttons["transcript.undo"]
+                XCTAssertTrue(action.waitForExistence(timeout: 5) && action.isEnabled)
+                action.tap()
+                capture("manual-you-\(language)-\(step)-committed")
+            }
+
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+            try openFixture()
+            assertOnlyOwner(nil, step: "initial-owner-missing")
+            try selectRole(secondID, step: "mark-second")
+            assertOnlyOwner(secondID, step: "second-is-you")
+            app.terminate()
+            try openFixture()
+            assertOnlyOwner(secondID, step: "second-is-you-reopened")
+            try selectRole(firstID, step: "switch-to-first")
+            assertOnlyOwner(firstID, step: "first-is-only-you")
+            try selectRole(firstID, removing: true, step: "clear-first")
+            assertOnlyOwner(nil, step: "designation-cleared")
+            try undo(step: "undo-clear")
+            assertOnlyOwner(firstID, step: "first-restored")
+            try selectRole(secondID, step: "switch-second-for-undo")
+            assertOnlyOwner(secondID, step: "second-is-only-you")
+            try undo(step: "undo-switch")
+            assertOnlyOwner(firstID, step: "first-restored-after-switch")
+            try selectRole(firstID, removing: true, step: "restore-ownerless-fixture")
+            assertOnlyOwner(nil, step: "fixture-ownerless")
+            app.terminate()
+            try openFixture()
+            assertOnlyOwner(nil, step: "cleared-designation-reopened")
+        }
+        #endif
+    }
+
+    /// Uses an isolated synthetic saved meeting. It never starts capture or a model.
+    func testFragmentParticipantCorrectionScopesUndoAndReopen() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Participant correction fixtures are simulator-only")
+        #else
+        let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9025"
+        let ownerID = "00000000-0000-0000-0000-000000000065"
+        let otherID = "00000000-0000-0000-0000-000000000066"
+        let unusedID = "00000000-0000-0000-0000-000000000067"
+        let firstID = "00000000-0000-0000-0000-202610210101"
+        let memberID = "00000000-0000-0000-0000-202610210102"
+        let secondID = "00000000-0000-0000-0000-202610210104"
+        let lastID = "00000000-0000-0000-0000-202610210105"
+        for (language, appearance, history, ownerName, otherName) in [
+            ("en", "light", "History", "You", "Participant 1"),
+            ("ru", "dark", "История", "Вы", "Participant 1")
+        ] {
+            func openFixture() throws {
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+                app.launch()
+                capture("participant-correction-\(language)-ready")
+                openNavigation("history", title: history)
+                capture("participant-correction-\(language)-history")
+                let meeting = app.buttons["history.session.\(fixtureID)"]
+                guard meeting.waitForExistence(timeout: 5) else {
+                    throw XCTSkip("Stage ParticipantCorrectionMeeting.json in the isolated simulator store")
+                }
+                meeting.tap()
+                XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+                capture("participant-correction-\(language)-opened")
+            }
+            func row(_ id: String) -> XCUIElement {
+                app.descendants(matching: .any)["transcript.paragraph.\(id)"].firstMatch
+            }
+            func assertSpeaker(_ id: String, _ name: String, step: String) throws {
+                let paragraph = row(id)
+                try revealParagraphAboveNavigation(paragraph, step: "participant-correction-\(language)-\(step)")
+                XCTAssertTrue(paragraph.staticTexts[name].firstMatch.waitForExistence(timeout: 5),
+                              "Only the selected fragment's participant caption may change")
+            }
+            func openAssignment(_ id: String, step: String) throws {
+                try revealParagraphAboveNavigation(row(id), step: "participant-correction-\(language)-\(step)")
+                let control = app.buttons["transcript.reassign.\(id)"]
+                XCTAssertTrue(control.waitForExistence(timeout: 5) && control.isEnabled)
+                control.tap()
+                capture("participant-correction-\(language)-\(step)-scope")
+            }
+            func assign(_ target: String, step: String) {
+                let control = app.buttons["transcript.reassign.target.\(target)"]
+                XCTAssertTrue(control.waitForExistence(timeout: 5))
+                control.tap()
+                capture("participant-correction-\(language)-\(step)-saved")
+            }
+            func undo(step: String) throws {
+                try revealParagraphAboveNavigation(app.buttons["transcript.more"], step: "participant-correction-\(language)-\(step)-reveal-menu")
+                app.buttons["transcript.more"].tap()
+                capture("participant-correction-\(language)-\(step)-menu")
+                let control = app.buttons["transcript.undo"]
+                XCTAssertTrue(control.waitForExistence(timeout: 5) && control.isEnabled)
+                control.tap()
+                capture("participant-correction-\(language)-\(step)-restored")
+            }
+
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+            try openFixture()
+            XCTAssertTrue(app.buttons["transcript.speaker.\(ownerID)"].exists,
+                          "The automatic owner remains available for global naming")
+            try assertSpeaker(firstID, ownerName, step: "initial-owner")
+            try openAssignment(firstID, step: "whole-owner-to-other")
+            let whole = app.buttons["transcript.reassign.whole"]
+            XCTAssertTrue(whole.waitForExistence(timeout: 5))
+            whole.tap()
+            capture("participant-correction-\(language)-whole-targets")
+            XCTAssertTrue(app.buttons["transcript.reassign.target.\(unusedID)"].exists,
+                          "An active participant with no current fragments must still be a correction target")
+            assign(otherID, step: "whole-owner-to-other")
+            try assertSpeaker(firstID, otherName, step: "whole-corrected")
+            XCTAssertTrue(row(firstID).staticTexts["Обсудим первую фразу. Вторая реплика."].exists,
+                          "Every corrected member stays together; the neighboring turn already assigned to this participant can join it")
+            try assertSpeaker(lastID, ownerName, step: "other-owner-turn-unchanged")
+            // Undo is one operation for the entire displayed fragment, not one per word.
+            try revealParagraphAboveNavigation(row(firstID), step: "participant-correction-\(language)-reveal-undo")
+            try undo(step: "whole-undo")
+            try assertSpeaker(firstID, ownerName, step: "whole-undo-owner")
+            XCTAssertTrue(row(firstID).staticTexts["Обсудим первую фразу."].exists)
+
+            try openAssignment(firstID, step: "member-owner-to-other")
+            let member = app.descendants(matching: .any)["transcript.reassign.fragment.\(memberID)"].firstMatch
+            XCTAssertTrue(member.waitForExistence(timeout: 5))
+            member.tap()
+            capture("participant-correction-\(language)-member-targets")
+            assign(otherID, step: "member-owner-to-other")
+            try assertSpeaker(memberID, otherName, step: "member-corrected")
+            try assertSpeaker(firstID, ownerName, step: "member-neighbor-unchanged")
+            try undo(step: "member-undo")
+            try assertSpeaker(firstID, ownerName, step: "member-undo-owner")
+            XCTAssertTrue(row(firstID).staticTexts["Обсудим первую фразу."].exists)
+
+            try openAssignment(secondID, step: "other-to-owner")
+            assign(ownerID, step: "other-to-owner")
+            try assertSpeaker(firstID, ownerName, step: "other-now-owner")
+            let allOwnerText = "Обсудим первую фразу. Вторая реплика. Последняя реплика."
+            XCTAssertTrue(row(firstID).staticTexts[allOwnerText].exists,
+                          "The changed turn joins its owner's neighboring text without losing words")
+            app.terminate()
+            try openFixture()
+            try assertSpeaker(firstID, ownerName, step: "owner-correction-reopened")
+            XCTAssertTrue(row(firstID).staticTexts[allOwnerText].exists,
+                          "The corrected owner and all unchanged text must survive reopening")
+            // Restore the synthetic fixture through the same user-facing operation.
+            try openAssignment(firstID, step: "restore-other")
+            let restoreMember = app.descendants(matching: .any)["transcript.reassign.fragment.\(secondID)"].firstMatch
+            XCTAssertTrue(restoreMember.waitForExistence(timeout: 5))
+            restoreMember.tap()
+            capture("participant-correction-\(language)-restore-member-targets")
+            assign(otherID, step: "restore-other")
+            try assertSpeaker(secondID, otherName, step: "fixture-restored")
+            try assertSpeaker(firstID, ownerName, step: "first-scope-restored")
+            try assertSpeaker(lastID, ownerName, step: "last-scope-restored")
+        }
+        #endif
     }
 
     func testSavedTranscriptCaptionContractInBothAppearances() throws {

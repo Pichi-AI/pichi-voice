@@ -55,6 +55,7 @@ import Foundation
         try sourceGuards()
         try unsafeWholeBoutCannotAdmit()
         try manualReferencedIdentity()
+        try explicitAssignmentSurvivesRebuild()
         try nativeBoutPartitionInvariance()
         try limitsAndAtomicity()
         try policyCompatibility()
@@ -257,6 +258,49 @@ import Foundation
         check(output.speakers.filter { $0.id == cID }.count == 1)
         check(output.speakers.first(where: { $0.id == cID }) == manual,
               "A bounded streaming update must retain its incoming owner flags and alias")
+    }
+
+    static func explicitAssignmentSurvivesRebuild() throws {
+        let aID = MeetingTranscriptAssembler.speakerID(attemptID: attempt, token: a)
+        let bID = MeetingTranscriptAssembler.speakerID(attemptID: attempt, token: b)
+        let speakers = [MeetingSessionSpeaker(id: aID, displayName: "Synthetic explicit alias",
+            diarizationClusterID: nil, trackKind: .microphone, isLocalUser: false,
+            identityCandidates: [], usesCustomDisplayName: true),
+            MeetingSessionSpeaker(id: bID, displayName: "Synthetic other", diarizationClusterID: nil,
+                trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
+        // The selected UUID equals the original raw token's UUID. Revision alone cannot
+        // distinguish this correction from an automatic/privacy publication revision.
+        var first = word(4600, 0, 6, token: a)
+        first.speakerID = aID; first.attributionState = .assigned; first.revision = 1
+        var second = word(4601, 7, 13, token: b)
+        second.speakerID = bID; second.attributionState = .assigned
+        let activity = [MeetingBackendSpeakerActivity(token: b, start: 0, end: 6),
+                        MeetingBackendSpeakerActivity(token: b, start: 7, end: 13)]
+        for enabled in [false, true] {
+            for flag: Bool? in [nil, false, true] {
+                for precision in [MeetingTextUnitPrecision.word, .utterance] {
+                    var selected = first
+                    selected.isUserSpeakerAssigned = flag
+                    selected.nativePrecision = precision
+                    let result = try MeetingPCMRecordingAttribution.assemble(
+                        transcript: .init(segments: [selected, second], speakers: speakers), activity: activity,
+                        epoch: epoch, attemptID: attempt, duration: 20, speakerNameFormat: "Speaker %lld",
+                        speakerAttributionPolicy: .init(enableVoicedSpeakerAdmission: enabled))
+                    if flag == true {
+                        check(result.segments[0] == selected,
+                              "An explicit original-UUID selection must survive same-attempt attribution rebuilding")
+                    } else {
+                        check(result.segments[0].speakerID == bID,
+                              "Absent/false manual provenance cannot freeze automatic same-UUID evidence")
+                    }
+                    check(result.segments[0].id == selected.id && result.segments[0].text == selected.text
+                          && result.segments[0].start == selected.start && result.segments[0].end == selected.end,
+                          "Attribution rebuilding preserves native source identity, timing and text")
+                    check(result.speakers.first(where: { $0.id == aID })?.usesCustomDisplayName == true,
+                          "Participant alias provenance survives identity reconciliation")
+                }
+            }
+        }
     }
 
     static func nativeBoutPartitionInvariance() throws {

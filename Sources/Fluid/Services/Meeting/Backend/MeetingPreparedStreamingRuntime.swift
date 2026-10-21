@@ -14,6 +14,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     private let useAdaptiveOwnerEvidence: Bool
     private let verifyOwnerDuringCapture: Bool
     private let ownerVerificationPolicy: MeetingOwnerVoiceVerifier.Policy
+    private let preserveOwnerCadenceAtEOF: Bool
     private let onProgress: @Sendable (MeetingStreamingPCMObservation) async throws -> Void
     private let lock = NSLock()
     private var busy = false
@@ -48,6 +49,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
          collectOwnerEvidence: Bool = false, useAdaptiveOwnerEvidence: Bool = false,
          verifyOwnerDuringCapture: Bool = false,
          ownerVerificationPolicy: MeetingOwnerVoiceVerifier.Policy = .streamingV2,
+         preserveOwnerCadenceAtEOF: Bool = false,
          onProgress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void) {
         self.runtime = runtime
         self.asr = asr
@@ -59,6 +61,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         self.useAdaptiveOwnerEvidence = useAdaptiveOwnerEvidence
         self.verifyOwnerDuringCapture = verifyOwnerDuringCapture && collectOwnerEvidence
         self.ownerVerificationPolicy = ownerVerificationPolicy
+        self.preserveOwnerCadenceAtEOF = preserveOwnerCadenceAtEOF
         self.onProgress = onProgress
         self.ownerSamples = collectOwnerEvidence
             ? .init(epoch: .init(trackID: trackID, ordinal: 0), useAdaptiveOwnerEvidence: useAdaptiveOwnerEvidence) : nil
@@ -287,7 +290,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     /// waits for novel admitted speech, so silence and repeated progress never reload weights.
     private func verifyLiveOwner(final: Bool = false) async throws {
         guard self.verifyOwnerDuringCapture, !self.ownerEncoderUnavailable,
-              let samples = self.ownerSamples?.liveExcerpts(final: final), !samples.isEmpty else { return }
+              let samples = self.ownerSamples?.liveExcerpts(final: final, preserveCadenceAtEOF: self.preserveOwnerCadenceAtEOF), !samples.isEmpty else { return }
         try Task.checkCancellation()
         let began = ProcessInfo.processInfo.systemUptime
         let profiles: [MeetingSpeakerVoiceProfile]
@@ -444,15 +447,16 @@ nonisolated struct MeetingStreamingOwnerVoiceSamples: Sendable {
     }
 
     /// First decision uses two independent 3s clips. Retry after 2s of new clean speech
-    /// until 10s, then after each additional 10s. A final flush scores a changed tail once.
+    /// until 10s, then after each additional 10s. Final collection always admits pending
+    /// quality blocks; only frozen legacy recipes bypass the same novelty budget at EOF.
     /// Eight counters and the existing fixed PCM/clip budgets bound all retained evidence.
-    mutating func liveExcerpts(final: Bool = false) -> [MeetingSpeakerVoiceSamples] {
+    mutating func liveExcerpts(final: Bool = false, preserveCadenceAtEOF: Bool = false) -> [MeetingSpeakerVoiceSamples] {
         guard self.enabled, self.useAdaptiveOwnerEvidence else { return [] }
         if final { self.flushAdaptivePending() }
         let slots = Set((0..<8).filter { slot in
             let count = self.cleanFrameCounts[slot], prior = self.encodedFrameCounts[slot]
             return count >= 2 * Self.clipFrames && count > prior
-                && (prior == 0 || final || count - prior >= (prior < 2 * Self.adaptiveClipFrames ? 2 * Self.sampleRate : 10 * Self.sampleRate))
+                && (prior == 0 || (final && !preserveCadenceAtEOF) || count - prior >= (prior < 2 * Self.adaptiveClipFrames ? 2 * Self.sampleRate : 10 * Self.sampleRate))
         }.map { "slot-\($0)" })
         guard !slots.isEmpty else { return [] }
         let result = self.excerpts.filter { slots.contains($0.token.label) }

@@ -38,16 +38,17 @@ nonisolated struct MeetingNemotronModelArtifact: Equatable, Sendable {
         enum Preference: Equatable { case cpuOnly, devicePreferred }
         var streamingImplementationFingerprint = "synthetic-pinned-profile"
         func acceptsStreamingImplementationFingerprint(_ value: String) -> Bool {
-            value == self.streamingImplementationFingerprint || value == "synthetic-legacy-anonymous" || value == "synthetic-owner-v1" || (value == "synthetic-live" || value == "synthetic-live-v4")
+            value == self.streamingImplementationFingerprint || value == "synthetic-legacy-anonymous" || value == "synthetic-owner-v1" || ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined"].contains(value)
         }
         func verifiesStreamingOwner(implementationFingerprint value: String) -> Bool {
-            value == self.streamingImplementationFingerprint || value == "synthetic-owner-v1" || (value == "synthetic-live" || value == "synthetic-live-v4")
+            value == self.streamingImplementationFingerprint || value == "synthetic-owner-v1" || ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined"].contains(value)
         }
         func usesAdaptiveStreamingOwnerEvidence(implementationFingerprint value: String) -> Bool {
-            value == self.streamingImplementationFingerprint || (value == "synthetic-live" || value == "synthetic-live-v4")
+            value == self.streamingImplementationFingerprint || ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined"].contains(value)
         }
-        func verifiesLiveStreamingOwner(implementationFingerprint value: String) -> Bool { (value == "synthetic-live" || value == "synthetic-live-v4") }
-        func requiresFullStreamingOwnerEvidence(implementationFingerprint value: String) -> Bool { value == "synthetic-live-v4" }
+        func verifiesLiveStreamingOwner(implementationFingerprint value: String) -> Bool { ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined"].contains(value) }
+        func requiresFullStreamingOwnerEvidence(implementationFingerprint value: String) -> Bool { value == "synthetic-live-v4" || value == "synthetic-live-combined" }
+        func preservesStreamingOwnerCadenceAtEOF(implementationFingerprint value: String) -> Bool { value == "synthetic-live-cadence" || value == "synthetic-live-combined" }
         var isExperimental = true
         var computePreference = Preference.cpuOnly
     }
@@ -119,6 +120,7 @@ nonisolated enum StreamingScopeFailure: Error { case encoder }
 nonisolated final class StreamingScopeFixture: @unchecked Sendable {
     let failEncoder: Bool
     let blockEncoder: Bool
+    let blockEncoderAtCall: Int?
     private var encoderReleased = false
     private var encoderWaiter: CheckedContinuation<Void, Never>?
     private let lock = NSLock()
@@ -133,9 +135,9 @@ nonisolated final class StreamingScopeFixture: @unchecked Sendable {
     var encodedClipFrames: [[Int]] { self.lock.withLock { self.encoded } }
     var encodedClipFrameHistory: [[[Int]]] { self.lock.withLock { self.encodedHistory } }
     var encoderCallCount: Int { self.lock.withLock { self.calls } }
-    init(failEncoder: Bool = false, blockEncoder: Bool = false, responses: [Int: Response] = [:],
+    init(failEncoder: Bool = false, blockEncoder: Bool = false, blockEncoderAtCall: Int? = nil, responses: [Int: Response] = [:],
          distancesBySlot: [String: Float] = [:]) {
-        self.failEncoder = failEncoder; self.blockEncoder = blockEncoder
+        self.failEncoder = failEncoder; self.blockEncoder = blockEncoder; self.blockEncoderAtCall = blockEncoderAtCall
         self.responses = responses; self.distancesBySlot = distancesBySlot
     }
     func profilesForCall(_ samples: [MeetingSpeakerVoiceSamples]) throws -> [MeetingSpeakerVoiceProfile] {
@@ -162,7 +164,7 @@ nonisolated final class StreamingScopeFixture: @unchecked Sendable {
         }
     }
     func waitForEncoderRelease() async {
-        guard self.blockEncoder else { return }
+        guard self.blockEncoder || self.blockEncoderAtCall == self.lock.withLock({ self.encodedHistory.count }) else { return }
         await withCheckedContinuation { continuation in
             let ready = self.lock.withLock {
                 if self.encoderReleased { return true }
@@ -407,6 +409,41 @@ private actor ScheduledOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession 
     }
 }
 
+// A bounded native-scoring lag can first expose a due owner update at EOF. It also
+// permits a newly eligible rival to enter the actual complete candidate cache at Stop.
+private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession {
+    let rows: [MeetingNemotronSpeakerSegment]
+    let liveThrough: Int
+    let recorder: Recorder
+    private var accepted = 0
+    private var retained = 0
+    init(_ rows: [MeetingNemotronSpeakerSegment], liveThrough: Int, recorder: Recorder = Recorder()) {
+        self.rows = rows; self.liveThrough = liveThrough; self.recorder = recorder
+    }
+    func appendStreaming(_ samples: [Float], sourceStartSample: Int) async throws -> MeetingIncrementalDiarizationUpdate {
+        guard sourceStartSample == accepted else { throw FixtureFailure.invalid }
+        accepted += samples.count
+        return update(final: false)
+    }
+    func finishStreaming(totalSamples: Int) async throws -> MeetingIncrementalDiarizationUpdate {
+        guard totalSamples == accepted else { throw FixtureFailure.invalid }
+        return update(final: true)
+    }
+    func discardActivity(beforeSample: Int) async throws { retained = beforeSample }
+    func cleanupStreaming() async { recorder.event("cleanup") }
+    func diarize(samples: [Float]) async throws -> [MeetingNemotronSpeakerSegment] { throw FixtureFailure.invalid }
+    private func update(final: Bool) -> MeetingIncrementalDiarizationUpdate {
+        let through = final ? accepted : min(accepted, liveThrough)
+        let end = Double(through) / 16_000, floor = Double(retained) / 16_000
+        let activity = rows.compactMap { row -> MeetingNemotronSpeakerSegment? in
+            let start = max(floor, row.start), finish = min(end, row.end)
+            return finish > start ? .init(slotIndex: row.slotIndex, start: start, end: finish) : nil
+        }
+        return .init(activity: activity, acceptedThroughSample: accepted, processedThroughSample: through,
+            retainedFromSample: retained, isFinal: final)
+    }
+}
+
 @main struct MeetingPreparedStreamingRuntimeTests {
     private nonisolated static func make(_ recorder: Recorder, silence: Bool = false, fail: Bool = false, invalid: Bool = false,
                                 refuseProgress: Bool = false) -> MeetingPreparedStreamingRuntime {
@@ -565,7 +602,15 @@ private actor ScheduledOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession 
         try await v4CachedMetadataAndShortCompetitors()
         try await v4ReplacementRevocationAndBoundedCache()
         try await v4JoinedCancellation()
-        print("25 prepared streaming runtime contract groups passed")
+        try await ownerEOFCadenceProductionRoute()
+        try ownerEOFCadenceExactBoundaries()
+        try await ownerEOFFirstEligibility()
+        try await ownerEOFDueEvidenceRevokes()
+        try await ownerEOFCancellationJoins()
+        try await combinedOwnerEOFFirstEligibility()
+        try await ownerEOFDueEvidenceRevokes(policy: .streamingV4)
+        try await ownerEOFCancellationJoins(policy: .streamingV4)
+        print("33 prepared streaming runtime contract groups passed")
     }
 
     private nonisolated static var ownerDecisionLines: [String] {
@@ -582,6 +627,17 @@ private actor ScheduledOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession 
             diarizer: diarizer, trackID: trackID, attemptID: UUID(), configuration: .init(),
             speakerNameFormat: "Speaker %lld", collectOwnerEvidence: true, useAdaptiveOwnerEvidence: true,
             verifyOwnerDuringCapture: true, ownerVerificationPolicy: .streamingV4,
+            onProgress: { recorder.observation($0) })
+    }
+
+    private nonisolated static func ownerAdapter(scope: StreamingScopeFixture, recorder: Recorder,
+        diarizer: any MeetingIncrementalNemotronDiarizerSession, trackID: UUID = UUID(),
+        policy: MeetingOwnerVoiceVerifier.Policy = .streamingV2
+    ) -> MeetingPreparedStreamingRuntime {
+        MeetingPreparedStreamingRuntime(runtime: .init(scope: scope), asr: SyntheticASR(Recorder()),
+            diarizer: diarizer, trackID: trackID, attemptID: UUID(), configuration: .init(),
+            speakerNameFormat: "Speaker %lld", collectOwnerEvidence: true, useAdaptiveOwnerEvidence: true,
+            verifyOwnerDuringCapture: true, ownerVerificationPolicy: policy, preserveOwnerCadenceAtEOF: true,
             onProgress: { recorder.observation($0) })
     }
     @discardableResult private nonisolated static func recognizeOwnerRange(
@@ -818,6 +874,218 @@ private actor ScheduledOwnerDiarizer: MeetingIncrementalNemotronDiarizerSession 
         _ = try await runtime.finishStreaming()
         await runtime.cleanup()
         print("PASS integer source-clock offsets preserve words at fractional window starts")
+    }
+
+    /// The extracted production scope must choose the immutable leaf capability. A changed
+    /// tail below its next live budget cannot force a new decision only because Stop occurs.
+    private nonisolated static func ownerEOFCadenceProductionRoute() async throws {
+        for (fingerprint, fullEvidence, preservesCadence) in [
+            ("synthetic-live", false, false), ("synthetic-live-v4", true, false),
+            ("synthetic-live-cadence", false, true), ("synthetic-live-combined", true, true)
+        ] {
+            DebugLogger.shared.reset()
+            let scope = StreamingScopeFixture(responses: [4: .differentVoice]), recorder = Recorder()
+            var configuration = MeetingFinalProcessingConfiguration()
+            configuration.diarizationFingerprint = fingerprint
+            let frozen = configuration, trackID = UUID()
+            let token = MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: trackID, ordinal: 0), label: "slot-0")
+            let runtime = MeetingParakeetNemotronRuntime(scope: scope)
+            let controller = MeetingStreamingPCMController.deferred { body in
+                try await runtime.withPreparedStreamingPCM(trackID: trackID, attemptID: UUID(), configuration: frozen,
+                    onProgress: { recorder.observation($0) }, body: body)
+            }
+            let source = OwnerReplayFixture(frames: 320_000)
+            let live = try await controller.recognize(window: .fixture(samples: source.signal(0..<320_000), final: true), offset: 0)
+            try require(live.confirmedLocalUserTokens == [token] && scope.encoderCallCount == 3,
+                "Every recipe must verify the exact global owner token under its real scorer before Stop")
+            let first = recorder.progress.first { $0.confirmedLocalUserTokens == [token] }
+            try require(first?.acceptedThroughSample == (fullEvidence ? 176_000 : 112_000) && first?.batch.segments.isEmpty == true,
+                "The new final cadence must preserve adaptive promotion before ASR and Stop")
+            let history = scope.encodedClipFrameHistory, decisions = ownerDecisionLines.count
+            let final = try await controller.finishStreaming()
+            try require(scope.encoderCallCount == (preservesCadence ? 3 : 4),
+                "Only recipes without final cadence may force an extra encode for the sub-cadence EOF tail")
+            try require(final.confirmedLocalUserTokens == (preservesCadence ? [token] : []),
+                "New EOF uses the exact last verified decision; old V3 keeps the final changed-voice rejection")
+            try require(final.acceptedThroughSample == 320_000 && final.processedThroughSample == 320_000
+                && final.asrStableThroughSample == 320_000,
+                "Preserving cadence cannot discard final source or ASR coverage")
+            try require(ownerDecisionLines.count == decisions + (preservesCadence ? 0 : 1)
+                && (!preservesCadence || scope.encodedClipFrameHistory == history),
+                "Skipped EOF cannot secretly replace cached profiles or recompute a different owner decision")
+            try require(ownerDecisionLines.allSatisfy { $0.contains(fullEvidence ? "policy=streamingV4" : "policy=streamingV2") }
+                && ownerDecisionLines.last?.contains(preservesCadence ? "outcome=confirmed" : "outcome=referenceDistance") == true,
+                "The actual verifier retains its exact numerical policy and observes old final rejection")
+            try require(scope.snapshot.last == "asr-scope-closed", "Both scopes must join after final publication")
+        }
+        // A real finite voice turn followed by long silence still has a fractional pending
+        // quality tail. Its flush does not make repeated silence into novel clean speech.
+        DebugLogger.shared.reset()
+        let scope = StreamingScopeFixture(), recorder = Recorder(), trackID = UUID()
+        let token = MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: trackID, ordinal: 0), label: "slot-0")
+        let source = OwnerReplayFixture(frames: 960_000, ranges: [0..<320_000])
+        let adapter = ownerAdapter(scope: scope, recorder: recorder,
+            diarizer: ScheduledOwnerDiarizer([.init(slotIndex: 0, start: 0, end: 20)]), trackID: trackID)
+        _ = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
+        _ = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<640_000)
+        let settled = scope.encoderCallCount
+        _ = try await recognizeOwnerRange(adapter, source: source, range: 640_000..<960_000)
+        let final = try await adapter.finishStreaming()
+        try require(scope.encoderCallCount == settled && final.confirmedLocalUserTokens == [token]
+            && final.asrStableThroughSample == 960_000,
+            "Long silence, a fractional final quality flush and empty seal preserve the exact verified token without encoding")
+        await adapter.cleanup()
+        print("PASS actual old/new recipe routing, adaptive owner promotion, sub-cadence EOF and silence")
+    }
+
+    private nonisolated static func ownerEOFCadenceExactBoundaries() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        func signal(_ frames: Int) -> [Float] { (0..<frames).map { 0.1 * sin(Float($0) * 0.031) } }
+        func add(_ frames: Int, to collector: inout MeetingStreamingOwnerVoiceSamples) {
+            collector.consumeCleanOwnerSamples(signal(frames)[...], slot: 0)
+        }
+        var collector = MeetingStreamingOwnerVoiceSamples(epoch: epoch, useAdaptiveOwnerEvidence: true)
+        add(96_000, to: &collector)
+        try require(collector.liveExcerpts(preserveCadenceAtEOF: true).map(\.clips).first?.map(\.count) == [48_000, 48_000],
+            "First eligible live decision remains two independent three-second clips")
+        let six = collector
+        add(31_999, to: &collector)
+        try require(collector.liveExcerpts(final: true, preserveCadenceAtEOF: true).isEmpty,
+            "Flushing two seconds minus one clean frame cannot bypass the live retry budget")
+        var exactEight = six
+        add(32_000, to: &exactEight)
+        try require(exactEight.liveExcerpts(final: true, preserveCadenceAtEOF: true).count == 1,
+            "Exactly two new clean seconds must score at EOF")
+        add(32_000, to: &exactEight)
+        try require(exactEight.liveExcerpts(preserveCadenceAtEOF: true).count == 1,
+            "The early two-second cadence remains active through ten clean seconds")
+        var underTwenty = exactEight
+        add(159_999, to: &underTwenty)
+        try require(underTwenty.liveExcerpts(final: true, preserveCadenceAtEOF: true).isEmpty,
+            "At maturity ten seconds minus one clean frame remains below the same live budget")
+        add(160_000, to: &exactEight)
+        try require(exactEight.liveExcerpts(final: true, preserveCadenceAtEOF: true).map(\.clips).first?.map(\.count) == [80_000, 80_000],
+            "Exactly ten new clean seconds must score a mature pair at EOF")
+        var oldV3 = six
+        add(800, to: &oldV3)
+        try require(oldV3.liveExcerpts(final: true).count == 1,
+            "The exact old V3 default retains its forced final flush, even below two seconds")
+        try require(exactEight.retainedVoiceFrames <= MeetingStreamingOwnerVoiceSamples.maximumAdaptiveVoiceFrames,
+            "Cadence selection cannot expand the existing bounded evidence storage")
+        print("PASS exact 2s/10s clean-frame boundaries, quality flush and old V3 compatibility")
+    }
+
+    private nonisolated static func ownerEOFFirstEligibility() async throws {
+        for (frames, eligible) in [(100_800, false), (102_400, true)] {
+            DebugLogger.shared.reset()
+            let scope = StreamingScopeFixture(), recorder = Recorder(), trackID = UUID()
+            let token = MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: trackID, ordinal: 0), label: "slot-0")
+            let source = OwnerReplayFixture(frames: frames)
+            let adapter = ownerAdapter(scope: scope, recorder: recorder, diarizer: SyntheticDiarizer(Recorder()), trackID: trackID)
+            let live = try await recognizeOwnerRange(adapter, source: source, range: 0..<frames)
+            try require(live.confirmedLocalUserTokens == [] && scope.encoderCallCount == 0,
+                "First eligibility fixture must reach Stop with no prior encoded owner candidate")
+            let final = try await adapter.finishStreaming()
+            try require(scope.encoderCallCount == (eligible ? 1 : 0)
+                && final.confirmedLocalUserTokens == (eligible ? [token] : []),
+                "Final collection must score the first genuinely eligible candidate and abstain below six clean seconds")
+            try require(!eligible || ownerDecisionLines.last?.contains("outcome=confirmed") == true,
+                "First EOF promotion must pass the actual verifier, not only emit a label")
+            await adapter.cleanup()
+        }
+        print("PASS final quality collection, first eligible EOF verification and short abstention")
+    }
+
+    private nonisolated static func combinedOwnerEOFFirstEligibility() async throws {
+        for (frames, evaluated) in [(100_800, false), (102_400, true)] {
+            DebugLogger.shared.reset()
+            let scope = StreamingScopeFixture(), recorder = Recorder()
+            let source = OwnerReplayFixture(frames: frames)
+            let adapter = ownerAdapter(scope: scope, recorder: recorder,
+                diarizer: SyntheticDiarizer(Recorder()), policy: .streamingV4)
+            let live = try await recognizeOwnerRange(adapter, source: source, range: 0..<frames)
+            try require(live.confirmedLocalUserTokens == [] && scope.encoderCallCount == 0,
+                "Short combined evidence has no premature live decision")
+            let final = try await adapter.finishStreaming()
+            try require(final.confirmedLocalUserTokens == [] && scope.encoderCallCount == (evaluated ? 1 : 0),
+                "First eligibility at EOF must still satisfy full-clip evidence before promotion")
+            try require(ownerDecisionLines.allSatisfy { $0.contains("policy=streamingV4") && $0.contains("outcome=insufficientEvidence") }
+                && recorder.progress.allSatisfy { $0.confirmedLocalUserTokens?.isEmpty != false },
+                "Every genuine short EOF evaluation and emitted observation abstains")
+            await adapter.cleanup()
+        }
+        print("PASS combined full-evidence and EOF cadence short first-eligibility abstention")
+    }
+
+    private nonisolated static func ownerEOFDueEvidenceRevokes(policy: MeetingOwnerVoiceVerifier.Policy = .streamingV2) async throws {
+        let responses: [StreamingScopeFixture.Response] = [.differentVoice, .missing, .duplicate, .invalid, .foreignToken, .failure]
+        for response in responses {
+            DebugLogger.shared.reset()
+            let scope = StreamingScopeFixture(responses: [4: response]), recorder = Recorder()
+            let source = OwnerReplayFixture(frames: 480_000)
+            let adapter = ownerAdapter(scope: scope, recorder: recorder,
+                diarizer: EOFDeferredOwnerDiarizer([.init(slotIndex: 0, start: 0, end: 30)], liveThrough: 320_000), policy: policy)
+            _ = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
+            let beforeStop = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<480_000)
+            try require(beforeStop.confirmedLocalUserTokens?.isEmpty == false && scope.encoderCallCount == 3,
+                "A due EOF fixture must begin with a real confirmed owner and ten seconds of still-unscored PCM")
+            let final = try await adapter.finishStreaming()
+            try require(scope.encodedClipFrameHistory.count == 4 && final.confirmedLocalUserTokens == [],
+                "A due changed, missing, duplicate, invalid, foreign or failed result must revoke the prior owner at EOF")
+            if case .failure = response {
+                try require(ownerDecisionLines.count == 3, "Encoder failure cannot manufacture a verified final decision")
+            } else {
+                try require(ownerDecisionLines.count == 4 && ownerDecisionLines.last?.contains("outcome=confirmed") == false,
+                    "Due replacement rejection must be produced by the actual verifier")
+            }
+            await adapter.cleanup()
+        }
+        DebugLogger.shared.reset()
+        let scope = StreamingScopeFixture(distancesBySlot: ["slot-1": 0.05]), recorder = Recorder()
+        let source = OwnerReplayFixture(frames: 480_000)
+        let adapter = ownerAdapter(scope: scope, recorder: recorder,
+            diarizer: EOFDeferredOwnerDiarizer([.init(slotIndex: 0, start: 0, end: 20),
+                .init(slotIndex: 1, start: 20, end: 30)], liveThrough: 320_000), policy: policy)
+        _ = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
+        let prior = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<480_000)
+        try require(prior.confirmedLocalUserTokens?.isEmpty == false && scope.encoderCallCount == 3,
+            "The new-rival fixture must have a confirmed owner before native EOF admission")
+        let final = try await adapter.finishStreaming()
+        try require(final.confirmedLocalUserTokens == [] && scope.encoderCallCount == 4
+            && ownerDecisionLines.last?.contains("profileCount=2") == true
+            && ownerDecisionLines.last?.contains("outcome=winnerMargin") == true,
+            "A newly eligible EOF rival must compete with the cached owner and revoke an ambiguous confirmation")
+        await adapter.cleanup()
+        print("PASS due EOF conflict, missing/invalid/failure revocation and complete-cache rival ambiguity")
+    }
+
+    private nonisolated static func ownerEOFCancellationJoins(policy: MeetingOwnerVoiceVerifier.Policy = .streamingV2) async throws {
+        DebugLogger.shared.reset()
+        let scope = StreamingScopeFixture(blockEncoderAtCall: 4), recorder = Recorder(), native = Recorder()
+        let source = OwnerReplayFixture(frames: 480_000)
+        let adapter = ownerAdapter(scope: scope, recorder: recorder,
+            diarizer: EOFDeferredOwnerDiarizer([.init(slotIndex: 0, start: 0, end: 30)], liveThrough: 320_000, recorder: native), policy: policy)
+        _ = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
+        _ = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<480_000)
+        let decisions = ownerDecisionLines.count, observations = recorder.progress.count
+        let finish = Task { try await adapter.finishStreaming() }
+        for _ in 0..<5_000 {
+            if scope.encodedClipFrameHistory.count == 4 { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        try require(scope.encodedClipFrameHistory.count == 4, "Cancellation must reach the due final encoder boundary")
+        finish.cancel()
+        let joined = Task { _ = try? await finish.value; await adapter.cleanup(); scope.event("cancel-joined") }
+        for _ in 0..<20 { await Task.yield() }
+        try require(!scope.snapshot.contains("cancel-joined") && !native.snapshot.contains("cleanup"),
+            "Cancellation cannot retire the native session while noncooperative final encoding remains in flight")
+        scope.releaseEncoder()
+        await joined.value
+        do { _ = try await finish.value; throw FixtureFailure.invalid } catch is CancellationError {}
+        try require(ownerDecisionLines.count == decisions && recorder.progress.count == observations
+            && native.snapshot == ["cleanup"],
+            "Cancelled final evidence cannot produce a decision or observation, and cleanup must join once")
+        print("PASS due final owner cancellation joins inference before native cleanup and publication")
     }
 
     private nonisolated static func liveOwnerBeforeStopAndJoinedCancellation() async throws {
