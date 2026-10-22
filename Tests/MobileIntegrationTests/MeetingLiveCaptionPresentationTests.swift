@@ -168,6 +168,20 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         }
     }
 
+    func testLegacyUncertaintyMetadataDoesNotQualifyLiveCaptions() {
+        let participant = MeetingSpeakerPresentation(identity: "legacy-participant", label: .estimated(
+            .init(displayName: "Участник 2", isLocalUser: false, isProvisional: true)))
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.utterances = [.init(id: UUID(), speaker: .you, text: "Да.", start: 1, end: 1.4,
+            participant: participant)]
+        let original = snapshot
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(rows.first?.captionLabel, "00:01 Участник 2")
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).first?.captionLabel, "00:01 Участник 2")
+        XCTAssertEqual(snapshot, original, "Caption formatting preserves legacy identity and uncertainty metadata")
+        XCTAssertTrue(rows.first?.participant?.isEstimated == true)
+    }
+
     func testUncertainOverlapAndInterruptingRolesStayDistinctFromKnownTurn() {
         let name = MeetingSpeakerPresentation.Name(displayName: "Участник", isLocalUser: false)
         let roles: [MeetingSpeakerPresentation] = [

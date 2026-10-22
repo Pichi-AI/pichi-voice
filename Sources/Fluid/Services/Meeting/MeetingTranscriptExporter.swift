@@ -127,9 +127,9 @@ nonisolated enum MeetingTranscriptExporter {
         case .unknown:
             return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         case let .identified(value), let .estimated(value):
-            return value.isProvisional
-                ? String(format: PichiLocalization.text("%@ (provisional)", language: language, bundle: bundle), name(value))
-                : name(value)
+            // Legacy uncertainty remains in the presentation/evidence value. Product
+            // captions and readable exports use the participant's unqualified name.
+            return name(value)
         case let .interrupting(value, _): return name(value)
         case .candidates: return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         }

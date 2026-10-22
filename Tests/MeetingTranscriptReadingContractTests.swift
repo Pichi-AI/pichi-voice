@@ -47,12 +47,23 @@ extension MeetingSessionStoreCheckpointTests {
             let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
             let presentation = reading[provisional.id]!
             check(presentation.participantID == b && presentation.isEstimated,
-                  "A preliminary participant has its own readable identity instead of the previous voice")
-            check(MeetingTranscriptExporter.speakerLabel(for: presentation).contains("(provisional)"),
-                  "Preliminary identity must be visibly qualified")
+                  "A saved legacy participant retains its readable identity and internal uncertainty")
+            let speakerNames = Dictionary(uniqueKeysWithValues: value.speakers.map { ($0.id, $0.displayName) })
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: value.transcriptSegments, in: value)
+            for language in [PichiInterfaceLanguage.english, .russian] {
+                check(MeetingTranscriptExporter.speakerLabel(for: presentation, language: language) == "Другое имя"
+                      && MeetingTranscriptExporter.captionLabel(for: presentation, language: language) == "Другое имя"
+                      && MeetingTranscriptExporter.captionLabel(for: paragraphs[1], in: value,
+                          speakerNames: speakerNames, language: language) == "Другое имя",
+                      "Live, history and readable-export captions never append legacy uncertainty in either language")
+            }
+            check(MeetingTranscriptExporter.text(for: value) == "[00:00] Имя Ёё: An earlier voice.\n\n[00:04] Другое имя: A synthetic reply.",
+                  "Readable export keeps the complete reply and unqualified participant name")
             let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(value))
             check(MeetingTranscriptExporter.speakerPresentations(in: restored)[provisional.id] == presentation,
-                  "Preliminary identity and caption survive Stop and reopen")
+                  "Legacy identity and internal uncertainty survive Stop and reopen")
+            check(MeetingTranscriptExporter.text(for: restored) == MeetingTranscriptExporter.text(for: value),
+                  "Stop and reopen keep readable export free of generated uncertainty suffixes")
             let exported = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: value)) as! [String: Any]
             let exportedSpeakers = exported["speakers"] as! [[String: Any]]
             check(exportedSpeakers.contains { $0["identityIsProvisional"] as? Bool == true },
@@ -71,6 +82,19 @@ extension MeetingSessionStoreCheckpointTests {
             value.transcriptSegments[1].speakerAttribution = nil
             check(!MeetingTranscriptExporter.speakerPresentation(for: value.transcriptSegments[1], in: value).isEstimated,
                   "One qualified identity record refines older word references without rewriting text")
+        }
+        for alias in ["Участник 2", "Имя (provisional)", "Имя (предварительно)"] {
+            for isLocalUser in [false, true] {
+                let name = MeetingSpeakerPresentation.Name(displayName: alias, isLocalUser: isLocalUser,
+                    usesCustomDisplayName: true, isProvisional: true)
+                for label in [MeetingSpeakerPresentation.Label.identified(name), .estimated(name)] {
+                    let presentation = MeetingSpeakerPresentation(identity: "synthetic-legacy-alias", label: label)
+                    for language in [PichiInterfaceLanguage.english, .russian] {
+                        check(MeetingTranscriptExporter.captionLabel(for: presentation, language: language) == alias,
+                              "Uncertainty formatting never rewrites a user-provided alias, including literal suffix words")
+                    }
+                }
+            }
         }
         let unknown = word("Я", 0.04, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
         let first = word("Начало.", 10.3, raw: ta, selected: ta, owner: a, map: both)

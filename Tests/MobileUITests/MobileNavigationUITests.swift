@@ -1396,32 +1396,36 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
-    /// A synthetic protected publication, including a short final preliminary participant.
-    func testProvisionalParticipantsSurviveReopen() throws {
+    /// Previously saved uncertainty metadata keeps plain captions after reopening.
+    func testLegacyParticipantCaptionsStayPlainAfterReopen() throws {
         #if !targetEnvironment(simulator)
-        throw XCTSkip("Preliminary participant fixtures are simulator-only")
+        throw XCTSkip("Legacy participant fixtures are simulator-only")
         #else
         let fixtureID = "8EEC0000-2026-4000-8000-000000000021"
-        for (language, appearance, history, suffix) in [
-            ("en", "light", "History", "provisional"),
-            ("ru", "dark", "История", "предварительно")
+        for (language, appearance, history) in [
+            ("en", "light", "History"),
+            ("ru", "dark", "История")
         ] {
             for iteration in 0..<2 {
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
                 app.launch()
                 openNavigation("history", title: history)
                 let meeting = app.buttons["history.session.\(fixtureID)"]
-                XCTAssertTrue(meeting.waitForExistence(timeout: 5), "Stage the synthetic preliminary participant fixture")
+                XCTAssertTrue(meeting.waitForExistence(timeout: 5), "Stage the synthetic legacy participant fixture")
                 meeting.tap()
                 XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
-                let firstCaption = app.staticTexts["Участник 2 (\(suffix))"].firstMatch
-                XCTAssertTrue(firstCaption.waitForExistence(timeout: 5), "The first preliminary speaker keeps a qualified name")
+                let firstCaption = app.staticTexts["Участник 2"].firstMatch
+                XCTAssertTrue(firstCaption.waitForExistence(timeout: 5), "Saved uncertainty metadata keeps a plain participant caption")
+                XCTAssertFalse(app.staticTexts.matching(NSPredicate(format:
+                    "label CONTAINS[c] %@ OR label CONTAINS[c] %@", "(provisional)", "(предварительно)")).firstMatch.exists)
                 capture("provisional-\(language)-reopen-\(iteration)")
                 let last = app.descendants(matching: .any)["transcript.paragraph.8EEC0000-2026-4000-8000-000000000005"].firstMatch
                 try revealParagraphAboveNavigation(last, step: "provisional-\(language)-tail-\(iteration)")
-                let finalCaption = app.staticTexts["Участник 3 (\(suffix))"].firstMatch
+                let finalCaption = app.staticTexts["Участник 3"].firstMatch
                 XCTAssertTrue(finalCaption.waitForExistence(timeout: 5) && finalCaption.isHittable,
-                    "The virtualized final speaker keeps a fully visible qualified caption after scrolling")
+                    "The virtualized saved participant keeps its fully visible plain caption after scrolling")
+                XCTAssertFalse(app.staticTexts.matching(NSPredicate(format:
+                    "label CONTAINS[c] %@ OR label CONTAINS[c] %@", "(provisional)", "(предварительно)")).firstMatch.exists)
                 capture("provisional-\(language)-tail-visible-\(iteration)")
                 app.terminate()
             }
