@@ -2373,6 +2373,7 @@ struct BottomOverlayView: View {
     @ObservedObject private var activeAppMonitor = ActiveAppMonitor.shared
     @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var promptPresentation = DictationOverlayPresentationStore.shared
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHoveringModeChip = false
@@ -2632,33 +2633,22 @@ struct BottomOverlayView: View {
         self.contentState.activeDictationShortcutSlot ?? .primary
     }
 
+    private var dictationPresentation: DictationOverlayPresentation {
+        self.activeDictationShortcutSlot == .secondary ? self.promptPresentation.value.secondary : self.promptPresentation.value.primary
+    }
+
     private var isAppPromptOverrideActive: Bool {
         guard let activePromptMode else { return false }
-        if activePromptMode.normalized == .dictate {
-            return self.settings.isAppDictationPromptBindingActive(
-                for: self.activeDictationShortcutSlot,
-                appBundleID: self.promptResolutionBundleID
-            )
-        }
-        return self.settings.hasAppPromptBinding(
-            for: activePromptMode,
-            appBundleID: self.promptResolutionBundleID
-        )
+        if activePromptMode.normalized == .dictate { return self.dictationPresentation.hasAppOverride }
+        return self.settings.hasAppPromptBinding(for: activePromptMode, appBundleID: self.promptResolutionBundleID)
     }
 
     private var selectedPromptLabel: String {
         guard let activePromptMode else { return PichiLocalization.text("N/A") }
         if activePromptMode.normalized == .dictate {
-            if let label = self.contentState.stopSnapshotLabel { return label }
-            return self.settings.dictationOverlayLabel(
-                for: self.activeDictationShortcutSlot,
-                appBundleID: self.promptResolutionBundleID
-            )
+            return self.contentState.stopSnapshotLabel ?? self.dictationPresentation.label
         }
-        if let profile = self.settings.resolvedPromptProfile(
-            for: activePromptMode,
-            appBundleID: self.promptResolutionBundleID
-        ) {
+        if let profile = self.settings.resolvedPromptProfile(for: activePromptMode, appBundleID: self.promptResolutionBundleID) {
             let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
             return name.isEmpty ? PichiLocalization.text("Untitled") : name
         }
@@ -2667,27 +2657,8 @@ struct BottomOverlayView: View {
 
     private var promptSelectorBuiltInLabel: String? {
         guard let activePromptMode else { return nil }
-        if activePromptMode.normalized == .dictate {
-            switch self.settings.resolvedDictationPromptSelection(for: self.activeDictationShortcutSlot, appBundleID: self.promptResolutionBundleID) {
-            case .off:
-                return PichiLocalization.text("Basic")
-            case .privateAI:
-                return self.isAppPromptOverrideActive ? nil : SettingsStore.DictationModeLabels.smart
-            case .default:
-                let hasAppOverride = self.settings.resolvedDictationPromptProfile(
-                    for: self.activeDictationShortcutSlot,
-                    appBundleID: self.promptResolutionBundleID
-                ) != nil
-                return hasAppOverride ? nil : SettingsStore.DictationModeLabels.externalDefault
-            case .profile:
-                return nil
-            }
-        }
-
-        return self.settings.resolvedPromptProfile(
-            for: activePromptMode,
-            appBundleID: self.promptResolutionBundleID
-        ) == nil ? PichiLocalization.text("Default") : nil
+        if activePromptMode.normalized == .dictate { return self.dictationPresentation.builtInLabel }
+        return self.settings.resolvedPromptProfile(for: activePromptMode, appBundleID: self.promptResolutionBundleID) == nil ? PichiLocalization.text("Default") : nil
     }
 
     private var promptSelectorDisplayLabel: String {
@@ -3405,6 +3376,7 @@ struct BottomOverlayView: View {
 
     private var textDeliveryFailureView: some View {
         let message = self.contentState.textDeliveryFailureMessage
+        let failureID = self.contentState.textDeliveryFailureID
         return DeliveryFailureCard(
             title: message,
             detail: TextDeliveryFailure.userFacingDetail(forMessage: message),
@@ -3413,9 +3385,10 @@ struct BottomOverlayView: View {
             compact: self.layout.usesFixedCanvas,
             maxWidth: self.previewMaxWidth
         ) {
-            self.contentState.clearTextDeliveryFailure()
+            guard self.contentState.clearTextDeliveryFailure(ifPresentationID: failureID) else { return }
             NotchOverlayManager.shared.hide()
         }
+        .id(failureID)
     }
 
     private func scrollablePreviewText(_ previewText: String) -> some View {
@@ -3755,6 +3728,7 @@ struct BottomOverlayView: View {
         // Reserve space around the pill so its drop shadow isn't clipped by the (content-sized) window.
         .padding(self.isPillSize ? 26 : 0)
         .environment(\.locale, PichiLocalization.locale)
+        .onAppear { self.promptPresentation.start() }
         .onChange(of: self.contentState.isBottomOverlayPresented) { _, presented in
             self.borderAnimationStartedAt = presented ? Date() : nil
             if !presented { self.collapsePillImmediately() }

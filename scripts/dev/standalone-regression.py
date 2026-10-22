@@ -253,7 +253,7 @@ SHELL_PROBES = (
     "stats_snapshot", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
-    "diarization_repeatability", "dictionary_training_save", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
+    "delivery_failure_copy", "diarization_repeatability", "dictionary_training_save", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
     "meeting_speaker_attribution",
     "settings_backup_concurrency",
 )

@@ -46,7 +46,7 @@ final class DeliveryFailureOverlayController {
 
     private static let displayDuration: TimeInterval = 10
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<DeliveryFailureOverlayView>?
+    private var hostingView: NSHostingView<DeliveryFailureOverlayRoot>?
     private var dismissTask: Task<Void, Never>?
     private var generation: UInt64 = 0
 
@@ -63,14 +63,24 @@ final class DeliveryFailureOverlayController {
             displayDuration: Self.displayDuration,
             startedAt: Date(),
             onCopied: { [weak self] in
-                self?.hide(after: 0.9)
+                guard let self, self.hostingView?.rootView.generation == currentGeneration else { return }
+                self.hide(after: 0.9)
             },
-            onDismiss: { [weak self] in self?.hide() }
+            onCopyFailed: { [weak self] in
+                guard let self, self.panel?.isVisible == true,
+                      self.hostingView?.rootView.generation == currentGeneration else { return }
+                self.show(kind: kind, transcript: transcript)
+            },
+            onDismiss: { [weak self] in
+                guard let self, self.hostingView?.rootView.generation == currentGeneration else { return }
+                self.hide()
+            }
         )
+        let presentation = DeliveryFailureOverlayRoot(generation: currentGeneration, content: rootView)
         if let hostingView = self.hostingView {
-            hostingView.rootView = rootView
+            hostingView.rootView = presentation
         } else {
-            self.createPanel(rootView: rootView)
+            self.createPanel(rootView: presentation)
         }
         guard let panel = self.panel else { return }
         self.resizeAndPositionPanel()
@@ -108,7 +118,7 @@ final class DeliveryFailureOverlayController {
         }
     }
 
-    private func createPanel(rootView: DeliveryFailureOverlayView) {
+    private func createPanel(rootView: DeliveryFailureOverlayRoot) {
         let panel = NSPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -164,6 +174,15 @@ final class DeliveryFailureOverlayController {
     }
 }
 
+private struct DeliveryFailureOverlayRoot: View {
+    let generation: UInt64
+    let content: DeliveryFailureOverlayView
+
+    var body: some View {
+        self.content.id(self.generation)
+    }
+}
+
 private struct DeliveryFailureOverlayView: View {
     @ObservedObject private var settings = SettingsStore.shared
     let kind: DeliveryFailureOverlayController.Kind
@@ -171,6 +190,7 @@ private struct DeliveryFailureOverlayView: View {
     let displayDuration: TimeInterval
     let startedAt: Date
     let onCopied: () -> Void
+    let onCopyFailed: () -> Void
     let onDismiss: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -281,8 +301,11 @@ private struct DeliveryFailureOverlayView: View {
     }
 
     private func copy() {
-        guard !self.didCopy else { return }
-        _ = ClipboardService.copyToClipboard(self.transcript)
+        guard ClipboardService.copyToClipboard(self.transcript) else {
+            self.didCopy = false
+            self.onCopyFailed()
+            return
+        }
         withAnimation(.easeOut(duration: 0.15)) { self.didCopy = true }
         self.onCopied()
     }

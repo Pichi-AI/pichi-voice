@@ -59,6 +59,7 @@ struct AppPagePresentation: Equatable {
 
 enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     case general
+    case fluidMeet
     case dictation
     case dictationFormatting
     case shortcuts
@@ -74,6 +75,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
+        case .fluidMeet: return AppBrand.text("FluidMeet Settings")
         case .general: return PichiLocalization.text("General")
         case .dictation: return PichiLocalization.text("Dictation")
         case .dictationFormatting: return PichiLocalization.text("Dictation Formatting")
@@ -89,6 +91,7 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     var systemImage: String {
         switch self {
         case .general: return "gearshape"
+        case .fluidMeet: return "person.2"
         case .dictation: return "mic"
         case .dictationFormatting: return "textformat"
         case .shortcuts: return "keyboard"

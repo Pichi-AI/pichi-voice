@@ -214,6 +214,8 @@ scratch/
 .local-dependencies/
 
 assets/
+!Sources/Fluid/AppIcon.icon/Assets/
+!Sources/Fluid/AppIcon.icon/Assets/*.svg
 .swiftpm/
 scripts/
 
@@ -294,3 +296,6 @@ builds/
 !docs/development/owner-v4-full-evidence-2026-10-21.md
 !docs/development/owner-proof-continuity-2026-10-21.md
 !docs/development/stable-speaker-opening-2026-10-21.md
+# Local Claude Code settings and worktrees
+.claude/
+!/docs/development/upstream-sync-1.6.12.md

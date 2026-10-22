@@ -6,9 +6,8 @@ import Foundation
 nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Sendable {
     static let defaultASRModel = "parakeet-tdt-v2"
     static let defaultLanguageCode = "en"
-    /// Mirrors `MeetingProcessingPipeline.pipelineVersion`; that class is `@MainActor`, so a
-    /// MainActor test guards this literal against drift instead of referencing it here.
-    static let defaultPipelineVersion = 16
+    /// Share the immutable version across frozen requests and persisted attempts.
+    static let defaultPipelineVersion = MeetingProcessingPipeline.pipelineVersion
 
     let asrModel: String
     let asrArtifactFingerprint: String?

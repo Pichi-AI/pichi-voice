@@ -171,7 +171,8 @@ extension VoiceEngineSettingsView {
                             Text(PichiLocalization.text(creditLine))
                                 .font(self.theme.typography.caption)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
+                                // A fixed vertical size here can push the page above the toolbar.
+                                .lineLimit(2)
                         }
 
                         if let metadata {

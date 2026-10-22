@@ -520,11 +520,11 @@ final class SettingsStore: ObservableObject {
         self.setDictationPromptSelection(selection, for: .primary)
     }
 
-    func dictationPromptSelection(for slot: DictationShortcutSlot) -> DictationPromptSelection {
+    func dictationPromptSelection(for slot: DictationShortcutSlot, privateAIAvailable: Bool? = nil) -> DictationPromptSelection {
         if self.isDictationPromptOff(for: slot) { return .off }
         if let promptID = self.selectedDictationPromptID(for: slot) {
             if promptID == PrivateAIProviderPromptFormat.promptSelectionID {
-                return PrivateAIProviderPromptFormat.isAvailable(settings: self) ? .privateAI : .default
+                return (privateAIAvailable ?? PrivateAIProviderPromptFormat.isAvailable(settings: self)) ? .privateAI : .default
             }
             return .profile(promptID)
         }
@@ -747,9 +747,9 @@ final class SettingsStore: ObservableObject {
         return self.dictationPromptProfiles.first(where: { $0.id == id && $0.mode.normalized == .dictate })
     }
 
-    func resolvedDictationPromptSelection(for slot: DictationShortcutSlot, appBundleID: String?) -> DictationPromptSelection {
+    func resolvedDictationPromptSelection(for slot: DictationShortcutSlot, appBundleID: String?, privateAIAvailable: Bool? = nil) -> DictationPromptSelection {
         if let manual = DictationAppSession.shared.choice(for: slot, appID: appBundleID) { return manual }
-        let selection = self.dictationPromptSelection(for: slot)
+        let selection = self.dictationPromptSelection(for: slot, privateAIAvailable: privateAIAvailable)
         guard selection != .off else { return .off }
         let appOnly = self.promptRoutingScope(for: .dictate) == .selectedAppsOnly
         guard appOnly || Self.dictationSelectionSupportsAppOverride(selection) else { return selection }
@@ -776,8 +776,8 @@ final class SettingsStore: ObservableObject {
         return system ? fallback.systemPrompt : fallback.promptBody
     }
 
-    func resolvedDictationPromptProfile(for slot: DictationShortcutSlot, appBundleID: String?) -> DictationPromptProfile? {
-        switch self.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID) {
+    func resolvedDictationPromptProfile(for slot: DictationShortcutSlot, appBundleID: String?, privateAIAvailable: Bool? = nil) -> DictationPromptProfile? {
+        switch self.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID, privateAIAvailable: privateAIAvailable) {
         case .off:
             return nil
         case let .profile(promptID):
@@ -792,9 +792,9 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    func isAppDictationPromptBindingActive(for slot: DictationShortcutSlot, appBundleID: String?) -> Bool {
+    func isAppDictationPromptBindingActive(for slot: DictationShortcutSlot, appBundleID: String?, privateAIAvailable: Bool? = nil) -> Bool {
         guard DictationAppSession.shared.choice(for: slot, appID: appBundleID) == nil else { return false }
-        let selection = self.dictationPromptSelection(for: slot)
+        let selection = self.dictationPromptSelection(for: slot, privateAIAvailable: privateAIAvailable)
         guard Self.dictationSelectionSupportsAppOverride(selection) else { return false }
         return self.hasAppPromptBinding(for: .dictate, appBundleID: appBundleID)
     }
@@ -815,19 +815,19 @@ final class SettingsStore: ObservableObject {
         return model.isEmpty ? "Basic" : "\(mode) · \(model)"
     }
 
-    func dictationPromptDisplayName(for slot: DictationShortcutSlot, appBundleID: String?) -> String {
-        switch self.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID) {
+    func dictationPromptDisplayName(for slot: DictationShortcutSlot, appBundleID: String?, privateAIAvailable: Bool? = nil) -> String {
+        switch self.resolvedDictationPromptSelection(for: slot, appBundleID: appBundleID, privateAIAvailable: privateAIAvailable) {
         case .off:
             return "Basic"
         case .default:
-            if let profile = self.resolvedDictationPromptProfile(for: slot, appBundleID: appBundleID) {
+            if let profile = self.resolvedDictationPromptProfile(for: slot, appBundleID: appBundleID, privateAIAvailable: privateAIAvailable) {
                 let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 return name.isEmpty ? "Untitled" : name
             }
             return "Default"
         case .privateAI:
-            if self.isAppDictationPromptBindingActive(for: slot, appBundleID: appBundleID) {
-                if let profile = self.resolvedDictationPromptProfile(for: slot, appBundleID: appBundleID) {
+            if self.isAppDictationPromptBindingActive(for: slot, appBundleID: appBundleID, privateAIAvailable: privateAIAvailable) {
+                if let profile = self.resolvedDictationPromptProfile(for: slot, appBundleID: appBundleID, privateAIAvailable: privateAIAvailable) {
                     let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
                     return name.isEmpty ? "Untitled" : name
                 }
@@ -3042,6 +3042,26 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Unassigned by default. Meeting recording never claims a shortcut until explicitly configured.
+    var meetingRecordingHotkeyShortcut: HotkeyShortcut? {
+        get {
+            guard let data = self.defaults.data(forKey: Keys.meetingRecordingHotkeyShortcut),
+                  let shortcut = try? JSONDecoder().decode(HotkeyShortcut.self, from: data),
+                  shortcut.isMeetingRecordingShortcut else { return nil }
+            return shortcut
+        }
+        set {
+            objectWillChange.send()
+            guard let newValue, newValue.isMeetingRecordingShortcut,
+                  let data = try? JSONEncoder().encode(newValue)
+            else {
+                self.defaults.removeObject(forKey: Keys.meetingRecordingHotkeyShortcut)
+                return
+            }
+            self.defaults.set(data, forKey: Keys.meetingRecordingHotkeyShortcut)
+        }
+    }
+
     // MARK: - Paste Last Transcription Settings
 
     /// Whether the "Paste Last Transcription" global hotkey is active. Opt-in and off by default.
@@ -3492,6 +3512,8 @@ final class SettingsStore: ObservableObject {
             rewriteModeSelectedModel: self.rewriteModeSelectedModel,
             rewriteModeSelectedProviderID: self.rewriteModeSelectedProviderID,
             rewriteModeLinkedToGlobal: self.rewriteModeLinkedToGlobal,
+            meetingRecordingHotkeyShortcut: self.meetingRecordingHotkeyShortcut,
+            meetingRecordingShortcutEnabled: self.meetingRecordingHotkeyShortcut != nil,
             cancelRecordingHotkeyShortcut: self.cancelRecordingHotkeyShortcut,
             pasteLastTranscriptionHotkeyShortcut: self.pasteLastTranscriptionHotkeyShortcut,
             pasteLastTranscriptionShortcutEnabled: self.pasteLastTranscriptionShortcutEnabled,
@@ -3646,6 +3668,9 @@ final class SettingsStore: ObservableObject {
         self.rewriteModeSelectedModel = payload.rewriteModeSelectedModel
         self.rewriteModeSelectedProviderID = payload.rewriteModeSelectedProviderID
         self.rewriteModeLinkedToGlobal = payload.rewriteModeLinkedToGlobal
+        if let enabled = payload.meetingRecordingShortcutEnabled {
+            self.meetingRecordingHotkeyShortcut = enabled ? payload.meetingRecordingHotkeyShortcut : nil
+        }
         self.cancelRecordingHotkeyShortcut = payload.cancelRecordingHotkeyShortcut
         // Both guarded so restoring an older backup (which predates these fields) doesn't wipe a
         // currently-configured shortcut or leave the feature enabled with no shortcut bound.
@@ -5151,3 +5176,7 @@ extension SettingsStore {
 }
 
 #endif
+
+extension Notification.Name {
+    static let fluidMeetEnabledChanged = Notification.Name("FluidMeetEnabledChanged")
+}

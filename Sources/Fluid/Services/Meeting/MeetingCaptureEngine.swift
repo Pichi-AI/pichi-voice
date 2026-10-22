@@ -19,6 +19,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         var runtime: any MeetingCaptureRuntime
         var writers: [MeetingAudioChunkWriter]
         var memoryConsumer: (any MeetingMemoryAudioConsuming)?
+        var comparisonProbe: MeetingAudioComparisonProbe?
     }
 
     private var activeCapture: ActiveCapture?
@@ -68,152 +69,177 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         )
         try Self.verifyMicrophonePermission()
 
-        let tracks = Self.makeTracks(session: session, configuration: configuration)
-        let writers = try tracks.map { track in
-            try MeetingAudioChunkWriter(
-                track: track,
-                sessionDirectory: sessionDirectory,
-                chunkDuration: configuration.chunkDuration,
-                eventHandler: eventHandler
-            )
+        let comparisonProbe: MeetingAudioComparisonProbe?
+        if configuration.audioStorageMode != .memoryOnly, configuration.piiRedactionEnabled != true,
+           let expiration = MeetingAudioComparisonProbe.requestExpiration(mode: configuration.mode) {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("FluidVoice-AudioComparison", isDirectory: true)
+                .appendingPathComponent(session.id.uuidString, isDirectory: true)
+            comparisonProbe = try? MeetingAudioComparisonProbe(session: session, directory: directory, onUsefulComparison: {
+                MeetingAudioComparisonProbe.completeRequest(expiration: expiration)
+            })
+            DebugLogger.shared.info("Audio comparison probe \(comparisonProbe == nil ? "failed to start" : "armed") at \(directory.path)", source: "MeetingCaptureEngine")
+        } else {
+            comparisonProbe = nil
         }
-        let writersByKind = Dictionary(uniqueKeysWithValues: zip(tracks.map(\.kind), writers))
-
-        var memoryConsumer: (any MeetingMemoryAudioConsuming)?
-        if configuration.effectiveSpeakerProcessingMode == .streaming, let memoryConsumerFactory,
-           let microphoneTrack = tracks.first(where: { $0.kind == .microphone }) {
-            do { memoryConsumer = try await memoryConsumerFactory(session, configuration, microphoneTrack, eventHandler) }
-            catch { _ = await Self.stopWriters(writers); throw error }
-        }
-        let runtime: any MeetingCaptureRuntime
-        switch configuration.mode {
-        case .onlineCall:
-            guard let audioSource = configuration.applicationAudioSource,
-                  let applicationWriter = writersByKind[.applicationAudio],
-                  let microphoneWriter = writersByKind[.microphone]
-            else { throw MeetingCaptureError.applicationNotSelected }
-
-            let outputRoute = Self.currentOutputRouteSnapshot()
-            #if DEBUG
-            let forcePairedScreenCaptureKit = MeetingSCKPairedDiagnosticGate.enabled()
-            #else
-            let forcePairedScreenCaptureKit = false
-            #endif
-            let preferDirectAEC3 = MeetingDirectAEC3Gate.enabled()
-            let decision = MeetingCapturePathDecider.decide(
-                mode: configuration.mode,
-                microphone: configuration.microphone,
-                outputRoute: outputRoute,
-                forcePairedScreenCaptureKit: forcePairedScreenCaptureKit,
-                preferDirectAEC3: preferDirectAEC3
-            )
-            switch decision {
-            case let .screenCaptureKit(reason):
-                if reason == MeetingCapturePathDecider.directAEC3DefaultReason {
-                    #if DEBUG
-                    DebugLogger.shared.log(
-                        "Direct AEC3 selected for the built-in-speaker pre-production path.",
-                        source: "MeetingCaptureEngine"
-                    )
-                    #endif
-                } else {
-                    let captureDecisionMessage = reason == MeetingCapturePathDecider.diagnosticForceScreenCaptureKitReason
-                        ? "C2 diagnostic forced paired ScreenCaptureKit; this is not a production fallback."
-                        : "Meeting voice-processing capture declined: \(reason)"
-                    DebugLogger.shared.log(
-                        captureDecisionMessage,
-                        source: "MeetingCaptureEngine"
-                    )
-                    eventHandler(.interrupted(kind: .voiceProcessingDeclined, trackID: nil, detail: reason))
-                }
-                try await microphoneWriter.updateTrackMetadata { track in
-                    track.captureEras = [MeetingCaptureEra(
-                        method: .screenCaptureKit,
-                        deviceUID: configuration.microphone.coreAudioUID,
-                        deviceName: configuration.microphone.displayName,
-                        roleAtElection: configuration.microphone.role,
-                        echoProtection: .unprotected,
-                        startSeconds: 0
-                    )]
-                }
-                runtime = try await ScreenCaptureMeetingRuntime.make(
-                    audioSource: audioSource,
-                    microphone: configuration.microphone,
-                    includeMicrophone: true,
-                    microphoneEchoProtection: .unprotected,
-                    applicationWriter: applicationWriter,
-                    microphoneWriter: microphoneWriter,
+        if let comparisonProbe { eventHandler(.audioComparisonProbeStarted(comparisonProbe)) }
+        do {
+            let tracks = Self.makeTracks(session: session, configuration: configuration)
+            let writers = try tracks.map { track in
+                try MeetingAudioChunkWriter(
+                    track: track,
+                    sessionDirectory: sessionDirectory,
+                    chunkDuration: configuration.chunkDuration,
                     eventHandler: eventHandler,
-                    liveAudioHandler: liveAudioHandler
-                )
-            case .voiceProcessing:
-                runtime = try await VoiceProcessingMeetingRuntime.make(
-                    audioSource: audioSource,
-                    microphone: configuration.microphone,
-                    applicationWriter: applicationWriter,
-                    microphoneWriter: microphoneWriter,
-                    eventHandler: eventHandler,
-                    liveAudioHandler: liveAudioHandler
+                    diagnosticSampleObserver: comparisonProbe.map { probe in
+                        let stage: MeetingAudioComparisonProbe.Stage = track.kind == .microphone ? .microphoneOutput : .browser
+                        return { sample, epoch in probe.offer(sample, stage: stage, producerEpoch: epoch) }
+                    }
                 )
             }
-        case .inRoom:
-            guard let microphoneWriter = writersByKind[.microphone] else {
-                throw MeetingCaptureError.microphoneUnavailable
+            let writersByKind = Dictionary(uniqueKeysWithValues: zip(tracks.map(\.kind), writers))
+
+            var memoryConsumer: (any MeetingMemoryAudioConsuming)?
+            if configuration.effectiveSpeakerProcessingMode == .streaming, let memoryConsumerFactory,
+               let microphoneTrack = tracks.first(where: { $0.kind == .microphone }) {
+                do { memoryConsumer = try await memoryConsumerFactory(session, configuration, microphoneTrack, eventHandler) }
+                catch { _ = await Self.stopWriters(writers); throw error }
             }
+            let runtime: any MeetingCaptureRuntime
+            switch configuration.mode {
+            case .onlineCall:
+                guard let audioSource = configuration.applicationAudioSource,
+                      let applicationWriter = writersByKind[.applicationAudio],
+                      let microphoneWriter = writersByKind[.microphone]
+                else { throw MeetingCaptureError.applicationNotSelected }
+
+                let outputRoute = Self.currentOutputRouteSnapshot()
+                #if DEBUG
+                let forcePairedScreenCaptureKit = MeetingSCKPairedDiagnosticGate.enabled()
+                #else
+                let forcePairedScreenCaptureKit = false
+                #endif
+                let preferDirectAEC3 = MeetingDirectAEC3Gate.enabled()
+                let decision = MeetingCapturePathDecider.decide(
+                    mode: configuration.mode,
+                    microphone: configuration.microphone,
+                    outputRoute: outputRoute,
+                    forcePairedScreenCaptureKit: forcePairedScreenCaptureKit,
+                    preferDirectAEC3: preferDirectAEC3
+                )
+                switch decision {
+                case let .screenCaptureKit(reason):
+                    if reason == MeetingCapturePathDecider.directAEC3DefaultReason {
+                        #if DEBUG
+                        DebugLogger.shared.log(
+                            "Direct AEC3 selected for the built-in-speaker pre-production path.",
+                            source: "MeetingCaptureEngine"
+                        )
+                        #endif
+                    } else {
+                        let captureDecisionMessage = reason == MeetingCapturePathDecider.diagnosticForceScreenCaptureKitReason
+                            ? "C2 diagnostic forced paired ScreenCaptureKit; this is not a production fallback."
+                            : "Meeting voice-processing capture declined: \(reason)"
+                        DebugLogger.shared.log(
+                            captureDecisionMessage,
+                            source: "MeetingCaptureEngine"
+                        )
+                        eventHandler(.interrupted(kind: .voiceProcessingDeclined, trackID: nil, detail: reason))
+                    }
+                    try await microphoneWriter.updateTrackMetadata { track in
+                        track.captureEras = [MeetingCaptureEra(
+                            method: .screenCaptureKit,
+                            deviceUID: configuration.microphone.coreAudioUID,
+                            deviceName: configuration.microphone.displayName,
+                            roleAtElection: configuration.microphone.role,
+                            echoProtection: .unprotected,
+                            startSeconds: 0
+                        )]
+                    }
+                    runtime = try await ScreenCaptureMeetingRuntime.make(
+                        audioSource: audioSource,
+                        microphone: configuration.microphone,
+                        includeMicrophone: true,
+                        comparisonProbe: comparisonProbe,
+                        microphoneEchoProtection: .unprotected,
+                        applicationWriter: applicationWriter,
+                        microphoneWriter: microphoneWriter,
+                        eventHandler: eventHandler,
+                        liveAudioHandler: liveAudioHandler
+                    )
+                case .voiceProcessing:
+                    runtime = try await VoiceProcessingMeetingRuntime.make(
+                        audioSource: audioSource,
+                        microphone: configuration.microphone,
+                        applicationWriter: applicationWriter,
+                        microphoneWriter: microphoneWriter,
+                        eventHandler: eventHandler,
+                        liveAudioHandler: liveAudioHandler
+                    )
+                }
+            case .inRoom:
+                guard let microphoneWriter = writersByKind[.microphone] else {
+                    throw MeetingCaptureError.microphoneUnavailable
+                }
+                do {
+                    runtime = try InRoomMicrophoneCaptureRuntime(
+                        microphone: configuration.microphone,
+                        writer: microphoneWriter,
+                        memoryConsumer: memoryConsumer,
+                        eventHandler: eventHandler,
+                        liveAudioHandler: liveAudioHandler
+                    )
+                } catch {
+                    _ = await Self.stopWriters(writers)
+                    try? await memoryConsumer?.finish()
+                    throw error
+                }
+            }
+
             do {
-                runtime = try InRoomMicrophoneCaptureRuntime(
-                    microphone: configuration.microphone,
-                    writer: microphoneWriter,
-                    memoryConsumer: memoryConsumer,
-                    eventHandler: eventHandler,
-                    liveAudioHandler: liveAudioHandler
-                )
+                try await runtime.start()
             } catch {
+                try? await runtime.stop()
                 _ = await Self.stopWriters(writers)
                 try? await memoryConsumer?.finish()
                 throw error
             }
-        }
 
-        do {
-            try await runtime.start()
+            // The actor is reentrant across the awaits above; termination may have arrived meanwhile.
+            if self.terminating {
+                try? await runtime.stop()
+                _ = await Self.stopWriters(writers)
+                try? await memoryConsumer?.finish()
+                throw MeetingCaptureError.captureStartFailed("The app is shutting down.")
+            }
+            self.displaySleepAssertionID = Self.acquireDisplaySleepAssertion()
+            self.activeCapture = ActiveCapture(
+                sessionID: session.id,
+                runtime: runtime,
+                writers: writers,
+                memoryConsumer: memoryConsumer,
+                comparisonProbe: comparisonProbe
+            )
+            // Re-snapshot: a VPIO commit during start() promotes provenance on the writer's own track.
+            let settledTracks = await withTaskGroup(of: MeetingAudioTrack.self, returning: [MeetingAudioTrack].self) { group in
+                for writer in writers {
+                    group.addTask { await writer.snapshot() }
+                }
+                var result: [MeetingAudioTrack] = []
+                for await track in group {
+                    result.append(track)
+                }
+                return result.sorted { $0.kind.rawValue < $1.kind.rawValue }
+            }
+            return MeetingCaptureStartResult(
+                tracks: settledTracks,
+                firstPresentationTime: nil,
+                captureScope: runtime.captureScope
+            )
         } catch {
-            try? await runtime.stop()
-            _ = await Self.stopWriters(writers)
-            try? await memoryConsumer?.finish()
+            if let comparisonProbe { await comparisonProbe.stop() }
             throw error
         }
-
-        // The actor is reentrant across the awaits above; termination may have arrived meanwhile.
-        if self.terminating {
-            try? await runtime.stop()
-            _ = await Self.stopWriters(writers)
-            try? await memoryConsumer?.finish()
-            throw MeetingCaptureError.captureStartFailed("The app is shutting down.")
-        }
-        self.displaySleepAssertionID = Self.acquireDisplaySleepAssertion()
-        self.activeCapture = ActiveCapture(
-            sessionID: session.id,
-            runtime: runtime,
-            writers: writers,
-            memoryConsumer: memoryConsumer
-        )
-        // Re-snapshot: a VPIO commit during start() promotes provenance on the writer's own track.
-        let settledTracks = await withTaskGroup(of: MeetingAudioTrack.self, returning: [MeetingAudioTrack].self) { group in
-            for writer in writers {
-                group.addTask { await writer.snapshot() }
-            }
-            var result: [MeetingAudioTrack] = []
-            for await track in group {
-                result.append(track)
-            }
-            return result.sorted { $0.kind.rawValue < $1.kind.rawValue }
-        }
-        return MeetingCaptureStartResult(
-            tracks: settledTracks,
-            firstPresentationTime: nil,
-            captureScope: runtime.captureScope
-        )
     }
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
@@ -251,6 +277,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .writerStop)
             #endif
             let tracks = await Self.stopWriters(activeCapture.writers)
+            if let probe = activeCapture.comparisonProbe { await probe.stop() }
             #if DEBUG
             AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .writerStop)
             #endif
@@ -607,6 +634,8 @@ nonisolated enum MeetingDirectAEC3Availability {
 private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCaptureRuntime, SCStreamOutput, SCStreamDelegate,
     @unchecked Sendable
 {
+    private let comparisonProbe: MeetingAudioComparisonProbe?
+    private let microphonePCMNormalizer = MeetingMicrophonePCMNormalizer()
     /// HAL notifications can arrive while the default input/output pair is still converging.
     /// Admission stays closed until the latest route revision has settled.
     private static let rawRouteSettleSeconds: Double = 0.75
@@ -686,12 +715,14 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         requestedMicrophone: MeetingMicrophoneIdentity,
         activeMicrophone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool,
+        comparisonProbe: MeetingAudioComparisonProbe?,
         microphoneEchoProtection: MeetingMicrophoneEchoProtection,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) {
+        self.comparisonProbe = comparisonProbe
         self.stream = stream
         self.scope = scope
         self.audioSource = audioSource
@@ -716,6 +747,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         audioSource: MeetingApplicationAudioSource,
         microphone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool = true,
+        comparisonProbe: MeetingAudioComparisonProbe? = nil,
         microphoneEchoProtection: MeetingMicrophoneEchoProtection = .unprotected,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
@@ -749,6 +781,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             requestedMicrophone: microphone,
             activeMicrophone: resolvedMicrophone,
             includeMicrophone: includeMicrophone,
+            comparisonProbe: comparisonProbe,
             microphoneEchoProtection: microphoneEchoProtection,
             applicationWriter: applicationWriter,
             microphoneWriter: microphoneWriter,
@@ -875,9 +908,12 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             var firstSnapshot = MeetingCaptureEngine.currentOutputRouteSnapshot()
             try? await Task.sleep(nanoseconds: 100_000_000)
             var secondSnapshot = MeetingCaptureEngine.currentOutputRouteSnapshot()
+            var settleAttempts = 1
             while firstSnapshot != secondSnapshot,
+                  settleAttempts < 3,
                   self.stateLock.withLock({ self.outputRouteRevision == baselineRevision && !self.stopping })
             {
+                settleAttempts += 1
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 firstSnapshot = MeetingCaptureEngine.currentOutputRouteSnapshot()
                 try? await Task.sleep(nanoseconds: 100_000_000)
@@ -1085,6 +1121,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             #if DEBUG
             self.recordPairedDiagnostic(sampleBuffer, output: .microphone)
             #endif
+            let sampleBuffer = self.microphonePCMNormalizer.normalize(sampleBuffer)
+            self.comparisonProbe?.offer(sampleBuffer, stage: .microphoneInput, producerEpoch: streamToken.generation)
             switch aecState {
             case .active:
                 pipeline?.consumeCapture(sampleBuffer, stream: streamToken)
@@ -1127,6 +1165,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         stream: SCStream,
         token: MeetingAECStreamToken
     ) {
+        if self.stateLock.withLock({ self.aecActivation.formatValidationTimedOut() }) {
+            self.deactivateAECOnCallbackQueue(reason: .formatValidationTimedOut)
+            return
+        }
         if let failure = MeetingAECPipeline.firstFormatFailure(sampleBuffer, kind: kind, stream: token) {
             self.deactivateAECOnCallbackQueue(reason: failure)
             return
@@ -1151,6 +1193,15 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         }
         detached?.invalidate(reason: reason, boundary: boundary)
         if let detached { self.retainRetiredCommitterIfPending(detached.committer) }
+        let revision = self.stateLock.withLock { self.outputRouteRevision }
+        self.routeProtectionTasks.enqueue { [weak self] in
+            guard let self, self.isCurrentRouteRevision(revision) else { return }
+            do {
+                try await self.resumeDirectMicrophone(.unfiltered, revision: revision)
+            } catch {
+                self.handleAECTerminalFailure(.metadataPersistence)
+            }
+        }
     }
 
     private func applySettledRouteDisposition(
@@ -1166,36 +1217,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
 
         switch disposition {
         case .physicallyClosed:
-            // The gate epoch is captured before persistence so a route/lifecycle invalidation
-            // racing the write below can never be overwritten by this stale open.
-            let gateEpoch = self.microphoneTranscriptGate.invalidationEpoch
-            let start = self.microphoneTranscriptGate.latestObservedSeconds()
-            try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
-                MeetingAECOutputCommitter.applyEra(
-                    to: &track,
-                    protection: .acousticallyClosed,
-                    provenance: nil,
-                    startSeconds: start
-                )
-            }
-            let mayOpen = self.stateLock.withLock {
-                self.outputRouteRevision == revision && !self.stopping
-            }
-            if mayOpen,
-               self.microphoneTranscriptGate.updateIfNotInvalidated(.acousticallyClosed, since: gateEpoch)
-            {} else {
-                // The route invalidation may have queued its conservative command before the
-                // stale optimistic write above. Append a compensating fail-closed write after it.
-                let unsafeStart = self.microphoneTranscriptGate.invalidate()?.unsafeStartSeconds
-                try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
-                    MeetingAECOutputCommitter.applyEra(
-                        to: &track,
-                        protection: .unprotected,
-                        provenance: nil,
-                        startSeconds: unsafeStart
-                    )
-                }
-            }
+            try await self.resumeDirectMicrophone(.acousticallyClosed, revision: revision)
         case .supportedSpeaker:
             let start = self.microphoneTranscriptGate.latestObservedSeconds()
             try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
@@ -1210,23 +1232,34 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             do {
                 try await self.installAECForSupportedSpeaker(revision: revision)
             } catch {
-                self.eventHandler(.interrupted(
-                    kind: .microphoneChanged,
-                    trackID: self.microphoneWriter.trackID,
-                    detail: "Speaker-route AEC initialization failed; microphone remains raw and unprotected."
-                ))
+                try await self.resumeDirectMicrophone(.unfiltered, revision: revision)
             }
         case .ambiguous:
-            let start = self.microphoneTranscriptGate.latestObservedSeconds()
+            try await self.resumeDirectMicrophone(.unfiltered, revision: revision)
+        }
+    }
+
+    /// Echo provenance and live delivery commit together, without changing capture method or
+    /// restarting either device. A stale route cannot reopen the gate after a newer invalidation.
+    private func resumeDirectMicrophone(_ protection: MeetingMicrophoneEchoProtection, revision: UInt64) async throws {
+        guard self.stateLock.withLock({
+            self.outputRouteRevision == revision && !self.stopping && !self.rebuilding && !self.currentStreamStopped
+        }) else { return }
+        let gateEpoch = self.microphoneTranscriptGate.invalidationEpoch
+        let start = self.microphoneTranscriptGate.latestObservedSeconds()
+        try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
+            MeetingAECOutputCommitter.applyEra(to: &track, protection: protection, provenance: nil, startSeconds: start)
+        }
+        let mayOpen = self.stateLock.withLock {
+            self.outputRouteRevision == revision && !self.stopping && !self.rebuilding && !self.currentStreamStopped
+        }
+        if mayOpen, self.microphoneTranscriptGate.updateIfNotInvalidated(protection, since: gateEpoch) {
+            self.eventHandler(.microphoneEchoProtectionChanged(protection))
+        } else {
+            let unsafeStart = self.microphoneTranscriptGate.invalidate()?.unsafeStartSeconds
             try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
-                MeetingAECOutputCommitter.applyEra(
-                    to: &track,
-                    protection: .unprotected,
-                    provenance: nil,
-                    startSeconds: start
-                )
+                MeetingAECOutputCommitter.applyEra(to: &track, protection: .unprotected, provenance: nil, startSeconds: unsafeStart)
             }
-            _ = self.microphoneTranscriptGate.invalidate()
         }
     }
 
@@ -1262,11 +1295,22 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             writer: self.microphoneWriter,
             producerEpoch: reserved.ownership.streamGeneration,
             transcriptGate: self.microphoneTranscriptGate,
-            liveAudioHandler: self.liveAudioHandler
+            liveAudioHandler: self.liveAudioHandler,
+            protectionChanged: { [eventHandler = self.eventHandler] protection in
+                eventHandler(.microphoneEchoProtectionChanged(protection))
+            }
         ) { [weak self] failure in
             self?.handleAECTerminalFailure(failure)
         }
-        let candidate = MeetingAECPipeline(processor: processor, committer: committer)
+        let candidate = MeetingAECPipeline(
+            processor: processor,
+            committer: committer,
+            diagnosticObserver: self.comparisonProbe.map { probe in
+                { frame, output, statistics in
+                    probe.recordAECFrame(frame, output: output, statistics: statistics)
+                }
+            }
+        )
 
         let committed = self.stateLock.withLock { () -> Bool in
             let mayCommit = MeetingCaptureOwnershipGate.mayCommitAEC(
@@ -1467,6 +1511,14 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         }
         self.routeProtectionTasks.enqueue { [weak self] in
             guard let self else { return }
+            if self.stateLock.withLock({ self.routeListenerDegraded }) {
+                do {
+                    try await self.resumeDirectMicrophone(.unfiltered, revision: revision)
+                } catch {
+                    self.handleAECTerminalFailure(.metadataPersistence)
+                }
+                return
+            }
             guard let settled = await self.settleRouteAndInput(revision: revision) else { return }
             var disposition = settled.disposition
             var inputDetail: String?
@@ -1561,9 +1613,9 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             try? await Task.sleep(nanoseconds: 100_000_000)
             let second = MeetingCaptureEngine.currentOutputRouteSnapshot()
             guard self.stateLock.withLock({ self.outputRouteRevision == revision && !self.stopping }) else { return nil }
-            guard first == second else {
+            if first != second {
                 attempt += 1
-                continue
+                if attempt < 3 { continue }
             }
             let disposition = MeetingAECOutputRouteClassifier.classify(
                 first: first,
@@ -2088,6 +2140,7 @@ private final nonisolated class ScreenCaptureRuntimeDelegateProxy: NSObject, SCS
 private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, MeetingCaptureRuntime,
     AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable
 {
+    private let microphonePCMNormalizer = MeetingMicrophonePCMNormalizer()
     var captureScope: MeetingCaptureScope? { nil }
 
     private let session = AVCaptureSession()
@@ -2201,6 +2254,7 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
         let shouldAccept = !self.stopping
         self.stateLock.unlock()
         guard shouldAccept else { return }
+        let sampleBuffer = self.microphonePCMNormalizer.normalize(sampleBuffer)
         guard self.writer.enqueue(sampleBuffer) else {
             // A skipped native buffer would compress the streaming sample clock, even when
             // the gap is below the converter's discontinuity tolerance. Fail both sinks.
@@ -2378,6 +2432,7 @@ final nonisolated class MeetingSerializedCaptureLifecycle: @unchecked Sendable {
 final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
     AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable
 {
+    private let microphonePCMNormalizer = MeetingMicrophonePCMNormalizer()
     private static let interruptionEndedWaitSeconds: Double = 3
 
     let deviceUID: String?
@@ -2524,7 +2579,7 @@ final nonisolated class MeetingAVCaptureMicrophoneComponent: NSObject,
         if shouldAccept { self.deliveredSampleCount &+= 1 }
         self.stateLock.unlock()
         guard shouldAccept else { return }
-        self.onSample(sampleBuffer)
+        self.onSample(self.microphonePCMNormalizer.normalize(sampleBuffer))
     }
 
     func sampleCount() -> UInt64 {
@@ -2948,10 +3003,8 @@ nonisolated enum MeetingCapturePathDecision: Sendable, Equatable {
     case screenCaptureKit(reason: String)
 }
 
-/// Pre-production builds exercise direct AEC3 by default on a positively classified built-in-
-/// speaker route. The escape hatch is intentionally fail-closed and also prevents
-/// `ScreenCaptureMeetingRuntime` from constructing AEC3 if selection reaches it through another
-/// path.
+/// Stable speaker routes can attempt direct AEC3 after format and clock validation. The escape
+/// hatch disables filtering; it does not disable recording or unfiltered transcription.
 nonisolated enum MeetingDirectAEC3Gate {
     // TODO: Remove this escape hatch once direct AEC3 has completed real-meeting testing and is stable.
     static let disableEnvironmentKey = "FLUIDVOICE_DISABLE_AEC3"
@@ -3191,16 +3244,16 @@ nonisolated struct MeetingOutputRouteSnapshot: Sendable, Equatable {
 }
 
 nonisolated enum MeetingRawMicrophoneProtection {
-    /// Closed must be positively identified. Unknown, aggregate, HDMI, virtual, and speaker
-    /// routes remain unprotected even when they are not the built-in speakers.
+    /// Headphones need positive evidence. Other raw routes keep speech with an explicit echo
+    /// warning; this classification never pretends the audio was filtered or acoustically closed.
     static func classify(_ route: MeetingOutputRouteSnapshot) -> MeetingMicrophoneEchoProtection {
-        guard route.deviceExists else { return .unprotected }
+        guard route.deviceExists else { return .unfiltered }
         if (route.isBuiltIn && route.isHeadphonesDataSource)
             || route.terminalTypes.contains(kAudioStreamTerminalTypeHeadphones)
         {
             return .acousticallyClosed
         }
-        return .unprotected
+        return .unfiltered
     }
 }
 
@@ -3244,7 +3297,7 @@ final nonisolated class MeetingMicrophoneTranscriptGate: @unchecked Sendable {
     /// Atomically observes the sample boundary and decides live admission. A route callback taking
     /// the same lock therefore has an exact conservative cut: samples ordered after invalidation
     /// cannot leak into live transcription under the prior route's protection.
-    func observeAndAdmit(_ sampleBuffer: CMSampleBuffer) -> Bool {
+    func observeAndAdmit(_ sampleBuffer: CMSampleBuffer, since epoch: UInt64? = nil) -> Bool {
         let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         return self.lock.withLock {
             if time.isValid, time.isNumeric {
@@ -3253,7 +3306,7 @@ final nonisolated class MeetingMicrophoneTranscriptGate: @unchecked Sendable {
                     self.latestPresentationSeconds = max(self.latestPresentationSeconds ?? seconds, seconds)
                 }
             }
-            return self.protection.admitsTranscript
+            return (epoch == nil || epoch == self.invalidationCounter) && self.protection.admitsTranscript
         }
     }
 
@@ -4741,6 +4794,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     private func publishTranscriptProtection(_ protection: MeetingMicrophoneEchoProtection) {
         let mayOpen = self.stateLock.withLock { !self.routeChangeDirty && !self.stopRequested }
         self.transcriptGate.update(mayOpen ? protection : .unprotected)
+        if mayOpen { self.eventHandler(.microphoneEchoProtectionChanged(protection)) }
     }
 
     private func handleMicEvent(_ event: MeetingMicrophoneCaptureEvent, owner: MeetingMicrophoneCapture) {
