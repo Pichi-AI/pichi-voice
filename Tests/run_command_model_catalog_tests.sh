@@ -141,8 +141,11 @@ if command_baseline:
 assert 'self.llmClient.call(config)' in command
 client = Path('Sources/Fluid/Services/LLMClient.swift').read_text()
 injected = client[client.index('    init(session: URLSession,'):client.index('    // MARK: - Response Types')]
-for assignment in ['self.session = session', 'self.localSession = session', 'self.cloudSession = session']:
-    assert assignment in injected
+for assignment in ['self.session = session', 'self.localSession = session',
+                   'self.cloudSession = URLSession(configuration: session.configuration,',
+                   'delegate: session.delegate, delegateQueue: session.delegateQueue)',
+                   'self.cloudAuthorization = CloudTextProviderAuthorization(session: session)']:
+    assert assignment in injected, 'All test transports must inherit the intercepted session configuration'
 assert 'self.localSession.configuration.copy()' in client
 command = command[command.index('    private struct LLMResponse {'):command.rindex('\n}')]
 # Access is widened only inside the isolated owner so its actual admission,

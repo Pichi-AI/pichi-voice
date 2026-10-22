@@ -43,6 +43,7 @@ final nonisolated class MeetingMacCaptureTeeProbe: @unchecked Sendable {
 
     private let writer: MeetingMacCaptureWriterProbe
     private let memoryConsumer: (any MeetingMemoryAudioConsuming)?
+    private let microphonePCMNormalizer = MeetingMicrophonePCMNormalizer()
     private let pcmConverter: MeetingCapturePCMConverter?
     private let stateLock = NSLock()
     private var stopping = false
