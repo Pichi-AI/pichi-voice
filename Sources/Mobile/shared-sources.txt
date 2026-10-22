@@ -85,6 +85,7 @@ Sources/Fluid/Services/Meeting/MeetingASRPreparedScope.swift
 Sources/Fluid/Services/Meeting/MeetingASRServiceContract.swift
 Sources/Fluid/Services/Meeting/MeetingAppRegistry.swift
 Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift
+Sources/Fluid/Services/Meeting/MeetingAudioComparisonProbe.swift
 Sources/Fluid/Services/Meeting/MeetingAudioChunkLedger.swift
 Sources/Fluid/Services/Meeting/MeetingAudioChunkWriter.swift
 Sources/Fluid/Services/Meeting/MeetingAudioExporter.swift
