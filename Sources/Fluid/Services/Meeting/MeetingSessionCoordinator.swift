@@ -2248,14 +2248,19 @@ final class MeetingSessionCoordinator: ObservableObject {
             let reading = MeetingTranscriptExporter.speakerPresentations(in: session)
             var result = MeetingLiveTranscriptSnapshot.empty
             result.revision = revision
-            result.utterances = session.transcriptSegments.enumerated().filter { !$0.element.isEcho }.sorted {
+            result.utterances = session.transcriptSegments.enumerated().filter {
+                !$0.element.isEcho && reading[$0.element.id] != nil
+            }.sorted {
                 ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
             }.map { _, segment in
                 MeetingLiveUtterance(id: segment.id, speaker: .you, text: segment.text,
                     start: segment.start.seconds, end: segment.end.seconds,
                     participant: reading[segment.id])
             }
-            result = result.settingPartial(preview, for: .you)
+            let readablePreview = preview.flatMap { value in
+                MeetingTranscriptSegment.textContainsLexicalContent(value.text) || value.containsPrivacyReplacement ? value : nil
+            }
+            result = result.settingPartial(readablePreview, for: .you)
             result.availability = .available
             try Task.checkCancellation()
             return result

@@ -1697,7 +1697,7 @@ private struct MeetingHistoryInspector: View {
         return self.sessions.filter { session in
             session.displayTitle.localizedCaseInsensitiveContains(query) ||
                 session.capturedApplication?.displayName.localizedCaseInsensitiveContains(query) == true ||
-                session.activeSpeakers.contains(where: { $0.displayName.localizedCaseInsensitiveContains(query) })
+                session.readableSpeakers.contains(where: { $0.displayName.localizedCaseInsensitiveContains(query) })
         }
     }
 
@@ -2044,8 +2044,8 @@ private struct MeetingHistoryRow: View {
         switch self.session.state {
         case .completed:
             var parts = [self.timeText, Self.durationText(self.session.duration)]
-            if !self.session.activeSpeakers.isEmpty {
-                parts.append(self.session.activeSpeakers.count == 1 ? PichiLocalization.text("1 speaker") : PichiLocalization.format("%lld speakers", self.session.activeSpeakers.count))
+            if !self.session.readableSpeakers.isEmpty {
+                parts.append(self.session.readableSpeakers.count == 1 ? PichiLocalization.text("1 speaker") : PichiLocalization.format("%lld speakers", self.session.readableSpeakers.count))
             }
             return parts
         case .interrupted:

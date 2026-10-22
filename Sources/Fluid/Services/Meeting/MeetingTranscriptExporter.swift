@@ -74,7 +74,7 @@ nonisolated enum MeetingTranscriptExporter {
         let names = Dictionary(context.activeSpeakers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
         var result: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation] = [:]
         for paragraph in self.displayParagraphs(for: ordered, in: context) {
-            let first = paragraph.firstSegment
+            let first = paragraph.captionSegment
             let projected = paragraph.projectedSpeakerID
             let label = projected.flatMap { self.speakerName($0, in: context, speakerNames: names) }
                 .map(MeetingSpeakerPresentation.Label.estimated)
@@ -247,6 +247,7 @@ nonisolated enum MeetingTranscriptExporter {
         var showsSpeakerLabel = true
         var id: MeetingTranscriptSegmentID { segments[0].id }
         var firstSegment: MeetingTranscriptSegment { segments[0] }
+        var captionSegment: MeetingTranscriptSegment { segments.first(where: \.hasReadableContent) ?? segments[0] }
         let text: String
 
         init(segments: [MeetingTranscriptSegment], containsLegacySpeakerBridge: Bool = false,
@@ -284,7 +285,7 @@ nonisolated enum MeetingTranscriptExporter {
                     language: language, bundle: bundle)
             }
         }
-        return self.speakerLabel(for: paragraph.firstSegment, in: session, speakerNames: speakerNames,
+        return self.speakerLabel(for: paragraph.captionSegment, in: session, speakerNames: speakerNames,
                                 language: language, bundle: bundle)
     }
 
@@ -298,8 +299,8 @@ nonisolated enum MeetingTranscriptExporter {
             guard let name = self.speakerName(projected, in: session, speakerNames: speakerNames) else { return nil }
             return self.speakerLabel(for: .estimated(name), language: language, bundle: bundle)
         }
-        let label = self.speakerLabelValue(for: paragraph.firstSegment, in: session, speakerNames: speakerNames)
-        let presentation = self.speakerPresentation(for: paragraph.firstSegment, in: session, speakerNames: speakerNames)
+        let label = self.speakerLabelValue(for: paragraph.captionSegment, in: session, speakerNames: speakerNames)
+        let presentation = self.speakerPresentation(for: paragraph.captionSegment, in: session, speakerNames: speakerNames)
         guard presentation.hasReadableParticipant else { return nil }
         return self.speakerLabel(for: label, language: language, bundle: bundle)
     }
@@ -825,17 +826,43 @@ nonisolated enum MeetingTranscriptExporter {
             .merging(continuations) { _, continuation in continuation }
         let readingOwners = contextualOwners.merging(self.boundaryReadingOwners(
             for: segments, in: session, existingOwners: contextualOwners)) { contextual, _ in contextual }
+        // Nonlexical members are typography only when adjacent to actual readable speech.
+        // Preserve the original members and timing, but never let their unsupported identity
+        // open a paragraph. Standalone artifacts remain available in canonical JSON/evidence.
+        var typographyAnchors: [MeetingTranscriptSegmentID: MeetingTranscriptSegment] = [:]
+        let maximumGap = MeetingSpeakerAttributionPolicy.standard.maximumNeighborGapSeconds
+        for index in segments.indices where !segments[index].hasReadableContent {
+            let value = segments[index]
+            let neighbors = [index - 1, index + 1].filter { segments.indices.contains($0) }
+            for neighbor in neighbors {
+                let anchor = segments[neighbor]
+                let gap = neighbor < index ? value.start.seconds - anchor.end.seconds : anchor.start.seconds - value.end.seconds
+                guard anchor.hasReadableContent, anchor.sourceTrackID == value.sourceTrackID,
+                      anchor.status == value.status, anchor.completeness == value.completeness,
+                      anchor.isEcho == value.isEcho, gap >= -0.001, gap <= maximumGap,
+                      !(session.transcriptCoverageGaps ?? []).contains(where: {
+                          $0.trackID == value.sourceTrackID && $0.start < max(anchor.end.seconds, value.end.seconds)
+                              && $0.end > min(anchor.start.seconds, value.start.seconds)
+                      }) else { continue }
+                typographyAnchors[value.id] = anchor
+                break
+            }
+        }
+        func readingIdentity(_ segment: MeetingTranscriptSegment) -> String {
+            let anchor = typographyAnchors[segment.id] ?? segment
+            return paragraphIdentity(for: anchor, legacySpeakerID: readingOwners[anchor.id], in: session, speakerNames: names)
+        }
         var paragraphs: [DisplayParagraph] = []
         var members: [MeetingTranscriptSegment] = []
         var containsLegacyBridge = false
         var projectedSpeakerID: SessionSpeakerID?
         for segment in segments {
+            guard segment.hasReadableContent || typographyAnchors[segment.id] != nil else { continue }
             let startsParagraph = members.last.map { previous in
                 let bothUnknown = previous.speakerID == nil && segment.speakerID == nil
                     && readingOwners[previous.id] == nil && readingOwners[segment.id] == nil
                 return ((!bothUnknown || previous.speakerAttribution != nil || segment.speakerAttribution != nil)
-                    && paragraphIdentity(for: previous, legacySpeakerID: readingOwners[previous.id], in: session, speakerNames: names)
-                    != paragraphIdentity(for: segment, legacySpeakerID: readingOwners[segment.id], in: session, speakerNames: names))
+                    && readingIdentity(previous) != readingIdentity(segment))
                     || previous.sourceTrackID != segment.sourceTrackID
                     || previous.status != segment.status || previous.completeness != segment.completeness
                     || previous.isEcho != segment.isEcho
@@ -855,8 +882,9 @@ nonisolated enum MeetingTranscriptExporter {
             paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge,
                                                projectedSpeakerID: projectedSpeakerID))
         }
+        paragraphs.removeAll { !$0.segments.contains(where: \.hasReadableContent) }
         for index in paragraphs.indices {
-            let paragraph = paragraphs[index], first = paragraph.firstSegment
+            let paragraph = paragraphs[index], first = paragraph.captionSegment
             let presentation = self.speakerPresentation(for: first, in: session, speakerNames: names)
             // Each timestamp starts a displayed paragraph, so repeat its known name even
             // when an unresolved paragraph intervened. Unsupported names remain absent.
@@ -1048,7 +1076,7 @@ nonisolated enum MeetingTranscriptExporter {
         let document = PortableTranscript(
             sessionID: session.id, title: title, languageCode: session.languageCode,
             startedAt: session.startedAt, endedAt: session.endedAt, durationSeconds: durationSeconds,
-            speakers: session.activeSpeakers.map {
+            speakers: session.readableSpeakers.map {
                 .init(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser,
                     identityIsProvisional: $0.identityIsProvisional)
             }, segments: segments)

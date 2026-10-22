@@ -1270,6 +1270,32 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testProtectedLiveHistoryOmitsStandaloneArtifactsAndKeepsSymbolMasks() async throws {
+        var source = session()
+        let track = UUID(), owner = UUID(), extra = UUID()
+        source.speakers = [owner, extra].enumerated().map { index, id in
+            .init(id: id, displayName: "Participant \(index + 1)", diarizationClusterID: nil,
+                trackKind: .microphone, isLocalUser: index == 0, identityCandidates: [],
+                generatedParticipantNumber: index + 1)
+        }
+        var mask = segment("***", track: track, start: 8, speaker: owner, attribution: .assigned)
+        mask.containsPrivacyReplacement = true
+        let real = segment("Да", track: track, start: 0, speaker: owner, attribution: .assigned)
+        let noise = segment("\u{2014}", track: track, start: 4, speaker: extra)
+        source.transcriptSegments = [real, noise, mask]
+        let preview = MeetingLivePartial(id: UUID(), text: "\u{200B}-", start: 10)
+        let result = try await MeetingSessionCoordinator.protectedLiveHistory(session: source, revision: 1, preview: preview)
+        XCTAssertEqual(result.utterances.map(\.id), [real.id, mask.id])
+        XCTAssertTrue(result.partials.isEmpty)
+        XCTAssertEqual(source.readableSpeakers.map(\.id), [owner])
+        var protectedPreview = preview
+        protectedPreview.text = "***"; protectedPreview.containsPrivacyReplacement = true
+        let next = try await MeetingSessionCoordinator.protectedLiveHistory(session: source, revision: 2, preview: protectedPreview)
+        XCTAssertEqual(next.partials[.you]?.text, "***")
+        XCTAssertEqual(source.transcriptSegments, [real, noise, mask], "Rendering preserves raw evidence for diagnostics and undo")
+    }
+
+    @MainActor
     func testProtectedLiveHistoryRetainsEveryParticipantBeyondOneHundredWords() async throws {
         let voices = [UUID(), UUID(), UUID()]
         let track = UUID()

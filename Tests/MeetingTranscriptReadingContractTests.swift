@@ -37,6 +37,47 @@ extension MeetingSessionStoreCheckpointTests {
         }
         let both = [ta: a, tb: b]
         do {
+            var value = session
+            value.speakers[0].generatedParticipantNumber = 1
+            value.speakers[0].isLocalUser = true
+            value.speakers[1].generatedParticipantNumber = 2
+            value.speakers[2].generatedParticipantNumber = 3
+            value.speakers[2].identityIsProvisional = true
+            let first = word("Да", 0, raw: ta, selected: ta, owner: a, map: both)
+            let comma = word(",", 0.08, raw: nil, selected: nil, owner: extra)
+            let reply = word("нет", 1, raw: tb, selected: tb, owner: b, map: both)
+            let number = word("42", 1.2, raw: tb, selected: tb, owner: b, map: both)
+            let noise = ["-", "\u{2014}", "...", " \t\n", "\u{200B}\u{2060}\u{FEFF}"]
+                .enumerated().map { word($0.element, 6 + Double($0.offset), raw: nil, selected: nil, owner: extra) }
+            var mask = word("***", 14, raw: tb, selected: tb, owner: b, map: both)
+            mask.containsPrivacyReplacement = true
+            value.transcriptSegments = [first, comma, reply, number] + noise + [mask]
+            let original = value.transcriptSegments
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: original, in: value)
+            check(paragraphs.first?.text == "Да,", "Adjacent punctuation remains inside a normal phrase")
+            check(paragraphs.flatMap(\.segments).map(\.id) == [first.id, comma.id, reply.id, number.id, mask.id],
+                  "Standalone artifacts have no readable paragraph; useful replies, numbers and privacy masks survive")
+            check(value.readableSpeakers.map(\.id) == [a, b], "Noise-only generated people stay out of the roster")
+            check(value.speakers.map(\.generatedParticipantNumber) == [1, 2, 3],
+                  "Rendering never renumbers existing people or rewrites evidence")
+            let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
+            check(noise.allSatisfy { reading[$0.id] == nil } && reading[comma.id]?.participantID == a,
+                  "Live projection shares artifact suppression and typography ownership without native reassignment")
+            check(value.transcriptSegments == original, "Reading does not mutate original native evidence")
+            let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(value))
+            check(restored.transcriptSegments == original && restored.readableSpeakers.map(\.id) == [a, b],
+                  "Stop and reopen preserve source evidence while keeping noise out of the roster")
+            check(MeetingTranscriptExporter.text(for: restored) == MeetingTranscriptExporter.text(for: value)
+                  && MeetingTranscriptExporter.text(for: value).contains("***"),
+                  "Readable export preserves protected masks and remains stable after reopen")
+            value.speakers[2].usesCustomDisplayName = true
+            value.speakers[2].displayName = "Manual alias"
+            check(value.readableSpeakers.last?.displayName == "Manual alias", "A manual alias is never removed by automatic roster filtering")
+            for text in ["да", "нет", "я", "Ёё", "0", "3.14", "[ИМЯ]"] {
+                check(MeetingTranscriptSegment.textContainsLexicalContent(text), "Useful short text remains lexical: \(text)")
+            }
+        }
+        do {
             var provisional = word("A synthetic reply.", 4, raw: nil, selected: nil, owner: b,
                 rule: .insufficientSupport)
             provisional.attributionState = .unassigned
