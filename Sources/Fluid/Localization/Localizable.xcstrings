@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "This is me": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This is me"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это я"
+          }
+        }
+      }
+    },
     "Mark as You": {
       "extractionState": "manual",
       "localizations": {

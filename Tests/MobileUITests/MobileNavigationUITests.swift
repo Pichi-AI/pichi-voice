@@ -6,17 +6,18 @@ final class MobileNavigationUITests: XCTestCase {
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
-        if name.contains("testSpeakerColorsNativeSmoke") {
+        if name.contains("testSpeakerColorsNativeSmoke") || name.contains("testParticipantInlineNameAndOwnerTransferSmoke") {
             #if !targetEnvironment(simulator)
             throw XCTSkip("Synthetic speaker color smoke is simulator-only")
             #else
-            guard ProcessInfo.processInfo.environment["PICHI_SPEAKER_COLOR_SMOKE"] == "1" else {
+            guard ProcessInfo.processInfo.environment["PICHI_SPEAKER_COLOR_SMOKE"] == "1"
+                    || ProcessInfo.processInfo.environment["PICHI_PARTICIPANT_INLINE_SMOKE"] == "1" else {
                 throw XCTSkip("Stage SpeakerColorMeeting.json in an owned simulator and opt in")
             }
             #endif
         }
         if name.contains("testFragmentParticipantCorrectionScopesUndoAndReopen")
-            || name.contains("testManualYouDesignationSwitchClearUndoAndReopen")
+            || name.contains("testParticipantInlineNameAndOwnerTransferSmoke")
             || name.contains("testTranscriptScrollKeepsNavigationControlsReadable") {
             #if !targetEnvironment(simulator)
             throw XCTSkip("Participant correction fixtures are simulator-only")
@@ -50,7 +51,7 @@ final class MobileNavigationUITests: XCTestCase {
         if !productionDownload { XCUIDevice.shared.orientation = .portrait }
         app = XCUIApplication()
         if !productionDownload { app.launchArguments += ["-PichiInterfaceLanguage", "en"] }
-        if name.contains("testSpeakerColorsNativeSmoke") {
+        if name.contains("testSpeakerColorsNativeSmoke") || name.contains("testParticipantInlineNameAndOwnerTransferSmoke") {
             app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
             app.launchArguments += ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
                 "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO",
@@ -1254,9 +1255,9 @@ final class MobileNavigationUITests: XCTestCase {
     func testExplicitSpeakerAliasPersistsWithTranscriptPrivacyEnabled() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9024"
         let speakerID = "00000000-0000-0000-0000-000000000065"
-        for (language, appearance, historyTitle, saveTitle) in [
-            ("en", "light", "History", "Save"),
-            ("ru", "dark", "История", "Сохранить")
+        for (language, appearance, historyTitle) in [
+            ("en", "light", "History"),
+            ("ru", "dark", "История")
         ] {
             func openFixture() throws {
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
@@ -1278,7 +1279,7 @@ final class MobileNavigationUITests: XCTestCase {
                 XCTAssertTrue(participant.waitForExistence(timeout: 5))
                 participant.tap()
                 capture("explicit-alias-\(language)-editor")
-                let field = app.textViews["transcript.edit.text"]
+                let field = app.textFields["transcript.participant.name"]
                 XCTAssertTrue(field.waitForExistence(timeout: 5))
                 XCTAssertEqual(field.value as? String, previous)
                 field.tap()
@@ -1300,7 +1301,7 @@ final class MobileNavigationUITests: XCTestCase {
                 selectAll.tap()
                 field.typeText(name)
                 capture("explicit-alias-\(language)-entered")
-                app.buttons[saveTitle].firstMatch.tap()
+                app.buttons["transcript.participant.save"].tap()
                 let saved = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", name), object: participant)
                 XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 5), .completed)
                 XCTAssertTrue(app.staticTexts["[ИМЯ] оставил [ТЕЛЕФОН]."].exists,
@@ -1319,24 +1320,26 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
-    /// Covers a saved meeting where the automatic owner designation was lost entirely.
-    func testManualYouDesignationSwitchClearUndoAndReopen() throws {
+    /// Direct names expose the inline editor; explicit owner corrections replace one another.
+    func testParticipantInlineNameAndOwnerTransferSmoke() throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Participant correction fixtures are simulator-only")
         #else
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9026"
         let firstID = "00000000-0000-0000-0000-000000000065"
         let secondID = "00000000-0000-0000-0000-000000000066"
-        for (language, appearance, history, ownerName) in [
-            ("en", "light", "History", "You"),
-            ("ru", "dark", "История", "Вы")
+        let firstFragmentID = "00000000-0000-0000-0000-202610210101"
+        for (language, appearance, history, ownerName, thisIsMe, generatedName) in [
+            ("en", "light", "History", "You", "This is me", "Speaker 1"),
+            ("ru", "dark", "История", "Вы", "Это я", "Участник 1")
         ] {
             func openFixture() throws {
-                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                    "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
+                    "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO"]
                 app.launch()
-                capture("manual-you-\(language)-ready")
+                capture("inline-participant-\(language)-ready")
                 openNavigation("history", title: history)
-                capture("manual-you-\(language)-history")
                 let meeting = app.buttons["history.session.\(fixtureID)"]
                 guard meeting.waitForExistence(timeout: 5) else {
                     throw XCTSkip("Stage ManualOwnerDesignationMeeting.json in the isolated simulator store")
@@ -1344,69 +1347,77 @@ final class MobileNavigationUITests: XCTestCase {
                 meeting.tap()
                 XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
                 assertParticipantHeadersHaveCompactLabels()
-                capture("manual-you-\(language)-opened")
+                capture("inline-participant-\(language)-opened")
             }
-            func assertOnlyOwner(_ id: String?, step: String) {
-                if let id {
-                    let participant = app.buttons["transcript.speaker.\(id)"]
-                    let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", ownerName), object: participant)
-                    XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed,
-                                   "The chosen participant must receive the owner label after the correction commits")
-                }
+            func assertOwner(_ id: String?, step: String) {
                 let owners = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
                     "transcript.speaker.", ownerName))
-                let count = id == nil ? 0 : 1
-                let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == %d", count), object: owners)
-                XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed,
-                               "A meeting must have exactly the manually chosen owner, or none after clearing")
-                capture("manual-you-\(language)-\(step)")
+                let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == %d", id == nil ? 0 : 1), object: owners)
+                XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
+                if let id { XCTAssertEqual(app.buttons["transcript.speaker.\(id)"].label, ownerName) }
+                capture("inline-participant-\(language)-\(step)")
             }
-            func selectRole(_ id: String, removing: Bool = false, step: String) throws {
-                let menu = app.buttons["transcript.participant.actions.\(id)"]
-                try revealParagraphAboveNavigation(menu, step: "manual-you-\(language)-\(step)-reveal")
-                XCTAssertTrue(menu.isEnabled)
-                menu.tap()
-                capture("manual-you-\(language)-\(step)-menu")
-                let action = app.buttons["transcript.participant.\(removing ? "removeYou" : "markYou").\(id)"]
-                XCTAssertTrue(action.waitForExistence(timeout: 5) && action.isEnabled)
-                action.tap()
-                capture("manual-you-\(language)-\(step)-committed")
-            }
-            func undo(step: String) throws {
-                let more = app.buttons["transcript.more"]
-                try revealParagraphAboveNavigation(more, step: "manual-you-\(language)-\(step)-reveal")
-                more.tap()
-                capture("manual-you-\(language)-\(step)-menu")
-                let action = app.buttons["transcript.undo"]
-                XCTAssertTrue(action.waitForExistence(timeout: 5) && action.isEnabled)
-                action.tap()
-                capture("manual-you-\(language)-\(step)-committed")
+            func editRoster(_ id: String, step: String) throws {
+                let name = app.buttons["transcript.speaker.\(id)"]
+                try revealParagraphAboveNavigation(name, step: "inline-participant-\(language)-\(step)-reveal")
+                name.tap()
+                XCTAssertTrue(app.textFields["transcript.participant.name"].waitForExistence(timeout: 5))
+                XCTAssertFalse(app.textViews["transcript.edit.text"].exists, "A name opens inline, without the separate text edit sheet")
+                capture("inline-participant-\(language)-\(step)-editor")
             }
 
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
             try openFixture()
-            assertOnlyOwner(nil, step: "initial-owner-missing")
-            try selectRole(secondID, step: "mark-second")
-            assertOnlyOwner(secondID, step: "second-is-you")
+            let fragmentName = app.buttons["transcript.reassign.\(firstFragmentID)"]
+            try revealParagraphAboveNavigation(fragmentName, step: "inline-participant-\(language)-fragment-name")
+            fragmentName.tap()
+            let field = app.textFields["transcript.participant.name"]
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            XCTAssertEqual(app.buttons["transcript.participant.markYou"].label, thisIsMe)
+            XCTAssertTrue(app.buttons["transcript.participant.changeSpeaker"].exists,
+                          "Fragment attribution remains accessible from its name")
+            capture("inline-participant-\(language)-fragment-editor")
+            // The short generated label ends before the field center, so a native
+            // tap places the insertion point after it before the bounded deletion.
+            let previous = try XCTUnwrap(field.value as? String)
+            field.tap()
+            capture("inline-participant-\(language)-name-focused")
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count) + "Алекс Ёлкин")
+            XCTAssertEqual(field.value as? String, "Алекс Ёлкин")
+            capture("inline-participant-\(language)-name-entered")
+            app.buttons["transcript.participant.save"].tap()
+            let renamed = app.buttons["transcript.speaker.\(firstID)"]
+            let saved = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Алекс Ёлкин"), object: renamed)
+            XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 5), .completed)
+            capture("inline-participant-\(language)-name-saved")
+            try editRoster(firstID, step: "choose-first")
+            app.buttons["transcript.participant.markYou"].tap()
+            assertOwner(firstID, step: "first-is-you")
+            try editRoster(secondID, step: "choose-second")
+            app.buttons["transcript.participant.markYou"].tap()
+            assertOwner(secondID, step: "second-is-only-you")
+            XCTAssertEqual(app.buttons["transcript.speaker.\(firstID)"].label, generatedName,
+                           "The previous owner's alias resets to its stable generated number")
             app.terminate()
             try openFixture()
-            assertOnlyOwner(secondID, step: "second-is-you-reopened")
-            try selectRole(firstID, step: "switch-to-first")
-            assertOnlyOwner(firstID, step: "first-is-only-you")
-            try selectRole(firstID, removing: true, step: "clear-first")
-            assertOnlyOwner(nil, step: "designation-cleared")
-            try undo(step: "undo-clear")
-            assertOnlyOwner(firstID, step: "first-restored")
-            try selectRole(secondID, step: "switch-second-for-undo")
-            assertOnlyOwner(secondID, step: "second-is-only-you")
-            try undo(step: "undo-switch")
-            assertOnlyOwner(firstID, step: "first-restored-after-switch")
-            try selectRole(firstID, removing: true, step: "restore-ownerless-fixture")
-            assertOnlyOwner(nil, step: "fixture-ownerless")
-            app.terminate()
-            try openFixture()
-            assertOnlyOwner(nil, step: "cleared-designation-reopened")
+            XCTAssertEqual(app.buttons["transcript.speaker.\(firstID)"].label, generatedName)
+            assertOwner(secondID, step: "owner-transfer-reopened")
+            // The long scoped correction test exercises assignment/undo. This smoke
+            // checks its entry still follows the fragment's plain name.
+            try revealParagraphAboveNavigation(fragmentName, step: "inline-participant-\(language)-reassign-name")
+            fragmentName.tap()
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            capture("inline-participant-\(language)-reassign-editor")
+            app.buttons["transcript.participant.changeSpeaker"].tap()
+            XCTAssertTrue(app.buttons["transcript.reassign.whole"].waitForExistence(timeout: 5))
+            capture("inline-participant-\(language)-reassign-scope")
+            let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Отмена"])).firstMatch
+            cancel.tap()
+            capture("inline-participant-\(language)-reassign-cancelled")
+            try editRoster(secondID, step: "restore-fixture")
+            app.buttons["transcript.participant.removeYou"].tap()
+            assertOwner(nil, step: "fixture-restored")
         }
         #endif
     }
@@ -1499,6 +1510,10 @@ final class MobileNavigationUITests: XCTestCase {
                 let control = app.buttons["transcript.reassign.\(id)"]
                 XCTAssertTrue(control.waitForExistence(timeout: 5) && control.isEnabled)
                 control.tap()
+                if app.textFields["transcript.participant.name"].waitForExistence(timeout: 2) {
+                    capture("participant-correction-\(language)-\(step)-inline-editor")
+                    app.buttons["transcript.participant.changeSpeaker"].tap()
+                }
                 capture("participant-correction-\(language)-\(step)-scope")
             }
             func assign(_ target: String, step: String) {
@@ -1974,12 +1989,12 @@ final class MobileNavigationUITests: XCTestCase {
     private func assertParticipantHeadersHaveCompactLabels(file: StaticString = #filePath, line: UInt = #line) {
         let names = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.speaker."))
         XCTAssertGreaterThan(names.count, 0, file: file, line: line)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@",
+            "transcript.participant.actions.")).count, 0, "Participant names need no separate ellipsis", file: file, line: line)
         for name in names.allElementsBoundByIndex {
-            let speakerID = String(name.identifier.dropFirst("transcript.speaker.".count))
-            let actions = app.buttons["transcript.participant.actions.\(speakerID)"]
-            XCTAssertTrue(actions.exists, file: file, line: line)
-            XCTAssertLessThanOrEqual(name.frame.height, actions.frame.height + 1,
-                "Participant names must remain readable compact labels rather than tall, narrow word fragments",
+            XCTAssertGreaterThanOrEqual(name.frame.height, 44, file: file, line: line)
+            XCTAssertLessThanOrEqual(name.frame.height, 60,
+                "Participant names must remain compact labels rather than tall, narrow word fragments",
                 file: file, line: line)
         }
     }
