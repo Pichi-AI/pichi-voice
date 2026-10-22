@@ -411,7 +411,11 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
             .appendingPathComponent("Resources/dictation_fixture.wav")
         let clip = try AudioConverter().resampleAudioFile(path: fixture.path)
         XCTAssertFalse(clip.isEmpty)
+        // Give the final spoken word a real trailing capture interval. The model's
+        // frame-wide ending can otherwise exceed the abruptly cut fixture, which
+        // correctly makes the provider reject all timings as incomplete evidence.
         let samples = Array(repeating: clip, count: 240_000 / max(1, clip.count) + 1).flatMap { $0 }
+            + [Float](repeating: 0, count: 16_000)
         XCTAssertGreaterThan(samples.count, 240_000)
 
         UserDefaults.standard.set(false, forKey: "DictionarySharedFeatureMatcherEnabled")
@@ -425,8 +429,14 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         let defaultOn = try await provider.transcribeWithWordTimings(samples)
         XCTAssertFalse(baseline.result.text.isEmpty)
         XCTAssertFalse(baseline.words.isEmpty)
+        let duration = Double(samples.count) / 16_000
+        XCTAssertTrue(baseline.words.allSatisfy {
+            $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start && $0.end <= duration
+        }, "The fixture must provide timing evidence inside its physical capture")
         XCTAssertEqual(defaultOn.result.text, baseline.result.text)
         XCTAssertEqual(defaultOn.words.map(\.text), baseline.words.map(\.text))
+        XCTAssertEqual(defaultOn.words.map(\.start), baseline.words.map(\.start))
+        XCTAssertEqual(defaultOn.words.map(\.end), baseline.words.map(\.end))
         let final = try await provider.transcribeFinal(samples)
         XCTAssertEqual(final.text, baseline.result.text)
     }
