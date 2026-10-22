@@ -224,16 +224,22 @@ import Foundation
         var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
         let first = try update(&tail, [main, gap], [.init(token: a, start: 0, end: 6)], end: 6.3)
         let preliminary = first.inserted[1].speakerID!
+        check(first.speakers.first { $0.id == preliminary }?.generatedParticipantNumber == 2)
         let second = try update(&tail, [reply], [.init(token: a, start: 0, end: 6),
             .init(token: b, start: 6.4, end: 7)], end: 7)
         let target = second.inserted[0].speakerID!
+        check(second.speakers.first { $0.id == target }?.generatedParticipantNumber == 3,
+            "A new identity cannot recycle a preliminary participant's reserved number")
         check(second.revisions.first { $0.segmentID == gap.id }?.speakerID == target)
         check(second.speakers.first { $0.id == preliminary }?.mergedIntoSpeakerID == target,
             "Fully refined preliminary identity remained a ghost participant")
         check(second.speakers.filter { $0.mergedIntoSpeakerID == nil }.count == 2)
         let merged = MeetingPCMTranscriptBatch(segments: [], speakers: second.speakers).mergingSpeakers(into: first.speakers)
         check(merged.first { $0.id == preliminary }?.mergedIntoSpeakerID == target)
-        check(merged.first { $0.id == target }?.generatedParticipantNumber == 2)
+        check(merged.first { $0.id == target }?.generatedParticipantNumber == 3,
+            "Refinement must preserve the target's issued number rather than renumber it")
+        check(merged.first { $0.id == preliminary }?.generatedParticipantNumber == 2,
+            "Retired identity provenance keeps its original reserved number")
     }
     static func compatibility() throws {
         let old = MeetingSpeakerAttributionPolicy()
