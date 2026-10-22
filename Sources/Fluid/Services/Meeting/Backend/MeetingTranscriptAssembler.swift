@@ -195,12 +195,18 @@ nonisolated struct MeetingTranscriptAssembler {
         var dispositions: [MeetingTextUnitDispositionRecord] = []
         var emitted: [(unit: MeetingFinalTextUnit, presentation: MeetingAnalysisInterval)] = []
         var remainderGaps: [MeetingAssemblyCoverageGap] = []
+        var excludedPresentationBarriers: [MeetingAudioTrackID: [MeetingSpeakerAttributionInterval]] = [:]
+        var unsafeProvisionalEpochs = Set<MeetingAnalysisEpochID>()
 
         let canonicalUnits = evidence.units.sorted { $0.id < $1.id }
         for unit in canonicalUnits {
             try Task.checkCancellation()
             if let quarantine = unit.quarantineReason(in: manifest) {
                 // No interval arithmetic on quarantined bounds (plan §4).
+                unsafeProvisionalEpochs.insert(unit.analysisEpochID)
+                for spanID in unit.analysisSpanIDs {
+                    if let span = spansByID[spanID] { unsafeProvisionalEpochs.insert(span.analysisEpochID) }
+                }
                 dispositions.append(MeetingTextUnitDispositionRecord(
                     unitID: unit.id,
                     disposition: .rejectedInvalidTiming,
@@ -239,6 +245,8 @@ nonisolated struct MeetingTranscriptAssembler {
                     excluding: inadmissibleGapsByTrack[unit.trackID] ?? [],
                     trackID: unit.trackID
                 ))
+                excludedPresentationBarriers[unit.trackID, default: []].append(.init(
+                    start: presentation.start, end: presentation.end))
                 continue
             }
 
@@ -279,6 +287,8 @@ nonisolated struct MeetingTranscriptAssembler {
                         disposition: .echoSuppressed,
                         reasonCode: MeetingUnitDispositionReason.crossTrackEcho.rawValue
                     ))
+                    excludedPresentationBarriers[unit.trackID, default: []].append(.init(
+                        start: presentation.start, end: presentation.end))
                     continue
                 }
             }
@@ -289,6 +299,8 @@ nonisolated struct MeetingTranscriptAssembler {
                     disposition: .outsideActivity,
                     reasonCode: MeetingUnitDispositionReason.outsideSpeakerActivity.rawValue
                 ))
+                excludedPresentationBarriers[unit.trackID, default: []].append(.init(
+                    start: presentation.start, end: presentation.end))
                 continue
             }
 
@@ -443,13 +455,16 @@ nonisolated struct MeetingTranscriptAssembler {
             $0.disposition == .rejectedInvalidTiming
         }
         var seenSpeakerIDs = Set<SessionSpeakerID>()
+        var publicationBarriers = excludedPresentationBarriers
+        for gap in coverageGaps {
+            publicationBarriers[gap.trackID, default: []].append(.init(start: gap.start, end: gap.end))
+        }
         let product = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(
             .init(segments: segments, speakers: speakers.map(\.speaker).filter { seenSpeakerIDs.insert($0.id).inserted }),
             attemptID: manifest.attemptID, policy: input.speakerAttributionPolicy, speakerNameFormat: self.speakerNameFormat,
             trackKinds: Dictionary(uniqueKeysWithValues: manifest.tracks.map { ($0.id, $0.kind) }),
-            barriersByTrack: Dictionary(grouping: coverageGaps, by: \.trackID).mapValues {
-                $0.map { .init(start: $0.start, end: $0.end) }
-            }, epochForSegment: { segment in
+            barriersByTrack: publicationBarriers, contextualBarrierEpochIDs: unsafeProvisionalEpochs,
+            epochForSegment: { segment in
                 segment.nativeUnitID.flatMap { unitsByID[$0]?.analysisEpochID }
             })
         return MeetingAssemblyResult(

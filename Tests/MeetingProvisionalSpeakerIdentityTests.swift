@@ -236,5 +236,17 @@ import Foundation
                 text: "raw", analysisStart: 0, analysisEnd: 0.4, speaker: .unassigned, analysisSpanIDs: [])])
         check(raw.segments[0].speakerID == nil && raw.speakers.isEmpty,
             "Raw PCM assembly minted a durable unknown identity before privacy admission")
+        let recoveryRows = [word(7_000, 0, 6), word(7_001, 6.1, 8.1), word(7_002, 8.2, 10.1), word(7_003, 10.2, 10.4)]
+        let native = try MeetingPCMRecordingAttribution.assemble(transcript: .init(segments: recoveryRows),
+            activity: [.init(token: a, start: 0, end: 6), .init(token: a, start: 10.2, end: 10.4)],
+            epoch: epoch, attemptID: attempt, duration: 11, speakerNameFormat: "Speaker %lld")
+        let unsafeEpoch = try Tail.finalizingProtectedTranscript(native, attemptID: attempt, policy: .standard,
+            speakerNameFormat: "Speaker %lld", contextualBarrierEpochIDs: [epoch], epochForSegment: { _ in epoch })
+        check(unsafeEpoch.segments[1].speakerID == unsafeEpoch.segments[2].speakerID,
+            "Unplaceable quarantine manufactured one identity per admitted unknown word")
+        check(unsafeEpoch.segments[1].speakerID != unsafeEpoch.segments[0].speakerID)
+        check(unsafeEpoch.segments[3].speakerID == unsafeEpoch.segments[0].speakerID,
+            "Unsafe epoch reused contextual preceding-token recovery")
+        check(unsafeEpoch.segments.map(\.nativeSpeakerAssignment) == native.segments.map(\.nativeSpeakerAssignment))
     }
 }

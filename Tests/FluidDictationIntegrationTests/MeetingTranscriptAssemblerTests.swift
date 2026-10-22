@@ -234,6 +234,34 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(result.sidecar.units, units.sorted { $0.id < $1.id })
     }
 
+    func testExcludedWordsBreakProvisionalPublicationBout() throws {
+        for outsideActivity in [false, true] {
+            let (plan, manifest, span) = try self.onlineMicFixture()
+            let a = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "a")
+            let b = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "b")
+            let assignment: MeetingBackendSpeakerAssignment = outsideActivity ? .ambiguous([a, b]) : .unassigned
+            let before = self.unit(id: "before", span: span, analysisStart: 1, analysisEnd: 1.2, speaker: assignment)
+            let excluded = self.unit(id: "excluded", span: span, analysisStart: 1.3, analysisEnd: 1.5, speaker: .unassigned)
+            let after = self.unit(id: "after", span: span, analysisStart: 1.6, analysisEnd: 1.8, speaker: assignment)
+            let units = [before, excluded, after]
+            let activity = outsideActivity ? [a, b].flatMap { token in
+                [MeetingBackendSpeakerActivity(token: token, start: 1, end: 1.2),
+                 .init(token: token, start: 1.6, end: 1.8)]
+            } : []
+            let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+                evidence: .init(backendID: plan.backendID, attemptID: plan.attemptID, units: units, speakerActivity: activity),
+                coverageReceipts: self.receipts(for: manifest),
+                echoVerdicts: [before.id: .notEcho, after.id: .notEcho,
+                    excluded.id: outsideActivity ? .notEcho : .echoSuppressed(duplicateOfUnitID: nil)]))
+            XCTAssertEqual(result.segments.count, 2)
+            XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil && $0.speakerIdentityIsProvisional == true })
+            XCTAssertNotEqual(result.segments[0].speakerID, result.segments[1].speakerID)
+            XCTAssertEqual(result.sidecar.units, units.sorted { $0.id < $1.id })
+            XCTAssertEqual(result.sidecar.dispositions.first { $0.unitID == excluded.id }?.disposition,
+                outsideActivity ? .outsideActivity : .echoSuppressed)
+        }
+    }
+
     func testPostStopIndexedBatchHandlesNestedUtteranceWithoutMovingNativeWords() throws {
         let attempt = UUID(), track = UUID()
         let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)

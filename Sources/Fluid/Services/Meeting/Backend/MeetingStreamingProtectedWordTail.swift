@@ -513,7 +513,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
     /// never rewrites the native token or the resolver's original summary.
     private mutating func applyProvisionalIdentities(to resolved: inout [MeetingTranscriptSegment],
         trackKind: MeetingAudioTrackKind = .microphone,
-        resetBefore: Set<MeetingTranscriptSegmentID> = []
+        resetBefore: Set<MeetingTranscriptSegmentID> = [], allowRecovery: Bool = true
     ) throws {
         guard self.policy.enableProvisionalSpeakerIdentities else { return }
         var state = self.provisionalPrefixState
@@ -554,7 +554,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 return native
             }()
             if validIdentity {
-                if let token = independentToken, var bout = state.bout,
+                if allowRecovery, let token = independentToken, var bout = state.bout,
                    !barrier, (bout.recoveryToken == token
                     || (bout.precedingToken == token
                         && bout.end - bout.start > self.policy.maximumUnknownRunSeconds + self.policy.comparisonTolerance)) {
@@ -569,7 +569,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                     resolved[index].speakerIdentityIsProvisional = true
                 } else {
                     state.bout = nil
-                    state.precedingToken = barrier ? nil : independentToken
+                    state.precedingToken = barrier || !allowRecovery ? nil : independentToken
                     resolved[index].speakerIdentityIsProvisional = identity?.identityIsProvisional == true ? true : nil
                 }
             } else {
@@ -585,7 +585,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                         self.speakers.append(speaker)
                     }
                     bout = .init(speakerID: speaker.id, start: timing.start, end: timing.end,
-                        precedingToken: barrier ? nil : state.precedingToken)
+                        precedingToken: barrier || !allowRecovery ? nil : state.precedingToken)
                 }
                 bout.end = max(bout.end, timing.end)
                 state.bout = bout
@@ -631,6 +631,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         attemptID: UUID, policy: MeetingSpeakerAttributionPolicy?, speakerNameFormat: String,
         trackKinds: [MeetingAudioTrackID: MeetingAudioTrackKind] = [:],
         barriersByTrack: [MeetingAudioTrackID: [MeetingSpeakerAttributionInterval]] = [:],
+        contextualBarrierEpochIDs: Set<MeetingAnalysisEpochID> = [],
         epochForSegment: (MeetingTranscriptSegment) -> MeetingAnalysisEpochID?
     ) throws -> MeetingPCMTranscriptBatch {
         guard let policy, policy.enableProvisionalSpeakerIdentities else { return transcript }
@@ -688,7 +689,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 }
                 owner.retained = resolved.map { .init(original: $0, published: $0, committed: false) }
                 try owner.applyProvisionalIdentities(to: &resolved,
-                    trackKind: trackKinds[epoch.trackID] ?? .microphone, resetBefore: resetBefore)
+                    trackKind: trackKinds[epoch.trackID] ?? .microphone, resetBefore: resetBefore,
+                    allowRecovery: !contextualBarrierEpochIDs.contains(epoch))
                 for (index, segment) in zip(chunkIndices, resolved) { result.segments[index] = segment }
                 owner.provisionalPrefixState = owner.retained.last?.provisionalStateAfter ?? .init()
                 owner.retained.removeAll(keepingCapacity: true)
