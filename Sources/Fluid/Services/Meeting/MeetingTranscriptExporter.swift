@@ -145,10 +145,15 @@ nonisolated enum MeetingTranscriptExporter {
         if segment.isUserSpeakerAssigned != true, let speakerID = segment.speakerID,
            let speaker = session.activeSpeakers.first(where: {
                $0.id == self.resolvedAliasID(speakerID, in: session)
-           }), speaker.identityIsProvisional == true,
+           }), speaker.identityIsProvisional != nil,
            let value = name(speakerID) {
-            return .estimated(.init(displayName: value.displayName, isLocalUser: false,
-                usesCustomDisplayName: value.usesCustomDisplayName, isProvisional: true))
+            if speaker.identityIsProvisional == true {
+                return .estimated(.init(displayName: value.displayName, isLocalUser: false,
+                    usesCustomDisplayName: value.usesCustomDisplayName, isProvisional: true))
+            }
+            if segment.speakerIdentityIsProvisional == true {
+                return segment.speakerAttribution?.rule.isHeuristic == true ? .estimated(value) : .identified(value)
+            }
         }
         if segment.attributionState != .timingUncertain, let attribution = segment.speakerAttribution,
            attribution.selectedSpeakerID == segment.speakerID {
@@ -308,8 +313,13 @@ nonisolated enum MeetingTranscriptExporter {
     ) -> String {
         if segment.isUserSpeakerAssigned != true, let speakerID = segment.speakerID {
             let resolved = self.resolvedAliasID(speakerID, in: session)
-            if session.activeSpeakers.contains(where: { $0.id == resolved && $0.identityIsProvisional == true }) {
-                return [resolved.uuidString, "provisional"].joined(separator: "|")
+            if let speaker = session.activeSpeakers.first(where: { $0.id == resolved }), speaker.identityIsProvisional != nil {
+                if speaker.identityIsProvisional == true {
+                    return [resolved.uuidString, "provisional"].joined(separator: "|")
+                }
+                if segment.speakerIdentityIsProvisional == true {
+                    return [resolved.uuidString, "assigned"].joined(separator: "|")
+                }
             }
         }
         if let speaker = legacySpeakerID ?? segment.speakerID,

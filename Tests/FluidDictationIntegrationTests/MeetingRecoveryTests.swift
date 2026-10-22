@@ -4302,6 +4302,32 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(redactor.inputs.isEmpty)
     }
 
+    func testProvisionalParticipantOwnerChoicePersistsAndUndoRestoresUncertainty() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var (session, speakerA, _, _) = self.makeCorrectionSession(state: .completed)
+        session.speakers[0].identityIsProvisional = true
+        for index in session.transcriptSegments.indices where session.transcriptSegments[index].speakerID == speakerA {
+            session.transcriptSegments[index].speakerIdentityIsProvisional = true
+            session.transcriptSegments[index].nativeSpeakerAssignment = .unassigned
+            session.transcriptSegments[index].attributionState = .unassigned
+        }
+        try await store.create(session)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let selected = try await coordinator.setLocalUserSpeaker(sessionID: session.id, speakerID: speakerA)
+        XCTAssertEqual(selected.speakers[0].identityIsProvisional, false)
+        XCTAssertTrue(MeetingTranscriptExporter.text(for: selected).contains("You:"))
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved?.speakers, selected.speakers)
+        XCTAssertEqual(saved?.transcriptSegments, session.transcriptSegments, "A role choice never rewrites native evidence")
+        let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        XCTAssertEqual(undone.speakers, session.speakers)
+        XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
+        XCTAssertTrue(MeetingTranscriptExporter.text(for: undone).contains("(provisional)"))
+    }
+
     func testMeetingLocalUserRoleSurvivesPrivacyTextCorrectionAndItsUndo() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
