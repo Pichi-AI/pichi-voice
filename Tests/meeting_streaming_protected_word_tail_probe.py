@@ -97,6 +97,9 @@ def section(path, start, end):
     return source[source.index(start):source.index(end, source.index(start))]
 
 full = "import Foundation\n"
+pipeline = (meeting / "MeetingProcessingPipeline.swift").read_text()
+version = re.search(r"^    (?:nonisolated )?(static let pipelineVersion = [^\n]+)", pipeline, re.M).group(1)
+full += "nonisolated enum MeetingProcessingPipeline { " + version + " }\n"
 full += section("Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift",
                 "nonisolated enum MeetingLiveSpeaker:", "nonisolated enum MeetingLiveTimeConversion")
 full += section("Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackend.swift",
