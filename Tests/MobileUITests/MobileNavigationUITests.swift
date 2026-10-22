@@ -1534,8 +1534,15 @@ final class MobileNavigationUITests: XCTestCase {
             func assertSpeaker(_ id: String, _ name: String, step: String) throws {
                 let paragraph = row(id)
                 try revealParagraphAboveNavigation(paragraph, step: "participant-correction-\(language)-\(step)")
-                XCTAssertTrue(paragraph.staticTexts[name].firstMatch.waitForExistence(timeout: 5),
-                              "Only the selected fragment's participant caption may change")
+                // Captions are the paragraph's native change-speaker buttons.
+                // Scope both the identifier and exact label to this paragraph.
+                let caption = paragraph.buttons["transcript.reassign.\(id)"]
+                XCTAssertTrue(caption.waitForExistence(timeout: 5))
+                let expectedSpeaker = XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "label == %@", name), object: caption)
+                XCTAssertEqual(XCTWaiter.wait(for: [expectedSpeaker], timeout: 5), .completed,
+                               "Only the selected fragment's participant caption may change")
+                XCTAssertEqual(caption.label, name)
             }
             func openAssignment(_ id: String, step: String) throws {
                 try revealParagraphAboveNavigation(row(id), step: "participant-correction-\(language)-\(step)")
