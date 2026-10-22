@@ -1054,10 +1054,12 @@ extension MeetingMenuBarStartTests {
     func testSavedOnlineApplicationIsUsedWithoutAutomaticDetection() throws {
         var defaults = MeetingRecordingDefaults.unconfigured
         defaults.isConfigured = true
+        defaults.applicationAudioScope = .selectedApplication
         defaults.applicationBundleIdentifier = "us.zoom.xos"
         let app = MeetingApplicationIdentity(bundleIdentifier: "us.zoom.xos", processID: 42, displayName: "Zoom")
         let config = try self.savedSourceConfiguration(defaults: defaults, applications: [app])
         XCTAssertEqual(config.mode, .onlineCall)
+        XCTAssertEqual(config.applicationAudioScope, .selectedApplication)
         XCTAssertEqual(config.application, app)
         XCTAssertEqual(config.platform?.identifier, app.bundleIdentifier)
     }
@@ -1065,6 +1067,7 @@ extension MeetingMenuBarStartTests {
     func testUnavailableSavedApplicationCannotSilentlyBecomeMicrophoneOnly() {
         var defaults = MeetingRecordingDefaults.unconfigured
         defaults.isConfigured = true
+        defaults.applicationAudioScope = .selectedApplication
         defaults.applicationBundleIdentifier = "us.zoom.xos"
         XCTAssertThrowsError(try self.savedSourceConfiguration(defaults: defaults, applications: [
             MeetingApplicationIdentity(bundleIdentifier: "com.microsoft.teams2", processID: 43, displayName: "Teams"),
