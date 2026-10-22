@@ -685,12 +685,15 @@ final class MobileNavigationUITests: XCTestCase {
         let storageFooter = app.staticTexts["Audio recordings and transcripts are stored on this device."].firstMatch
         if app.tabBars.firstMatch.exists && storageFooter.exists {
             let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
-            for step in 0..<3 where !storageFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty {
+            for step in 0..<3 where !app.windows.firstMatch.frame.contains(storageFooter.frame)
+                || !storageFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty {
                 XCTAssertTrue(scroll.isHittable)
                 scroll.swipeUp()
                 capture("03-settings-footer-scroll-\(step)")
             }
             XCTAssertTrue(storageFooter.isHittable)
+            XCTAssertTrue(app.windows.firstMatch.frame.contains(storageFooter.frame),
+                          "The complete storage footer must remain inside the visible application window")
             XCTAssertTrue(storageFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty,
                           "Normal scrolling must expose the complete storage footer above the floating tab bar")
         }
@@ -2041,6 +2044,7 @@ final class MobileNavigationUITests: XCTestCase {
         // A row-center tap lands on the label; operate the observed backing control.
         let bounds = row.frame
         let previousValue = try XCTUnwrap(row.value as? String)
+        XCTAssertTrue(["0", "1"].contains(previousValue), "The identified switch must expose a binary value")
         let controls = app.switches.allElementsBoundByIndex.filter {
             let frame = $0.frame
             // Native UISwitch artwork can extend slightly outside its SwiftUI row.
@@ -2058,7 +2062,8 @@ final class MobileNavigationUITests: XCTestCase {
             row.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
         }
         let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            (row.value as? String) != previousValue
+            guard row.exists, let value = row.value as? String, ["0", "1"].contains(value) else { return false }
+            return value != previousValue
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed)
     }
