@@ -193,6 +193,7 @@ final class AppServices: ObservableObject {
     }
 
     private var _meetingSessionCoordinator: MeetingSessionCoordinator?
+    lazy var meetingLocation = MeetingLocationService()
     var meetingSessionCoordinator: MeetingSessionCoordinator {
         if let existing = self._meetingSessionCoordinator {
             return existing
@@ -213,7 +214,7 @@ final class AppServices: ObservableObject {
             preferredMicrophoneUID: { [weak self] in
                 self?.microphonePreferenceCoordinator.inputDeviceForCapture()?.uid
             },
-            locationResolver: MeetingLocationService(),
+            locationResolver: self.meetingLocation,
             // The coordinator prepares the frozen speaker dependency profile only when the
             // capture mode needs it; the ASR lifecycle remains owned by the existing service.
             validateRecordingModels: {

@@ -399,6 +399,14 @@ struct MeetingRecordingSettingsSheet: View {
 
     private var automationSettings: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
+            FluidManagementGroup(title: PichiLocalization.text("Meeting location")) {
+                MeetingLocationSettingsContent()
+                Text(PichiLocalization.text("Location changes apply immediately, including when you close without saving other settings."))
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             FluidManagementGroup(title: PichiLocalization.text("Your preferences")) {
                 VStack(spacing: 0) {
                     MeetingAdaptiveSetupRow(

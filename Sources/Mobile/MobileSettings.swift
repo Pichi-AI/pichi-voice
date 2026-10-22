@@ -117,6 +117,9 @@ struct MobileRecordingSettings: View {
                     }
                 }.accessibilityIdentifier("recording.language")
             }
+            Section(PichiLocalization.text("Meeting location")) {
+                MeetingLocationSettingsContent()
+            }
             Section(PichiLocalization.text("Speaker labels")) {
                 Text(PichiLocalization.text("Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."))
                 Text(PichiLocalization.text("Text and participant labels update in fragments. A delay is normal while enough speech is collected."))

@@ -345,6 +345,12 @@ extension SettingsStore {
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingSaveAudio) }
     }
 
+    /// Optional metadata requires an explicit choice, independent of the OS permission.
+    var meetingLocationEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.meetingLocationEnabled) }
+        set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingLocationEnabled) }
+    }
+
     var meetingSpeakerLabelsEnabled: Bool {
         get { self.defaults.object(forKey: Keys.meetingSpeakerLabelsEnabled) as? Bool ?? true }
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingSpeakerLabelsEnabled) }

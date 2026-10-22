@@ -53481,6 +53481,227 @@
         }
       },
       "comment": "Audio player accessibility label."
+    },
+    "Meeting location": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting location"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Место встречи"
+          }
+        }
+      }
+    },
+    "Use location for meeting addresses": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use location for meeting addresses"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать геолокацию для адресов встреч"
+          }
+        }
+      }
+    },
+    "Optional. Save the address where a meeting starts. Location is requested once per meeting, without background tracking.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optional. Save the address where a meeting starts. Location is requested once per meeting, without background tracking."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Необязательно. Сохраняйте адрес, где начинается встреча. Геолокация запрашивается один раз на встречу, без отслеживания в фоне."
+          }
+        }
+      }
+    },
+    "Apple resolves the address. It is saved with the meeting and shown in your interface language.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple resolves the address. It is saved with the meeting and shown in your interface language."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple определяет адрес. Он сохраняется вместе со встречей и отображается на языке интерфейса."
+          }
+        }
+      }
+    },
+    "Location access is allowed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location access is allowed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к геолокации разрешён."
+          }
+        }
+      }
+    },
+    "Location access has not been requested.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location access has not been requested."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешение на геолокацию ещё не запрашивалось."
+          }
+        }
+      }
+    },
+    "Location access is denied. Allow it in system settings to save meeting addresses.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location access is denied. Allow it in system settings to save meeting addresses."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к геолокации запрещён. Разрешите его в системных настройках, чтобы сохранять адреса встреч."
+          }
+        }
+      }
+    },
+    "Location access is restricted on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location access is restricted on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к геолокации ограничен на этом устройстве."
+          }
+        }
+      }
+    },
+    "Waiting for location permission…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for location permission…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ожидание разрешения на геолокацию…"
+          }
+        }
+      }
+    },
+    "Allow location access": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow location access"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешить геолокацию"
+          }
+        }
+      }
+    },
+    "Open system settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open system settings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть системные настройки"
+          }
+        }
+      }
+    },
+    "Optional: Add the meeting address using your location.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optional: Add the meeting address using your location."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Необязательно: добавляйте адрес встречи с помощью геолокации."
+          }
+        }
+      }
+    },
+    "Location changes apply immediately, including when you close without saving other settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location changes apply immediately, including when you close without saving other settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменения геолокации применяются сразу, даже если закрыть окно без сохранения остальных настроек."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

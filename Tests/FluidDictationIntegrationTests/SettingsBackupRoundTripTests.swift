@@ -4,6 +4,29 @@ import XCTest
 
 @MainActor
 final class SettingsBackupRoundTripTests: XCTestCase {
+    func testMeetingLocationOnboardingStepResumesWithoutResettingCompletedSetup() throws {
+        let suite = "MeetingLocationOnboarding-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "OnboardingCompleted")
+        defaults.set(5, forKey: "OnboardingCurrentStep")
+        let settings = SettingsStore(defaults: defaults)
+        XCTAssertTrue(settings.onboardingCompleted, "Adding an optional step must preserve completed onboarding")
+        XCTAssertEqual(settings.onboardingCurrentStep, 5, "The existing AI step keeps its persisted index")
+
+        settings.onboardingCompleted = false
+        settings.onboardingCurrentStep = 6
+        let reloaded = SettingsStore(defaults: defaults)
+        XCTAssertEqual(reloaded.onboardingCurrentStep, 6, "The optional location step must survive relaunch")
+        XCTAssertFalse(reloaded.onboardingCompleted)
+        reloaded.onboardingCurrentStep = Int.max
+        XCTAssertEqual(reloaded.onboardingCurrentStep, 6)
+        defaults.set(Int.max, forKey: "OnboardingCurrentStep")
+        XCTAssertEqual(reloaded.onboardingCurrentStep, 6)
+        reloaded.onboardingCurrentStep = -1
+        XCTAssertEqual(reloaded.onboardingCurrentStep, 0)
+    }
+
     func testHoldSpaceMuteRoundTripsAndLegacyBackupDefaultsOff() throws {
         try self.withSavedDefaults {
             let settings = SettingsStore.shared

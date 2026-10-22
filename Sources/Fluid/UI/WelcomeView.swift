@@ -141,6 +141,7 @@ struct OnboardingFlowView: View {
         case permissions = 3
         case playground = 4
         case aiEnhancement = 5
+        case meetingLocation = 6
 
         var analyticsStep: AnalyticsOnboardingStep {
             switch self {
@@ -150,6 +151,7 @@ struct OnboardingFlowView: View {
             case .permissions: .permissions
             case .playground: .playground
             case .aiEnhancement: .aiEnhancement
+            case .meetingLocation: .meetingLocation
             }
         }
 
@@ -167,6 +169,8 @@ struct OnboardingFlowView: View {
                 return "Set Up AI Enhancement"
             case .playground:
                 return AppBrand.text("Try FluidVoice")
+            case .meetingLocation:
+                return "Meeting location"
             }
         }
 
@@ -184,6 +188,8 @@ struct OnboardingFlowView: View {
                 return "Optional: Configure AI post-processing or skip this step."
             case .playground:
                 return "Use your dictation shortcut once before finishing setup."
+            case .meetingLocation:
+                return "Optional: Add the meeting address using your location."
             }
         }
     }
@@ -337,6 +343,8 @@ struct OnboardingFlowView: View {
             return self.isAIReady
         case .playground:
             return self.isPlaygroundReady && !self.asr.isRunning && !self.isRecordingAnyShortcut
+        case .meetingLocation:
+            return true
         }
     }
 
@@ -346,7 +354,7 @@ struct OnboardingFlowView: View {
             return "Next"
         case .language:
             return "Continue"
-        case .aiEnhancement:
+        case .meetingLocation:
             return "Finish Setup"
         default:
             return "Continue"
@@ -515,6 +523,8 @@ struct OnboardingFlowView: View {
             self.aiEnhancementStep
         case .playground:
             self.playgroundStep
+        case .meetingLocation:
+            self.meetingLocationStep
         }
     }
 
@@ -2244,18 +2254,22 @@ struct OnboardingFlowView: View {
             self.selectOnboardingRoute(route)
         }
 
-        if self.step == .aiEnhancement {
-            guard self.isAIReady else { return }
-            let origin = self.settings.analyticsOnboardingOrigin
-            self.finishOnboarding()
-            self.completeCurrentStep(
-                outcome: .completed,
-                origin: origin,
-                completesFlow: self.settings.onboardingCompleted
-            )
+        if self.step == .meetingLocation {
+            self.finishLocationStep(outcome: .completed)
             return
         }
+        if self.step == .aiEnhancement, !self.isAIReady { return }
         self.goNext()
+    }
+
+    private func finishLocationStep(outcome: AnalyticsOnboardingOutcome) {
+        let origin = self.settings.analyticsOnboardingOrigin
+        self.finishOnboardingAtGettingStarted()
+        self.completeCurrentStep(
+            outcome: outcome,
+            origin: origin,
+            completesFlow: self.settings.onboardingCompleted
+        )
     }
 
     private func completeCurrentStep(
@@ -2310,25 +2324,62 @@ private extension OnboardingFlowView {
             isRecordingShortcut: self.isRecordingPrimaryShortcut,
             onBack: self.goBack,
             onSkip: {
-                let origin = self.settings.analyticsOnboardingOrigin
                 self.markAISkipped()
-                self.finishOnboardingAtGettingStarted()
-                self.completeCurrentStep(
-                    outcome: .skipped,
-                    origin: origin,
-                    completesFlow: self.settings.onboardingCompleted
-                )
+                self.goNext(outcome: .skipped)
             },
             onFinishSetup: {
-                let origin = self.settings.analyticsOnboardingOrigin
-                self.finishOnboardingAtGettingStarted()
-                self.completeCurrentStep(
-                    outcome: .completed,
-                    origin: origin,
-                    completesFlow: self.settings.onboardingCompleted
-                )
+                self.goNext(outcome: .completed)
             }
         )
+    }
+
+    var meetingLocationStep: some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
+
+            OnboardingFittedContent(width: 760) {
+                VStack(spacing: self.theme.metrics.spacing.lg) {
+                    FluidOnboardingCompactAppIconMark(size: 66)
+                        .padding(.bottom, self.theme.metrics.spacing.sm)
+
+                    Text(PichiLocalization.text("Meeting location"))
+                        .font(self.theme.typography.title)
+                        .foregroundStyle(self.theme.palette.primaryText)
+                        .multilineTextAlignment(.center)
+
+                    Text(PichiLocalization.text("Optional: Add the meeting address using your location."))
+                        .font(self.theme.typography.body)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    MeetingLocationSettingsContent()
+                        .frame(maxWidth: 560, alignment: .leading)
+                        .padding(self.theme.metrics.spacing.lg)
+                        .background(
+                            self.theme.palette.cardBackground,
+                            in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg)
+                        )
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, self.theme.metrics.spacing.xxl)
+                .padding(.vertical, self.theme.metrics.spacing.xl)
+            }
+
+            self.cinematicFooter(
+                continueTitle: "Finish Setup",
+                canContinue: self.canContinue,
+                continueAction: self.handlePrimaryAction,
+                skipTitle: "Not now",
+                canSkip: true,
+                skipAction: {
+                    self.appServices.meetingLocation.setEnabled(false)
+                    self.finishLocationStep(outcome: .skipped)
+                }
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("onboarding.meeting-location")
     }
 
     var orderedOnboardingInputDevices: [AudioDevice.Device] {

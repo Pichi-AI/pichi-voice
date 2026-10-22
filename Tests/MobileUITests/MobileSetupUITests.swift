@@ -58,21 +58,29 @@ final class MobileSetupUITests: XCTestCase {
         XCTAssertEqual(app.alerts.count, 0, "Showing enrollment must not request microphone permission")
         app.buttons["onboarding.skip"].tap()
         capture("flow-06-skipped-voice")
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.5"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.switches["meetingLocation.enabled"].value as? String, "0")
+        XCTAssertEqual(app.alerts.count, 0, "Showing the optional location page must not request permission")
+        XCTAssertEqual(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.count, 0)
+        capture("flow-07-location-offer")
+        app.buttons["onboarding.skip"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.6"].firstMatch.waitForExistence(timeout: 10))
+        capture("flow-08-skipped-location")
         app.buttons["onboarding.next"].tap()
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
-        capture("flow-07-normal-app")
+        capture("flow-09-normal-app")
         app.terminate()
         app.launch()
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
         XCTAssertFalse(app.buttons["onboarding.next"].exists)
-        capture("flow-08-restart")
+        capture("flow-10-restart")
     }
 
     /// Argument-domain page selection is only a native layout review. It does not
     /// claim that static pages prove downloads, model accuracy or enrollment acceptance.
     func testRussianNativeSetupPagesInBothAppearances() {
         let app = XCUIApplication()
-        let steps = ProcessInfo.processInfo.environment["PICHI_SETUP_MODEL_CHOICE_ONLY"] == "1" ? [1] : Array(0...5)
+        let steps = ProcessInfo.processInfo.environment["PICHI_SETUP_MODEL_CHOICE_ONLY"] == "1" ? [1] : Array(0...6)
         for appearance in ["light", "dark"] {
             for step in steps {
                 app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance,
@@ -82,6 +90,89 @@ final class MobileSetupUITests: XCTestCase {
                 capture("native-ru-\(appearance)-step\(step)")
                 XCTAssertEqual(app.alerts.count, 0)
                 if step == 4 { XCTAssertFalse(app.buttons["ownerVoice.stop"].exists) }
+                app.terminate()
+            }
+        }
+    }
+
+    /// Parent stages MobileSetupStep=5 in the owned simulator's persistent domain.
+    /// Launch arguments must not override the step being changed by real Next/Skip.
+    func testLocationSetupCanAdvanceWithoutPermission() {
+        let app = XCUIApplication()
+        let language = ProcessInfo.processInfo.environment["PICHI_LOCATION_TEST_LANGUAGE"] ?? "ru"
+        app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", "light", "-MobileSetupVersion", "0"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.5"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.switches["meetingLocation.enabled"].exists)
+        XCTAssertEqual(app.switches["meetingLocation.enabled"].value as? String, "0")
+        XCTAssertEqual(app.alerts.count, 0)
+        XCTAssertEqual(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.count, 0)
+        capture("location-\(language)-optional-offer")
+        app.buttons["onboarding.next"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.6"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.alerts.count, 0, "Location authorization is optional for completing setup")
+        XCTAssertEqual(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.count, 0)
+        capture("location-\(language)-advanced-without-permission")
+        app.terminate()
+    }
+
+    func testLocationPreferencePersistsInSettingsAfterPermissionDenial() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light", "-MobileSetupVersion", "1"]
+        app.launch()
+        openRecording(in: app)
+        let location = app.switches["meetingLocation.enabled"]
+        revealLocationSwitch(in: app)
+        XCTAssertEqual(location.value as? String, "0", "Run on a fresh task-owned application container")
+        capture("location-settings-00-disabled")
+        try tapNativeSwitch("meetingLocation.enabled", in: app)
+        dismissLocationPermissionIfPresented()
+        XCTAssertEqual(location.value as? String, "1")
+        XCTAssertTrue(app.buttons["meetingLocation.openSettings"].exists)
+        capture("location-settings-01-enabled-denied")
+        app.terminate()
+        app.launch()
+        openRecording(in: app)
+        revealLocationSwitch(in: app)
+        XCTAssertEqual(location.value as? String, "1")
+        XCTAssertEqual(app.alerts.count, 0, "Restarting must not request location authorization")
+        XCTAssertEqual(XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.count, 0)
+        capture("location-settings-02-restart-enabled")
+        app.terminate()
+    }
+
+    func testLocationSetupSkipDisablesPreference() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark", "-MobileSetupVersion", "0"]
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.5"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertEqual(app.switches["meetingLocation.enabled"].value as? String, "1")
+        capture("location-setup-03-enabled")
+        app.buttons["onboarding.skip"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.6"].firstMatch.waitForExistence(timeout: 10))
+        capture("location-setup-04-skipped")
+        app.terminate()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark", "-MobileSetupVersion", "1"]
+        app.launch()
+        openRecording(in: app)
+        revealLocationSwitch(in: app)
+        XCTAssertEqual(app.switches["meetingLocation.enabled"].value as? String, "0")
+        XCTAssertFalse(app.buttons["onboarding.next"].exists, "Completed installations stay completed")
+        capture("location-settings-05-restart-disabled")
+        app.terminate()
+    }
+
+    func testLocationPageInBothLanguagesAndThemes() {
+        let app = XCUIApplication()
+        for language in ["ru", "en"] {
+            for appearance in ["light", "dark"] {
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                       "-MobileSetupVersion", "0", "-MobileSetupStep", "5"]
+                app.launch()
+                XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.5"].firstMatch.waitForExistence(timeout: 15))
+                XCTAssertTrue(app.switches["meetingLocation.enabled"].exists)
+                XCTAssertEqual(app.alerts.count, 0)
+                capture("location-page-\(language)-\(appearance)")
                 app.terminate()
             }
         }
@@ -148,6 +239,43 @@ final class MobileSetupUITests: XCTestCase {
         else { app.tabBars.buttons["Настройки"].tap() }
         XCTAssertTrue(app.buttons["settings.privacy"].waitForExistence(timeout: 10))
         app.buttons["settings.privacy"].tap()
+    }
+
+    private func openRecording(in app: XCUIApplication) {
+        let sidebar = app.buttons["navigation.settings"]
+        if sidebar.waitForExistence(timeout: 2) { sidebar.tap() }
+        else { app.tabBars.buttons["Настройки"].tap() }
+        XCTAssertTrue(app.buttons["settings.recording"].waitForExistence(timeout: 10))
+        capture("location-settings-open-root")
+        app.buttons["settings.recording"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["settings.recording.detail"].firstMatch.waitForExistence(timeout: 10))
+        capture("location-settings-open-recording")
+    }
+
+    private func revealLocationSwitch(in app: XCUIApplication) {
+        let location = app.switches["meetingLocation.enabled"]
+        for step in 0..<6 where !location.isHittable {
+            app.swipeUp()
+            capture("location-settings-scroll-\(step)")
+        }
+        XCTAssertTrue(location.isHittable)
+    }
+
+    private func dismissLocationPermissionIfPresented() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        let appeared = alert.waitForExistence(timeout: 15)
+        if ProcessInfo.processInfo.environment["PICHI_LOCATION_EXPECT_PERMISSION_PROMPT"] == "1" {
+            XCTAssertTrue(appeared, "Fresh owned simulator must show the actual location permission prompt")
+        }
+        if appeared {
+            capture("location-settings-system-permission")
+            let deny = alert.buttons.matching(NSPredicate(format: "label IN %@",
+                ["Don’t Allow", "Don't Allow", "Don’t allow", "Don't allow", "Не разрешать", "Запретить"])).firstMatch
+            XCTAssertTrue(deny.exists, "Only deny location in the task-owned simulator")
+            deny.tap()
+            capture("location-settings-permission-denied")
+        }
     }
 
     private func reveal(_ identifier: String, in app: XCUIApplication) {

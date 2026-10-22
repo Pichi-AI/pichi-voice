@@ -16,7 +16,7 @@ struct MobileOnboarding: View {
     @State private var error: String?
     @State private var operation: Task<Void, Never>?
     private var step: Int { settings.mobileSetupStep }
-    private let titles = ["Welcome", "Choose Voice Engine", "Automatic speaker labels", "Data cleanup", "My voice", "Ready to meet"]
+    private let titles = ["Welcome", "Choose Voice Engine", "Automatic speaker labels", "Data cleanup", "My voice", "Meeting location", "Ready to meet"]
 
     var body: some View {
         NavigationStack {
@@ -26,9 +26,9 @@ struct MobileOnboarding: View {
                         PichiBrandMark(size: 36, color: theme.palette.accent)
                         Text(AppBrand.appName).font(theme.typography.sectionTitle)
                         Spacer()
-                        Text("\(step + 1) / 6").font(theme.typography.caption).monospacedDigit()
+                        Text("\(step + 1) / \(titles.count)").font(theme.typography.caption).monospacedDigit()
                     }
-                    ProgressView(value: Double(step + 1), total: 6).accessibilityLabel(PichiLocalization.text("Setup progress"))
+                    ProgressView(value: Double(step + 1), total: Double(titles.count)).accessibilityLabel(PichiLocalization.text("Setup progress"))
                     Text(PichiLocalization.text(titles[step])).font(theme.typography.title)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("onboarding.step.\(step)")
@@ -108,6 +108,8 @@ struct MobileOnboarding: View {
             Text(PichiLocalization.text("Find a quiet place and read the phrase below. The microphone starts only when you choose Set up my voice. You can skip this step."))
                 .font(theme.typography.bodySmall)
             MeetingOwnerVoiceSettingsContent(audioArbiter: audioArbiter, microphone: nil)
+        case 5:
+            MeetingLocationSettingsContent()
         default:
             Label(PichiLocalization.text("Your meeting setup is ready"), systemImage: "checkmark.circle.fill")
                 .font(theme.typography.sectionTitle).foregroundStyle(theme.palette.success)
@@ -130,15 +132,18 @@ struct MobileOnboarding: View {
                     .disabled(advancing).accessibilityIdentifier("onboarding.back")
             }
             Spacer()
-            if step == 4 {
-                Button(PichiLocalization.text("Skip")) { settings.mobileSetupStep = 5 }
+            if step == 4 || step == 5 {
+                Button(PichiLocalization.text("Skip")) {
+                    if step == 5 { AppServices.shared.meetingLocation.setEnabled(false) }
+                    settings.mobileSetupStep = step + 1
+                }
                     .disabled(advancing).accessibilityIdentifier("onboarding.skip")
             }
             if advancing {
                 Button(PichiLocalization.text("Cancel")) { operation?.cancel(); asr.cancelModelDownload() }
                     .accessibilityIdentifier("onboarding.cancel")
             }
-            Button(PichiLocalization.text(step == 5 ? "Get started" : error == nil ? "Next" : "Try again")) { next() }
+            Button(PichiLocalization.text(step == 6 ? "Get started" : error == nil ? "Next" : "Try again")) { next() }
                 .buttonStyle(.borderedProminent).foregroundStyle(theme.palette.accentForeground)
                 .disabled(advancing || (step == 3 && privacy.isPreparing))
                 .accessibilityIdentifier("onboarding.next")
@@ -164,7 +169,7 @@ struct MobileOnboarding: View {
                     try await asr.activateModel(selected)
                 case 2: try await required.prepare(modelID: settings.selectedSpeechModel.rawValue)
                 case 3: try await privacy.waitUntilReadyIfRequested()
-                case 5:
+                case 6:
                     // A restored final page cannot assume cache files survived an interruption.
                     let model = settings.selectedSpeechModel
                     if !(try await asr.modelIsInstalled(model)) { try await asr.downloadModel(model) }
@@ -174,7 +179,7 @@ struct MobileOnboarding: View {
                 }
                 try Task.checkCancellation()
                 guard settings.mobileSetupStep == current else { return }
-                if current == 5 { settings.mobileSetupCompleted = true }
+                if current == 6 { settings.mobileSetupCompleted = true }
                 else { settings.mobileSetupStep = current + 1 }
             } catch is CancellationError { }
             catch { self.error = error.localizedDescription }
