@@ -1374,6 +1374,15 @@ final class MobileNavigationUITests: XCTestCase {
             fragmentName.tap()
             let field = app.textFields["transcript.participant.name"]
             XCTAssertTrue(field.waitForExistence(timeout: 5))
+            // A fresh iPhone keyboard can present its own swipe-typing tutorial.
+            // Dismiss only this observed system hint before reviewing the app editor.
+            let typingHint = app.staticTexts["Speed up your typing by sliding your finger across the letters to compose a word."]
+            if typingHint.waitForExistence(timeout: 0.5) {
+                let proceed = app.buttons["Continue"]
+                XCTAssertTrue(proceed.exists && proceed.isHittable)
+                proceed.tap()
+                capture("inline-participant-\(language)-keyboard-hint-dismissed")
+            }
             XCTAssertEqual(app.buttons["transcript.participant.markYou"].label, thisIsMe)
             XCTAssertTrue(app.buttons["transcript.participant.changeSpeaker"].exists,
                           "Fragment attribution remains accessible from its name")
