@@ -4503,8 +4503,8 @@ extension DictationE2ETests {
             SettingsStore.shared.customDictionaryEntries = []
             ASRService.invalidateDictionaryCache()
             XCTAssertEqual(
-                ASRService.applyCustomDictionary("Ask claud to log it in post hoc for fluid voice."),
-                "Ask Claude to log it in PostHog for FluidVoice."
+                ASRService.applyCustomDictionary("Ask claud to log it in post hoc for \(AppBrand.appName.lowercased())."),
+                "Ask Claude to log it in PostHog for \(AppBrand.appName)."
             )
 
             // A user mapping for the same spelling replaces the built-in one.
@@ -4523,8 +4523,8 @@ extension DictationE2ETests {
             SettingsStore.shared.customDictionaryEntries = [.init(triggers: ["post hoc analysis"], replacement: "post hoc analysis")]
             ASRService.invalidateDictionaryCache()
             XCTAssertEqual(
-                ASRService.applyCustomDictionary("🙂 post hoc analysis; log it in post hoc for fluid voice."),
-                "🙂 post hoc analysis; log it in PostHog for FluidVoice."
+                ASRService.applyCustomDictionary("🙂 post hoc analysis; log it in post hoc for \(AppBrand.appName.lowercased())."),
+                "🙂 post hoc analysis; log it in PostHog for \(AppBrand.appName)."
             )
         }
     }
@@ -4547,7 +4547,7 @@ extension DictationE2ETests {
         self.withRestoredDefaults(keys: [self.customDictionaryEntriesKey]) {
             SettingsStore.shared.customDictionaryEntries = [.init(triggers: ["Claude Code"], replacement: "My Assistant")]
             ASRService.invalidateDictionaryCache()
-            XCTAssertEqual(ASRService.applyCustomDictionary("open claud code and fluid voice"), "open My Assistant and FluidVoice")
+            XCTAssertEqual(ASRService.applyCustomDictionary("open claud code and \(AppBrand.appName.lowercased())"), "open My Assistant and \(AppBrand.appName)")
         }
     }
 

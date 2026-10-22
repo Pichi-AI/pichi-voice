@@ -20,6 +20,7 @@ Sources/Fluid/Services/ASRService+iOS.swift
 Sources/Fluid/Services/AudioBufferConverter.swift
 Sources/Fluid/Services/AudioSpectrumMeter.swift
 Sources/Fluid/Services/AutomaticDictionaryCorrectionDetector.swift
+Sources/Fluid/Services/BuiltInDictionary.swift
 Sources/Fluid/Services/CompactSpeechModelReleaseCatalog.swift
 Sources/Fluid/Services/DebugLogger.swift
 Sources/Fluid/Services/DictionaryAudioInspection.swift

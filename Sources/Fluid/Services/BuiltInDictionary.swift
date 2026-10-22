@@ -8,7 +8,7 @@ nonisolated enum BuiltInDictionary {
         .init(triggers: ["claud", "clawed"], replacement: "Claude"),
         .init(triggers: ["post hoc"], replacement: "PostHog"),
         .init(triggers: ["huggingface", "hugging face"], replacement: "Hugging Face"),
-        .init(triggers: ["fluid voice"], replacement: "FluidVoice"),
+        .init(triggers: [AppBrand.appName.lowercased()], replacement: AppBrand.appName),
     ]
 
     /// Built-in entries without any spelling the user already maps, so the user's choice wins.
