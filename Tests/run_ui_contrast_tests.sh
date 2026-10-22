@@ -455,7 +455,7 @@ mobile_source = Path('Sources/Mobile/MobileMeetingRoot.swift').read_text()
 if 'MeetingSpeakerPalette.labelColor(' in mobile_source:
     expected_speaker_calls['Sources/Mobile/MobileMeetingRoot.swift'] = ['tintIndices', 'labelColor', 'labelColor']
     assert 'MeetingSpeakerPalette.tintIndices(for: session.speakers)' in mobile_source
-    for participant in ('colorIndex', 'participantIndex'):
+    for participant in ('colorIndex', 'presentation.participantIndex'):
         assert f'MeetingSpeakerPalette.labelColor(forSpeakerIndex: {participant},' in mobile_source
 assert speaker_calls == expected_speaker_calls, f'Uncovered production speaker palette caller: {speaker_calls}'
 for marker in ('    private var fill: Color {', '    private var isMicrophone: Bool {'):
