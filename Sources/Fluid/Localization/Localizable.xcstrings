@@ -43671,6 +43671,23 @@
         }
       }
     },
+    "Your meetings, models and voice profile are kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your meetings, models and voice profile are kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встречи, модели и голосовой профиль сохранятся."
+          }
+        }
+      }
+    },
     "Your mic will record the room.": {
       "extractionState": "manual",
       "localizations": {

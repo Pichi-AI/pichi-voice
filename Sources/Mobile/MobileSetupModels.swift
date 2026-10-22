@@ -16,6 +16,11 @@ extension SettingsStore {
         get { min(6, max(0, defaults.integer(forKey: Self.mobileSetupStepKey))) }
         set { objectWillChange.send(); defaults.set(min(6, max(0, newValue)), forKey: Self.mobileSetupStepKey) }
     }
+    /// Replay starts setup at its first page; meetings, models, privacy and the voice profile stay.
+    func resetMobileSetupProgress() {
+        mobileSetupStep = 0
+        mobileSetupCompleted = false
+    }
     var mobileSetupSelectedModel: SpeechModel? {
         get { defaults.string(forKey: Self.mobileSetupModelKey).flatMap(SpeechModel.init(rawValue:)) }
         set { defaults.set(newValue?.rawValue, forKey: Self.mobileSetupModelKey) }

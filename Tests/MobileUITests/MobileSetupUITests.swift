@@ -116,6 +116,25 @@ final class MobileSetupUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Parent stages a completed setup (MobileSetupVersion=1) in the owned simulator's persistent domain.
+    /// A launch argument would pin completion, so replay must change the stored value.
+    func testReplayOnboardingReturnsToWelcome() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light"]
+        app.launch()
+        let sidebar = app.buttons["navigation.settings"]
+        if sidebar.waitForExistence(timeout: 10) { sidebar.tap() }
+        else { app.tabBars.buttons["Настройки"].tap() }
+        let replay = app.buttons["settings.replaySetup"]
+        XCTAssertTrue(replay.waitForExistence(timeout: 10))
+        XCTAssertTrue(replay.isEnabled, "Replay is available while no meeting is active")
+        capture("replay-00-settings")
+        replay.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 10))
+        capture("replay-01-welcome")
+        app.terminate()
+    }
+
     func testLocationPreferencePersistsInSettingsAfterPermissionDenial() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light", "-MobileSetupVersion", "1"]
