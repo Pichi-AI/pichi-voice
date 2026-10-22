@@ -23,6 +23,7 @@ Sources/Fluid/Services/AutomaticDictionaryCorrectionDetector.swift
 Sources/Fluid/Services/CompactSpeechModelReleaseCatalog.swift
 Sources/Fluid/Services/DebugLogger.swift
 Sources/Fluid/Services/DictionaryAudioInspection.swift
+Sources/Fluid/Services/DictionaryAudioSpan.swift
 Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift
 Sources/Fluid/Services/DictionaryExperimentalMatcher.swift
 Sources/Fluid/Services/DictionaryLearningEvidence.swift
@@ -33,6 +34,7 @@ Sources/Fluid/Services/DictionaryPronunciationExperiment.swift
 Sources/Fluid/Services/DictionaryPronunciationReferences.swift
 Sources/Fluid/Services/DictionaryReplacementProtection.swift
 Sources/Fluid/Services/DictionaryTemporalEncoder.swift
+Sources/Fluid/Services/DictionaryStampMatcher.swift
 Sources/Fluid/Services/DictionaryTrainingEndpointDetector.swift
 Sources/Fluid/Services/ExternalCoreMLModelRegistry.swift
 Sources/Fluid/Services/ExternalCoreMLTranscriptionProvider.swift
