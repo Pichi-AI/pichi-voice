@@ -1992,7 +1992,8 @@ final class MobileNavigationUITests: XCTestCase {
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@",
             "transcript.participant.actions.")).count, 0, "Participant names need no separate ellipsis", file: file, line: line)
         for name in names.allElementsBoundByIndex {
-            XCTAssertGreaterThanOrEqual(name.frame.height, 44, file: file, line: line)
+            // Accessibility may report an exact 44pt control as 43.99999999999994.
+            XCTAssertGreaterThanOrEqual(name.frame.height + 0.000001, 44, file: file, line: line)
             XCTAssertLessThanOrEqual(name.frame.height, 60,
                 "Participant names must remain compact labels rather than tall, narrow word fragments",
                 file: file, line: line)
