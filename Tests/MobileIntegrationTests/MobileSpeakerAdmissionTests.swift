@@ -256,7 +256,8 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
             attempt: attempt, state: state)
         XCTAssertEqual(ambiguous.speakers.count, 2)
         XCTAssertTrue(ambiguous.speakers.allSatisfy { !$0.isLocalUser })
-        XCTAssertEqual(ambiguous.speakers.first(where: { $0.id == owner.id })?.displayName, "Speaker 1")
+        XCTAssertEqual(ambiguous.speakers.first(where: { $0.id == owner.id })?.displayName, "Speaker 2",
+            "An initially confirmed owner had no published number; demotion must preserve the other speaker's number 1")
         let next = try state.begin(attemptID: attempt)
         state.end()
         XCTAssertTrue(next.speakers.allSatisfy { !$0.isLocalUser }, "Revocation must survive the runtime's next begin")
@@ -286,6 +287,51 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
     }
 
     @MainActor
+    func testConfirmedOwnerAndOtherNumberSurviveStopAndFreshStoreReopen() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("OwnerStop-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "OwnerStop.\(UUID())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .parakeetTDTv2
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let store = MeetingSessionStore(rootDirectory: root)
+        let processing = OwnerCheckpointProcessing(completesUsingCheckpoint: true)
+        let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic-mic",
+            sourceDisplayName: "Synthetic microphone", format: nil,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: [])
+        let coordinator = MeetingSessionCoordinator(store: store, capture: OwnerCheckpointCapture(track: track),
+            processing: processing, audioArbiter: OwnerCheckpointArbiter(), settings: settings)
+        addTeardownBlock { await coordinator.shutdownForTermination() }
+        var configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic owner Stop",
+            microphone: .init(captureDeviceID: "synthetic-mic", displayName: "Synthetic microphone"))
+        configuration.languageCode = "en"
+        configuration.audioStorageMode = .memoryOnly
+        configuration.transcriptionBackendID = MeetingBackendID.productionDefault.rawValue
+        let session = try await coordinator.startRecording(configuration: configuration)
+        let attempt = UUID(), identity = MeetingPCMIdentityState()
+        let anonymous = try self.ownerBatch(current: [profile(track: track.id, epoch: 0),
+            profile(track: track.id, epoch: 0, slot: 1, angle: 0.3)], attempt: attempt, state: identity)
+        XCTAssertTrue(anonymous.speakers.allSatisfy { !$0.isLocalUser })
+        XCTAssertEqual(anonymous.speakers.map(\.generatedParticipantNumber), [1, 2])
+        try await processing.checkpoint(anonymous)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: track.id, ordinal: 0), label: "slot-0")
+        let promoted = MeetingTranscriptAssembler.applyingLocalUserTokens(to: anonymous.speakers,
+            attemptID: attempt, tokens: [token], speakerNameFormat: "Frozen %lld")
+        try await processing.checkpoint(.init(segments: [], speakers: promoted))
+        XCTAssertEqual(coordinator.activeSession?.speakers.filter(\.isLocalUser).count, 1)
+        let stopped = try await coordinator.stopAndTranscribe()
+        let stored = try await MeetingSessionStore(rootDirectory: root).load(id: session.id)
+        let reopened = try XCTUnwrap(stored)
+        XCTAssertEqual(stopped.state, .completed)
+        XCTAssertEqual(reopened.speakers, stopped.speakers)
+        XCTAssertEqual(reopened.speakers.map(\.id), anonymous.speakers.map(\.id))
+        XCTAssertEqual(reopened.speakers.map(\.generatedParticipantNumber), [1, 2])
+        XCTAssertEqual(reopened.speakers.filter(\.isLocalUser).map(\.id), promoted.filter(\.isLocalUser).map(\.id))
+        XCTAssertEqual(reopened.transcriptSegments, anonymous.segments)
+    }
+
     func testDurablePCMCheckpointsPromoteAndRevokeOwnerWithoutReplacingManualAliases() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("OwnerCheckpoint-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -357,6 +403,8 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
 @MainActor
 private final class OwnerCheckpointProcessing: MeetingProcessingControlling {
     private var operation: (@MainActor (MeetingPCMTranscriptBatch) async throws -> Void)?
+    private let completesUsingCheckpoint: Bool
+    init(completesUsingCheckpoint: Bool = false) { self.completesUsingCheckpoint = completesUsingCheckpoint }
     func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {
         try XCTUnwrap(MeetingTranscriptionBackendRegistry.makeDefault().descriptor(for: backendID))
     }
@@ -368,7 +416,11 @@ private final class OwnerCheckpointProcessing: MeetingProcessingControlling {
     func cancelMemoryAudio(sessionID: MeetingSessionID) async { self.operation = nil }
     func process(session: MeetingSession, sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
-        throw CancellationError()
+        guard self.completesUsingCheckpoint else { throw CancellationError() }
+        var attempt = try XCTUnwrap(session.processingAttempts.last)
+        attempt.stage = .completed
+        attempt.completedAt = Date()
+        return .init(speakers: session.speakers, segments: session.transcriptSegments, attempt: attempt)
     }
 }
 

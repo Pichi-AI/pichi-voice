@@ -15,6 +15,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     private let verifyOwnerDuringCapture: Bool
     private let ownerVerificationPolicy: MeetingOwnerVoiceVerifier.Policy
     private let preserveOwnerCadenceAtEOF: Bool
+    private let preserveOwnerEvidenceOnInconclusiveRefresh: Bool
     private let onProgress: @Sendable (MeetingStreamingPCMObservation) async throws -> Void
     private let lock = NSLock()
     private var busy = false
@@ -27,8 +28,8 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
     private var speakers: [MeetingSessionSpeaker] = []
     private var ownerSamples: MeetingStreamingOwnerVoiceSamples?
     /// The clip lengths belong to this exact encoded profile, including when another
-    /// slot alone supplies the next inference batch. Keeping one value prevents stale
-    /// eligibility from surviving a missing, invalid or replaced encoder result.
+    /// slot alone supplies the next inference batch. In the continuity recipe an unavailable
+    /// refresh retains this exact proof; only a complete measurement replaces it.
     private nonisolated struct OwnerProfileEvidence: Sendable {
         let profile: MeetingSpeakerVoiceProfile
         let clipFrames: [Int]?
@@ -51,6 +52,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
          verifyOwnerDuringCapture: Bool = false,
          ownerVerificationPolicy: MeetingOwnerVoiceVerifier.Policy = .streamingV2,
          preserveOwnerCadenceAtEOF: Bool = false,
+         preserveOwnerEvidenceOnInconclusiveRefresh: Bool = false,
          onProgress: @escaping @Sendable (MeetingStreamingPCMObservation) async throws -> Void) {
         self.runtime = runtime
         self.asr = asr
@@ -63,6 +65,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         self.verifyOwnerDuringCapture = verifyOwnerDuringCapture && collectOwnerEvidence
         self.ownerVerificationPolicy = ownerVerificationPolicy
         self.preserveOwnerCadenceAtEOF = preserveOwnerCadenceAtEOF
+        self.preserveOwnerEvidenceOnInconclusiveRefresh = preserveOwnerEvidenceOnInconclusiveRefresh
         self.onProgress = onProgress
         self.ownerSamples = collectOwnerEvidence
             ? .init(epoch: .init(trackID: trackID, ordinal: 0), useAdaptiveOwnerEvidence: useAdaptiveOwnerEvidence) : nil
@@ -299,6 +302,13 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         do { profiles = try await self.runtime.speakerVoiceProfiles(samples: samples) }
         catch {
             try Task.checkCancellation()
+            if self.preserveOwnerEvidenceOnInconclusiveRefresh {
+                self.incompleteOwnerProfiles.formUnion(samples.map(\.token))
+                self.traceOwnerDecision(encodedProfiles: 0, candidateProfiles: self.ownerProfiles.count,
+                    fullEvidenceProfiles: self.ownerProfiles.values.filter { $0.clipFrames == [80_000, 80_000] }.count,
+                    outcome: "encoderUnavailablePreserved", final: final, since: began)
+                return
+            }
             self.ownerEncoderUnavailable = true
             self.ownerProfiles.removeAll(keepingCapacity: false)
             self.confirmedOwnerTokens.removeAll(keepingCapacity: false)
@@ -317,14 +327,33 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
             let complete = !foreignResults && MeetingOwnerVoiceVerifier.hasCompleteEncoderResults(samples: [sample], profiles: matches)
             if matches.count == 1, let profile = matches.first,
                self.ownerVerificationPolicy != .streamingV4 || complete {
+                if self.preserveOwnerEvidenceOnInconclusiveRefresh,
+                   self.confirmedOwnerTokens.contains(sample.token),
+                   self.ownerProfiles[sample.token]?.clipFrames == [80_000, 80_000],
+                   encodedClipFrames[sample.token] == [80_000, 80_000],
+                   let owner = self.runtime.ownerVoiceProfileSnapshot,
+                   let consistency = MeetingSpeakerVoiceMatcher.distance(profile, profile),
+                   consistency > self.ownerVerificationPolicy.maximumQuerySelfDistance,
+                   let reference = MeetingSpeakerVoiceMatcher.distance(profile,
+                       MeetingSpeakerVoiceProfile(token: profile.token, embeddings: owner.embeddings)),
+                   reference <= self.ownerVerificationPolicy.maximumReferenceDistance {
+                    // The new pair disagrees internally but every clip still fits enrollment.
+                    // It cannot establish a new identity or contradict the earlier coherent
+                    // full proof. Keep that proof, while forbidding any new promotion until
+                    // this slot supplies a conclusive replacement. A reference contradiction
+                    // or measured close rival still goes through the ordinary scorer below.
+                    self.incompleteOwnerProfiles.insert(sample.token)
+                    continue
+                }
                 self.ownerProfiles[sample.token] = .init(profile: profile, clipFrames: encodedClipFrames[sample.token])
                 self.incompleteOwnerProfiles.remove(sample.token)
             } else {
-                self.ownerProfiles[sample.token] = nil
+                if !self.preserveOwnerEvidenceOnInconclusiveRefresh { self.ownerProfiles[sample.token] = nil }
                 if self.ownerVerificationPolicy == .streamingV4 { self.incompleteOwnerProfiles.insert(sample.token) }
             }
         }
-        if self.ownerVerificationPolicy == .streamingV4, !self.incompleteOwnerProfiles.isEmpty {
+        if self.ownerVerificationPolicy == .streamingV4, !self.incompleteOwnerProfiles.isEmpty,
+           !self.preserveOwnerEvidenceOnInconclusiveRefresh {
             // Persist the blocker across other slots' batches and unchanged EOF. Only a
             // valid replacement for each missing competitor can restore complete scoring.
             self.confirmedOwnerTokens.removeAll(keepingCapacity: false)
@@ -341,12 +370,17 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
         let diagnosticObserver = MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: samples, profiles: candidates,
             streaming: true, clipFramesByToken: clipFramesByToken)
         var decisionOutcome: MeetingOwnerVoiceVerifier.Diagnostics.Outcome?
-        self.confirmedOwnerTokens = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.runtime.ownerVoiceProfileSnapshot,
+        let measuredOwnerTokens = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.runtime.ownerVoiceProfileSnapshot,
             profiles: candidates, policy: self.ownerVerificationPolicy, clipFramesByToken: clipFramesByToken,
             diagnostics: { details in
                 decisionOutcome = details.outcome
                 diagnosticObserver?(details)
             })
+        // Missing evidence cannot promote an unverified identity or restore an earlier
+        // decision after a measured contradiction. Complete cached competitors still rank,
+        // so a measured rival or replacement can revoke the incumbent immediately.
+        self.confirmedOwnerTokens = self.preserveOwnerEvidenceOnInconclusiveRefresh && !self.incompleteOwnerProfiles.isEmpty
+            ? self.confirmedOwnerTokens.intersection(measuredOwnerTokens) : measuredOwnerTokens
         self.traceOwnerDecision(encodedProfiles: profiles.count, candidateProfiles: candidates.count,
             fullEvidenceProfiles: evidence.filter { $0.clipFrames == [80_000, 80_000] }.count,
             outcome: decisionOutcome?.rawValue ?? "unavailable", final: final, since: began)
@@ -362,6 +396,7 @@ final nonisolated class MeetingPreparedStreamingRuntime: MeetingPreparedStreamin
             "processedThroughSample": String(self.update.processedThroughSample),
             "encodedProfiles": String(encodedProfiles), "candidateProfiles": String(candidateProfiles),
             "fullEvidenceProfiles": String(fullEvidenceProfiles),
+            "inconclusiveRefreshProfiles": String(self.incompleteOwnerProfiles.count),
             "policy": self.ownerVerificationPolicy.diagnosticName,
             "decisionOutcome": outcome,
             "confirmedCount": String(self.confirmedOwnerTokens.count),

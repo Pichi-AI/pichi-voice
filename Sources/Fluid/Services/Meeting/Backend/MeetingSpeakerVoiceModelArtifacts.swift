@@ -114,9 +114,14 @@ extension MeetingNemotronModelProfile {
             ? ";owner-final=live-cadence-v1" : "")
     }
 
-    nonisolated var streamingImplementationFingerprint: String {
+    nonisolated var ownerV4CadenceStreamingImplementationFingerprint: String {
         self.ownerV4StreamingImplementationFingerprint + (self.supportsOwnerVoiceVerification
             ? ";owner-final=live-cadence-v1" : "")
+    }
+
+    nonisolated var streamingImplementationFingerprint: String {
+        self.ownerV4CadenceStreamingImplementationFingerprint + (self.supportsOwnerVoiceVerification
+            ? ";owner-refresh=measured-continuity-v1" : "")
     }
 
     /// Only exact compiled recipes are admitted. Anonymous and owner-v1 checkpoints keep
@@ -125,6 +130,7 @@ extension MeetingNemotronModelProfile {
         value == self.implementationFingerprint || value == self.legacyOwnerStreamingImplementationFingerprint
             || value == self.ownerV2StreamingImplementationFingerprint || value == self.ownerV3StreamingImplementationFingerprint
             || value == self.ownerV4StreamingImplementationFingerprint || value == self.ownerCadenceStreamingImplementationFingerprint
+            || value == self.ownerV4CadenceStreamingImplementationFingerprint
             || value == self.streamingImplementationFingerprint
     }
 
@@ -133,6 +139,7 @@ extension MeetingNemotronModelProfile {
             && (value == self.legacyOwnerStreamingImplementationFingerprint
                 || value == self.ownerV2StreamingImplementationFingerprint || value == self.ownerV3StreamingImplementationFingerprint
                 || value == self.ownerV4StreamingImplementationFingerprint || value == self.ownerCadenceStreamingImplementationFingerprint
+                || value == self.ownerV4CadenceStreamingImplementationFingerprint
                 || value == self.streamingImplementationFingerprint)
     }
 
@@ -140,22 +147,30 @@ extension MeetingNemotronModelProfile {
         self.supportsOwnerVoiceVerification
             && (value == self.ownerV2StreamingImplementationFingerprint || value == self.ownerV3StreamingImplementationFingerprint
                 || value == self.ownerV4StreamingImplementationFingerprint || value == self.ownerCadenceStreamingImplementationFingerprint
+                || value == self.ownerV4CadenceStreamingImplementationFingerprint
                 || value == self.streamingImplementationFingerprint)
     }
 
     nonisolated func verifiesLiveStreamingOwner(implementationFingerprint value: String) -> Bool {
         self.supportsOwnerVoiceVerification
             && (value == self.ownerV3StreamingImplementationFingerprint || value == self.ownerV4StreamingImplementationFingerprint
-                || value == self.ownerCadenceStreamingImplementationFingerprint || value == self.streamingImplementationFingerprint)
+                || value == self.ownerCadenceStreamingImplementationFingerprint || value == self.ownerV4CadenceStreamingImplementationFingerprint
+                || value == self.streamingImplementationFingerprint)
     }
 
     nonisolated func requiresFullStreamingOwnerEvidence(implementationFingerprint value: String) -> Bool {
         self.supportsOwnerVoiceVerification
-            && (value == self.ownerV4StreamingImplementationFingerprint || value == self.streamingImplementationFingerprint)
+            && (value == self.ownerV4StreamingImplementationFingerprint || value == self.ownerV4CadenceStreamingImplementationFingerprint
+                || value == self.streamingImplementationFingerprint)
     }
 
     nonisolated func preservesStreamingOwnerCadenceAtEOF(implementationFingerprint value: String) -> Bool {
         self.supportsOwnerVoiceVerification
-            && (value == self.ownerCadenceStreamingImplementationFingerprint || value == self.streamingImplementationFingerprint)
+            && (value == self.ownerCadenceStreamingImplementationFingerprint || value == self.ownerV4CadenceStreamingImplementationFingerprint
+                || value == self.streamingImplementationFingerprint)
+    }
+
+    nonisolated func preservesStreamingOwnerEvidenceOnInconclusiveRefresh(implementationFingerprint value: String) -> Bool {
+        self.supportsOwnerVoiceVerification && value == self.streamingImplementationFingerprint
     }
 }

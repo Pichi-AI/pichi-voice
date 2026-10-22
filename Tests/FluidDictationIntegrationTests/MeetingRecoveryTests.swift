@@ -4260,7 +4260,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let first = try await coordinator.setLocalUserSpeaker(sessionID: session.id, speakerID: speakerA)
         var expectedSpeakers = session.speakers
         expectedSpeakers[0].isLocalUser = true
-        expectedSpeakers[0].generatedParticipantNumber = 0
+        expectedSpeakers[0].generatedParticipantNumber = 1
         XCTAssertEqual(first.speakers, expectedSpeakers)
         XCTAssertTrue(MeetingTranscriptExporter.text(for: first).contains("You:"))
         let repeated = try await coordinator.setLocalUserSpeaker(sessionID: session.id, speakerID: speakerA)
@@ -5466,7 +5466,7 @@ final class MeetingRecoveryTests: XCTestCase {
             sessionID: session.id,
             names: [speakerA: "Erik", speakerB: "Maya"]
         )
-        XCTAssertTrue(renamed.speakers.allSatisfy { $0.generatedParticipantNumber == nil })
+        XCTAssertEqual(renamed.speakers.map(\.generatedParticipantNumber), [1, 2])
         let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
 
         let namesByID = Dictionary(uniqueKeysWithValues: undone.speakers.map { ($0.id, $0.displayName) })

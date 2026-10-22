@@ -729,6 +729,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             implementationFingerprint: configuration.diarizationFingerprint)
         let preserveOwnerCadenceAtEOF = artifact.profile.preservesStreamingOwnerCadenceAtEOF(
             implementationFingerprint: configuration.diarizationFingerprint)
+        let preserveOwnerEvidenceOnInconclusiveRefresh = artifact.profile.preservesStreamingOwnerEvidenceOnInconclusiveRefresh(
+            implementationFingerprint: configuration.diarizationFingerprint)
         let idleResources = self.takeIdleResources()
         do {
             try idleResources?.claim(configuration: configuration, artifact: artifact)
@@ -746,7 +748,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                         useAdaptiveOwnerEvidence: adaptiveOwnerEvidence,
                         verifyOwnerDuringCapture: liveOwnerVerification,
                         ownerVerificationPolicy: ownerPolicy,
-                        preserveOwnerCadenceAtEOF: preserveOwnerCadenceAtEOF, onProgress: onProgress)
+                        preserveOwnerCadenceAtEOF: preserveOwnerCadenceAtEOF,
+                        preserveOwnerEvidenceOnInconclusiveRefresh: preserveOwnerEvidenceOnInconclusiveRefresh, onProgress: onProgress)
                     do {
                         try await body(session)
                         try Task.checkCancellation()
