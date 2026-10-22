@@ -515,6 +515,11 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         trackKind: MeetingAudioTrackKind = .microphone,
         resetBefore: Set<MeetingTranscriptSegmentID> = [], allowRecovery: Bool = true
     ) throws {
+        if self.policy.enableStableSpeakerOpening {
+            try self.applyExistingParticipantContext(to: &resolved, resetBefore: resetBefore,
+                allowContext: allowRecovery)
+            return
+        }
         guard self.policy.enableProvisionalSpeakerIdentities else { return }
         var state = self.provisionalPrefixState
         var speakerIndices = Dictionary(self.speakers.enumerated().map { ($0.element.id, $0.offset) },
@@ -638,6 +643,93 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
             speakerNameFormat: self.speakerNameFormat)
     }
 
+    /// Presentation-only fallback for a short unresolved run. It consumes no product identity,
+    /// does not replace an independently selected person and cannot sponsor acoustic admission.
+    /// Anchors come from the original independently supported words, never this pass's choices.
+    private func applyExistingParticipantContext(to resolved: inout [MeetingTranscriptSegment],
+        resetBefore: Set<MeetingTranscriptSegmentID>, allowContext: Bool
+    ) throws {
+        guard allowContext else { return }
+        let identities = Dictionary(self.speakers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func safe(_ index: Int) -> Bool {
+            let source = self.retained[index].original
+            return source.hasReadableContent && source.status == .final && source.completeness == .complete
+                && !source.isEcho && source.attributionState != .timingUncertain
+                && source.isUserSpeakerAssigned != true && source.nativePrecision == .word
+                && source.nativeUnitID?.isEmpty == false && source.nativeSpeakerAssignment != nil
+        }
+        func anchor(_ index: Int) -> (id: SessionSpeakerID, token: MeetingBackendSpeakerToken)? {
+            guard resolved.indices.contains(index), safe(index),
+                  let id = resolved[index].speakerID, let speaker = identities[id],
+                  speaker.mergedIntoSpeakerID == nil,
+                  case let .assigned(token) = resolved[index].nativeSpeakerAssignment,
+                  token.analysisEpochID == self.epoch,
+                  id == MeetingTranscriptAssembler.speakerID(attemptID: self.attemptID, token: token)
+            else { return nil }
+            if let summary = resolved[index].speakerAttribution {
+                guard summary.rule.isIndependentAcousticSelection, summary.selectedToken == token else { return nil }
+            }
+            return (id, token)
+        }
+        func neighborIndex(from initial: Int, step: Int) -> Int? {
+            var position = initial
+            while resolved.indices.contains(position) {
+                if resetBefore.contains(resolved[position].id) { return nil }
+                if self.retained[position].original.hasReadableContent { return position }
+                let source = self.retained[position].original
+                guard source.status == .final, source.completeness == .complete, !source.isEcho,
+                      source.attributionState != .timingUncertain, source.isUserSpeakerAssigned != true else { return nil }
+                position += step
+            }
+            return nil
+        }
+        var index = 0
+        while index < resolved.count {
+            try Task.checkCancellation()
+            guard resolved[index].speakerID == nil, safe(index) else { index += 1; continue }
+            let first = index
+            var last = index
+            while last + 1 < resolved.count, resolved[last + 1].speakerID == nil, safe(last + 1),
+                  !resetBefore.contains(resolved[last + 1].id),
+                  Self.timing(self.retained[last + 1].original).start - Self.timing(self.retained[last].original).end
+                    <= self.policy.maximumNeighborGapSeconds + self.policy.comparisonTolerance { last += 1 }
+            index = last + 1
+            let start = Self.timing(self.retained[first].original).start
+            let end = (first...last).map { Self.timing(self.retained[$0].original).end }.max()!
+            guard end - start <= self.policy.maximumUnknownRunSeconds + self.policy.comparisonTolerance else { continue }
+            var options: [(id: SessionSpeakerID, token: MeetingBackendSpeakerToken, gap: Double)] = []
+            if !resetBefore.contains(resolved[first].id), let position = neighborIndex(from: first - 1, step: -1),
+               let left = anchor(position) {
+                let gap = start - Self.timing(self.retained[position].original).end
+                if gap >= -self.policy.comparisonTolerance,
+                   gap <= self.policy.maximumNeighborGapSeconds + self.policy.comparisonTolerance {
+                    options.append((left.id, left.token, gap))
+                }
+            }
+            if let position = neighborIndex(from: last + 1, step: 1), let right = anchor(position) {
+                let gap = Self.timing(self.retained[position].original).start - end
+                if gap >= -self.policy.comparisonTolerance,
+                   gap <= self.policy.maximumNeighborGapSeconds + self.policy.comparisonTolerance {
+                    options.append((right.id, right.token, gap))
+                }
+            }
+            guard !options.isEmpty else { continue }
+            // A native cue for an already known person wins over distance. Otherwise choose
+            // the nearest real neighbor, with the preceding person as a deterministic tie.
+            let nativeTokens = Set((first...last).flatMap { self.retained[$0].original.nativeSpeakerAssignment?.tokens ?? [] })
+            let supported = options.filter { nativeTokens.contains($0.token) }
+            let chosen = (supported.isEmpty ? options : supported).min { $0.gap < $1.gap }!
+            for position in first...last {
+                let source = resolved[position]
+                resolved[position].speakerID = chosen.id
+                resolved[position].attributionState = .assigned
+                resolved[position].speakerIdentityIsProvisional = nil
+                resolved[position].speakerAttribution = .init(existingParticipantContext: source,
+                    token: chosen.token, speakerID: chosen.id, policy: self.policy)
+            }
+        }
+    }
+
     /// Final publication counterpart of the live protected tail. Call only after the owning
     /// privacy operation admitted all text. This reuses the same reading state without rerunning
     /// ASR, acoustic assignment, privacy or PCM assembly. Working text stays within one normal
@@ -649,7 +741,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         contextualBarrierEpochIDs: Set<MeetingAnalysisEpochID> = [],
         epochForSegment: (MeetingTranscriptSegment) -> MeetingAnalysisEpochID?
     ) throws -> MeetingPCMTranscriptBatch {
-        guard let policy, policy.enableProvisionalSpeakerIdentities else { return transcript }
+        guard let policy, policy.enableProvisionalSpeakerIdentities || policy.enableStableSpeakerOpening else { return transcript }
         _ = try policy.validated()
         guard transcript.speakers.count <= MeetingSessionSpeaker.maximumParticipants else { throw Failure.speakerLimit }
         var indicesByEpoch: [MeetingAnalysisEpochID: [Int]] = [:]
@@ -771,6 +863,20 @@ nonisolated struct MeetingVoicedSpeakerAdmission: Sendable {
 }
 
 private nonisolated extension MeetingTranscriptSpeakerAttribution {
+    init(existingParticipantContext source: MeetingTranscriptSegment, token: MeetingBackendSpeakerToken,
+         speakerID: SessionSpeakerID, policy: MeetingSpeakerAttributionPolicy) {
+        self.unitID = source.nativeUnitID!
+        self.rawAssignment = source.nativeSpeakerAssignment!
+        self.selectedToken = token
+        self.selectedSpeakerID = speakerID
+        self.candidates = source.speakerAttribution?.candidates ?? []
+        self.background = source.speakerAttribution?.background ?? []
+        self.relation = source.speakerAttribution?.relation ?? .none
+        self.rule = .existingParticipantContext
+        self.policyVersion = policy.schemaVersion
+        self.policyFingerprint = policy.fingerprint
+    }
+
     init(streamingSummary source: Self, knownToken: MeetingBackendSpeakerToken, speakerID: SessionSpeakerID) {
         self.unitID = source.unitID
         self.rawAssignment = source.rawAssignment
