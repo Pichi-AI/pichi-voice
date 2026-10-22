@@ -26,7 +26,7 @@ extension SettingsStore {
     func dictationPromptSelection(for _: DictationShortcutSlot) -> DictationPromptSelection {
         self.selectsPrivateCapability ? .privateAI : .default
     }
-    func resolvedDictationPromptSelection(for slot: DictationShortcutSlot, appBundleID: String?) -> DictationPromptSelection {
+    func resolvedDictationPromptSelection(for slot: DictationShortcutSlot, appBundleID: String?, privateAIAvailable: Bool? = nil) -> DictationPromptSelection {
         if let choice = DictationAppSession.shared.choice(for: slot, appID: appBundleID) { return choice }
         if let profile = self.resolvedDictationPromptProfile(for: slot, appBundleID: appBundleID) { return .profile(profile.id) }
         return UserDefaults.standard.values["synthetic-prompt-off"] as? Bool == true ? .off : self.dictationPromptSelection(for: slot)
@@ -45,6 +45,11 @@ extension SettingsStore {
     var selectedSpeechModel: SpeechModel { fatalError("Postprocess tests must never access an ASR model") }
 }
 enum PrivateAIProviderPromptFormat {
+    // Metadata-only warmup input. Any attempted model verification is outside this
+    // intercepted credential-admission probe and must fail rather than touch weights.
+    struct VerificationInput {
+        init(settings _: SettingsStore) {}
+    }
     static func verifiedModelID(settings: SettingsStore) -> String? {
         settings.privateCapabilityReady ? PrivateAIProviderFeature.shared.modelIDs().first : nil
     }

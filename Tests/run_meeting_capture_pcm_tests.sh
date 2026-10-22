@@ -7,7 +7,7 @@ trap 'rm -rf "$task_test_dir"' EXIT HUP INT TERM
 # The pipeline/metadata stubs isolate the transport from engine installation and application
 # composition. Actual PCM converter, format contract, sample copier and consumer are compiled.
 # Combined iOS/app tests separately verify real canonical batch/store integration.
-python3 - "$task_test_dir" <<'PY'
+python3 -S - "$task_test_dir" <<'PY'
 import pathlib, sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(pathlib.Path('Tests').resolve()))
@@ -24,8 +24,8 @@ speaker_contract += '\n'.join(declaration(evidence, marker) for marker in (
     'nonisolated struct MeetingAnalysisEpochID:',
     'nonisolated struct MeetingBackendSpeakerToken:',
 ))
-start = contract.index('nonisolated protocol MeetingMemoryAudioConsuming:')
-root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia\n' + speaker_contract + '\n' + contract[start:] + '\n'
+memory_contract = declaration(contract, 'nonisolated protocol MeetingMemoryAudioConsuming:') + '\n' + declaration(contract, 'extension MeetingMemoryAudioConsuming {')
+root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia\n' + speaker_contract + '\n' + memory_contract + '\n'
     + 'class MeetingProcessingPipeline {}\n'
     + 'final class DebugLogger: Sendable { static let shared = DebugLogger(); func info(_ message: String, source: String) {} }\n'
     + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = []; var protectedSourceThroughSample: Int? = nil }\n'
@@ -73,8 +73,10 @@ assert 'Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))' 
 root.joinpath('CaptureStop.swift').write_text(stop_probe)
 PY
 xcrun swiftc -parse-as-library -swift-version 6 \
+    -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
+    Sources/Fluid/Services/Meeting/MeetingMicrophonePCMNormalizer.swift \
     Sources/Fluid/Services/Meeting/Platform/MeetingCapturePCMTransport.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingPipeline+MemoryAudio.swift \
     Sources/Fluid/Services/Meeting/MeetingStreamingPCMController.swift \

@@ -34,6 +34,8 @@ while depth:
 entry = settings[entry_start:end]
 swift = r'''
 import Foundation
+// Only visual metadata is inert; the production save method and localizer remain unchanged.
+nonisolated enum AppBrand { static let appName = "Synthetic Test Voice" }
 // The production localizer can read preferences, but this control-flow probe must not.
 nonisolated final class UserDefaults: @unchecked Sendable {
     static let standard = UserDefaults()
@@ -427,18 +429,19 @@ actor SnapshotReader {
     }
 }
 '''.replace('ENTRY', entry)
-with tempfile.TemporaryDirectory(prefix="fluidvoice-dictionary-regression-") as directory:
+(repo / ".build").mkdir(exist_ok=True)
+with tempfile.TemporaryDirectory(prefix="dictionary-regression-", dir=repo / ".build") as directory:
     root = Path(directory)
     (root / 'dictionary-proof.swift').write_text(swift)
     subprocess.run([
-        'xcrun', 'swiftc', '-parse-as-library',
+        'xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(root / 'ModuleCache'),
         str(repo/'Sources/Fluid/Localization/PichiLocalization.swift'),
         str(root/'dictionary-proof.swift'), '-o', str(root/'dictionary-proof'),
     ], check=True, timeout=60)
     subprocess.run([str(root/'dictionary-proof')], check=True, timeout=60)
     (root / 'dictionary-isolation.swift').write_text(isolation_swift)
     subprocess.run([
-        'xcrun', 'swiftc', '-parse-as-library', '-swift-version', '6',
+        'xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(root / 'ModuleCache'), '-swift-version', '6',
         '-default-isolation', 'MainActor', '-strict-concurrency=complete', '-warnings-as-errors',
         str(root/'dictionary-isolation.swift'), '-o', str(root/'dictionary-isolation'),
     ], check=True, timeout=60)
