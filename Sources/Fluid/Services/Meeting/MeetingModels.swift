@@ -991,6 +991,20 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     /// A stable reading identity while acoustic identity is unresolved. Native assignments,
     /// timing and attribution summaries remain evidence and are never rewritten to claim it.
     var speakerIdentityIsProvisional: Bool? = nil
+    /// Privacy may replace real speech with a nonlexical mask. Preserve that admitted text
+    /// without mistaking ordinary punctuation or invisible ASR output for speech.
+    /// Optional so existing manifests retain their decoding and evidence.
+    var containsPrivacyReplacement: Bool? = nil
+
+    static func textContainsLexicalContent(_ text: String) -> Bool {
+        text.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+    }
+
+    var hasLexicalContent: Bool { Self.textContainsLexicalContent(self.text) }
+
+    var hasReadableContent: Bool {
+        self.hasLexicalContent || (self.containsPrivacyReplacement == true && !self.text.isEmpty)
+    }
 
     var isEcho: Bool {
         self.isLikelyEcho == true

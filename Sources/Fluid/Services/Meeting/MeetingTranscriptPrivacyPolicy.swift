@@ -200,6 +200,9 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
             for index in ordered {
                 copy[index].text = projected.canonical[index] ?? segments[index].text
                 copy[index].originalText = nil
+                if projected.redactions[index]?.isEmpty == false {
+                    copy[index].containsPrivacyReplacement = true
+                }
             }
             // A display prefix belongs to one source. Never join unrelated source contexts.
             if groups.count == 1, !provisionalSegmentIDs.isEmpty, let preview = projected.provisional {
