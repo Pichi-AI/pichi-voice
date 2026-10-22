@@ -124,10 +124,11 @@ enum FluidOnboardingMotion {
     static let breath = Animation.easeInOut(duration: 3.6).repeatForever(autoreverses: true)
     static let stagger: Double = 0.07
 
-    /// Content enters with a short rise and leaves by fading, so the shared backdrop stays still.
+    /// Content enters with a short rise; the previous step fades out quickly so the two never
+    /// read as a double exposure. The shared backdrop stays still.
     static let stepTransition = AnyTransition.asymmetric(
         insertion: .opacity.combined(with: .offset(y: 14)).combined(with: .scale(scale: 0.985)),
-        removal: .opacity
+        removal: .opacity.animation(.easeOut(duration: 0.14))
     )
 }
 
