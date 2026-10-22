@@ -43,9 +43,10 @@ accessibility = snippet(settings, '                                    Button("O
                         '                                }\n\n                                self.instructionsBox(')
 backup = snippet(settings, '                Button(action: self.exportBackup) {',
                  '                Button(action: self.importBackup) {')
-updates = snippet(settings, '                                Button("Check for Updates") {',
-                  '                                Button("Release Notes") {')
-for control in [microphone, accessibility, backup, updates]:
+updates = snippet(settings, '                Button(PichiLocalization.text(self.updateActionTitle)) {',
+                  '\n\n                if self.updater.availableUpdateVersion != nil {')
+update_title = declaration(Path(settings).read_text(), '    private var updateActionTitle:').replace('private ', '', 1)
+for control in [microphone, accessibility, backup]:
     assert control.count('.buttonStyle(AccentButtonStyle(compact: true))') == 1
     assert '.buttonStyle(.borderedProminent)' not in control
 # Accessibility environment values are read-only in this SDK. These additional
@@ -88,7 +89,9 @@ words = snippet('Sources/Fluid/UI/StatsShareCard.swift',
 def fallback(control):
     assert control.count('.fluidGlassAction(prominent: true)') == 1
     return control.replace('.fluidGlassAction(prominent: true)', '.buttonStyle(AccentButtonStyle())')
-choose, copy, explore = map(fallback, [choose, copy, explore])
+# The shipping updater now uses the same native glass primary action as these
+# controls. Use its exact documented fallback for raster-only evidence too.
+choose, copy, explore, updates = map(fallback, [choose, copy, explore, updates])
 Path(sys.argv[1]).write_text('import SwiftUI\n'
     'struct DeleteRoleFixture: View {\n'
     '    @Environment(\\.theme) private var theme\n'
@@ -139,7 +142,7 @@ with Path(sys.argv[1]).open('a') as output:
         ('MicrophonePermissionFixture', microphone, 'private struct ASR { func requestMicAccess() {} }; private let asr = ASR()'),
         ('AccessibilityPermissionFixture', accessibility, 'private func openAccessibilitySettings() {}'),
         ('BackupPrimaryActionFixture', backup, 'private func exportBackup() {}'),
-        ('UpdatePrimaryActionFixture', updates, 'private struct Updater { let isCheckingForUpdates = false; let isUpdateInProgress = false; func checkForUpdatesManually() {} }; private let updater = Updater()'),
+        ('UpdatePrimaryActionFixture', updates, 'private struct Updater { let isCheckingForUpdates = false; let isUpdateInProgress = false; let availableUpdateVersion: String? = nil; func checkForUpdatesManually() {}; func showAvailableUpdate() {} }; private let updater = Updater(); private let isRollingBack = false\n' + update_title),
     ]:
         output.write('struct ' + name + ': View {\n    ' + dependencies + '\n'
             '    var body: some View {\n' + control + '\n    }\n}\n')
