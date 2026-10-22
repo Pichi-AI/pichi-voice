@@ -360,7 +360,8 @@ nonisolated struct MeetingTranscriptAssembler {
             confirmedLocalUserTokens: input.confirmedLocalUserTokens,
             activity: evidence.speakerActivity,
             useVoicedAdmission: input.speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true,
-            useProvisionalIdentities: input.speakerAttributionPolicy?.enableProvisionalSpeakerIdentities == true
+            useProvisionalIdentities: input.speakerAttributionPolicy?.enableProvisionalSpeakerIdentities == true,
+            useStableSpeakerOpening: input.speakerAttributionPolicy?.enableStableSpeakerOpening == true
         )
         let speakerIDsByToken = Dictionary(
             speakers.map { ($0.token, $0.speaker.id) },
@@ -736,6 +737,7 @@ nonisolated struct MeetingTranscriptAssembler {
         activity: [MeetingBackendSpeakerActivity] = [],
         useVoicedAdmission: Bool = false,
         useProvisionalIdentities: Bool = false,
+        useStableSpeakerOpening: Bool = false,
         contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = [],
         voicedAdmissionUnitIDs: Set<String>? = nil,
         qualifiedNativeTokens: Set<MeetingBackendSpeakerToken> = []
@@ -743,6 +745,7 @@ nonisolated struct MeetingTranscriptAssembler {
         var tokens: [MeetingBackendSpeakerToken] = []
         var seen = Set<MeetingBackendSpeakerToken>()
         for (unit, _) in emitted {
+            if useStableSpeakerOpening, !MeetingTranscriptSegment.textContainsLexicalContent(unit.text) { continue }
             guard case let .assigned(token) = unit.speaker, seen.insert(token).inserted else { continue }
             tokens.append(token)
         }
@@ -759,9 +762,11 @@ nonisolated struct MeetingTranscriptAssembler {
         var unitIntervals: [MeetingBackendSpeakerToken: [MeetingAnalysisInterval]] = [:]
         var voicedUnitIntervals: [MeetingBackendSpeakerToken: [MeetingAnalysisInterval]] = [:]
         for (unit, _) in emitted {
+            if useStableSpeakerOpening, !MeetingTranscriptSegment.textContainsLexicalContent(unit.text) { continue }
             guard case let .assigned(token) = unit.speaker else { continue }
             if useVoicedAdmission {
-                guard unit.text.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }
+                guard useStableSpeakerOpening ? MeetingTranscriptSegment.textContainsLexicalContent(unit.text)
+                    : unit.text.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }
                 if voicedAdmissionUnitIDs?.contains(unit.id) != false,
                    !contextualBarriers.contains(where: { $0.analysisEpochID == unit.analysisEpochID
                        && min($0.interval.end, unit.analysisEnd) - max($0.interval.start, unit.analysisStart)
@@ -804,8 +809,32 @@ nonisolated struct MeetingTranscriptAssembler {
                 || secondsByIdentity[identity, default: 0] >= Self.minimumSpeakerSeconds
         }
         let tracksWithSubstantialSpeaker = Set(wordsByIdentity.keys.filter(isSubstantial).map(\.analysisEpochID.trackID))
+        // A first real lexical voice may be shown immediately. Once a track has an actual
+        // identity, an extra native slot must earn its own voiced qualification instead of
+        // consuming a product number for every brief or unstable bout.
+        let tracksWithPriorSpeaker = Set(trackKinds.keys.filter { trackID in
+            priorSpeakers.contains { $0.mergedIntoSpeakerID == nil
+                && $0.diarizationClusterID?.hasPrefix("\(trackID.uuidString)#") == true }
+        })
+        var firstTokenByTrack: [MeetingAudioTrackID: MeetingBackendSpeakerToken] = [:]
+        if useStableSpeakerOpening {
+            for (unit, _) in emitted {
+                guard MeetingTranscriptSegment.textContainsLexicalContent(unit.text),
+                      case let .assigned(token) = unit.speaker,
+                      firstTokenByTrack[unit.trackID] == nil else { continue }
+                firstTokenByTrack[unit.trackID] = token
+            }
+        }
         let speakingTokens = tokens.filter { token in
             let identity = canonicalByToken[token] ?? token
+            if useStableSpeakerOpening {
+                let id = Self.speakerID(attemptID: attemptID, token: identity)
+                let existing = priorSpeakers.contains { $0.id == id && $0.mergedIntoSpeakerID == nil }
+                return existing || qualifiedNativeTokens.contains(token) || isSubstantial(identity)
+                    || confirmedLocalUserTokens.contains(token)
+                    || (!tracksWithPriorSpeaker.contains(token.analysisEpochID.trackID)
+                        && firstTokenByTrack[token.analysisEpochID.trackID] == token)
+            }
             return useProvisionalIdentities || qualifiedNativeTokens.contains(token) || isSubstantial(identity)
                 || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
         }
@@ -923,6 +952,7 @@ nonisolated struct MeetingTranscriptAssembler {
                                          confirmedLocalUserTokens: confirmedLocalUserTokens, activity: activity,
                                          useVoicedAdmission: speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true,
                                          useProvisionalIdentities: speakerAttributionPolicy?.enableProvisionalSpeakerIdentities == true,
+                                         useStableSpeakerOpening: speakerAttributionPolicy?.enableStableSpeakerOpening == true,
                                          contextualBarriers: contextualBarriers,
                                          voicedAdmissionUnitIDs: voicedAdmissionUnitIDs)
         let speakerIDs = Dictionary(speakers.map { ($0.token, $0.speaker.id) }, uniquingKeysWith: { first, _ in first })

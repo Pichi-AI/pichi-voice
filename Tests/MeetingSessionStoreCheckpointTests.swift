@@ -1137,7 +1137,11 @@ struct MeetingSessionStoreCheckpointTests {
               "Attaching punctuation never claims a native speaker or changes silence timing")
         for symbol in ["(", "[", "«", "-", "\"", "🙂"] {
             var opener = baseline; opener.transcriptSegments[1].text = symbol
-            check(owner(opener) == nil, "Short nonlexical openers or symbols cannot enter the lexical residual path")
+            let before = opener
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: opener.transcriptSegments, in: opener)
+            check(paragraphs.allSatisfy { $0.segments.contains(where: \.hasReadableContent) }
+                  && opener == before && opener.transcriptSegments[1].speakerID == nil,
+                  "Adjacent symbols can be typography without a standalone row or new native identity")
         }
         var shortDigit = baseline; shortDigit.transcriptSegments[1].text = "7"
         check(owner(shortDigit) == firstSpeaker.id, "A bounded numeric lexical residual can remain with its adjacent outgoing voice")

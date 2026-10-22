@@ -71,6 +71,17 @@ private struct InvalidPreviewRedactor: TranscriptTextRedacting {
     }
 }
 
+private struct SymbolMaskRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let range = (text as NSString).range(of: "секрет")
+        guard range.location != NSNotFound else {
+            return .init(text: text, spans: [], provisionalSafeUTF16: text.utf16.count)
+        }
+        return .init(text: (text as NSString).replacingCharacters(in: range, with: "***"),
+            spans: [.init(range: range, replacement: "***")], provisionalSafeUTF16: text.utf16.count)
+    }
+}
+
 private struct InvalidOffsetRedactor: TranscriptTextRedacting {
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         .init(text: "[ИМЯ]", spans: [.init(range: NSRange(location: 1, length: 1), replacement: "[ИМЯ]")])
@@ -320,6 +331,20 @@ struct MeetingPrivacyContextTests {
             try check(final?.speakerNameFormat == "Frozen %lld", "Final privacy tail replaced the frozen speaker template")
         }
         try await sensitiveDictionarySuite()
+        do {
+            let word = segment("секрет", track: UUID(), start: 0)
+            let protected = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: [word]),
+                using: SymbolMaskRedactor(), provisionalPreviewID: UUID(), provisionalSegmentIDs: [word.id])
+            try check(protected.segments[0].text == "***" && !protected.segments[0].hasLexicalContent
+                      && protected.segments[0].hasReadableContent,
+                      "Actual symbolic privacy replacements retain readable speech provenance")
+            try check(protected.livePreview?.containsPrivacyReplacement == true,
+                      "The approved preview retains a symbolic privacy replacement")
+            let noise = segment("-", track: UUID(), start: 0)
+            let unchanged = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: [noise]), using: SymbolMaskRedactor())
+            try check(unchanged.segments[0].containsPrivacyReplacement == nil && !unchanged.segments[0].hasReadableContent,
+                      "Unchanged punctuation cannot manufacture privacy replacement provenance")
+        }
         try await speechBoundaryAdmissionSuite()
         try completedSpeechBoundaryPrecisionSuite()
         try await completedSpeechBoundaryContextSuite(using: StructuredPrivacyRedactor())

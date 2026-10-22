@@ -324,7 +324,8 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         // Combined regression: a short unresolved turn takes the real protected-tail path
         // after owner promotion, then merges through the coordinator and durable store.
         // Runtime refresh scoring has separate actual-source tests; this verifies its
-        // retained owner result is not erased by the new preliminary reading identity.
+        // retained owner result is not erased by unresolved reading text. With no nearby
+        // acoustic anchor, the brief reply remains unnamed and consumes no participant ID.
         let unresolved = MeetingTranscriptSegment(id: UUID(),
             start: .init(value: 20_100, timescale: 1_000),
             end: .init(value: 20_400, timescale: 1_000), sourceTrackID: track.id,
@@ -337,9 +338,10 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         let finalTail = try tail.finish(safeWords: .init(segments: [unresolved]), activity: [],
             watermarks: .init(asrStableThrough: 21, diarizationProcessedThrough: 21, privacySafeThrough: 21),
             attemptID: attempt, epoch: token.analysisEpochID)
-        let preliminaryID = try XCTUnwrap(finalTail.inserted.first?.speakerID)
-        XCTAssertFalse(anonymous.speakers.contains { $0.id == preliminaryID })
-        XCTAssertEqual(finalTail.inserted.first?.speakerIdentityIsProvisional, true)
+        XCTAssertNil(finalTail.inserted.first?.speakerID)
+        XCTAssertNil(finalTail.inserted.first?.speakerIdentityIsProvisional)
+        XCTAssertEqual(finalTail.inserted.first?.text, unresolved.text)
+        XCTAssertEqual(finalTail.speakers.map(\.id), promoted.map(\.id))
         XCTAssertEqual(finalTail.inserted.first?.nativeSpeakerAssignment, unresolved.nativeSpeakerAssignment)
         XCTAssertEqual(finalTail.inserted.first?.nativeTiming, unresolved.nativeTiming)
         try await processing.checkpoint(.init(segments: finalTail.inserted, speakers: finalTail.speakers))
@@ -349,10 +351,8 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         let reopened = try XCTUnwrap(stored)
         XCTAssertEqual(stopped.state, .completed)
         XCTAssertEqual(reopened.speakers, stopped.speakers)
-        XCTAssertEqual(reopened.speakers.map(\.id), anonymous.speakers.map(\.id) + [preliminaryID])
-        XCTAssertEqual(reopened.speakers.map(\.generatedParticipantNumber), [1, 2, 3])
-        XCTAssertEqual(reopened.speakers.first { $0.id == preliminaryID }?.identityIsProvisional, true)
-        XCTAssertFalse(reopened.speakers.contains { $0.id == preliminaryID && $0.isLocalUser })
+        XCTAssertEqual(reopened.speakers.map(\.id), anonymous.speakers.map(\.id))
+        XCTAssertEqual(reopened.speakers.map(\.generatedParticipantNumber), [1, 2])
         XCTAssertTrue(reopened.speakers.allSatisfy { !$0.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         XCTAssertEqual(reopened.speakers.filter(\.isLocalUser).map(\.id), promoted.filter(\.isLocalUser).map(\.id))
         XCTAssertEqual(reopened.transcriptSegments, anonymous.segments + finalTail.inserted)

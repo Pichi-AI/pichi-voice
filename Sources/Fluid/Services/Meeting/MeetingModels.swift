@@ -991,6 +991,27 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     /// A stable reading identity while acoustic identity is unresolved. Native assignments,
     /// timing and attribution summaries remain evidence and are never rewritten to claim it.
     var speakerIdentityIsProvisional: Bool? = nil
+    /// Privacy may replace real speech with a nonlexical mask. Preserve that admitted text
+    /// without mistaking ordinary punctuation or invisible ASR output for speech.
+    /// Optional so existing manifests retain their decoding and evidence.
+    var containsPrivacyReplacement: Bool? = nil
+
+    static func textContainsLexicalContent(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            guard !scalar.properties.isDefaultIgnorableCodePoint else { return false }
+            switch scalar.properties.generalCategory {
+            case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
+                 .decimalNumber, .letterNumber, .otherNumber: return true
+            default: return false
+            }
+        }
+    }
+
+    var hasLexicalContent: Bool { Self.textContainsLexicalContent(self.text) }
+
+    var hasReadableContent: Bool {
+        self.hasLexicalContent || (self.containsPrivacyReplacement == true && !self.text.isEmpty)
+    }
 
     var isEcho: Bool {
         self.isLikelyEcho == true
@@ -1175,9 +1196,29 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         (self.endedAt ?? Date()).timeIntervalSince(self.startedAt)
     }
 
-    /// Speakers not merged away into another speaker — the set the UI should render.
+    /// Canonical identities remain available to corrections and undo, including hidden records.
     var activeSpeakers: [MeetingSessionSpeaker] {
         self.speakers.filter { $0.mergedIntoSpeakerID == nil }
+    }
+
+    /// Generated identities need readable speech before entering the visible roster. Keep
+    /// records and numbers intact for evidence, aliases, manual corrections and undo.
+    var readableSpeakers: [MeetingSessionSpeaker] {
+        let aliases = Dictionary(self.speakers.compactMap { speaker in
+            speaker.mergedIntoSpeakerID.map { (speaker.id, $0) }
+        }, uniquingKeysWith: { first, _ in first })
+        var referenced = Set<SessionSpeakerID>()
+        for segment in self.transcriptSegments where !segment.isEcho && segment.hasReadableContent {
+            guard var id = segment.speakerID else { continue }
+            var visited = Set<SessionSpeakerID>()
+            while let target = aliases[id], visited.insert(id).inserted { id = target }
+            referenced.insert(id)
+        }
+        return self.speakers.filter {
+            $0.mergedIntoSpeakerID == nil && (referenced.contains($0.id)
+                || $0.usesCustomDisplayName == true
+                || ($0.generatedParticipantNumber == nil && $0.identityIsProvisional == nil))
+        }
     }
 
     mutating func renameSpeaker(id: SessionSpeakerID, to displayName: String) throws {

@@ -54,6 +54,9 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         if let id = provisionalPreviewID, let text = projection.provisionalText, !text.isEmpty,
            let first = batch.segments.filter({ provisionalSegmentIDs.contains($0.id) }).min(by: { $0.start < $1.start }) {
             copy.livePreview = .init(id: id, text: text, start: first.start.seconds, end: projection.provisionalEnd)
+            copy.livePreview?.containsPrivacyReplacement = projection.segments.contains {
+                provisionalSegmentIDs.contains($0.id) && $0.containsPrivacyReplacement == true
+            }
         }
         for i in copy.speakers.indices {
             // A resumed batch can carry existing aliases. Never run transcript redaction
@@ -135,6 +138,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 if !wholeInputAdmitted { safePartial.end = nil }
                 // Stable offsets refer to raw text and do not describe replacements.
                 safePartial.stableUTF16Count = nil
+                safePartial.containsPrivacyReplacement = projection.redactions[partialKey]?.isEmpty == false
                 copy.partials[source] = safePartial
             } else { copy.partials.removeValue(forKey: source) }
         }
@@ -200,6 +204,9 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
             for index in ordered {
                 copy[index].text = projected.canonical[index] ?? segments[index].text
                 copy[index].originalText = nil
+                if projected.redactions[index]?.isEmpty == false {
+                    copy[index].containsPrivacyReplacement = true
+                }
             }
             // A display prefix belongs to one source. Never join unrelated source contexts.
             if groups.count == 1, !provisionalSegmentIDs.isEmpty, let preview = projected.provisional {

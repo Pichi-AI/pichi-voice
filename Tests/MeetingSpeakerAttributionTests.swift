@@ -614,7 +614,7 @@ struct MeetingSpeakerAttributionTests {
             self.check(rule.isIndependentAcousticSelection)
         }
         for rule in [MeetingSpeakerAttributionRule.rawOnly, .rawAssigned, .ambiguous, .conflict, .barrier,
-                     .neighborAgreement, .incomingSpeaker, .boundaryContinuation, .briefInterruption, .mainSpeakerContinuation] {
+                     .neighborAgreement, .incomingSpeaker, .boundaryContinuation, .briefInterruption, .mainSpeakerContinuation, .existingParticipantContext] {
             self.check(!rule.isIndependentAcousticSelection, "Contextual results cannot become acoustic anchors")
         }
         for offset in [0.0, 70.0, 3600.0] {
@@ -907,6 +907,8 @@ struct MeetingSpeakerAttributionTests {
         let oldRoundTrip = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: JSONEncoder().encode(oldPolicy))
         self.check(oldRoundTrip == oldPolicy && oldRoundTrip.fingerprint == oldFingerprint)
         var priorObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
+        priorObject.removeValue(forKey: "enableProvisionalSpeakerIdentities")
+        priorObject.removeValue(forKey: "enableStableSpeakerOpening")
         priorObject.removeValue(forKey: "enableMainSpeakerContinuation")
         priorObject.removeValue(forKey: "enableIndependentAcousticAnchors")
         priorObject.removeValue(forKey: "preserveIndependentSpeakerTurns")
@@ -921,6 +923,8 @@ struct MeetingSpeakerAttributionTests {
         self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONEncoder().encode(priorPolicy)).fingerprint == priorPolicy.fingerprint)
         var beforeAcoustic = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
+        beforeAcoustic.removeValue(forKey: "enableProvisionalSpeakerIdentities")
+        beforeAcoustic.removeValue(forKey: "enableStableSpeakerOpening")
         beforeAcoustic.removeValue(forKey: "enableIndependentAcousticAnchors")
         beforeAcoustic.removeValue(forKey: "preserveIndependentSpeakerTurns")
         beforeAcoustic.removeValue(forKey: "enableVoicedSpeakerAdmission")
@@ -934,6 +938,8 @@ struct MeetingSpeakerAttributionTests {
         self.check(try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
             from: JSONEncoder().encode(frozen)) == frozen)
         var beforeTurnBoundaries = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
+        beforeTurnBoundaries.removeValue(forKey: "enableProvisionalSpeakerIdentities")
+        beforeTurnBoundaries.removeValue(forKey: "enableStableSpeakerOpening")
         beforeTurnBoundaries.removeValue(forKey: "preserveIndependentSpeakerTurns")
         beforeTurnBoundaries.removeValue(forKey: "enableVoicedSpeakerAdmission")
         let frozenTurnPolicy = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,

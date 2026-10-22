@@ -43,6 +43,8 @@ nonisolated struct MeetingLivePartial: Sendable, Equatable, Identifiable {
     /// Whole-word prefix repeated in consecutive observations of this same turn.
     /// This is recognition evidence, not permission to publish unredacted text.
     var stableUTF16Count: Int? = nil
+    /// Set by privacy projection when a visible prefix contains a real replacement mask.
+    var containsPrivacyReplacement = false
 }
 
 /// Batch recognizers revise a growing audio prefix. Only words repeated across

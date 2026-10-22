@@ -4325,7 +4325,9 @@ final class MeetingRecoveryTests: XCTestCase {
         let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
         XCTAssertEqual(undone.speakers, session.speakers)
         XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
-        XCTAssertTrue(MeetingTranscriptExporter.text(for: undone).contains("(provisional)"))
+        XCTAssertTrue(undone.speakers[0].identityIsProvisional == true)
+        XCTAssertFalse(MeetingTranscriptExporter.text(for: undone).contains("(provisional)"),
+            "Undo restores internal uncertainty without adding a user-visible qualifier")
     }
 
     func testMeetingLocalUserRoleSurvivesPrivacyTextCorrectionAndItsUndo() async throws {

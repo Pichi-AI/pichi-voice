@@ -525,7 +525,7 @@ struct MobileMeetingRoot: View {
     private var history: some View {
         let matches = sessions.filter { session in
             search.isEmpty || session.displayTitle.localizedCaseInsensitiveContains(search)
-                || session.activeSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
+                || session.readableSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
                 || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
         }
         return List(matches) { session in
@@ -566,8 +566,8 @@ struct MobileMeetingRoot: View {
     private func historySummary(_ session: MeetingSession) -> String {
         var parts = [session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)),
                      MeetingTranscriptExporter.timestampText(session.duration)]
-        if !session.activeSpeakers.isEmpty {
-            parts.append(PichiLocalization.format("%lld speakers", Int64(session.activeSpeakers.count)))
+        if !session.readableSpeakers.isEmpty {
+            parts.append(PichiLocalization.format("%lld speakers", Int64(session.readableSpeakers.count)))
         }
         if session.state != .completed { parts.append(PichiLocalization.text(sessionStatus(session.state))) }
         return parts.joined(separator: " · ")
@@ -575,7 +575,7 @@ struct MobileMeetingRoot: View {
 
     private func transcript(_ session: MeetingSession) -> some View {
         let speakerIndices = MeetingSpeakerPalette.tintIndices(for: session.speakers)
-        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map {
+        let names = Dictionary(uniqueKeysWithValues: session.readableSpeakers.map {
             ($0.id, MeetingTranscriptExporter.speakerDisplayName($0, language: PichiLocalization.language))
         })
         let readingInput = MeetingTranscriptExporter.ReadingInput(session)
@@ -634,7 +634,7 @@ struct MobileMeetingRoot: View {
                 }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 Text(PichiLocalization.text("Transcript")).font(theme.typography.sectionTitle)
                 Divider()
-                if !session.activeSpeakers.isEmpty {
+                if !session.readableSpeakers.isEmpty {
                     Text(PichiLocalization.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     Text(PichiLocalization.text("The You label applies only to this meeting."))
@@ -642,7 +642,7 @@ struct MobileMeetingRoot: View {
                     if UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact {
                         ScrollView(.horizontal) {
                             HStack(spacing: theme.metrics.spacing.sm) {
-                                ForEach(session.activeSpeakers) { speaker in
+                                ForEach(session.readableSpeakers) { speaker in
                                     participantButton(speaker, session: session, colorIndex: speakerIndices[speaker.id], expands: false)
                                 }
                             }
@@ -650,7 +650,7 @@ struct MobileMeetingRoot: View {
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), alignment: .leading)], alignment: .leading,
                                   spacing: theme.metrics.spacing.sm) {
-                            ForEach(session.activeSpeakers) { speaker in
+                            ForEach(session.readableSpeakers) { speaker in
                                 participantButton(speaker, session: session, colorIndex: speakerIndices[speaker.id], expands: true)
                             }
                         }.accessibilityIdentifier("transcript.speakers")
@@ -739,7 +739,7 @@ struct MobileMeetingRoot: View {
                 } label: {
                     Image(systemName: "person.2")
                         .frame(minWidth: 44, minHeight: 44)
-                }.disabled(!coordinator.isQuiescent || isBusy || session.activeSpeakers.isEmpty)
+                }.disabled(!coordinator.isQuiescent || isBusy || session.readableSpeakers.isEmpty)
                     .accessibilityLabel(PichiLocalization.text("Change speaker"))
                     .accessibilityIdentifier("transcript.reassign.\(segment.id)")
                 if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
@@ -963,7 +963,7 @@ private struct MeetingSpeakerAssignmentSheet: View {
     private func participantList(for segments: [MeetingTranscriptSegment]) -> some View {
         List {
             Section {
-                ForEach(draft.session.activeSpeakers) { speaker in
+                ForEach(draft.session.readableSpeakers) { speaker in
                     Button {
                         assign(segments.map(\.id), speaker.id)
                     } label: {

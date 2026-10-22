@@ -282,32 +282,38 @@ struct MeetingPendingSpeechProjectionTests {
         }
         let initial = snapshot([nil, unknown, candidates])
         let initialRows = MeetingLiveBubbleComposer.rows(for: initial)
-        try require(initialRows.allSatisfy { !$0.showsLabel && $0.participant == nil },
-                    "Initial unresolved text has neither a fake speaker identity nor a source header")
+        try require(initialRows.allSatisfy { !$0.showsLabel && !$0.hasReadableParticipant }
+                    && initialRows.map { $0.participant?.identity } == [nil, unknown.identity, candidates.identity],
+                    "Initial unresolved text retains internal metadata without a fake participant header")
         for participants in [[first, unknown, first], [first, nil, first], [first, candidates, first]] {
             let value = snapshot(participants)
             let original = value
             let rows = MeetingLiveBubbleComposer.rows(for: value)
-            try require(rows.map(\.showsLabel) == [true, false, false]
-                        && rows.allSatisfy { $0.participant?.identity == first.identity },
-                        "An unresolved letter, nil owner or candidate set continues the known readable turn")
-            try require(rows[1].participant?.isEstimated == true,
-                        "Carried reading ownership remains an internal estimate rather than new speaker evidence")
+            try require(rows.map(\.showsLabel) == [true, false, true]
+                        && rows.map { $0.participant?.identity } == participants.map { $0?.identity },
+                        "The composer cannot infer a participant solely from the capture source")
+            try require(!rows[1].hasReadableParticipant,
+                        "Unresolved source metadata cannot become independent ownership evidence")
             try require(value == original && rows.map(\.id) == value.utterances.map(\.id)
                         && rows.map(\.text) == value.utterances.map(\.text)
                         && rows.map(\.start) == value.utterances.map(\.start),
                         "Composition preserves raw uncertainty, row IDs, text order and native start times")
         }
+        let contextual = MeetingLiveBubbleComposer.rows(for: snapshot([first, first.markingEstimated(), first]))
+        try require(contextual.map(\.showsLabel) == [true, false, false]
+                    && contextual.allSatisfy { $0.participant?.identity == first.identity }
+                    && contextual[0].participant?.isEstimated == true,
+                    "A participant supplied by the protected context policy continues the actual reading turn as an internal estimate")
         var value = snapshot([first, unknown, second])
         let partialID = UUID()
         value.partials[.you] = .init(id: partialID, text: "продолжение", start: 3, end: 3.5)
         let original = value
         let rows = MeetingLiveBubbleComposer.rows(for: value)
         try require(rows.map(\.showsLabel) == [true, false, true, false]
-                    && rows.map { $0.participant?.identity } == [first.identity, first.identity, second.identity, second.identity],
-                    "Only an actual new participant splits a turn; an unassigned partial follows that participant")
+                    && rows.map { $0.participant?.identity } == [first.identity, unknown.identity, second.identity, nil],
+                    "Known participant switches remain distinct and source-only partials do not claim ownership")
         try require(rows.last?.id == partialID && rows.last?.isPartial == true && value == original,
-                    "A source-only growing partial retains its ID and original evidence while continuing the readable turn")
+                    "A source-only growing partial retains its ID and original evidence")
         print("PASS live unresolved letters, nil/candidate ownership, initial anonymity and known participant switches")
     }
 
@@ -325,11 +331,11 @@ struct MeetingPendingSpeechProjectionTests {
             .init(id: UUID(), speaker: .them, text: "ответ", start: 10, end: 10.4, participant: second),
         ]
         let before = MeetingLiveBubbleComposer.rows(for: value)
-        try require(before.map { $0.participant?.identity } == [first.identity, nil, first.identity, second.identity]
-                    && before.map(\.showsLabel) == [true, false, true, true],
+        try require(before.map { $0.participant?.identity } == [first.identity, unknown.identity, nil, second.identity]
+                    && before.map(\.showsLabel) == [true, false, false, true],
                     "Unresolved ownership never leaks across capture sources or collapses distinct equal-name identities")
-        try require(before[2].readingTurnStart == 7 && before[3].readingTurnStart == 10,
-                    "Resumed source headers retain their readable turn origin; the new participant uses its own first word")
+        try require(before[2].readingTurnStart == 9 && before[3].readingTurnStart == 10,
+                    "Unassigned source text retains its own time; a known participant uses its actual first word")
         value.revision = 2
         value.utterances[2].participant = second
         let corrected = MeetingLiveBubbleComposer.rows(for: value)
@@ -366,10 +372,10 @@ struct MeetingPendingSpeechProjectionTests {
         value.partials[.you]?.text += " новые слова"
         value.partials[.you]?.end = 55
         let after = MeetingLiveBubbleComposer.rows(for: value)
-        try require(before.allSatisfy { $0.readingTurnStart == 7.8 }
-                    && after.allSatisfy { $0.readingTurnStart == 7.8 }
+        try require(before.map(\.readingTurnStart) == [7.8, 7.8, 50]
+                    && after.map(\.readingTurnStart) == [7.8, 7.8, 50]
                     && after.map(\.showsLabel) == [true, false, false],
-                    "Explicit newline, long layout paragraphs, pending growth and revisions cannot replace a turn's first-word time")
+                    "Layout and pending growth preserve actual participant turn time without attaching source-only partials")
         print("PASS finite elapsed timestamp boundaries and stable first-word turn anchors")
     }
 
