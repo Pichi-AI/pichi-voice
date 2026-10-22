@@ -919,10 +919,15 @@ nonisolated struct MeetingTranscriptAssembler {
             if useStableSpeakerOpening {
                 let id = Self.speakerID(attemptID: attemptID, token: identity)
                 let existing = priorSpeakers.contains { $0.id == id && $0.mergedIntoSpeakerID == nil }
+                // An explicit cross-epoch link continues the first admitted identity. Comparing
+                // raw epoch-scoped tokens would discard its later words as an extra participant.
+                let sharesFirstIdentity = firstTokenByTrack[token.analysisEpochID.trackID].map {
+                    (canonicalByToken[$0] ?? $0) == identity
+                } == true
                 return existing || qualifiedNativeTokens.contains(token) || isSubstantial(identity)
                     || confirmedLocalUserTokens.contains(token)
                     || (!tracksWithPriorSpeaker.contains(token.analysisEpochID.trackID)
-                        && firstTokenByTrack[token.analysisEpochID.trackID] == token)
+                        && sharesFirstIdentity)
             }
             return useProvisionalIdentities || qualifiedNativeTokens.contains(token) || isSubstantial(identity)
                 || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)

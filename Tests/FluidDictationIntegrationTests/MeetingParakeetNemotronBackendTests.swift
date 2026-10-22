@@ -2148,7 +2148,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             plan: plan,
             manifest: manifest,
             evidence: bundle.evidence,
-            coverageReceipts: bundle.coverageReceipts
+            coverageReceipts: bundle.coverageReceipts,
+            speakerAttributionPolicy: .init(enableProvisionalSpeakerIdentities: true)
         ))
         XCTAssertEqual(assembly.segments.map(\.text), ["a", "b"])
         XCTAssertEqual(assembly.speakers.count, 2, "The ambiguous fragment gets its own preliminary reading identity")
@@ -2215,9 +2216,14 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
                 ))
                 XCTAssertEqual(result.segments.map(\.text), ["been", "there?"])
                 XCTAssertEqual(result.segments.first?.attributionState, .assigned)
-                XCTAssertEqual(result.segments.last?.nativeSpeakerAssignment, .unassigned)
-                XCTAssertEqual(result.sidecar.dispositions.map(\.disposition), [.emitted, .emitted])
                 let tail = try XCTUnwrap(bundle.evidence.units.last)
+                let expectedNative: MeetingBackendSpeakerAssignment = timing.activityEnd - timing.start
+                    > MeetingAnalysisManifestSchema.mappingToleranceSeconds
+                    ? .assigned(.init(analysisEpochID: epoch.id, label: "slot-0")) : .unassigned
+                XCTAssertEqual(tail.speaker, expectedNative,
+                    "An ending with direct acoustic overlap stays assigned; boundary retention does not invent evidence")
+                XCTAssertEqual(result.segments.last?.nativeSpeakerAssignment, tail.speaker)
+                XCTAssertEqual(result.sidecar.dispositions.map(\.disposition), [.emitted, .emitted])
                 XCTAssertEqual(tail.analysisStart, timing.start, accuracy: 0.000_001)
                 XCTAssertEqual(tail.analysisEnd, timing.end, accuracy: 0.000_001)
                 let merged = MeetingProcessingPipeline.mergeCanonicalSegments(result.segments)
