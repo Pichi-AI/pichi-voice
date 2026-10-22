@@ -111,11 +111,11 @@ struct MeetingKnownSpeakerRegistryTests {
         try safetyAndSourceScopes()
         try registryScopes()
         try noNewIdentityAndNativeEvidence()
-        try ownerExcludedFromGeneratedNumbering()
+        try ownerPromotionPreservesGeneratedNumbering()
         print("Known contextual speaker registry: \(checks) checks passed")
     }
 
-    static func ownerExcludedFromGeneratedNumbering() throws {
+    static func ownerPromotionPreservesGeneratedNumbering() throws {
         let tokens = [token("a"), token("b"), token("c")]
         let units = tokens.enumerated().map { index, token in
             MeetingFinalTextUnit(id: "numbering:\(index)", trackID: epoch.trackID, analysisEpochID: epoch,
@@ -134,10 +134,11 @@ struct MeetingKnownSpeakerRegistryTests {
             check(confirmed.speakers.map(\.id) == anonymous.speakers.map(\.id))
             check(late.map(\.id) == anonymous.speakers.map(\.id))
             check(confirmed.speakers.filter { !$0.isLocalUser }.map(\.displayName) == ["Участник 1", "Участник 2"])
-            check(late.filter { !$0.isLocalUser }.map(\.generatedParticipantNumber) == [1, 2])
-            check(late.filter(\.isLocalUser).map(\.generatedParticipantNumber) == [0])
+            check(late.map(\.generatedParticipantNumber) == [1, 2, 3],
+                  "Late owner promotion must preserve every published participant number")
+            check(late.map(\.displayName) == anonymous.speakers.map(\.displayName))
             // A delayed raw batch may carry earlier numbers. Owner publication supplies the
-            // current flags; canonical merge must recalculate instead of copying stale names.
+            // current flags; canonical merge must preserve published numbering.
             var stale = anonymous
             stale.speakers = stale.speakers.map { source in
                 var speaker = source
@@ -145,14 +146,15 @@ struct MeetingKnownSpeakerRegistryTests {
                 return speaker
             }
             let merged = stale.mergingSpeakers(into: late, speakerNameFormat: "Участник %lld")
-            check(merged.filter { !$0.isLocalUser }.map(\.displayName) == ["Участник 1", "Участник 2"])
+            check(merged == late, "A delayed raw batch changed published names or owner numbering")
             let extra = token("d")
             let extraUnit = MeetingFinalTextUnit(id: "numbering:later", trackID: epoch.trackID,
                 analysisEpochID: epoch, precision: .utterance, text: "Later synthetic voice",
                 analysisStart: 0, analysisEnd: 6, speaker: .assigned(extra), analysisSpanIDs: [])
             let later = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 120,
                 duration: 6, units: [extraUnit], priorSpeakers: merged, confirmedLocalUserTokens: [owner])
-            check(later.speakers.filter { !$0.isLocalUser }.map(\.displayName) == ["Участник 1", "Участник 2", "Участник 3"])
+            check(later.speakers.map(\.generatedParticipantNumber) == [1, 2, 3, 4],
+                  "A later participant reused a number reserved by the owner")
             let returned = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 600,
                 duration: 18, units: units, priorSpeakers: later.speakers, confirmedLocalUserTokens: [owner])
             check(returned.speakers == later.speakers, "A long pause or repeated voice changed its identity or number")
@@ -166,7 +168,34 @@ struct MeetingKnownSpeakerRegistryTests {
         let confirmed = MeetingTranscriptAssembler.applyingLocalUserTokens(to: alias, attemptID: attempt,
             tokens: [tokens[0]], speakerNameFormat: "Участник %lld")
         check(confirmed[1].displayName == "Ручное имя Ёё" && confirmed[1].generatedParticipantNumber == nil)
-        check(confirmed[2].displayName == "Участник 2", "An alias still represents a real participant")
+        check(confirmed[2].displayName == "Участник 3", "A manual alias must not compact another participant")
+        var placeholder = anonymous.speakers[0]
+        placeholder.id = UUID()
+        let appended = MeetingSessionSpeaker.numberingGeneratedParticipants(alias + [placeholder],
+            speakerNameFormat: "Участник %lld")
+        check(appended.map(\.generatedParticipantNumber) == [1, nil, 3, 4],
+              "Renaming a participant cannot recycle its admission number for a later voice")
+        alias[1].isLocalUser = true
+        let namedOwner = MeetingSessionSpeaker.numberingGeneratedParticipants(alias + [placeholder],
+            speakerNameFormat: "Участник %lld")
+        check(namedOwner.map(\.generatedParticipantNumber) == [1, nil, 3, 4],
+              "Promoting a manual alias cannot recycle its reserved admission number")
+        var merged = anonymous.speakers
+        merged[2].mergedIntoSpeakerID = merged[0].id
+        let afterMerge = MeetingSessionSpeaker.numberingGeneratedParticipants(merged + [placeholder],
+            speakerNameFormat: "Участник %lld")
+        check(afterMerge.map(\.generatedParticipantNumber) == [1, 2, 3, 4],
+              "A hidden merged identity must keep its historical number reserved")
+        var custom = alias[1]
+        custom.usesCustomDisplayName = true
+        custom.generatedParticipantNumber = 7
+        let customResult = MeetingSessionSpeaker.numberingGeneratedParticipants([custom, placeholder],
+            speakerNameFormat: "Участник %lld")
+        check(customResult[0] == custom, "Explicit custom provenance must protect a stale generated number")
+        check(customResult[1].generatedParticipantNumber == 1)
+        let decoded = try JSONDecoder().decode([MeetingSessionSpeaker].self, from: JSONEncoder().encode(confirmed))
+        let reopened = MeetingSessionSpeaker.numberingGeneratedParticipants(decoded, speakerNameFormat: "Участник %lld")
+        check(reopened == confirmed, "Promotion, save and reopen changed participant numbers or aliases")
         var legacy = anonymous.speakers
         for index in legacy.indices { legacy[index].generatedParticipantNumber = nil }
         let old = MeetingTranscriptAssembler.applyingLocalUserTokens(to: legacy, attemptID: attempt,

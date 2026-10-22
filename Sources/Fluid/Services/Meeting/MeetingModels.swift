@@ -828,30 +828,50 @@ nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Send
     /// Set when this speaker was merged into another; the speaker is kept (not removed) so
     /// embedding/cluster provenance survives for M3. Optional keeps older manifests decodable.
     var mergedIntoSpeakerID: SessionSpeakerID? = nil
-    /// Present only for assembler-generated names. Zero marks the confirmed owner, who
-    /// consumes no participant number. Nil preserves legacy names and manual aliases.
+    /// Reserved identity number, retained after a manual alias or owner change. Zero marks
+    /// an owner confirmed before anonymous publication. Nil preserves legacy aliases.
     var generatedParticipantNumber: Int? = nil
     /// Explicit user alias, independent of automatic owner recognition and generated labels.
     /// Nil retains the display convention of sessions saved before this provenance existed.
     var usesCustomDisplayName: Bool? = nil
 
-    /// Admission order is stable across windows. Recompute only generated labels when
-    /// acoustic owner evidence changes; names are never inspected to infer their origin.
+    /// Keep published numbers with their identities, including owners and merged records.
+    /// New assembler placeholders can collide; repair them in stable admission order without
+    /// recycling a known number. Names are never inspected to infer their origin.
     static func numberingGeneratedParticipants(
         _ speakers: [Self], speakerNameFormat: String
     ) -> [Self] {
-        var number = 0
+        var reserved = Set(speakers.compactMap(\.generatedParticipantNumber).filter { $0 > 0 })
+        var nextNumber = 1
+        func reserveNextNumber() -> Int {
+            while reserved.contains(nextNumber) { nextNumber += 1 }
+            let number = nextNumber
+            reserved.insert(number)
+            return number
+        }
+        // Legacy aliases have no number provenance. Reserve an admission slot where possible
+        // without inspecting their text or replacing a known positive number.
+        var ordinal = 0
+        for speaker in speakers {
+            if speaker.isLocalUser && speaker.generatedParticipantNumber == 0 { continue }
+            ordinal += 1
+            if speaker.generatedParticipantNumber == nil {
+                if !reserved.contains(ordinal) { reserved.insert(ordinal) }
+                else { _ = reserveNextNumber() }
+            }
+        }
+        var claimed = Set<Int>()
         return speakers.map { source in
             var speaker = source
-            guard speaker.mergedIntoSpeakerID == nil else { return speaker }
-            if speaker.isLocalUser {
-                if speaker.generatedParticipantNumber != nil { speaker.generatedParticipantNumber = 0 }
-            } else {
-                number += 1
-                if speaker.generatedParticipantNumber != nil {
-                    speaker.generatedParticipantNumber = number
-                    speaker.displayName = String(format: speakerNameFormat, Int64(number))
-                }
+            let originalNumber = speaker.generatedParticipantNumber
+            let keepsNumber = originalNumber.map { $0 > 0 && claimed.insert($0).inserted } ?? false
+            guard speaker.mergedIntoSpeakerID == nil, speaker.usesCustomDisplayName != true,
+                  let originalNumber else { return speaker }
+            if speaker.isLocalUser && originalNumber == 0 { return speaker }
+            let number = keepsNumber ? originalNumber : reserveNextNumber()
+            speaker.generatedParticipantNumber = number
+            if !speaker.isLocalUser {
+                speaker.displayName = String(format: speakerNameFormat, Int64(number))
             }
             return speaker
         }
@@ -1162,14 +1182,13 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         }
         guard self.speakers[index].displayName != trimmed else { return }
         self.speakers[index].displayName = trimmed
-        self.speakers[index].generatedParticipantNumber = nil
         self.speakers[index].usesCustomDisplayName = true
         self.updatedAt = Date()
     }
 
     /// A meeting-local user assertion, separate from the enrolled voice profile and native
     /// acoustic evidence. Corrections run only after capture and processing have joined.
-    /// The manual action supplies one captured interface template for renumbering generated
+    /// The manual action supplies one captured interface template for formatting generated
     /// labels. Background observations instead retain their producing attempt's template.
     mutating func setLocalUserSpeaker(id: SessionSpeakerID?, speakerNameFormat: String) throws {
         if let id {
@@ -1186,14 +1205,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
             }
         }
         guard changed else { return }
-        // Explicit aliases and legacy nil-number names are user data. Only generated
-        // provenance participates in this intentional role-change renumbering.
-        let numberedSources = self.speakers.map { source in
-            var speaker = source
-            if speaker.usesCustomDisplayName == true { speaker.generatedParticipantNumber = nil }
-            return speaker
-        }
-        self.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(numberedSources,
+        // An explicit alias protects its text while retaining any reserved identity number.
+        self.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(self.speakers,
             speakerNameFormat: speakerNameFormat)
         self.updatedAt = Date()
     }

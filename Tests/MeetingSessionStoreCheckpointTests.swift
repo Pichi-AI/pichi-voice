@@ -50,8 +50,8 @@ struct MeetingSessionStoreCheckpointTests {
         named.speakers = [generated]
         try named.renameSpeaker(id: generated.id, to: "Ручное имя Ёё")
         check(named.speakers[0].usesCustomDisplayName == true, "Renaming records explicit alias provenance")
-        check(named.speakers[0].generatedParticipantNumber == nil,
-              "An explicit alias must leave automatic participant numbering")
+        check(named.speakers[0].generatedParticipantNumber == 1,
+              "An explicit alias must keep its identity number reserved")
         let alias = MeetingSessionSpeaker.numberingGeneratedParticipants(named.speakers, speakerNameFormat: "Speaker %lld")
         check(alias[0].displayName == "Ручное имя Ёё", "Numbering replaced a manual alias")
         let speakerCodec = JSONEncoder()
@@ -97,17 +97,67 @@ struct MeetingSessionStoreCheckpointTests {
         var roleSession = session
         roleSession.speakers = [roleOwner, roleOther, roleAlias, roleLegacy]
         try roleSession.setLocalUserSpeaker(id: nil, speakerNameFormat: "Captured %lld")
-        check(roleSession.speakers.prefix(2).map(\.displayName) == ["Captured 1", "Captured 2"],
-              "Clearing the owner renumbers generated names that previously shared one raw label")
-        check(roleSession.speakers.prefix(2).map(\.generatedParticipantNumber) == [1, 2],
-              "A cleared owner cannot retain the generated zero owner marker")
+        check(roleSession.speakers.prefix(2).map(\.displayName) == ["Captured 2", "Captured 1"],
+              "Clearing an owner without a published number must preserve the other participant's number")
+        check(roleSession.speakers.prefix(2).map(\.generatedParticipantNumber) == [2, 1],
+              "A cleared zero owner marker receives an unused number without changing published numbers")
         check(roleSession.speakers[2].displayName == roleAlias.displayName
               && roleSession.speakers[2].usesCustomDisplayName == true
-              && roleSession.speakers[2].generatedParticipantNumber == nil,
+              && roleSession.speakers[2].generatedParticipantNumber == 7,
               "An explicit custom alias cannot be reformatted as a generated participant")
         check(roleSession.speakers[3] == roleLegacy, "Legacy nil-number names remain verbatim")
         let savedRoles = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(roleSession))
         check(savedRoles.speakers == roleSession.speakers, "Meeting-local role corrections survive the session codec")
+        let rolesStore = MeetingSessionStore(rootDirectory: root.appendingPathComponent("numbered-roles", isDirectory: true))
+        roleSession.transcriptSegments = []
+        roleSession.speakers[0].generatedParticipantNumber = 1
+        roleSession.speakers[0].displayName = "Captured 1"
+        roleSession.speakers[1].generatedParticipantNumber = 2
+        roleSession.speakers[1].displayName = "Captured 2"
+        let beforePromotion = roleSession.speakers
+        try roleSession.setLocalUserSpeaker(id: roleSession.speakers[0].id, speakerNameFormat: "Captured %lld")
+        check(roleSession.speakers.prefix(2).map(\.generatedParticipantNumber) == [1, 2],
+              "Late promotion changed the already published roster")
+        try await rolesStore.create(roleSession)
+        var reopenedRole = try await rolesStore.load(id: roleSession.id)!
+        check(reopenedRole.speakers == roleSession.speakers, "Saved owner promotion lost participant number provenance")
+        try reopenedRole.setLocalUserSpeaker(id: nil, speakerNameFormat: "Captured %lld")
+        check(reopenedRole.speakers == beforePromotion, "Owner demotion after reopen failed to restore the same roster")
+        try await rolesStore.save(reopenedRole)
+        let savedDemotion = try await rolesStore.load(id: roleSession.id)
+        check(savedDemotion?.speakers == beforePromotion, "Saving a demotion changed aliases or participant numbers")
+        var renamedRoster = roleSession
+        renamedRoster.speakers = [roleOwner, roleOther]
+        try renamedRoster.renameSpeaker(id: roleOther.id, to: "Synthetic named voice")
+        var laterSpeaker = roleOther
+        laterSpeaker.id = UUID()
+        renamedRoster.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(
+            renamedRoster.speakers + [laterSpeaker], speakerNameFormat: "Captured %lld")
+        check(renamedRoster.speakers.map(\.generatedParticipantNumber) == [0, 1, 2],
+              "Renaming after an early owner confirmation recycled the named voice's original number")
+        let beforeOwnerSwitch = renamedRoster.speakers
+        try renamedRoster.setLocalUserSpeaker(id: laterSpeaker.id, speakerNameFormat: "Captured %lld")
+        check(renamedRoster.speakers.map(\.generatedParticipantNumber) == [3, 1, 2],
+              "Switching owner changed a published number or reused an alias reservation")
+        check(renamedRoster.speakers[1].displayName == "Synthetic named voice",
+              "An owner switch replaced a manual alias")
+        try renamedRoster.setLocalUserSpeaker(id: nil, speakerNameFormat: "Captured %lld")
+        check(renamedRoster.speakers.map(\.generatedParticipantNumber) == [3, 1, 2],
+              "Demoting the new owner changed published participant numbers")
+        // The coordinator's inverse stores the previous roster rather than deriving labels.
+        renamedRoster.speakers = beforeOwnerSwitch
+        try await rolesStore.save(renamedRoster)
+        let undoneRoster = try await rolesStore.load(id: renamedRoster.id)
+        check(undoneRoster?.speakers == beforeOwnerSwitch, "An inverse roster lost aliases or reserved numbers on reopen")
+        renamedRoster.speakers = [roleOwner, roleOther]
+        try renamedRoster.setLocalUserSpeaker(id: nil, speakerNameFormat: "Captured %lld")
+        try renamedRoster.renameSpeaker(id: roleOther.id, to: "Synthetic named voice")
+        let afterRenamedDemotion = MeetingSessionSpeaker.numberingGeneratedParticipants(
+            renamedRoster.speakers + [laterSpeaker], speakerNameFormat: "Captured %lld")
+        check(afterRenamedDemotion.map(\.generatedParticipantNumber) == [2, 1, 3],
+              "Renaming after owner demotion recycled the named voice's original number")
+        check(MeetingSessionSpeaker.numberingGeneratedParticipants(afterRenamedDemotion,
+            speakerNameFormat: "Captured %lld") == afterRenamedDemotion, "Reserved numbering must be idempotent")
         try Self.checkReadableTranscriptContract(check)
 
         try Self.checkPlainParticipantLabels(template: session, check: check)
