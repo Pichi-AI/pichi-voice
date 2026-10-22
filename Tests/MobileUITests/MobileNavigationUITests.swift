@@ -682,6 +682,18 @@ final class MobileNavigationUITests: XCTestCase {
         }
         openNavigation("settings", title: "Settings")
         XCTAssertTrue(app.otherElements["settings.root"].exists || app.buttons["settings.privacy"].exists)
+        let storageFooter = app.staticTexts["Audio recordings and transcripts are stored on this device."].firstMatch
+        if app.tabBars.firstMatch.exists && storageFooter.exists {
+            let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+            for step in 0..<3 where !storageFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty {
+                XCTAssertTrue(scroll.isHittable)
+                scroll.swipeUp()
+                capture("03-settings-footer-scroll-\(step)")
+            }
+            XCTAssertTrue(storageFooter.isHittable)
+            XCTAssertTrue(storageFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty,
+                          "Normal scrolling must expose the complete storage footer above the floating tab bar")
+        }
         app.buttons["settings.privacy"].tap()
         XCTAssertTrue(app.switches["privacy.saveAudio"].waitForExistence(timeout: 5))
         // The app may already contain user-selected preferences. Fresh defaults belong to
@@ -2028,11 +2040,27 @@ final class MobileNavigationUITests: XCTestCase {
         // SwiftUI exposes an identified full-width row plus its native UISwitch.
         // A row-center tap lands on the label; operate the observed backing control.
         let bounds = row.frame
-        let control = try XCTUnwrap(app.switches.allElementsBoundByIndex.first {
-            bounds.contains($0.frame) && $0.frame.width > 0 && $0.frame.width < bounds.width / 2
-        })
-        XCTAssertTrue(control.isHittable)
-        control.tap()
+        let previousValue = try XCTUnwrap(row.value as? String)
+        let controls = app.switches.allElementsBoundByIndex.filter {
+            let frame = $0.frame
+            // Native UISwitch artwork can extend slightly outside its SwiftUI row.
+            return frame.width > 0 && frame.width < bounds.width / 2
+                && bounds.contains(CGPoint(x: frame.midX, y: frame.midY))
+        }
+        XCTAssertLessThanOrEqual(controls.count, 1, "The identified row must have at most one backing switch")
+        if controls.count == 1, let control = controls.first {
+            XCTAssertTrue(control.isHittable)
+            control.tap()
+        } else if controls.isEmpty {
+            // A standalone Toggle may expose the native switch itself as the row.
+            // Match the existing setup acceptance action on the reviewed trailing control.
+            XCTAssertTrue(row.isHittable)
+            row.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        }
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (row.value as? String) != previousValue
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed)
     }
 
     private func capture(_ step: String) {
