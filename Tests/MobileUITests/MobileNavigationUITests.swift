@@ -1419,6 +1419,10 @@ final class MobileNavigationUITests: XCTestCase {
                     XCTAssertTrue(caption.waitForExistence(timeout: 5), "Every preliminary speaker keeps a readable qualified name")
                 }
                 capture("provisional-\(language)-reopen-\(iteration)")
+                let last = app.descendants(matching: .any)["transcript.paragraph.8EEC0000-2026-4000-8000-000000000005"].firstMatch
+                try revealParagraphAboveNavigation(last, step: "provisional-\(language)-tail-\(iteration)")
+                XCTAssertTrue(app.staticTexts["Участник 3 (\(suffix))"].firstMatch.isHittable)
+                capture("provisional-\(language)-tail-visible-\(iteration)")
                 app.terminate()
             }
         }

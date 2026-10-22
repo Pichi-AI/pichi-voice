@@ -24,6 +24,36 @@ private nonisolated struct AssemblerFixtureObserver: MeetingChunkAudioObserving 
 final class MeetingTranscriptAssemblerTests: XCTestCase {
     private let backendID = MeetingBackendID(rawValue: "fixture.assembler")
 
+    func testCanonicalFinalPublicationNamesUnresolvedSpeechWithoutChangingNativeEvidence() throws {
+        let chunk = self.chunk(sequence: 0, start: 100, end: 110)
+        let mic = self.track(kind: .microphone, chunks: [chunk],
+            eras: [self.era(protection: .voiceProcessed, start: 100)])
+        let plan = self.plan(mode: .inRoom, tracks: [mic])
+        let manifest = try self.buildManifest(plan: plan,
+            observations: [(mic.id, chunk, self.observed(chunk, duration: 10))])
+        let span = try XCTUnwrap(manifest.track(mic.id)?.spans.first)
+        let units = [
+            self.unit(id: "unknown-first", span: span, analysisStart: 1, analysisEnd: 1.2, speaker: .unassigned),
+            self.unit(id: "unknown-continuation", span: span, analysisStart: 1.5, analysisEnd: 1.7, speaker: .unassigned),
+            self.unit(id: "unknown-later", span: span, analysisStart: 7, analysisEnd: 7.2, speaker: .unassigned)]
+        func assemble(_ policy: MeetingSpeakerAttributionPolicy) throws -> MeetingAssemblyResult {
+            try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+                evidence: self.evidence(plan: plan, units: units), coverageReceipts: self.receipts(for: manifest),
+                echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, MeetingUnitEchoVerdict.notEcho) }),
+                speakerAttributionPolicy: policy))
+        }
+        let result = try assemble(.standard)
+        let legacy = try assemble(.init())
+        XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil && $0.speakerIdentityIsProvisional == true })
+        XCTAssertEqual(result.segments[0].speakerID, result.segments[1].speakerID)
+        XCTAssertNotEqual(result.segments[1].speakerID, result.segments[2].speakerID)
+        XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), legacy.segments.map(\.nativeSpeakerAssignment))
+        XCTAssertEqual(result.segments.map(\.nativeTiming), legacy.segments.map(\.nativeTiming))
+        XCTAssertEqual(result.sidecar.units, legacy.sidecar.units)
+        XCTAssertEqual(result.sidecar.speakerActivity, legacy.sidecar.speakerActivity)
+        XCTAssertEqual(result.sidecar.dispositions, legacy.sidecar.dispositions)
+    }
+
     func testPCMWindowUsesExistingIdentityAndOffsetWithoutCreatingAudioManifest() throws {
         let attempt = UUID()
         let track = UUID()

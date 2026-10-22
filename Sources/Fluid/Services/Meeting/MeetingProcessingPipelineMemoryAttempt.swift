@@ -476,6 +476,18 @@ extension MeetingProcessingPipeline {
             }
         }
         try Task.checkCancellation()
+        if attempt.request.configuration.speakerLabelsEnabled,
+           attempt.request.configuration.effectiveSpeakerProcessingMode != .streaming, let track {
+            // Recognition/replay has already passed the existing privacy gate. Final batch
+            // diarization can still abstain; use the same protected reading identity policy
+            // as streaming without replaying speech or inventing native speaker evidence.
+            batch = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(batch,
+                attemptID: attempt.request.attemptID,
+                policy: attempt.request.configuration.speakerAttributionPolicy,
+                speakerNameFormat: batch.speakerNameFormat ?? PichiLocalization.text("Speaker %lld"),
+                trackKinds: [track.id: track.kind],
+                epochForSegment: { _ in .init(trackID: track.id, ordinal: 0) })
+        }
         progress(.finalizing)
         // Stop-time pending records can predate or differ from the admitted PCM request.
         // As in canonicalResult, preserve only the matching identity and record all lineage
