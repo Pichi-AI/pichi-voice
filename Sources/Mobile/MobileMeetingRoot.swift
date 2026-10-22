@@ -34,6 +34,7 @@ struct MobileMeetingRoot: View {
     @State private var showRecordingSettings = false
     @State private var microphoneSnapshot = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
     @State private var edit: MeetingEditDraft?
+    @State private var speakerAssignment: MeetingSpeakerAssignmentDraft?
     @State private var deletion: Deletion?
     @State private var share: MeetingSharePayload?
     @State private var showPresentationPicker = false
@@ -137,6 +138,22 @@ struct MobileMeetingRoot: View {
         .sheet(item: $share) { payload in
             MobileActivitySheet(items: payload.items) { share = nil }
                 .onDisappear { payload.cleanup() }
+        }
+        .sheet(item: $speakerAssignment) { draft in
+            MeetingSpeakerAssignmentSheet(draft: draft, cancel: { speakerAssignment = nil }) { segmentIDs, speakerID in
+                guard coordinator.isQuiescent, !isBusy else { return }
+                speakerAssignment = nil
+                run {
+                    let result: MeetingSession
+                    if let segmentID = segmentIDs.first, segmentIDs.count == 1 {
+                        result = try await coordinator.reassignSegment(sessionID: draft.session.id, segmentID: segmentID, to: speakerID)
+                    } else {
+                        result = try await coordinator.reassignSegments(sessionID: draft.session.id, segmentIDs: segmentIDs, to: speakerID)
+                    }
+                    acceptCommittedSession(result)
+                }
+            }
+            .disabled(!coordinator.isQuiescent || isBusy)
         }
         .fileImporter(isPresented: $showPresentationPicker, allowedContentTypes: [.pdf]) { result in
             showPresentationPicker = false
@@ -383,7 +400,7 @@ struct MobileMeetingRoot: View {
                 }
             }
             if !compactHeight {
-                Text(session.title).font(theme.typography.title).lineLimit(2)
+                Text(session.displayTitle).font(theme.typography.title).lineLimit(2)
             }
             HStack {
                 Label(PichiLocalization.text("Microphone"), systemImage: "mic")
@@ -439,7 +456,7 @@ struct MobileMeetingRoot: View {
         VStack(alignment: .leading, spacing: 24) {
             Label(PichiLocalization.text("Preparing your transcript"), systemImage: "text.alignleft")
                 .font(theme.typography.sectionTitle)
-            Text(session.title).font(theme.typography.title)
+            Text(session.displayTitle).font(theme.typography.title)
             ProgressView(PichiLocalization.text(stageTitle(stage)))
                 .accessibilityIdentifier("meeting.processing")
             Spacer()
@@ -471,7 +488,7 @@ struct MobileMeetingRoot: View {
                 VStack(alignment: .leading, spacing: 16) {
                     // Without transcript text the title belongs here; otherwise the transcript shows it.
                     if session.transcriptSegments.isEmpty {
-                        Text(session.title).font(theme.typography.title)
+                        Text(session.displayTitle).font(theme.typography.title)
                     }
                     Text(PichiLocalization.text(session.state == .interrupted
                         ? "Meeting transcription was interrupted" : "Meeting transcription failed"))
@@ -506,14 +523,14 @@ struct MobileMeetingRoot: View {
 
     private var history: some View {
         let matches = sessions.filter { session in
-            search.isEmpty || session.title.localizedCaseInsensitiveContains(search)
+            search.isEmpty || session.displayTitle.localizedCaseInsensitiveContains(search)
                 || session.activeSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
                 || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
         }
         return List(matches) { session in
             Button { historyPath = [session.id] } label: {
                 VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
-                    Text(session.title).font(theme.typography.bodyStrong)
+                    Text(session.displayTitle).font(theme.typography.bodyStrong)
                     Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
@@ -536,7 +553,10 @@ struct MobileMeetingRoot: View {
             if let session = sessions.first(where: { $0.id == id }) {
                 Group {
                     if session.state == .failed || session.state == .interrupted { recovery(session) } else { transcript(session) }
-                }.navigationBarTitleDisplayMode(.inline)
+                }
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbarBackground(theme.palette.toolbarBackground, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
             }
         }
     }
@@ -560,7 +580,7 @@ struct MobileMeetingRoot: View {
         let paragraphs = transcriptReadingSource == readingInput ? transcriptReading : []
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text(session.title).font(theme.typography.title)
+                Text(session.displayTitle).font(theme.typography.title)
                 HStack {
                     Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
                     Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
@@ -589,14 +609,15 @@ struct MobileMeetingRoot: View {
                             Button(PichiLocalization.text("Export Audio")) { exportAudio(session) }
                             Button(PichiLocalization.text("Delete Audio"), role: .destructive) { deletion = .audio(session) }
                         }
-                        Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.title) }
+                        Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.displayTitle) }
                         if coordinator.canUndoCorrection(sessionID: session.id) {
                             Button(PichiLocalization.text("Undo correction")) {
                                 run {
                                     let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
                                     acceptCommittedSession(updated)
                                 }
-                            }
+                            }.disabled(!coordinator.isQuiescent || isBusy)
+                                .accessibilityIdentifier("transcript.undo")
                         }
                         Button(PichiLocalization.text("Delete Meeting"), role: .destructive) { deletion = .meeting(session) }
                     } label: { Label(PichiLocalization.text("More"), systemImage: "ellipsis").frame(minHeight: 44) }
@@ -614,6 +635,8 @@ struct MobileMeetingRoot: View {
                 if !session.activeSpeakers.isEmpty {
                     Text(PichiLocalization.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    Text(PichiLocalization.text("The You label applies only to this meeting."))
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     if UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact {
                         ScrollView(.horizontal) {
                             HStack(spacing: theme.metrics.spacing.sm) {
@@ -623,7 +646,7 @@ struct MobileMeetingRoot: View {
                             }
                         }.scrollIndicators(.hidden).accessibilityIdentifier("transcript.speakers")
                     } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading,
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), alignment: .leading)], alignment: .leading,
                                   spacing: theme.metrics.spacing.sm) {
                             ForEach(session.activeSpeakers) { speaker in
                                 participantButton(speaker, session: session, expands: true)
@@ -653,14 +676,36 @@ struct MobileMeetingRoot: View {
     }
 
     private func participantButton(_ speaker: MeetingSessionSpeaker, session: MeetingSession, expands: Bool) -> some View {
-        Button {
-            edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
-        } label: {
-            Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language), systemImage: "person.crop.circle")
-                .font(theme.typography.captionStrong)
-                .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
-        }.disabled(!coordinator.isQuiescent)
-            .accessibilityIdentifier("transcript.speaker.\(speaker.id)")
+        HStack(spacing: theme.metrics.spacing.xs) {
+            Button {
+                edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
+            } label: {
+                Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language), systemImage: "person.crop.circle")
+                    .font(theme.typography.captionStrong)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
+            }.accessibilityIdentifier("transcript.speaker.\(speaker.id)")
+            Menu {
+                Button(PichiLocalization.text("Rename Speaker"), systemImage: "pencil") {
+                    edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
+                }
+                Button(PichiLocalization.text(speaker.isLocalUser ? "Remove You designation" : "Mark as You"),
+                       systemImage: speaker.isLocalUser ? "person.crop.circle.badge.minus" : "person.crop.circle.badge.checkmark") {
+                    guard coordinator.isQuiescent, !isBusy else { return }
+                    run {
+                        let updated = try await coordinator.setLocalUserSpeaker(sessionID: session.id,
+                            speakerID: speaker.isLocalUser ? nil : speaker.id)
+                        acceptCommittedSession(updated)
+                    }
+                }.accessibilityIdentifier("transcript.participant.\(speaker.isLocalUser ? "removeYou" : "markYou").\(speaker.id)")
+            } label: {
+                Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44)
+            }
+            .accessibilityLabel(PichiLocalization.text("Participant actions"))
+            .accessibilityHint(PichiLocalization.text("The You label applies only to this meeting."))
+            .accessibilityIdentifier("transcript.participant.actions.\(speaker.id)")
+        }.disabled(!coordinator.isQuiescent || isBusy)
     }
 
     private func transcriptParagraph(_ paragraph: MeetingTranscriptExporter.DisplayParagraph, session: MeetingSession,
@@ -679,6 +724,14 @@ struct MobileMeetingRoot: View {
                         .padding(.top, theme.metrics.spacing.sm)
                 }
                 Spacer(minLength: 0)
+                Button {
+                    speakerAssignment = MeetingSpeakerAssignmentDraft(session: session, segments: paragraph.segments)
+                } label: {
+                    Image(systemName: "person.2")
+                        .frame(minWidth: 44, minHeight: 44)
+                }.disabled(!coordinator.isQuiescent || isBusy || session.activeSpeakers.isEmpty)
+                    .accessibilityLabel(PichiLocalization.text("Change speaker"))
+                    .accessibilityIdentifier("transcript.reassign.\(segment.id)")
                 if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
                     Button {
                         if isAudioExpanded { playback.stop() }
@@ -796,7 +849,7 @@ struct MobileMeetingRoot: View {
         run {
             guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
             let data = try await MeetingTranscriptExporter.protectedTranscriptJSONForSharing(for: fresh)
-            share = try MeetingSharePayload.transcript(data: data, title: fresh.title, fileExtension: "json")
+            share = try MeetingSharePayload.transcript(data: data, title: fresh.displayTitle, fileExtension: "json")
         }
     }
 }
@@ -813,26 +866,115 @@ private struct MeetingEditSheet: View {
     let draft: MeetingEditDraft
     let cancel: () -> Void
     let save: (MeetingEditDraft.Kind, String) -> Void
-    @Environment(\.theme) private var theme
     var body: some View {
         NavigationStack {
             if case .paragraph(let segments) = draft.kind {
-                List(segments) { segment in
-                    NavigationLink {
+                List {
+                    MeetingTranscriptMemberLinks(segments: segments, identifierPrefix: "transcript.edit.fragment") { segment in
                         MeetingEditTextForm(kind: .segment(segment), text: segment.text, cancel: cancel, save: save)
-                    } label: {
-                        VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
-                            Text(MeetingTranscriptExporter.timestampText(segment.start.seconds))
-                                .font(theme.typography.codeCaption).foregroundStyle(theme.palette.secondaryText)
-                            Text(segment.text).font(theme.typography.body)
-                        }.frame(minHeight: 44)
-                    }.accessibilityIdentifier("transcript.edit.fragment.\(segment.id)")
+                    }
                 }.navigationTitle(PichiLocalization.text("Transcript text"))
                     .accessibilityIdentifier("transcript.edit.fragments")
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button(PichiLocalization.text("Cancel"), action: cancel) } }
             } else {
                 MeetingEditTextForm(kind: draft.kind, text: draft.text, cancel: cancel, save: save)
             }
+        }
+    }
+}
+
+/// The reading paragraph keeps its original members for both text and speaker corrections.
+/// Choosing a member never applies a change to another paragraph or participant's other turns.
+private struct MeetingTranscriptMemberLinks<Destination: View>: View {
+    let segments: [MeetingTranscriptSegment]
+    let identifierPrefix: String
+    @ViewBuilder let destination: (MeetingTranscriptSegment) -> Destination
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        ForEach(segments) { segment in
+            NavigationLink {
+                destination(segment)
+            } label: {
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                    Text(MeetingTranscriptExporter.timestampText(segment.start.seconds))
+                        .font(theme.typography.codeCaption).foregroundStyle(theme.palette.secondaryText)
+                    Text(segment.text).font(theme.typography.body)
+                }.frame(minHeight: 44)
+            }.accessibilityIdentifier("\(identifierPrefix).\(segment.id)")
+        }
+    }
+}
+
+private struct MeetingSpeakerAssignmentDraft: Identifiable {
+    let id = UUID()
+    let session: MeetingSession
+    let segments: [MeetingTranscriptSegment]
+}
+
+private struct MeetingSpeakerAssignmentSheet: View {
+    let draft: MeetingSpeakerAssignmentDraft
+    let cancel: () -> Void
+    let assign: ([MeetingTranscriptSegmentID], SessionSpeakerID) -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if draft.segments.count > 1 {
+                    List {
+                        Section {
+                            NavigationLink {
+                                participantList(for: draft.segments)
+                            } label: {
+                                Label(PichiLocalization.text("Whole fragment"), systemImage: "text.alignleft")
+                                    .font(theme.typography.body)
+                                    .frame(minHeight: 44)
+                            }.accessibilityIdentifier("transcript.reassign.whole")
+                        } footer: {
+                            Text(PichiLocalization.text("Change the speaker for this visible fragment only."))
+                                .font(theme.typography.caption)
+                        }
+                        Section(PichiLocalization.text("Individual words or parts")) {
+                            MeetingTranscriptMemberLinks(segments: draft.segments, identifierPrefix: "transcript.reassign.fragment") { segment in
+                                participantList(for: [segment])
+                            }
+                        }
+                    }
+                    .navigationTitle(PichiLocalization.text("Change speaker"))
+                    .accessibilityIdentifier("transcript.reassign.scope")
+                } else {
+                    participantList(for: draft.segments)
+                }
+            }.toolbar { cancellation }
+        }
+    }
+
+    private func participantList(for segments: [MeetingTranscriptSegment]) -> some View {
+        List {
+            Section {
+                ForEach(draft.session.activeSpeakers) { speaker in
+                    Button {
+                        assign(segments.map(\.id), speaker.id)
+                    } label: {
+                        Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language),
+                              systemImage: "person.crop.circle")
+                            .font(theme.typography.body)
+                            .frame(minHeight: 44)
+                    }.accessibilityIdentifier("transcript.reassign.target.\(speaker.id)")
+                }
+            } footer: {
+                Text(PichiLocalization.text("Only the selected text changes speaker. Other fragments keep their speakers."))
+                    .font(theme.typography.caption)
+            }
+        }
+        .navigationTitle(PichiLocalization.text("Select a speaker"))
+        .accessibilityIdentifier("transcript.reassign.targets")
+    }
+
+    @ToolbarContentBuilder private var cancellation: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button(PichiLocalization.text("Cancel"), action: cancel)
         }
     }
 }

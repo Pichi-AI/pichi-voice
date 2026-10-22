@@ -78,7 +78,7 @@ struct OnboardingCleanupExampleCarousel: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Show \(example.title)")
+                            .accessibilityLabel(PichiLocalization.format("Show %@", PichiLocalization.text(example.title)))
                             .accessibilityValue(self.selectedID == example.id ? "Current page" : "")
                         }
                     }
@@ -124,7 +124,7 @@ struct OnboardingCleanupExampleCarousel: View {
                     Color.clear.contentShape(RoundedRectangle(cornerRadius: AppTheme.Metrics.Showcase.cardRadius))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Show \(example.title)")
+                .accessibilityLabel(PichiLocalization.format("Show %@", PichiLocalization.text(example.title)))
             }
         }
     }

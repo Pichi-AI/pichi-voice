@@ -97,6 +97,9 @@ nonisolated struct MeetingNemotronPhaseResult: Sendable {
     var failures: [MeetingAnalysisEpochID: String] = [:]
     var voiceSamples: [MeetingSpeakerVoiceSamples] = []
     var voiceProfiles: [MeetingSpeakerVoiceProfile] = []
+    /// Optional identity rereads can fail while anonymous diarization/ASR remain usable.
+    /// A complete competitor set is required before a full-evidence owner decision.
+    var ownerEvidenceComplete = true
 }
 
 /// One bounded core whose provider could not supply usable word timing. Native segment

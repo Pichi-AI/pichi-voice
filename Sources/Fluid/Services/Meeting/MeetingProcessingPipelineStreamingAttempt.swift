@@ -6,8 +6,7 @@ extension MeetingProcessingPipeline {
     /// and speaker-only revisions. A streaming attempt never archives or replays its audio.
     func makeStreamingMemoryConsumer(
         attempt: MeetingMemoryProcessingAttempt, track: MeetingAudioTrack,
-        service: any MeetingASRServicing,
-        observeSpeech: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?
+        service: any MeetingASRServicing
     ) async throws -> any MeetingMemoryAudioConsuming {
         let configuration = attempt.request.configuration
         let attemptID = attempt.request.attemptID
@@ -79,13 +78,24 @@ extension MeetingProcessingPipeline {
         }
         do {
             try Task.checkCancellation()
+            let publishSpeech: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?
+            if let preview {
+                publishSpeech = { speech in
+                    let protected = try await state.observeSpeechPreview(speech)
+                    try Task.checkCancellation()
+                    try await preview(protected)
+                }
+            } else { publishSpeech = nil }
             let consumer = try Self.makeProgressiveMemoryAudioConsumer(
                 chunkSeconds: 20, maximumPendingSeconds: 60,
-                initialPreviewSeconds: 3, previewIntervalSeconds: 10,
+                // Small PCM deliveries keep acoustic scoring and pause detection moving.
+                // Repeated batch ASR has its own cadence in the existing runtime.
+                initialPreviewSeconds: 0.5, previewIntervalSeconds: 0.5,
                 confidentlyNonSpeech: attempt.confidentlyNonSpeech,
+                pauseEndpointSilenceSeconds: 0.768,
                 recognize: { window, offset in
                     let observation = try await controller.recognize(window: window, offset: offset,
-                        preview: observeSpeech)
+                        preview: publishSpeech)
                     let emission = try await state.observe(observation)
                     try await publishPreview(emission)
                     Self.logStreamingEmission(emission, attemptID: attemptID, phase: "window")

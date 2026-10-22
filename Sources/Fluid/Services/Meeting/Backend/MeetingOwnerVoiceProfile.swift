@@ -25,14 +25,55 @@ nonisolated enum MeetingOwnerVoiceProfileError: Error {
 
 /// Explicit owner identity is a cross-recording decision, separate from anonymous within-
 /// meeting clustering. Saved recipes retain their original strict policy; two plausible
-/// owner identities still remain unconfirmed under either policy.
+/// owner identities still remain unconfirmed under every policy.
 nonisolated enum MeetingOwnerVoiceVerifier {
+    /// Bind only an unambiguous encoder input/result pair. The adapter stores these scalar
+    /// lengths atomically with that encoded profile; embeddings alone cannot prove duration.
+    static func clipFramesByToken(
+        samples: [MeetingSpeakerVoiceSamples], profiles: [MeetingSpeakerVoiceProfile]
+    ) -> [MeetingBackendSpeakerToken: [Int]] {
+        guard samples.count <= MeetingSpeakerVoiceSamples.maximumProfiles,
+              profiles.count <= MeetingSpeakerVoiceSamples.maximumProfiles else { return [:] }
+        let inputs = Dictionary(grouping: samples, by: \.token)
+        let outputs = Dictionary(grouping: profiles, by: \.token)
+        var frames: [MeetingBackendSpeakerToken: [Int]] = [:]
+        for profile in profiles {
+            guard outputs[profile.token]?.count == 1, let matches = inputs[profile.token], matches.count == 1,
+                  matches[0].clips.count == 2 else { continue }
+            frames[profile.token] = matches[0].clips.map(\.count)
+        }
+        return frames
+    }
+
+    /// An omitted competitor is unavailable evidence, not evidence that the remaining
+    /// profile is the owner. Keep this input/result boundary separate from scoring.
+    static func hasCompleteEncoderResults(
+        samples: [MeetingSpeakerVoiceSamples], profiles: [MeetingSpeakerVoiceProfile]
+    ) -> Bool {
+        let expected = Set(samples.map(\.token))
+        let returned = Set(profiles.map(\.token))
+        return !samples.isEmpty && samples.count <= MeetingSpeakerVoiceSamples.maximumProfiles
+            && samples.count == profiles.count && expected.count == samples.count
+            && returned.count == profiles.count && expected == returned
+            && self.clipFramesByToken(samples: samples, profiles: profiles).count == samples.count
+            && profiles.allSatisfy { MeetingSpeakerVoiceMatcher.distance($0, $0) != nil }
+    }
+
     nonisolated enum Policy: Equatable, Sendable {
         case legacy
         case streamingV2
+        case streamingV4
         var maximumReferenceDistance: Float { self == .legacy ? 0.25 : 0.65 }
         var maximumQuerySelfDistance: Float { self == .legacy ? 0.25 : 0.45 }
         var ambiguityMargin: Float { 0.10 }
+
+        var diagnosticName: String {
+            switch self {
+            case .legacy: "legacy"
+            case .streamingV2: "streamingV2"
+            case .streamingV4: "streamingV4"
+            }
+        }
     }
 
     /// Attempt-local scalar evidence only. Never includes tokens, profile metadata or vectors.
@@ -40,7 +81,7 @@ nonisolated enum MeetingOwnerVoiceVerifier {
     nonisolated struct Diagnostics: Sendable {
         nonisolated enum Outcome: String, Sendable {
             case missingOwner, invalidOwner, duplicateTokens, invalidLinks
-            case noValidCandidates, referenceDistance, winnerMargin, confirmed
+            case noValidCandidates, referenceDistance, winnerMargin, insufficientEvidence, confirmed
         }
         nonisolated struct Query: Sendable {
             nonisolated enum Gate: String, Sendable { case invalidQuery, querySelfDistance, invalidReferenceDistance, measured }
@@ -48,6 +89,10 @@ nonisolated enum MeetingOwnerVoiceVerifier {
             let selfDistance: Float?
             let referenceDistance: Float?
             let gate: Gate
+            let clipCount: Int?
+            /// Bounded scalar metadata from this profile's encoded cache entry, never PCM.
+            let clipFrames: [Int]?
+            let hasFullEvidence: Bool
         }
         let policy: Policy
         let profileCount: Int
@@ -67,8 +112,9 @@ nonisolated enum MeetingOwnerVoiceVerifier {
             func scalar(_ value: Float?) -> String { value.map { String(format: "%.4f", locale: Locale(identifier: "en_US_POSIX"), Double($0)) } ?? "unavailable" }
             let rows = self.queries.sorted { $0.ordinal < $1.ordinal }.map {
                 "\($0.ordinal):\($0.gate.rawValue):self=\(scalar($0.selfDistance)):reference=\(scalar($0.referenceDistance))"
+                    + ":clips=\($0.clipCount.map(String.init) ?? "unavailable"):frames=\($0.clipFrames.map { $0.map(String.init).joined(separator: "+") } ?? "unavailable"):full=\($0.hasFullEvidence)"
             }.joined(separator: ",")
-            return "policy=\(self.policy == .legacy ? "legacy" : "streamingV2") outcome=\(self.outcome.rawValue)"
+            return "policy=\(self.policy.diagnosticName) outcome=\(self.outcome.rawValue)"
                 + " profileCount=\(self.profileCount) validProfiles=\(self.validProfileCount) rejectedProfiles=\(self.rejectedProfileCount)"
                 + " skippedProfiles=\(self.profileCount - self.validProfileCount - self.rejectedProfileCount)"
                 + " validGroups=\(self.validGroupCount) rejectedGroups=\(self.rejectedGroupCount)"
@@ -81,14 +127,17 @@ nonisolated enum MeetingOwnerVoiceVerifier {
 
     static func confirmedTokens(
         owner: MeetingOwnerVoiceProfileSnapshot?, profiles: [MeetingSpeakerVoiceProfile],
-        identityLinks: [MeetingSpeakerIdentityLink] = [], policy: Policy = .legacy
+        identityLinks: [MeetingSpeakerIdentityLink] = [], policy: Policy = .legacy,
+        clipFramesByToken: [MeetingBackendSpeakerToken: [Int]] = [:]
     ) -> Set<MeetingBackendSpeakerToken> {
-        self.confirmedTokens(owner: owner, profiles: profiles, identityLinks: identityLinks, policy: policy, diagnostics: nil)
+        self.confirmedTokens(owner: owner, profiles: profiles, identityLinks: identityLinks, policy: policy,
+                             clipFramesByToken: clipFramesByToken, diagnostics: nil)
     }
 
     static func confirmedTokens(
         owner: MeetingOwnerVoiceProfileSnapshot?, profiles: [MeetingSpeakerVoiceProfile],
         identityLinks: [MeetingSpeakerIdentityLink] = [], policy: Policy = .legacy,
+        clipFramesByToken: [MeetingBackendSpeakerToken: [Int]] = [:],
         diagnostics: ((Diagnostics) -> Void)?
     ) -> Set<MeetingBackendSpeakerToken> {
         var report = Diagnostics(policy: policy, profileCount: profiles.count)
@@ -96,15 +145,17 @@ nonisolated enum MeetingOwnerVoiceVerifier {
             if let diagnostics { report.outcome = outcome; diagnostics(report) }
             return tokens
         }
-        func measure(_ ordinal: Int, _ consistency: Float?, _ distance: Float?, _ gate: Diagnostics.Query.Gate) {
+        func measure(_ ordinal: Int, _ token: MeetingBackendSpeakerToken, _ consistency: Float?, _ distance: Float?, _ gate: Diagnostics.Query.Gate) {
             if gate == .measured { report.validProfileCount += 1 } else { report.rejectedProfileCount += 1 }
             if diagnostics != nil, report.queries.count < MeetingSpeakerVoiceSamples.maximumProfiles {
-                report.queries.append(.init(ordinal: ordinal, selfDistance: consistency, referenceDistance: distance, gate: gate))
+                let frames = clipFramesByToken[token]
+                report.queries.append(.init(ordinal: ordinal, selfDistance: consistency, referenceDistance: distance, gate: gate,
+                    clipCount: frames?.count, clipFrames: frames.map { Array($0.prefix(2)) }, hasFullEvidence: frames == [80_000, 80_000]))
             }
         }
         guard let owner else { return finish(.missingOwner) }
         guard MeetingOwnerVoiceProfileStore.isValid(owner) else { return finish(.invalidOwner) }
-        if policy == .streamingV2 {
+        if policy != .legacy {
             let tokens = Set(profiles.map(\.token))
             guard tokens.count == profiles.count else { return finish(.duplicateTokens) }
             guard MeetingSpeakerVoiceMatcher.validLinks(identityLinks, allowedTokens: tokens) else { return finish(.invalidLinks) }
@@ -117,15 +168,15 @@ nonisolated enum MeetingOwnerVoiceVerifier {
             var valid = true
             for (ordinal, observation) in observations {
                 guard let consistency = MeetingSpeakerVoiceMatcher.distance(observation, observation) else {
-                    measure(ordinal, nil, nil, .invalidQuery); valid = false; break
+                    measure(ordinal, observation.token, nil, nil, .invalidQuery); valid = false; break
                 }
                 guard consistency <= policy.maximumQuerySelfDistance else {
-                    measure(ordinal, consistency, nil, .querySelfDistance); valid = false; break
+                    measure(ordinal, observation.token, consistency, nil, .querySelfDistance); valid = false; break
                 }
                 guard let distance = MeetingSpeakerVoiceMatcher.distance(
                     observation, MeetingSpeakerVoiceProfile(token: observation.token, embeddings: owner.embeddings)
-                ) else { measure(ordinal, consistency, nil, .invalidReferenceDistance); valid = false; break }
-                measure(ordinal, consistency, distance, .measured)
+                ) else { measure(ordinal, observation.token, consistency, nil, .invalidReferenceDistance); valid = false; break }
+                measure(ordinal, observation.token, consistency, distance, .measured)
                 worst = max(worst, distance)
             }
             if valid { measures.append((canonical, worst)) } else { report.rejectedGroupCount += 1 }
@@ -138,7 +189,13 @@ nonisolated enum MeetingOwnerVoiceVerifier {
         guard let winner = measures.first else { return finish(.noValidCandidates) }
         guard winner.1 <= policy.maximumReferenceDistance else { return finish(.referenceDistance) }
         guard measures.count == 1 || measures[1].1 - winner.1 >= policy.ambiguityMargin else { return finish(.winnerMargin) }
-        return finish(.confirmed, tokens: Set(profiles.filter { (canonicalByToken[$0.token] ?? $0.token) == winner.0 }.map(\.token)))
+        let tokens = Set(profiles.filter { (canonicalByToken[$0.token] ?? $0.token) == winner.0 }.map(\.token))
+        // Rank every valid competitor before applying maturity to the winning identity. A
+        // short better match or close rival must never promote a worse mature candidate.
+        if policy == .streamingV4 {
+            guard tokens.allSatisfy({ clipFramesByToken[$0] == [80_000, 80_000] }) else { return finish(.insufficientEvidence) }
+        }
+        return finish(.confirmed, tokens: tokens)
     }
 }
 

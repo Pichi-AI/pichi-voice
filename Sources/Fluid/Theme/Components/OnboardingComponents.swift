@@ -4,6 +4,12 @@ import SwiftUI
 enum FluidOnboardingLayout {
     static let footerHorizontalInset: CGFloat = 56
     static let footerBottomInset: CGFloat = 56
+    /// One footer action size across steps, so Back stays in place between pages.
+    static let footerButtonWidth: CGFloat = 144
+    static let footerButtonHeight: CGFloat = 52
+    static let footerButtonFontSize: CGFloat = 17
+    static let progressTopInset: CGFloat = 28
+    static var progressReservedHeight: CGFloat { FluidOnboardingCompactProgress.height + progressTopInset }
 }
 
 struct OnboardingModelInfoTooltip: View {
@@ -32,6 +38,9 @@ struct OnboardingModelInfoTooltip: View {
 struct FluidOnboardingLandingHero<Actions: View>: View {
     @Environment(\.locale) private var locale
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isRevealed = false
 
     let eyebrow: String
     let title: String
@@ -59,6 +68,8 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             FluidOnboardingAppIconMark()
+                .scaleEffect(self.isRevealed || self.reduceMotion ? 1 : 0.9)
+                .revealed(self.isRevealed, order: 0)
                 .padding(.bottom, self.eyebrow.isEmpty ? 40 : 26)
 
             if !self.eyebrow.isEmpty {
@@ -67,6 +78,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
                     .tracking(4.2)
                     .foregroundStyle(self.theme.palette.accentText)
                     .textCase(.uppercase)
+                    .revealed(self.isRevealed, order: 1)
                     .padding(.bottom, 16)
             }
 
@@ -76,6 +88,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
                     .foregroundStyle(self.theme.palette.primaryText)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.82)
+                    .revealed(self.isRevealed, order: 2)
 
                 Text(PichiLocalization.text(self.accentTitle, locale: self.locale))
                     .font(.fluidSystem(size: 50, weight: .semibold, role: .title))
@@ -83,9 +96,11 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
                     .foregroundStyle(self.theme.palette.accentText)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.76)
+                    .revealed(self.isRevealed, order: 3)
             }
             .lineLimit(1)
-            .shadow(color: .black.opacity(0.34), radius: 10, x: 0, y: 5)
+            // Depth for light type on a dark surface; on a light surface a dark halo only muddies it.
+            .shadow(color: .black.opacity(self.colorScheme == .dark ? 0.34 : 0), radius: 10, x: 0, y: 5)
             .padding(.bottom, 28)
 
             VStack(spacing: 8) {
@@ -97,25 +112,90 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
             .multilineTextAlignment(.center)
             .lineLimit(1)
             .minimumScaleFactor(0.82)
+            .revealed(self.isRevealed, order: 4)
             .padding(.bottom, 42)
 
             self.actions
         }
         .padding(.horizontal, self.theme.metrics.onboardingSurface.landing.heroPadding)
         .frame(maxWidth: .infinity, alignment: .center)
+        .onAppear { self.isRevealed = true }
+    }
+}
+
+/// One motion vocabulary for the whole flow: a soft rise for content, a calm breath for light.
+enum FluidOnboardingMotion {
+    static let reveal = Animation.spring(response: 0.62, dampingFraction: 0.86)
+    static let step = Animation.spring(response: 0.5, dampingFraction: 0.9)
+    static let breath = Animation.easeInOut(duration: 3.6).repeatForever(autoreverses: true)
+    static let crossfade = Animation.easeInOut(duration: 0.2)
+    static let stagger: Double = 0.07
+
+    /// Starts the breath, or settles the light at rest. Callers key the breathing view on `isStill`,
+    /// so a new identity drops a running repeat-forever animation and appears again.
+    static func breathe(_ isBreathing: Binding<Bool>, isStill: Bool) {
+        withAnimation(isStill ? nil : Self.breath) { isBreathing.wrappedValue = !isStill }
+    }
+
+    /// Content enters with a short rise; the previous step fades out quickly so the two never
+    /// read as a double exposure. The shared backdrop stays still.
+    static let stepTransition = AnyTransition.asymmetric(
+        insertion: .opacity.combined(with: .offset(y: 14)).combined(with: .scale(scale: 0.985)),
+        removal: .opacity.animation(.easeOut(duration: 0.14))
+    )
+}
+
+/// Staggered entrance driven by one `isRevealed` flag; Reduce Motion shows content at rest.
+private struct FluidOnboardingReveal: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let isRevealed: Bool
+    let order: Int
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(self.isRevealed ? 1 : 0)
+            .offset(y: self.isRevealed || self.reduceMotion ? 0 : 12)
+            .animation(self.reduceMotion ? nil : FluidOnboardingMotion.reveal.delay(Double(self.order) * FluidOnboardingMotion.stagger),
+                       value: self.isRevealed)
+    }
+}
+
+private extension View {
+    func revealed(_ isRevealed: Bool, order: Int) -> some View {
+        self.modifier(FluidOnboardingReveal(isRevealed: isRevealed, order: order))
     }
 }
 
 struct FluidOnboardingLandingBackdrop: View {
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isBreathing = false
     let glowCenter: UnitPoint
+    let breathes: Bool
 
-    init(glowCenter: UnitPoint = UnitPoint(x: 0.5, y: 0.18)) {
+    init(glowCenter: UnitPoint = UnitPoint(x: 0.5, y: 0.18), breathes: Bool = true) {
         self.glowCenter = glowCenter
+        self.breathes = breathes
     }
 
     var body: some View {
-        self.theme.palette.windowBackground
+        // The original layered light, drawn from the active brand palette instead of fixed blue.
+        let isDark = self.colorScheme == .dark
+        let accent = FluidOnboardingLandingColors.blue
+        let isStill = self.reduceMotion || !self.breathes
+        ZStack {
+            self.theme.palette.windowBackground
+            RadialGradient(colors: [accent.opacity(isDark ? 0.22 : 0.13), accent.opacity(isDark ? 0.07 : 0.04), .clear],
+                           center: self.glowCenter, startRadius: 0, endRadius: 640)
+                .opacity(self.isBreathing ? 1 : 0.8)
+            RadialGradient(colors: [self.theme.palette.primaryText.opacity(isDark ? 0.035 : 0.02), .clear],
+                           center: .center, startRadius: 0, endRadius: 520)
+        }
+        .onAppear { FluidOnboardingMotion.breathe(self.$isBreathing, isStill: isStill) }
+        .id(isStill)
+        // Swap at once: a crossfade of two backdrops would let the transparent window show through.
+        .transition(.identity)
         // A crisp card edge: the old feathered mask let the window's rectangle show through
         // the fade, which read as a second, uglier boundary on light desktops.
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -202,6 +282,9 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
 }
 
 struct FluidOnboardingCompactProgress: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    static let height: CGFloat = 6
     let value: Double
 
     var body: some View {
@@ -210,24 +293,27 @@ struct FluidOnboardingCompactProgress: View {
             let width = proxy.size.width
 
             ZStack(alignment: .leading) {
+                // A theme ink track stays visible on light and dark brand surfaces.
                 Capsule()
-                    .fill(Color.white.opacity(0.08))
+                    .fill(self.theme.palette.primaryText.opacity(0.10))
 
                 Capsule()
-                    .fill(FluidOnboardingLandingColors.blue)
+                    .fill(self.theme.palette.accent)
                     .frame(width: width * clampedValue)
-                    .shadow(color: FluidOnboardingLandingColors.blue.opacity(0.38), radius: 8, x: 0, y: 0)
+                    .shadow(color: self.theme.palette.accent.opacity(0.38), radius: 8, x: 0, y: 0)
             }
+            .animation(self.reduceMotion ? nil : FluidOnboardingMotion.step, value: clampedValue)
         }
-        .frame(width: 292, height: 4)
+        .frame(width: 320, height: Self.height)
         .accessibilityHidden(true)
     }
 }
 
 struct FluidOnboardingCompactAppIconMark: View {
+    static let standardSize: CGFloat = 76
     let size: CGFloat
 
-    init(size: CGFloat = 66) {
+    init(size: CGFloat = Self.standardSize) {
         self.size = size
     }
 
@@ -456,15 +542,19 @@ private final class LandingPrimaryNSButton: NSButton {
 }
 
 private struct FluidOnboardingAppIconMark: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isBreathing = false
+
     var body: some View {
         ZStack {
             Circle()
-                .fill(FluidOnboardingLandingColors.blue.opacity(0.28))
+                .fill(FluidOnboardingLandingColors.blue.opacity(self.isBreathing ? 0.36 : 0.28))
                 .blur(radius: 42)
                 .frame(width: 188, height: 188)
                 .offset(y: -16)
 
             FluidOnboardingPortalGlow()
+                .scaleEffect(x: self.isBreathing ? 1.05 : 1, y: 1)
                 .offset(y: 58)
 
             Image(nsImage: PichiBrandMark.appIcon)
@@ -475,6 +565,8 @@ private struct FluidOnboardingAppIconMark: View {
                 .shadow(color: Color.black.opacity(0.56), radius: 20, x: 0, y: 15)
                 .shadow(color: FluidOnboardingLandingColors.blue.opacity(0.58), radius: 36, x: 0, y: 0)
         }
+        .onAppear { FluidOnboardingMotion.breathe(self.$isBreathing, isStill: self.reduceMotion) }
+        .id(self.reduceMotion)
         .frame(width: 360, height: 176)
         .accessibilityHidden(true)
     }

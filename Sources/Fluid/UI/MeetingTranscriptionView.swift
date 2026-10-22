@@ -291,7 +291,8 @@ struct MeetingTranscriptionView: View {
                         isRetrying: self.isRetrying,
                         onCloseSelection: self.closeCanvasAction,
                         summaryASRService: self.asrService,
-                        onOpenIntegrations: self.openMeetingIntegrations
+                        onOpenIntegrations: self.openMeetingIntegrations,
+                        onSetLocalUserSpeaker: self.setLocalUserSpeaker
                     )
                     .padding(.trailing, self.isMeetingHistoryVisible && geometry.size.width >= 900 ? 272 : 0)
                     .allowsHitTesting(!self.isMeetingHistoryVisible || geometry.size.width >= 900)
@@ -902,6 +903,19 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    private func setLocalUserSpeaker(sessionID: MeetingSessionID, speakerID: SessionSpeakerID?) {
+        guard self.coordinator.isQuiescent, self.summaryActivity.selectionLock == nil else { return }
+        self.actionErrorMessage = nil
+        Task {
+            do {
+                _ = try await self.coordinator.setLocalUserSpeaker(sessionID: sessionID, speakerID: speakerID)
+            } catch {
+                self.actionErrorMessage = error.localizedDescription
+            }
+            await self.loadMeetingHistory()
+        }
+    }
+
     private func nameUnknownSegment(
         sessionID: MeetingSessionID,
         segmentID: MeetingTranscriptSegmentID,
@@ -1297,7 +1311,7 @@ struct MeetingTranscriptionView: View {
 
     private func exportTranscript(_ session: MeetingSession, format: MeetingTranscriptExportFormat, includeEchoes: Bool) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(Self.sanitizedExportName(session.title)).\(format.fileExtension)"
+        panel.nameFieldStringValue = "\(Self.sanitizedExportName(session.displayTitle)).\(format.fileExtension)"
         panel.message = AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         self.actionErrorMessage = nil
@@ -1443,6 +1457,7 @@ struct MeetingTranscriptionCanvas: View {
     let onCloseSelection: (() -> Void)?
     var summaryASRService: ASRService? = nil
     var onOpenIntegrations: (() -> Void)? = nil
+    var onSetLocalUserSpeaker: ((MeetingSessionID, SessionSpeakerID?) -> Void)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -1555,7 +1570,10 @@ struct MeetingTranscriptionCanvas: View {
                         onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
                         onClose: self.onCloseSelection,
                         summaryASRService: self.summaryASRService,
-                        onOpenIntegrations: self.onOpenIntegrations
+                        onOpenIntegrations: self.onOpenIntegrations,
+                        onSetLocalUserSpeaker: self.onSetLocalUserSpeaker.map { callback in
+                            { speakerID in callback(session.id, speakerID) }
+                        }
                     )
                 }
             case let .failed(session, message):
@@ -1677,7 +1695,7 @@ private struct MeetingHistoryInspector: View {
         let query = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return self.sessions }
         return self.sessions.filter { session in
-            session.title.localizedCaseInsensitiveContains(query) ||
+            session.displayTitle.localizedCaseInsensitiveContains(query) ||
                 session.capturedApplication?.displayName.localizedCaseInsensitiveContains(query) == true ||
                 session.activeSpeakers.contains(where: { $0.displayName.localizedCaseInsensitiveContains(query) })
         }
@@ -1799,7 +1817,7 @@ private struct MeetingHistoryInspector: View {
                                             .menuIndicator(.hidden)
                                             .fixedSize()
                                             .meetingHoverFeedback()
-                                            .accessibilityLabel("Actions for \(session.title)")
+                                            .accessibilityLabel("Actions for \(session.displayTitle)")
                                             .padding(self.theme.metrics.spacing.sm)
                                         }
                                     }
@@ -1863,7 +1881,7 @@ private struct MeetingHistoryInspector: View {
     @ViewBuilder
     private func contextMenu(for session: MeetingSession) -> some View {
         Button("Rename…", systemImage: "pencil") {
-            self.renameDraft = session.title
+            self.renameDraft = session.displayTitle
             self.renameSessionID = session.id
         }
         .disabled(!self.isQuiescent)
@@ -1943,7 +1961,7 @@ private struct MeetingHistoryRow: View {
                 HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
                     self.tile
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                        Text(self.session.title)
+                        Text(self.session.displayTitle)
                             .font(self.theme.typography.bodyStrong)
                             .foregroundStyle(self.theme.palette.primaryText)
                             .lineLimit(2)
@@ -1959,9 +1977,9 @@ private struct MeetingHistoryRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(self.session.title), \(self.statusText), \(self.sourceName)")
+            .accessibilityLabel("\(self.session.displayTitle), \(self.statusText), \(self.sourceName)")
             .accessibilityAddTraits(self.isSelected ? .isSelected : [])
-            .editableTitle(self.session.title, id: String(describing: self.session.id), enabled: self.isQuiescent, onRename: self.onRename)
+            .editableTitle(self.session.displayTitle, id: String(describing: self.session.id), enabled: self.isQuiescent, onRename: self.onRename)
             if let actionLabel {
                 Button(actionLabel, action: self.performAction)
                     .buttonStyle(.borderless)
@@ -2325,7 +2343,7 @@ private struct MeetingSetupCanvas: View {
                         .foregroundStyle(self.theme.palette.secondaryText)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                         Text("Last meeting").font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
-                        Text(recentSession.title).font(self.theme.typography.bodyStrong).lineLimit(2)
+                        Text(recentSession.displayTitle).font(self.theme.typography.bodyStrong).lineLimit(2)
                     }
                     Spacer()
                     Text(Self.durationText(recentSession.duration))

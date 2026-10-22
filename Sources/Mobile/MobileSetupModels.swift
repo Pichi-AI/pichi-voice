@@ -13,8 +13,8 @@ extension SettingsStore {
         set { objectWillChange.send(); defaults.set(newValue ? 1 : 0, forKey: Self.mobileSetupVersionKey) }
     }
     var mobileSetupStep: Int {
-        get { min(5, max(0, defaults.integer(forKey: Self.mobileSetupStepKey))) }
-        set { objectWillChange.send(); defaults.set(min(5, max(0, newValue)), forKey: Self.mobileSetupStepKey) }
+        get { min(6, max(0, defaults.integer(forKey: Self.mobileSetupStepKey))) }
+        set { objectWillChange.send(); defaults.set(min(6, max(0, newValue)), forKey: Self.mobileSetupStepKey) }
     }
     var mobileSetupSelectedModel: SpeechModel? {
         get { defaults.string(forKey: Self.mobileSetupModelKey).flatMap(SpeechModel.init(rawValue:)) }

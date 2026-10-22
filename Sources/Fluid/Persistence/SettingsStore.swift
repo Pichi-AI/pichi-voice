@@ -2786,11 +2786,11 @@ final class SettingsStore: ObservableObject {
     var onboardingCurrentStep: Int {
         get {
             let raw = self.defaults.integer(forKey: Keys.onboardingCurrentStep)
-            return max(0, min(5, raw))
+            return max(0, min(6, raw))
         }
         set {
             objectWillChange.send()
-            let clamped = max(0, min(5, newValue))
+            let clamped = max(0, min(6, newValue))
             self.defaults.set(clamped, forKey: Keys.onboardingCurrentStep)
         }
     }

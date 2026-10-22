@@ -4,14 +4,10 @@ import SwiftUI
 struct OnboardingAIEnhancementStepView: View {
     @ObservedObject var setup: OnboardingAISetupController
     @Binding var finalText: String
-    let progressValue: Double
-    let glowCenter: UnitPoint
     let shortcutDisplay: String
     let isRunning: Bool
     let isListening: Bool
     let isRecordingShortcut: Bool
-    let onGlowMove: (CGPoint, CGSize) -> Void
-    let onGlowExit: () -> Void
     let onBack: () -> Void
     let onSkip: () -> Void
     let onFinishSetup: () -> Void
@@ -82,12 +78,10 @@ struct OnboardingAIEnhancementStepView: View {
         let hasConfiguredCleanup = DictationAIPostProcessingGate.isOnboardingChoiceConfigured()
         return GeometryReader { proxy in
             ZStack {
-                FluidOnboardingLandingBackdrop(glowCenter: self.glowCenter)
                 VStack(spacing: 24) {
-                    FluidOnboardingCompactProgress(value: self.progressValue)
-                        .padding(.top, 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
                     Spacer()
-                    FluidOnboardingCompactAppIconMark(size: 56)
+                    FluidOnboardingCompactAppIconMark()
                     Text(AppBrand.text("AI text cleanup with Fluid Intelligence"))
                         .font(.fluidSystem(size: 30, weight: .semibold, role: .title))
                         .foregroundStyle(self.theme.palette.primaryText)
@@ -111,7 +105,7 @@ struct OnboardingAIEnhancementStepView: View {
                     }
                     Spacer()
                     HStack(spacing: 16) {
-                        self.action(id: "public-back", title: "Back", tone: .secondary, width: 132, action: self.onBack)
+                        self.action(id: "public-back", title: "Back", tone: .secondary, width: FluidOnboardingLayout.footerButtonWidth, action: self.onBack)
                         Spacer()
                         if hasConfiguredCleanup {
                             self.action(id: "public-use-provider", title: "Use configured provider", tone: .primary, width: 238, action: self.onFinishSetup)
@@ -124,9 +118,7 @@ struct OnboardingAIEnhancementStepView: View {
                     .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
                 }
                 .padding(.horizontal, 32)
-                FluidOnboardingLandingHoverTracker(onMove: self.onGlowMove, onExit: self.onGlowExit)
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .accessibilityHidden(true)
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
     }
@@ -134,10 +126,8 @@ struct OnboardingAIEnhancementStepView: View {
     private var privateContent: some View {
         GeometryReader { proxy in
             ZStack {
-                FluidOnboardingLandingBackdrop(glowCenter: self.glowCenter)
                 VStack(spacing: 0) {
-                    FluidOnboardingCompactProgress(value: self.progressValue)
-                        .padding(.top, 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
                     self.mainContent
                     if !self.isReady {
                         self.offerStatus
@@ -145,7 +135,7 @@ struct OnboardingAIEnhancementStepView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     HStack(alignment: .center, spacing: 20) {
-                        self.action(id: "back", title: "Back", tone: .secondary, width: 132) {
+                        self.action(id: "back", title: "Back", tone: .secondary, width: FluidOnboardingLayout.footerButtonWidth) {
                             if self.isReady && self.showPractice {
                                 self.showPractice = false
                             } else {
@@ -160,7 +150,7 @@ struct OnboardingAIEnhancementStepView: View {
                                 .buttonStyle(.plain)
                                 .foregroundStyle(self.theme.palette.secondaryText)
                                 .disabled(!self.canNavigate)
-                            self.action(id: "practice-next", title: self.practice.isLast ? "Finish setup" : "Next example", tone: .primary, width: 180, isEnabled: self.practice.result != nil) {
+                            self.action(id: "practice-next", title: self.practice.isLast ? "Continue" : "Next example", tone: .primary, width: 180, isEnabled: self.practice.result != nil) {
                                 guard self.canNavigate, self.practice.result != nil else { return }
                                 if self.practice.isLast {
                                     self.onFinishSetup()
@@ -170,7 +160,7 @@ struct OnboardingAIEnhancementStepView: View {
                             }
                         } else if self.isReady && !self.isShowingIntroduction {
                             if !self.reduceMotion {
-                                self.action(id: "intro-replay", title: "Replay", tone: .secondary, width: 132) {
+                                self.action(id: "intro-replay", title: "Replay", tone: .secondary, width: FluidOnboardingLayout.footerButtonWidth) {
                                     self.setup.introductionFinished = false
                                     self.introductionPlaybackID = UUID()
                                 }
@@ -188,9 +178,7 @@ struct OnboardingAIEnhancementStepView: View {
                     .padding(.top, 12)
                     .fixedSize(horizontal: false, vertical: true)
                 }
-                FluidOnboardingLandingHoverTracker(onMove: self.onGlowMove, onExit: self.onGlowExit)
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .accessibilityHidden(true)
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
         .overlay {
@@ -240,7 +228,7 @@ struct OnboardingAIEnhancementStepView: View {
 
     private var hero: some View {
         VStack(spacing: 10) {
-            FluidOnboardingCompactAppIconMark(size: 40)
+            FluidOnboardingCompactAppIconMark(size: 56)
                 .padding(.bottom, 4)
             Text(AppBrand.text("Meet Fluid Intelligence"))
                 .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
@@ -320,7 +308,7 @@ struct OnboardingAIEnhancementStepView: View {
                 .keyboardShortcut(.defaultAction)
                 .transition(.opacity)
             } else {
-                Color.clear.frame(width: 210, height: 48)
+                Color.clear.frame(width: 210, height: FluidOnboardingLayout.footerButtonHeight)
                     .accessibilityHidden(true)
             }
         }
@@ -498,9 +486,12 @@ struct OnboardingAIEnhancementStepView: View {
         if #available(macOS 26, *), !self.reduceTransparency {
             Button(action: action) {
                 Text(PichiLocalization.text(title))
-                    .font(.fluidSystem(size: 16, weight: .semibold))
+                    .font(.fluidSystem(size: FluidOnboardingLayout.footerButtonFontSize, weight: .semibold))
                     .foregroundStyle(actionEnabled && tone == .primary ? self.theme.palette.accentForeground : self.theme.palette.primaryText)
-                    .frame(width: width - 32, height: 40)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    // Large native glass adds 14 pt at the sides and 6 pt above and below.
+                    .frame(width: width - 28, height: FluidOnboardingLayout.footerButtonHeight - 12)
             }
             .fluidGlassAction(prominent: actionEnabled && tone == .primary)
             .font(.fluidSystem(size: 17, weight: .semibold))
@@ -513,8 +504,8 @@ struct OnboardingAIEnhancementStepView: View {
                 systemImage: nil,
                 tone: tone,
                 width: width,
-                height: 48,
-                fontSize: 16,
+                height: FluidOnboardingLayout.footerButtonHeight,
+                fontSize: FluidOnboardingLayout.footerButtonFontSize,
                 isEnabled: actionEnabled
             ), action: action)
         }

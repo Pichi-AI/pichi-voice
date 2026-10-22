@@ -24,6 +24,10 @@
 	<string>$(PICHI_PRODUCT_NAME) needs Accessibility permission to listen for global hotkeys and type text into other apps when you stop recording.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>$(PICHI_PRODUCT_NAME) needs microphone access to record your voice for speech-to-text transcription. Speech recognition runs on this Mac. AI enhancement may use a provider you configure.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Use your location once when an in-room meeting starts to save its address. Apple resolves the address from the location.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Use your location once when an in-room meeting starts to save its address. Apple resolves the address from the location.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>$(PICHI_PRODUCT_NAME) needs system audio access to record the selected application or all system audio, according to your meeting settings. Meeting audio stays on this Mac.</string>
 	<key>NSScreenCaptureUsageDescription</key>

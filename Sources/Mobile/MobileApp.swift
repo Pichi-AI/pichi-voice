@@ -12,6 +12,7 @@ final class AppServices: ObservableObject {
     let meetingProcessingPipeline: MeetingProcessingPipeline
     let meetingStore: any MeetingSessionStoring
     let meetingAudioActivityArbiter: AudioActivityArbiter
+    let meetingLocation: MeetingLocationService
     let transcriptPrivacy: PichiTranscriptPrivacyService
     let requiredResources: MobileRequiredResources
     let privacyActivation: MobilePrivacyActivation
@@ -61,6 +62,7 @@ final class AppServices: ObservableObject {
         }
         let settings = settings ?? SettingsStore.shared
         self.settings = settings
+        self.meetingLocation = MeetingLocationService(settings: settings)
         settings.migrateMobileSetup()
         let store = store ?? MeetingSessionStore.shared
         let asr = ASRService(settings: settings)
@@ -98,6 +100,7 @@ final class AppServices: ObservableObject {
             preferredMicrophoneUID: { settings.meetingRecordingDefaults.microphoneCoreAudioUID },
             speechActivityModel: MeetingSileroActivityArtifacts.open,
             settings: settings,
+            locationResolver: injectedCapture == nil ? self.meetingLocation : nil,
             defaultConfigurationResolver: { mode, title in
                 // Preferences are one immutable request snapshot. Async discovery/preparation
                 // cannot substitute later Settings values into a running meeting.

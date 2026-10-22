@@ -720,10 +720,14 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let ownerEvidence = StreamingOwnerEvidenceBox()
         let adaptiveOwnerEvidence = artifact.profile.usesAdaptiveStreamingOwnerEvidence(
             implementationFingerprint: configuration.diarizationFingerprint)
-        let ownerPolicy: MeetingOwnerVoiceVerifier.Policy = adaptiveOwnerEvidence ? .streamingV2 : .legacy
+        let ownerPolicy: MeetingOwnerVoiceVerifier.Policy = artifact.profile.requiresFullStreamingOwnerEvidence(
+            implementationFingerprint: configuration.diarizationFingerprint) ? .streamingV4
+            : adaptiveOwnerEvidence ? .streamingV2 : .legacy
         let collectOwnerEvidence = self.ownerVoiceProfileSnapshot != nil
             && artifact.profile.verifiesStreamingOwner(implementationFingerprint: configuration.diarizationFingerprint)
         let liveOwnerVerification = artifact.profile.verifiesLiveStreamingOwner(
+            implementationFingerprint: configuration.diarizationFingerprint)
+        let preserveOwnerCadenceAtEOF = artifact.profile.preservesStreamingOwnerCadenceAtEOF(
             implementationFingerprint: configuration.diarizationFingerprint)
         let idleResources = self.takeIdleResources()
         do {
@@ -740,7 +744,9 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                         trackID: trackID, attemptID: attemptID, configuration: configuration,
                         speakerNameFormat: self.pcmSpeakerNameFormat, collectOwnerEvidence: collectOwnerEvidence,
                         useAdaptiveOwnerEvidence: adaptiveOwnerEvidence,
-                        verifyOwnerDuringCapture: liveOwnerVerification, onProgress: onProgress)
+                        verifyOwnerDuringCapture: liveOwnerVerification,
+                        ownerVerificationPolicy: ownerPolicy,
+                        preserveOwnerCadenceAtEOF: preserveOwnerCadenceAtEOF, onProgress: onProgress)
                     do {
                         try await body(session)
                         try Task.checkCancellation()
@@ -778,9 +784,11 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 return
             }
             try Task.checkCancellation()
+            let clipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: evidence.samples, profiles: profiles)
             let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot,
-                profiles: profiles, policy: ownerPolicy,
-                diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: evidence.samples, profiles: profiles, streaming: true))
+                profiles: profiles, policy: ownerPolicy, clipFramesByToken: clipFrames,
+                diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: evidence.samples, profiles: profiles,
+                    streaming: true, clipFramesByToken: clipFrames))
             DebugLogger.shared.info("mode=streaming owner_verification=completed profileCount=\(profiles.count) confirmedCount=\(confirmed.count)", source: "MeetingPCMRuntime")
             let identities = MeetingTranscriptAssembler.applyingLocalUserTokens(to: evidence.speakers,
                 attemptID: attemptID, tokens: confirmed)
@@ -928,12 +936,29 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             if samples.isEmpty { samples = update.samples }
             else { samples.append(contentsOf: update.samples) }
             update.samples = []
+            // A pause closes exactly this delivered prefix. Capture may have advanced
+            // while its VAD evidence arrived; the transport transfers that untouched
+            // suffix to the next window, preserving the immutable inference input.
+            if !update.isFinal,
+               await window.sealAtSpeechBoundaryIfConfident(totalFrames: update.totalFrames, offset: offset) {
+                try Task.checkCancellation()
+                MeetingTimelineTrace.shared?.record("asr_pause_endpoint", fields: [
+                    "attemptID": attemptID.uuidString, "windowOrdinal": String(epoch.ordinal),
+                    "sourceEndSample": String(Int((offset * 16_000).rounded()) + samples.count)])
+                // The following empty final marker runs final ASR once, even below
+                // the optional preview cadence or when headroom suppresses previews.
+                continue
+            }
             let sessionAllowsObservations = await session.allowsIntermediatePCMObservations()
             try Task.checkCancellation()
             // Consume every delta regardless of optional observations. Lifecycle changes
             // cannot let an empty final marker reuse an older, shorter inferred prefix.
+            // Subsecond PCM delivery serves VAD and the incremental diarizer. Buffered
+            // providers re-decode a complete prefix, so do not repeat batch inference
+            // on every such delivery. Final endpoints always bypass this cadence.
+            let previewIsDue = !window.usesPauseEndpoint || samples.count - inferredSampleCount >= 48_000
             let shouldInfer = update.isFinal ? inferredSampleCount != samples.count
-                : MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM, isFinal: false,
+                : previewIsDue && MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM, isFinal: false,
                     permitsIntermediateObservations: permitsIntermediateObservations && sessionAllowsObservations)
             if shouldInfer {
                 let inferenceStarted = ProcessInfo.processInfo.systemUptime
@@ -1147,11 +1172,29 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                         guard let slot = Int(activity.token.label.dropFirst("slot-".count)) else { return nil }
                         return .init(slotIndex: slot, start: activity.start, end: activity.end)
                     }
-                    let excerpts = try await MeetingSpeakerVoiceSamples.collect(epoch: epoch, source: source, segments: segments)
+                    // This entry point historically applies the legacy batch policy. Keep
+                    // that behavior for saved recipes; a direct V4 streaming request must
+                    // still carry the same full-clip eligibility as its live/retry route.
+                    let fullOwnerEvidence = configuration.effectiveSpeakerProcessingMode == .streaming
+                        && artifact.profile.requiresFullStreamingOwnerEvidence(
+                            implementationFingerprint: configuration.diarizationFingerprint)
+                    // Saved batch recipes retain their original read-failure behavior.
+                    // Only V4 treats a strict optional identity reread failure as abstention.
+                    let legacyExcerpts = fullOwnerEvidence ? []
+                        : try await MeetingSpeakerVoiceSamples.collect(epoch: epoch, source: source, segments: segments)
                     do {
+                        let excerpts = fullOwnerEvidence
+                            ? try await MeetingSpeakerVoiceSamples.collectFirstAndLatest(epoch: epoch, source: source,
+                                segments: segments, requireSuccessfulRead: true)
+                            : legacyExcerpts
                         let profiles = try await self.speakerVoiceProfiles(samples: excerpts)
-                        confirmedOwner = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles,
-                            diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: excerpts, profiles: profiles, streaming: false))
+                        let clipFrames = MeetingOwnerVoiceVerifier.clipFramesByToken(samples: excerpts, profiles: profiles)
+                        let complete = !fullOwnerEvidence || MeetingOwnerVoiceVerifier.hasCompleteEncoderResults(
+                            samples: excerpts, profiles: profiles)
+                        confirmedOwner = complete ? MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles,
+                            policy: fullOwnerEvidence ? .streamingV4 : .legacy, clipFramesByToken: clipFrames,
+                            diagnostics: MeetingPCMRuntimeDiagnostics.ownerVerificationObserver(samples: excerpts, profiles: profiles,
+                                streaming: false, clipFramesByToken: clipFrames)) : []
                     } catch { try Task.checkCancellation() }
                 }
                 try Task.checkCancellation()
@@ -1334,13 +1377,18 @@ nonisolated enum MeetingPCMRuntimeDiagnostics {
     /// Reuses the existing explicit local profiling opt-in in ordinary signed Release builds.
     /// Capture scalar lengths before enqueueing; neither this closure nor the log retains PCM.
     static func ownerVerificationObserver(
-        samples: [MeetingSpeakerVoiceSamples], profiles: [MeetingSpeakerVoiceProfile], streaming: Bool
+        samples: [MeetingSpeakerVoiceSamples], profiles: [MeetingSpeakerVoiceProfile], streaming: Bool,
+        clipFramesByToken: [MeetingBackendSpeakerToken: [Int]]? = nil
     ) -> ((MeetingOwnerVoiceVerifier.Diagnostics) -> Void)? {
         guard self.detailedProfilingEnabled else { return nil }
         // The encoder may omit unusable inputs. Align lengths to admitted profile ordinals
         // internally; ambiguous duplicate inputs have unavailable lengths, never guessed ones.
         let inputs = Dictionary(grouping: samples.prefix(MeetingSpeakerVoiceSamples.maximumProfiles), by: \.token)
         let frames = profiles.prefix(MeetingSpeakerVoiceSamples.maximumProfiles).enumerated().map { ordinal, profile in
+            if let clipFramesByToken {
+                guard let frames = clipFramesByToken[profile.token] else { return "\(ordinal):unavailable" }
+                return "\(ordinal):" + frames.prefix(2).map(String.init).joined(separator: "+")
+            }
             guard let matches = inputs[profile.token], matches.count == 1, let sample = matches.first else { return "\(ordinal):unavailable" }
             return "\(ordinal):" + sample.clips.prefix(2).map { String($0.count) }.joined(separator: "+")
         }.joined(separator: ",")

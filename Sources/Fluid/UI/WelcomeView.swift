@@ -132,6 +132,8 @@ struct OnboardingFlowView: View {
         let iconSize: CGFloat
         let isHovered: Bool
         let isEnabled: Bool
+        /// Treat `width` as a minimum and pad the title, so a longer translation widens the pill.
+        var growsWithTitle = false
     }
 
     private enum Step: Int, CaseIterable {
@@ -141,6 +143,7 @@ struct OnboardingFlowView: View {
         case permissions = 3
         case playground = 4
         case aiEnhancement = 5
+        case meetingLocation = 6
 
         var analyticsStep: AnalyticsOnboardingStep {
             switch self {
@@ -150,6 +153,7 @@ struct OnboardingFlowView: View {
             case .permissions: .permissions
             case .playground: .playground
             case .aiEnhancement: .aiEnhancement
+            case .meetingLocation: .meetingLocation
             }
         }
 
@@ -167,6 +171,8 @@ struct OnboardingFlowView: View {
                 return "Set Up AI Enhancement"
             case .playground:
                 return AppBrand.text("Try FluidVoice")
+            case .meetingLocation:
+                return "Meeting location"
             }
         }
 
@@ -184,6 +190,8 @@ struct OnboardingFlowView: View {
                 return "Optional: Configure AI post-processing or skip this step."
             case .playground:
                 return "Use your dictation shortcut once before finishing setup."
+            case .meetingLocation:
+                return "Optional: Add the meeting address using your location."
             }
         }
     }
@@ -337,6 +345,8 @@ struct OnboardingFlowView: View {
             return self.isAIReady
         case .playground:
             return self.isPlaygroundReady && !self.asr.isRunning && !self.isRecordingAnyShortcut
+        case .meetingLocation:
+            return true
         }
     }
 
@@ -346,7 +356,7 @@ struct OnboardingFlowView: View {
             return "Next"
         case .language:
             return "Continue"
-        case .aiEnhancement:
+        case .meetingLocation:
             return "Finish Setup"
         default:
             return "Continue"
@@ -354,10 +364,30 @@ struct OnboardingFlowView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            self.stepContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        // One still backdrop, light and progress for every step; only step content moves.
+        ZStack {
+            FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter, breathes: self.step == .landing)
+            FluidOnboardingLandingHoverTracker(
+                onMove: { location, size in self.updateLandingGlow(location: location, in: size) },
+                onExit: { self.resetLandingGlow() }
+            )
+            .accessibilityHidden(true)
+
+            ZStack {
+                self.stepContent
+                    .id(self.step)
+                    .transition(self.reduceMotion ? .opacity : FluidOnboardingMotion.stepTransition)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+
+            if self.step != .landing {
+                FluidOnboardingCompactProgress(value: self.compactProgressValue)
+                    .padding(.top, FluidOnboardingLayout.progressTopInset)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .transition(.opacity)
+            }
         }
+        .animation(self.reduceMotion ? FluidOnboardingMotion.crossfade : FluidOnboardingMotion.step, value: self.currentStep)
         .background {
             FluidOnboardingWindowTransparency()
         }
@@ -495,6 +525,8 @@ struct OnboardingFlowView: View {
             self.aiEnhancementStep
         case .playground:
             self.playgroundStep
+        case .meetingLocation:
+            self.meetingLocationStep
         }
     }
 
@@ -516,7 +548,7 @@ struct OnboardingFlowView: View {
                     }
                     HStack {
                         Spacer()
-                        FluidOnboardingLandingPrimaryButton(title: "Next") { self.goNext() }
+                        FluidOnboardingLandingPrimaryButton(title: "Next", action: self.forThisStep { self.goNext() })
                             .frame(
                                 width: FluidOnboardingLandingPrimaryButton.size.width,
                                 height: FluidOnboardingLandingPrimaryButton.size.height
@@ -525,21 +557,7 @@ struct OnboardingFlowView: View {
                     .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
                     .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
                 }
-
-                FluidOnboardingLandingHoverTracker(
-                    onMove: { location, size in
-                        self.updateLandingGlow(location: location, in: size)
-                    },
-                    onExit: {
-                        self.resetLandingGlow()
-                    }
-                )
                 .frame(width: proxy.size.width, height: proxy.size.height)
-                .accessibilityHidden(true)
-                .zIndex(-1)
-            }
-            .background {
-                FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter)
             }
         }
     }
@@ -587,15 +605,12 @@ struct OnboardingFlowView: View {
     private var languageStep: some View {
         GeometryReader { proxy in
             ZStack {
-                FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter)
-
                 VStack(spacing: 0) {
-                    FluidOnboardingCompactProgress(value: self.compactProgressValue)
-                        .padding(.top, 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
                     OnboardingFittedContent(width: 760) {
                         VStack(spacing: 0) {
-                            FluidOnboardingCompactAppIconMark(size: 66)
+                            FluidOnboardingCompactAppIconMark()
                                 .padding(.bottom, 22)
 
                             Text("What language will\nyou speak most?")
@@ -612,9 +627,9 @@ struct OnboardingFlowView: View {
 
                             LazyVGrid(
                                 columns: [
-                                    GridItem(.fixed(166), spacing: 16),
-                                    GridItem(.fixed(166), spacing: 16),
-                                    GridItem(.fixed(166), spacing: 16),
+                                    GridItem(.fixed(200), spacing: 16),
+                                    GridItem(.fixed(200), spacing: 16),
+                                    GridItem(.fixed(200), spacing: 16),
                                 ],
                                 spacing: 16
                             ) {
@@ -624,7 +639,7 @@ struct OnboardingFlowView: View {
 
                                 self.otherLanguageCard
                             }
-                            .frame(width: 530)
+                            .frame(width: 632)
 
                             if self.isShowingAllLanguages {
                                 self.allLanguagesPicker
@@ -649,17 +664,6 @@ struct OnboardingFlowView: View {
                     }
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
-
-                FluidOnboardingLandingHoverTracker(
-                    onMove: { location, size in
-                        self.updateLandingGlow(location: location, in: size)
-                    },
-                    onExit: {
-                        self.resetLandingGlow()
-                    }
-                )
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .accessibilityHidden(true)
             }
         }
     }
@@ -708,7 +712,7 @@ struct OnboardingFlowView: View {
                 }
             }
             .padding(.horizontal, 15)
-            .frame(width: 166, height: 58)
+            .frame(width: 200, height: 58)
             .background(
                 shape
                     .fill(self.theme.palette.primaryText.opacity(cardFillOpacity))
@@ -780,7 +784,7 @@ struct OnboardingFlowView: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
             .padding(.horizontal, 15)
-            .frame(width: 166, height: 58)
+            .frame(width: 200, height: 58)
             .background(
                 shape
                     .fill(self.theme.palette.primaryText.opacity(fillOpacity))
@@ -845,7 +849,7 @@ struct OnboardingFlowView: View {
                 }
             }
             .fluidDropdownStyle()
-            .frame(width: 530)
+            .frame(width: 632)
         }
     }
 
@@ -939,14 +943,15 @@ struct OnboardingFlowView: View {
                 title: title,
                 systemImage: nil,
                 tone: isPrimary ? .primary : .secondary,
-                width: 132,
-                height: 48,
-                fontSize: 16,
+                width: FluidOnboardingLayout.footerButtonWidth,
+                height: FluidOnboardingLayout.footerButtonHeight,
+                fontSize: FluidOnboardingLayout.footerButtonFontSize,
                 iconSize: 14,
                 isHovered: isHovered,
-                isEnabled: isEnabled
+                isEnabled: isEnabled,
+                growsWithTitle: true
             ),
-            action: action
+            action: self.forThisStep(action)
         ) { isHovered in
             self.setHoveredFooterButton(isHovered ? kind : nil)
         }
@@ -1040,15 +1045,12 @@ struct OnboardingFlowView: View {
     private var voiceModelStep: some View {
         GeometryReader { proxy in
             ZStack {
-                FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter)
-
                 VStack(spacing: 0) {
-                    FluidOnboardingCompactProgress(value: self.compactProgressValue)
-                        .padding(.top, 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
                     OnboardingFittedContent(width: 760) {
                         VStack(spacing: 0) {
-                            FluidOnboardingCompactAppIconMark(size: 66)
+                            FluidOnboardingCompactAppIconMark()
                                 .padding(.bottom, 22)
 
                             Text("Choose your\nvoice engine")
@@ -1159,17 +1161,7 @@ struct OnboardingFlowView: View {
                         self.handlePrimaryAction()
                     }
                 }
-
-                FluidOnboardingLandingHoverTracker(
-                    onMove: { location, size in
-                        self.updateLandingGlow(location: location, in: size)
-                    },
-                    onExit: {
-                        self.resetLandingGlow()
-                    }
-                )
                 .frame(width: proxy.size.width, height: proxy.size.height)
-                .accessibilityHidden(true)
             }
         }
     }
@@ -1177,15 +1169,12 @@ struct OnboardingFlowView: View {
     private var permissionsStep: some View {
         GeometryReader { proxy in
             ZStack {
-                FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter)
-
                 VStack(spacing: 0) {
-                    FluidOnboardingCompactProgress(value: self.compactProgressValue)
-                        .padding(.top, 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
                     OnboardingFittedContent(width: 760) {
                         VStack(spacing: 0) {
-                            FluidOnboardingCompactAppIconMark(size: 66)
+                            FluidOnboardingCompactAppIconMark()
                                 .padding(.bottom, 22)
 
                             Text(AppBrand.text("Let FluidVoice\nlisten and type"))
@@ -1242,7 +1231,7 @@ struct OnboardingFlowView: View {
                                         .padding(.top, 2)
                                 }
                             }
-                            .frame(width: 560)
+                            .frame(width: 632)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 34)
@@ -1256,17 +1245,7 @@ struct OnboardingFlowView: View {
                         self.handlePrimaryAction()
                     }
                 }
-
-                FluidOnboardingLandingHoverTracker(
-                    onMove: { location, size in
-                        self.updateLandingGlow(location: location, in: size)
-                    },
-                    onExit: {
-                        self.resetLandingGlow()
-                    }
-                )
                 .frame(width: proxy.size.width, height: proxy.size.height)
-                .accessibilityHidden(true)
             }
         }
     }
@@ -1274,15 +1253,12 @@ struct OnboardingFlowView: View {
     private var playgroundStep: some View {
         GeometryReader { proxy in
             ZStack {
-                FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter)
-
                 VStack(spacing: 0) {
-                    FluidOnboardingCompactProgress(value: self.compactProgressValue)
-                        .padding(.top, 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
                     OnboardingFittedContent(width: 760) {
                         VStack(spacing: 0) {
-                            FluidOnboardingCompactAppIconMark(size: 66)
+                            FluidOnboardingCompactAppIconMark()
                                 .padding(.bottom, 22)
 
                             Text(AppBrand.text("FluidVoice is ready."))
@@ -1337,17 +1313,6 @@ struct OnboardingFlowView: View {
                     )
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
-
-                FluidOnboardingLandingHoverTracker(
-                    onMove: { location, size in
-                        self.updateLandingGlow(location: location, in: size)
-                    },
-                    onExit: {
-                        self.resetLandingGlow()
-                    }
-                )
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .accessibilityHidden(true)
             }
         }
     }
@@ -2027,8 +1992,9 @@ struct OnboardingFlowView: View {
                     .minimumScaleFactor(0.72)
             }
             .foregroundStyle(foregroundColor)
-            .frame(width: configuration.width, height: configuration.height)
-            .frame(maxWidth: configuration.width == nil ? .infinity : nil)
+            .padding(.horizontal, configuration.growsWithTitle ? 16 : 0)
+            .frame(width: configuration.growsWithTitle ? nil : configuration.width, height: configuration.height)
+            .frame(minWidth: configuration.growsWithTitle ? configuration.width : nil, maxWidth: configuration.width == nil ? .infinity : nil)
             .background(
                 shape
                     .fill(fillColor)
@@ -2159,12 +2125,13 @@ struct OnboardingFlowView: View {
                         title: actionTitle,
                         systemImage: actionIcon,
                         tone: .primary,
-                        width: 132,
-                        height: 36,
-                        fontSize: 12,
-                        iconSize: 10,
+                        width: 140,
+                        height: 40,
+                        fontSize: 13,
+                        iconSize: 11,
                         isHovered: self.hoveredPermissionButtonID == buttonID,
-                        isEnabled: true
+                        isEnabled: true,
+                        growsWithTitle: true
                     ),
                     action: action
                 ) { isHovered in
@@ -2286,6 +2253,15 @@ struct OnboardingFlowView: View {
         self.asr.requestMicAccess()
     }
 
+    /// A fading step keeps its buttons and shortcuts until it leaves; bind them to the step that drew them.
+    private func forThisStep(_ action: @escaping () -> Void) -> () -> Void {
+        let step = self.step
+        return {
+            guard self.step == step else { return }
+            action()
+        }
+    }
+
     private func goBack() {
         self.activeShortcutRecordingTarget = nil
         self.shortcutRecordingMessage = nil
@@ -2308,18 +2284,22 @@ struct OnboardingFlowView: View {
             self.selectOnboardingRoute(route)
         }
 
-        if self.step == .aiEnhancement {
-            guard self.isAIReady else { return }
-            let origin = self.settings.analyticsOnboardingOrigin
-            self.finishOnboarding()
-            self.completeCurrentStep(
-                outcome: .completed,
-                origin: origin,
-                completesFlow: self.settings.onboardingCompleted
-            )
+        if self.step == .meetingLocation {
+            self.finishLocationStep(outcome: .completed)
             return
         }
+        if self.step == .aiEnhancement, !self.isAIReady { return }
         self.goNext()
+    }
+
+    private func finishLocationStep(outcome: AnalyticsOnboardingOutcome) {
+        let origin = self.settings.analyticsOnboardingOrigin
+        self.finishOnboardingAtGettingStarted()
+        self.completeCurrentStep(
+            outcome: outcome,
+            origin: origin,
+            completesFlow: self.settings.onboardingCompleted
+        )
     }
 
     private func completeCurrentStep(
@@ -2368,36 +2348,72 @@ private extension OnboardingFlowView {
                 get: { self.asr.finalText },
                 set: { self.asr.finalText = $0 }
             ),
-            progressValue: self.compactProgressValue,
-            glowCenter: self.landingGlowCenter,
             shortcutDisplay: self.onboardingShortcutDisplay,
             isRunning: self.asr.isRunning || self.asr.isStarting,
             isListening: self.asr.isRunning,
             isRecordingShortcut: self.isRecordingPrimaryShortcut,
-            onGlowMove: self.updateLandingGlow(location:in:),
-            onGlowExit: self.resetLandingGlow,
-            onBack: self.goBack,
-            onSkip: {
-                let origin = self.settings.analyticsOnboardingOrigin
+            onBack: self.forThisStep { self.goBack() },
+            onSkip: self.forThisStep {
                 self.markAISkipped()
-                self.finishOnboardingAtGettingStarted()
-                self.completeCurrentStep(
-                    outcome: .skipped,
-                    origin: origin,
-                    completesFlow: self.settings.onboardingCompleted
-                )
+                self.goNext(outcome: .skipped)
             },
-            onFinishSetup: {
-                let origin = self.settings.analyticsOnboardingOrigin
-                self.finishOnboardingAtGettingStarted()
-                self.completeCurrentStep(
-                    outcome: .completed,
-                    origin: origin,
-                    completesFlow: self.settings.onboardingCompleted
-                )
+            onFinishSetup: self.forThisStep {
+                self.goNext(outcome: .completed)
             }
         )
     }
+
+    var meetingLocationStep: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
+
+                OnboardingFittedContent(width: 760) {
+                    VStack(spacing: self.theme.metrics.spacing.lg) {
+                        FluidOnboardingCompactAppIconMark()
+                            .padding(.bottom, self.theme.metrics.spacing.sm)
+
+                        Text(PichiLocalization.text("Meeting location"))
+                            .font(self.theme.typography.title)
+                            .foregroundStyle(self.theme.palette.primaryText)
+                            .multilineTextAlignment(.center)
+
+                        Text(PichiLocalization.text("Optional: Add the meeting address using your location."))
+                            .font(self.theme.typography.body)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        MeetingLocationSettingsContent()
+                            .frame(maxWidth: 560, alignment: .leading)
+                            .padding(self.theme.metrics.spacing.lg)
+                            .background(
+                                self.theme.palette.cardBackground,
+                                in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg)
+                            )
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, self.theme.metrics.spacing.xxl)
+                    .padding(.vertical, self.theme.metrics.spacing.xl)
+                }
+
+                self.cinematicFooter(
+                    continueTitle: "Finish Setup",
+                    canContinue: self.canContinue,
+                    continueAction: self.handlePrimaryAction,
+                    skipTitle: "Not now",
+                    canSkip: true,
+                    skipAction: {
+                        self.appServices.meetingLocation.setEnabled(false)
+                        self.finishLocationStep(outcome: .skipped)
+                    }
+                )
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .accessibilityIdentifier("onboarding.meeting-location")
+    }
+
 
     var orderedOnboardingInputDevices: [AudioDevice.Device] {
         let devicesByUID = Dictionary(

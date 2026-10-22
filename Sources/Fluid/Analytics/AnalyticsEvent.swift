@@ -156,6 +156,7 @@ enum AnalyticsOnboardingStep: String {
     case permissions
     case playground
     case aiEnhancement = "ai_enhancement"
+    case meetingLocation = "meeting_location"
 }
 
 enum AnalyticsOnboardingOrigin: String {

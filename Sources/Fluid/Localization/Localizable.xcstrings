@@ -1,6 +1,176 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Mark as You": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark as You"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это я"
+          }
+        }
+      }
+    },
+    "Remove You designation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove You designation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Убрать отметку «Вы»"
+          }
+        }
+      }
+    },
+    "Participant actions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Participant actions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Действия с участником"
+          }
+        }
+      }
+    },
+    "The You label applies only to this meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The You label applies only to this meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отметка «Вы» применяется только к этой встрече."
+          }
+        }
+      }
+    },
+    "Change speaker": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change speaker"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменить участника"
+          }
+        }
+      }
+    },
+    "Whole fragment": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whole fragment"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Весь фрагмент"
+          }
+        }
+      }
+    },
+    "Change the speaker for this visible fragment only.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Change the speaker for this visible fragment only."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменить участника только для этого видимого фрагмента."
+          }
+        }
+      }
+    },
+    "Individual words or parts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Individual words or parts"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отдельные слова или части"
+          }
+        }
+      }
+    },
+    "Select a speaker": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select a speaker"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите участника"
+          }
+        }
+      }
+    },
+    "Only the selected text changes speaker. Other fragments keep their speakers.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only the selected text changes speaker. Other fragments keep their speakers."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Участник изменится только у выбранного текста. Остальные фрагменты сохранят своих участников."
+          }
+        }
+      }
+    },
     "Export Protected Transcript": {
       "extractionState": "manual",
       "localizations": {
@@ -6105,7 +6275,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Разрешить доступ к микрофону"
+            "value": "Разрешите доступ к микрофону"
           }
         }
       }
@@ -53311,6 +53481,227 @@
         }
       },
       "comment": "Audio player accessibility label."
+    },
+    "Meeting location": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting location"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Место встречи"
+          }
+        }
+      }
+    },
+    "Use location for meeting addresses": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use location for meeting addresses"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать геолокацию для адресов встреч"
+          }
+        }
+      }
+    },
+    "Optional. Save the address where a meeting starts. Location is requested once per meeting, without background tracking.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optional. Save the address where a meeting starts. Location is requested once per meeting, without background tracking."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Необязательно. Сохраняйте адрес, где начинается встреча. Геолокация запрашивается один раз на встречу, без отслеживания в фоне."
+          }
+        }
+      }
+    },
+    "Apple resolves the address. It is saved with the meeting and shown in your interface language.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple resolves the address. It is saved with the meeting and shown in your interface language."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple определяет адрес. Он сохраняется вместе со встречей и отображается на языке интерфейса."
+          }
+        }
+      }
+    },
+    "Location access is allowed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location access is allowed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к геолокации разрешён."
+          }
+        }
+      }
+    },
+    "Location access has not been requested.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location access has not been requested."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешение на геолокацию ещё не запрашивалось."
+          }
+        }
+      }
+    },
+    "Location access is denied. Allow it in system settings to save meeting addresses.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location access is denied. Allow it in system settings to save meeting addresses."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к геолокации запрещён. Разрешите его в системных настройках, чтобы сохранять адреса встреч."
+          }
+        }
+      }
+    },
+    "Location access is restricted on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location access is restricted on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к геолокации ограничен на этом устройстве."
+          }
+        }
+      }
+    },
+    "Waiting for location permission…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for location permission…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ожидание разрешения на геолокацию…"
+          }
+        }
+      }
+    },
+    "Allow location access": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow location access"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешить геолокацию"
+          }
+        }
+      }
+    },
+    "Open system settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open system settings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть системные настройки"
+          }
+        }
+      }
+    },
+    "Optional: Add the meeting address using your location.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optional: Add the meeting address using your location."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Необязательно: добавляйте адрес встречи с помощью геолокации."
+          }
+        }
+      }
+    },
+    "Location changes apply immediately, including when you close without saving other settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location changes apply immediately, including when you close without saving other settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменения геолокации применяются сразу, даже если закрыть окно без сохранения остальных настроек."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
