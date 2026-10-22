@@ -125,7 +125,7 @@
       "overlap": "none",
       "completeness": "complete",
       "attributionState": "assigned",
-      "nativePrecision": "segment",
+      "nativePrecision": "utterance",
       "nativeUnitID": "synthetic-color-1",
       "nativeTiming": {
         "start": 0,
@@ -150,7 +150,7 @@
       "overlap": "none",
       "completeness": "complete",
       "attributionState": "assigned",
-      "nativePrecision": "segment",
+      "nativePrecision": "utterance",
       "nativeUnitID": "synthetic-color-2",
       "nativeTiming": {
         "start": 4,
@@ -175,7 +175,7 @@
       "overlap": "none",
       "completeness": "complete",
       "attributionState": "assigned",
-      "nativePrecision": "segment",
+      "nativePrecision": "utterance",
       "nativeUnitID": "synthetic-color-3",
       "nativeTiming": {
         "start": 8,
@@ -200,7 +200,7 @@
       "overlap": "none",
       "completeness": "complete",
       "attributionState": "assigned",
-      "nativePrecision": "segment",
+      "nativePrecision": "utterance",
       "nativeUnitID": "synthetic-color-4",
       "nativeTiming": {
         "start": 12,
@@ -225,7 +225,7 @@
       "overlap": "none",
       "completeness": "complete",
       "attributionState": "assigned",
-      "nativePrecision": "segment",
+      "nativePrecision": "utterance",
       "nativeUnitID": "synthetic-color-5",
       "nativeTiming": {
         "start": 16,
@@ -250,7 +250,7 @@
       "overlap": "none",
       "completeness": "complete",
       "attributionState": "assigned",
-      "nativePrecision": "segment",
+      "nativePrecision": "utterance",
       "nativeUnitID": "synthetic-color-6",
       "nativeTiming": {
         "start": 20,
@@ -275,7 +275,7 @@
       "overlap": "none",
       "completeness": "complete",
       "attributionState": "assigned",
-      "nativePrecision": "segment",
+      "nativePrecision": "utterance",
       "nativeUnitID": "synthetic-color-7",
       "nativeTiming": {
         "start": 24,
@@ -300,7 +300,7 @@
       "overlap": "none",
       "completeness": "complete",
       "attributionState": "assigned",
-      "nativePrecision": "segment",
+      "nativePrecision": "utterance",
       "nativeUnitID": "synthetic-color-8",
       "nativeTiming": {
         "start": 28,
