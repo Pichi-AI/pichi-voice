@@ -511,7 +511,10 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
     /// Supply a durable reading identity only after canonical privacy admission and scoring.
     /// An unknown bout is not an acoustic person: it cannot sponsor voice/owner matching and
     /// never rewrites the native token or the resolver's original summary.
-    private mutating func applyProvisionalIdentities(to resolved: inout [MeetingTranscriptSegment]) throws {
+    private mutating func applyProvisionalIdentities(to resolved: inout [MeetingTranscriptSegment],
+        trackKind: MeetingAudioTrackKind = .microphone,
+        resetBefore: Set<MeetingTranscriptSegmentID> = []
+    ) throws {
         guard self.policy.enableProvisionalSpeakerIdentities else { return }
         var state = self.provisionalPrefixState
         var speakerIndices = Dictionary(self.speakers.enumerated().map { ($0.element.id, $0.offset) },
@@ -519,6 +522,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         for index in resolved.indices {
             try Task.checkCancellation()
             let source = self.retained[index].original, timing = Self.timing(source)
+            if resetBefore.contains(source.id) { state = .init() }
             let barrier = source.status != .final || source.completeness != .complete || source.isEcho
                 || source.attributionState == .timingUncertain || source.isUserSpeakerAssigned == true
                 || source.nativeUnitID?.isEmpty != false || source.nativeSpeakerAssignment == nil
@@ -573,7 +577,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 if let current = state.bout { bout = current }
                 else {
                     let speaker = MeetingTranscriptAssembler(speakerNameFormat: self.speakerNameFormat)
-                        .provisionalPCMSpeaker(attemptID: self.attemptID, epoch: self.epoch, firstWordID: source.id)
+                        .provisionalPCMSpeaker(attemptID: self.attemptID, epoch: self.epoch,
+                            firstWordID: source.id, trackKind: trackKind)
                     if speakerIndices[speaker.id] == nil {
                         guard self.speakers.count < self.limits.maximumSpeakers else { throw Failure.speakerLimit }
                         speakerIndices[speaker.id] = self.speakers.count
@@ -616,6 +621,82 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         }
         self.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(self.speakers,
             speakerNameFormat: self.speakerNameFormat)
+    }
+
+    /// Final publication counterpart of the live protected tail. Call only after the owning
+    /// privacy operation admitted all text. This reuses the same reading state without rerunning
+    /// ASR, acoustic assignment, privacy or PCM assembly. Working text stays within one normal
+    /// tail-sized chunk; product identity metadata retains its separate explicit capacity.
+    static func finalizingProtectedTranscript(_ transcript: MeetingPCMTranscriptBatch,
+        attemptID: UUID, policy: MeetingSpeakerAttributionPolicy?, speakerNameFormat: String,
+        trackKinds: [MeetingAudioTrackID: MeetingAudioTrackKind] = [:],
+        barriersByTrack: [MeetingAudioTrackID: [MeetingSpeakerAttributionInterval]] = [:],
+        epochForSegment: (MeetingTranscriptSegment) -> MeetingAnalysisEpochID?
+    ) throws -> MeetingPCMTranscriptBatch {
+        guard let policy, policy.enableProvisionalSpeakerIdentities else { return transcript }
+        _ = try policy.validated()
+        guard transcript.speakers.count <= MeetingSessionSpeaker.maximumParticipants else { throw Failure.speakerLimit }
+        var indicesByEpoch: [MeetingAnalysisEpochID: [Int]] = [:]
+        for index in transcript.segments.indices {
+            try Task.checkCancellation()
+            let segment = transcript.segments[index]
+            guard let epoch = epochForSegment(segment), epoch.trackID == segment.sourceTrackID,
+                  epoch.ordinal >= 0, epoch.generation >= 0 else { throw Failure.invalidWord }
+            indicesByEpoch[epoch, default: []].append(index)
+        }
+        var result = transcript
+        // Admission order follows the first product word, independently of dictionary iteration.
+        let epochs = indicesByEpoch.keys.sorted { indicesByEpoch[$0]!.first! < indicesByEpoch[$1]!.first! }
+        for epoch in epochs {
+            try Task.checkCancellation()
+            let indices = indicesByEpoch[epoch]!.sorted {
+                let lhs = Self.timing(transcript.segments[$0]), rhs = Self.timing(transcript.segments[$1])
+                return (lhs.start, lhs.end, $0) < (rhs.start, rhs.end, $1)
+            }
+            var owner = try Self(attemptID: attemptID, epoch: epoch, speakerNameFormat: speakerNameFormat,
+                policy: policy, priorSpeakers: result.speakers)
+            let barriers = try MeetingSpeakerAttribution.unionedIntervals(barriersByTrack[epoch.trackID] ?? [])
+            var barrierCursor = 0
+            var previousEnd: TimeInterval?
+            var offset = 0
+            while offset < indices.count {
+                try Task.checkCancellation()
+                var end = offset, bytes = 0
+                while end < indices.count, end - offset < owner.limits.maximumRetainedWords {
+                    let segment = transcript.segments[indices[end]]
+                    let count = segment.text.utf8.count + (segment.originalText?.utf8.count ?? 0)
+                    guard count <= owner.limits.maximumRetainedTextBytes else { throw Failure.retainedTextLimit }
+                    if count > owner.limits.maximumRetainedTextBytes - bytes { break }
+                    bytes += count
+                    end += 1
+                }
+                let chunkIndices = Array(indices[offset..<end])
+                offset = end
+                var resolved = chunkIndices.map { transcript.segments[$0] }
+                var resetBefore = Set<MeetingTranscriptSegmentID>()
+                for segment in resolved {
+                    let timing = Self.timing(segment)
+                    guard MeetingEvidenceInterval.isValid(start: timing.start, end: timing.end) else { throw Failure.invalidWord }
+                    if let previousEnd {
+                        while barrierCursor < barriers.count, barriers[barrierCursor].end <= previousEnd {
+                            barrierCursor += 1
+                        }
+                        if barrierCursor < barriers.count, barriers[barrierCursor].start < timing.end,
+                           barriers[barrierCursor].end > previousEnd { resetBefore.insert(segment.id) }
+                    }
+                    previousEnd = max(previousEnd ?? timing.end, timing.end)
+                }
+                owner.retained = resolved.map { .init(original: $0, published: $0, committed: false) }
+                try owner.applyProvisionalIdentities(to: &resolved,
+                    trackKind: trackKinds[epoch.trackID] ?? .microphone, resetBefore: resetBefore)
+                for (index, segment) in zip(chunkIndices, resolved) { result.segments[index] = segment }
+                owner.provisionalPrefixState = owner.retained.last?.provisionalStateAfter ?? .init()
+                owner.retained.removeAll(keepingCapacity: true)
+            }
+            result.speakers = owner.speakers
+        }
+        result.speakerNameFormat = speakerNameFormat
+        return result
     }
 
     private static func identityOnly(_ speakers: [MeetingSessionSpeaker]) -> [MeetingSessionSpeaker] {

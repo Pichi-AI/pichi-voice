@@ -45,6 +45,7 @@ import Foundation
         try recoveryAndPartitions()
         try shortTokenQualification()
         try refinementRetiresOnlyUncommittedIdentity()
+        try finalProtectedPublication()
         try boundariesCapacityAndAtomicity()
         try compatibility()
         print("Provisional speaker identities: \(checks) checks passed")
@@ -190,5 +191,50 @@ import Foundation
             from: JSONSerialization.data(withJSONObject: json))
         check(!decoded.enableProvisionalSpeakerIdentities && decoded.fingerprint == old.fingerprint)
         check(decoded.fingerprint != MeetingSpeakerAttributionPolicy.standard.fingerprint)
+    }
+
+    static func finalProtectedPublication() throws {
+        let otherTrack = UUID(uuidString: "00000000-0000-0000-0000-000000009003")!
+        let nextEpoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: 1)
+        let applicationEpoch = MeetingAnalysisEpochID(trackID: otherTrack, ordinal: 0)
+        var rows = [word(1_000, 0, 0.4), word(1_001, 0.6, 1), word(1_002, 1.1, 1.4), word(1_003, 1.5, 1.8)]
+        rows[2].nativeSpeakerAssignment = .ambiguous([a, b])
+        rows[3].sourceTrackID = otherTrack
+        let scopes = [rows[0].id: epoch, rows[1].id: nextEpoch, rows[2].id: nextEpoch, rows[3].id: applicationEpoch]
+        let input = MeetingPCMTranscriptBatch(segments: rows)
+        let final = try Tail.finalizingProtectedTranscript(input, attemptID: attempt, policy: .standard,
+            speakerNameFormat: "Speaker %lld", trackKinds: [otherTrack: .applicationAudio],
+            epochForSegment: { scopes[$0.id] })
+        check(final.segments.allSatisfy { $0.speakerID != nil && $0.speakerIdentityIsProvisional == true })
+        check(final.segments[0].speakerID != final.segments[1].speakerID, "A reset epoch reused an unknown identity")
+        check(final.segments[1].speakerID == final.segments[2].speakerID, "Ambiguous words lost their bout identity")
+        check(final.segments[2].speakerID != final.segments[3].speakerID, "Different capture sources shared an unknown identity")
+        check(final.speakers.first { $0.id == final.segments[3].speakerID }?.trackKind == .applicationAudio)
+        for (before, after) in zip(rows, final.segments) {
+            check(before.text == after.text && before.nativeSpeakerAssignment == after.nativeSpeakerAssignment
+                && before.nativeTiming == after.nativeTiming && before.speakerAttribution == after.speakerAttribution)
+        }
+        let again = try Tail.finalizingProtectedTranscript(final, attemptID: attempt, policy: .standard,
+            speakerNameFormat: "Speaker %lld", epochForSegment: { scopes[$0.id] })
+        check(again.segments == final.segments && again.speakers == final.speakers)
+        let legacy = try Tail.finalizingProtectedTranscript(input, attemptID: attempt, policy: .init(),
+            speakerNameFormat: "Speaker %lld", epochForSegment: { scopes[$0.id] })
+        check(legacy.segments == rows && legacy.speakers.isEmpty)
+        let withGap = try Tail.finalizingProtectedTranscript(.init(segments: Array(rows.prefix(2))),
+            attemptID: attempt, policy: .standard, speakerNameFormat: "Speaker %lld",
+            barriersByTrack: [trackID: [.init(start: 0.4, end: 0.5)]], epochForSegment: { _ in epoch })
+        check(withGap.segments[0].speakerID != withGap.segments[1].speakerID, "Coverage barrier did not split preliminary identity")
+        // Cross both the word-count and text-byte working bounds without splitting a bout.
+        var long = (0..<4_200).map { index in word(2_000 + index, Double(index) * 0.1, Double(index) * 0.1 + 0.04) }
+        for index in long.indices { long[index].text = String(repeating: "x", count: 300) }
+        let bounded = try Tail.finalizingProtectedTranscript(.init(segments: long), attemptID: attempt,
+            policy: .standard, speakerNameFormat: "Speaker %lld", epochForSegment: { _ in epoch })
+        check(bounded.speakers.count == 1 && Set(bounded.segments.compactMap(\.speakerID)).count == 1)
+        let raw = try MeetingTranscriptAssembler(speakerNameFormat: "Speaker %lld").assemblePCMWindow(
+            attemptID: attempt, epoch: epoch, offset: 0, duration: 1,
+            units: [.init(id: "raw", trackID: trackID, analysisEpochID: epoch, precision: .word,
+                text: "raw", analysisStart: 0, analysisEnd: 0.4, speaker: .unassigned, analysisSpanIDs: [])])
+        check(raw.segments[0].speakerID == nil && raw.speakers.isEmpty,
+            "Raw PCM assembly minted a durable unknown identity before privacy admission")
     }
 }

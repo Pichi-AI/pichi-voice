@@ -98,7 +98,8 @@ nonisolated struct MeetingAssemblyResult: Equatable {
     /// token label. Cross-epoch identity requires explicit voice matching; tracks never merge.
     let speakers: [MeetingSessionSpeaker]
     /// Emitted and ambiguous-admitted units, once each, in presentation order. Ambiguous text is
-    /// one segment with a nil speaker and `.ambiguous` overlap; excluded units never appear.
+    /// one segment retaining `.ambiguous` overlap; protected publication supplies a clearly
+    /// provisional reading identity when native evidence cannot select one. Excluded units never appear.
     let segments: [MeetingTranscriptSegment]
     /// The complete disposition and coverage ledger, already passing `validated()`.
     let sidecar: MeetingResultSidecar
@@ -442,9 +443,18 @@ nonisolated struct MeetingTranscriptAssembler {
             $0.disposition == .rejectedInvalidTiming
         }
         var seenSpeakerIDs = Set<SessionSpeakerID>()
+        let product = try MeetingStreamingProtectedWordTail.finalizingProtectedTranscript(
+            .init(segments: segments, speakers: speakers.map(\.speaker).filter { seenSpeakerIDs.insert($0.id).inserted }),
+            attemptID: manifest.attemptID, policy: input.speakerAttributionPolicy, speakerNameFormat: self.speakerNameFormat,
+            trackKinds: Dictionary(uniqueKeysWithValues: manifest.tracks.map { ($0.id, $0.kind) }),
+            barriersByTrack: Dictionary(grouping: coverageGaps, by: \.trackID).mapValues {
+                $0.map { .init(start: $0.start, end: $0.end) }
+            }, epochForSegment: { segment in
+                segment.nativeUnitID.flatMap { unitsByID[$0]?.analysisEpochID }
+            })
         return MeetingAssemblyResult(
-            speakers: speakers.map(\.speaker).filter { seenSpeakerIDs.insert($0.id).inserted },
-            segments: segments,
+            speakers: product.speakers,
+            segments: product.segments,
             sidecar: sidecar,
             skippedChunks: skippedChunks,
             coverageGaps: coverageGaps,
@@ -992,10 +1002,11 @@ nonisolated struct MeetingTranscriptAssembler {
     /// The protected publication owner supplies the first word of an unresolved bout. This
     /// is a product reading identity only; it carries no fabricated acoustic cluster or token.
     func provisionalPCMSpeaker(attemptID: UUID, epoch: MeetingAnalysisEpochID,
-                               firstWordID: MeetingTranscriptSegmentID) -> MeetingSessionSpeaker {
+                               firstWordID: MeetingTranscriptSegmentID,
+                               trackKind: MeetingAudioTrackKind = .microphone) -> MeetingSessionSpeaker {
         .init(id: Self.stableUUID("provisional-speaker:\(attemptID):\(epoch):\(firstWordID)"),
             displayName: String(format: self.speakerNameFormat, Int64(1)), diarizationClusterID: nil,
-            trackKind: .microphone, isLocalUser: false, identityCandidates: [],
+            trackKind: trackKind, isLocalUser: false, identityCandidates: [],
             generatedParticipantNumber: 1, identityIsProvisional: true)
     }
 
