@@ -525,7 +525,7 @@ struct MeetingResultCanvas: View {
                                         self.pendingNameUnknownSegmentID = row.segment.id
                                         self.pendingUnknownSpeakerName = ""
                                     },
-                                    reassignTargets: self.session.readableSpeakers.filter { $0.id != row.presentation.participantID },
+                                    reassignTargets: self.session.activeSpeakers.filter { $0.id != row.presentation.participantID },
                                     isQuiescent: self.isQuiescent,
                                     onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) },
                                     canPlayAudio: self.session.retention.audioDeletedAt == nil && self.session.hasFinalizedAudio && self.isQuiescent,
