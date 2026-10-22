@@ -2370,7 +2370,7 @@ private extension OnboardingFlowView {
 
                 OnboardingFittedContent(width: 760) {
                     VStack(spacing: self.theme.metrics.spacing.lg) {
-                        FluidOnboardingCompactAppIconMark(size: 66)
+                        FluidOnboardingCompactAppIconMark()
                             .padding(.bottom, self.theme.metrics.spacing.sm)
 
                         Text(PichiLocalization.text("Meeting location"))
