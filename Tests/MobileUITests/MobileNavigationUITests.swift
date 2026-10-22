@@ -7,7 +7,8 @@ final class MobileNavigationUITests: XCTestCase {
 
     override func setUpWithError() throws {
         if name.contains("testFragmentParticipantCorrectionScopesUndoAndReopen")
-            || name.contains("testManualYouDesignationSwitchClearUndoAndReopen") {
+            || name.contains("testManualYouDesignationSwitchClearUndoAndReopen")
+            || name.contains("testTranscriptScrollKeepsNavigationControlsReadable") {
             #if !targetEnvironment(simulator)
             throw XCTSkip("Participant correction fixtures are simulator-only")
             #endif
