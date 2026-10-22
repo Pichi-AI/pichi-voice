@@ -16,7 +16,7 @@ enum NativeInputPresentationContrastTests {
                 switch self.kind {
                 case 0: ProductionWPMEditor()
                 case 1: MeetingTranscriptTextEditor(text: "Ёжик ёлка synthetic paragraph", onSave: { _ in nil }, onCancel: {})
-                default: EditDictionaryEntrySheet(entry: .init(id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!, triggers: ["синтетика"], replacement: "Ёжик ёлка"), existingTriggers: [], onSave: { _ in })
+                default: EditDictionaryEntrySheet(entry: .init(id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!, triggers: ["синтетика"], replacement: "Ёжик ёлка"), existingTriggers: [], isCaptureBusy: false, onSave: { _ in })
                 }
             }
             // Deliberately no appTheme or colorScheme on the outside adapter.
