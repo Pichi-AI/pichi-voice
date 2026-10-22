@@ -258,6 +258,13 @@ builds/
 !/docs/development/meeting-summary-strategy.md
 !/docs/development/meeting-speaker-attribution.md
 !/docs/development/owner-verification-diagnostics.md
+!/docs/development/speaker-colors.md
+!/docs/development/speaker-colors/
+/docs/development/speaker-colors/*
+!/docs/development/speaker-colors/ipad-light.png
+!/docs/development/speaker-colors/ipad-dark.png
+!/docs/development/speaker-colors/iphone-light.png
+!/docs/development/speaker-colors/iphone-dark.png
 !/docs/development/mobile-first-run-setup.md
 !/docs/development/mobile-meetings.md
 !/docs/development/ipad-demo-install-via-mac.md
@@ -286,3 +293,4 @@ builds/
 !docs/development/streaming-owner-voice-2026-10-20.md
 !docs/development/owner-v4-full-evidence-2026-10-21.md
 !docs/development/owner-proof-continuity-2026-10-21.md
+!docs/development/stable-speaker-opening-2026-10-21.md

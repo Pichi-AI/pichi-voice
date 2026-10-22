@@ -8,6 +8,8 @@ import Foundation
     static let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: 0)
     static let a = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")
     static let b = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "b")
+    // Frozen PR40 policies remain replayable; new recordings use stable opening instead.
+    static let legacy = MeetingSpeakerAttributionPolicy(enableProvisionalSpeakerIdentities: true)
     static var checks = 0
     static func check(_ value: Bool, _ message: String = #function, line: Int = #line) {
         checks += 1
@@ -41,7 +43,7 @@ import Foundation
         value.speakers = speakers
         return value
     }
-    static func main() throws {
+    static func main() async throws {
         try recoveryAndPartitions()
         try contextualRecoveryAndNewFinalBout()
         try shortTokenQualification()
@@ -49,6 +51,11 @@ import Foundation
         try finalProtectedPublication()
         try boundariesCapacityAndAtomicity()
         try compatibility()
+        try stableOpeningAndContext()
+        try invisibleScalarsCannotOpenSpeakers()
+        try stableRepeatedRepliesAndOwnerContinuity()
+        try stableFinalPublicationBoundaries()
+        try await stableFinalPublicationCancellation()
         print("Provisional speaker identities: \(checks) checks passed")
     }
     static func recoveryAndPartitions() throws {
@@ -64,7 +71,7 @@ import Foundation
                         .init(token: a, start: 266.321, end: 268.2), .init(token: b, start: 270, end: 270.4)]
         var expected: [SessionSpeakerID?]?
         for cut in [words.count, 5, 9, 10] {
-            var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
+            var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: legacy)
             let firstEnd = cut == words.count ? 272 : words[cut - 1].nativeTiming!.end
             let firstActivity = activity.compactMap { item -> MeetingBackendSpeakerActivity? in
                 let end = min(firstEnd, item.end)
@@ -118,14 +125,14 @@ import Foundation
         }
     }
     static func shortTokenQualification() throws {
-        var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
+        var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: legacy)
         var firstID: SessionSpeakerID?
         for index in 0..<6 {
             let start = Double(index * 20)
             let words = [word(100 + index * 2, start, start + 6), word(101 + index * 2, start + 6.1, start + 6.2)]
             let native = try MeetingPCMRecordingAttribution.assemble(transcript: .init(segments: words),
                 activity: [.init(token: a, start: start, end: start + 6), .init(token: b, start: start + 6.1, end: start + 7.1)],
-                epoch: epoch, attemptID: attempt, duration: start + 20, speakerNameFormat: "Speaker %lld")
+                epoch: epoch, attemptID: attempt, duration: start + 20, speakerNameFormat: "Speaker %lld", speakerAttributionPolicy: legacy)
             let result = try update(&tail, native.segments,
                 [.init(token: a, start: start, end: start + 6), .init(token: b, start: start + 6.1, end: start + 7.1)], end: start + 20)
             let short = result.inserted.last!
@@ -151,11 +158,11 @@ import Foundation
             .init(token: a, start: 10.2, end: 10.4), .init(token: a, start: 11.2, end: 11.4),
             .init(token: a, start: 11.7, end: 12)]
         let native = try MeetingPCMRecordingAttribution.assemble(transcript: .init(segments: words),
-            activity: activity, epoch: epoch, attemptID: attempt, duration: 13, speakerNameFormat: "Speaker %lld")
+            activity: activity, epoch: epoch, attemptID: attempt, duration: 13, speakerNameFormat: "Speaker %lld", speakerAttributionPolicy: legacy)
         check(native.segments[5].nativeSpeakerAssignment == .unassigned)
         check(native.segments[5].speakerAttribution?.rule == .neighborAgreement)
         check(native.segments[5].speakerAttribution?.selectedToken == a)
-        let final = try Tail.finalizingProtectedTranscript(native, attemptID: attempt, policy: .standard,
+        let final = try Tail.finalizingProtectedTranscript(native, attemptID: attempt, policy: legacy,
             speakerNameFormat: "Speaker %lld", epochForSegment: { _ in epoch })
         func verify(_ rows: [MeetingTranscriptSegment]) {
             let recovered = rows[1].speakerID
@@ -171,7 +178,7 @@ import Foundation
         }
         verify(final.segments)
         for cut in [native.segments.count, 5, 6] {
-            var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
+            var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: legacy)
             let end = cut == native.segments.count ? 13 : native.segments[cut - 1].nativeTiming!.end
             let prefixActivity = activity.compactMap { entry -> MeetingBackendSpeakerActivity? in
                 let clipped = min(entry.end, end)
@@ -195,12 +202,12 @@ import Foundation
         }
     }
     static func boundariesCapacityAndAtomicity() throws {
-        var overlapping = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
+        var overlapping = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: legacy)
         let cluster = try update(&overlapping,
             [word(400, 0, 0.5), word(401, 0.3, 0.8), word(402, 0.6, 1.1)], [], end: 2)
         check(Set(cluster.inserted.compactMap(\.speakerID)).count == 1,
             "Overlapping ASR word envelopes manufactured one identity per word")
-        var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
+        var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: legacy)
         var identities = Set<SessionSpeakerID>()
         for index in 0..<140 {
             let start = Double(index * 10)
@@ -210,7 +217,7 @@ import Foundation
             check(tail.retainedAdmissionTokenCount == 0)
         }
         check(identities.count == 140, "Provisional people were capped by the voice-profile budget")
-        var bounded = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld",
+        var bounded = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: legacy,
             limits: .init(maximumSpeakers: 1))
         _ = try update(&bounded, [word(900, 0, 0.2)], [], end: 10)
         let cursor = bounded.committedThrough
@@ -221,7 +228,7 @@ import Foundation
     }
     static func refinementRetiresOnlyUncommittedIdentity() throws {
         let main = word(950, 0, 6), gap = word(951, 6.1, 6.3), reply = word(952, 6.4, 7)
-        var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
+        var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: legacy)
         let first = try update(&tail, [main, gap], [.init(token: a, start: 0, end: 6)], end: 6.3)
         let preliminary = first.inserted[1].speakerID!
         check(first.speakers.first { $0.id == preliminary }?.generatedParticipantNumber == 2)
@@ -249,6 +256,219 @@ import Foundation
             from: JSONSerialization.data(withJSONObject: json))
         check(!decoded.enableProvisionalSpeakerIdentities && decoded.fingerprint == old.fingerprint)
         check(decoded.fingerprint != MeetingSpeakerAttributionPolicy.standard.fingerprint)
+        var frozen = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as! [String: Any]
+        frozen["enableStableSpeakerOpening"] = nil
+        let prior = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self,
+            from: JSONSerialization.data(withJSONObject: frozen))
+        check(!prior.enableStableSpeakerOpening && prior.fingerprint == legacy.fingerprint)
+        check(prior.fingerprint != MeetingSpeakerAttributionPolicy.standard.fingerprint)
+        check(MeetingSpeakerAttributionPolicy.standard.enableStableSpeakerOpening)
+    }
+
+    static func invisibleScalarsCannotOpenSpeakers() throws {
+        for text in ["\u{034F}", "\u{FE0F}", "\u{0301}", "\u{115F}", " \u{200B}\u{2060}"] {
+            var source = word(40_000, 0, 0.08)
+            source.text = text; source.nativeSpeakerAssignment = .assigned(a)
+            var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
+            let result = try update(&tail, [source], [.init(token: a, start: 0, end: 6)], end: 7)
+            check(result.speakers.isEmpty && result.inserted[0].speakerID == nil,
+                "Invisible scalar-only output must not open even the first generated speaker")
+            check(tail.admittedVoiceSeconds(for: a) == 0,
+                "Invisible scalar-only output cannot sponsor native voiced admission")
+            check(result.inserted[0].text == text && result.inserted[0].nativeSpeakerAssignment == source.nativeSpeakerAssignment,
+                "Noise suppression preserves source evidence")
+        }
+    }
+
+    static func stableOpeningAndContext() throws {
+        let c = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "c")
+        var rows = [word(9_000, 0, 6), word(9_001, 6.1, 12.1), word(9_002, 12.2, 12.28),
+            word(9_003, 12.4, 12.6), word(9_004, 12.7, 12.9)]
+        rows[0].nativeSpeakerAssignment = .assigned(a)
+        rows[1].nativeSpeakerAssignment = .assigned(b)
+        rows[2].text = "\u{2014}"
+        rows[3].text = "да"; rows[3].nativeSpeakerAssignment = .assigned(c)
+        rows[4].text = "42"; rows[4].nativeSpeakerAssignment = .assigned(b)
+        let activity = [MeetingBackendSpeakerActivity(token: a, start: 0, end: 6),
+            .init(token: b, start: 6.1, end: 12.1), .init(token: c, start: 12.4, end: 12.6),
+            .init(token: b, start: 12.7, end: 12.9)]
+        var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
+        let first = try update(&tail, rows, activity, end: 13)
+        check(first.speakers.count == 2, "A punctuation or short uncertain bout opened a third participant")
+        check(first.inserted[2].speakerID == nil, "Punctuation acquired a reading identity")
+        check(first.inserted[3].speakerID == first.inserted[1].speakerID)
+        check(first.inserted[4].speakerID == first.inserted[1].speakerID, "A known short reply lost its actual identity")
+        check(first.inserted[3].speakerAttribution?.rule == .existingParticipantContext)
+        check(first.inserted[3].speakerAttribution?.rule.isIndependentAcousticSelection == false)
+        check(first.inserted[3].nativeSpeakerAssignment == .assigned(c)
+            && first.inserted[3].nativeTiming == rows[3].nativeTiming && first.inserted[3].text == "да")
+        check(tail.admittedVoiceSeconds(for: c) < 1, "Context trained the chosen person's acoustic identity")
+        var third = word(9_005, 14, 20)
+        third.nativeSpeakerAssignment = .assigned(c)
+        let next = try update(&tail, [third], activity + [.init(token: c, start: 14, end: 20)], end: 21)
+        let thirdID = next.inserted[0].speakerID!
+        check(next.speakers.count == 3 && next.speakers.first { $0.id == thirdID }?.generatedParticipantNumber == 3,
+            "Noise consumed the genuine third participant's number")
+        check(thirdID != first.inserted[0].speakerID && thirdID != first.inserted[1].speakerID)
+        let stopped = try tail.finish(activity: activity + [.init(token: c, start: 14, end: 20)],
+            watermarks: marks(21), attemptID: attempt, epoch: epoch, activityAvailableFrom: tail.retainActivityFrom)
+        var published = first.inserted + next.inserted
+        for patch in next.revisions + stopped.revisions {
+            if let position = published.firstIndex(where: { $0.id == patch.segmentID }) { try patch.apply(to: &published[position]) }
+        }
+        let stored = session(words: published, speakers: stopped.speakers)
+        let reopened = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(stored))
+        check(reopened.speakers == stored.speakers && reopened.transcriptSegments == stored.transcriptSegments)
+        var manual = reopened
+        try manual.reassignSegment(id: rows[3].id, to: first.inserted[0].speakerID!)
+        let corrected = manual.transcriptSegments[3]
+        check(try !MeetingPCMTranscriptBatch.SpeakerRevision(published[3]).apply(to: &manual.transcriptSegments[3]))
+        check(manual.transcriptSegments[3] == corrected)
+
+        var unknown = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld",
+            limits: .init(maximumSpeakers: 1))
+        for index in 0..<40 {
+            let start = Double(index * 10)
+            let result = try update(&unknown, [word(10_000 + index, start, start + 0.2)], [], end: start + 10)
+            check(result.speakers.isEmpty && result.inserted[0].speakerID == nil,
+                "Unscored fragments manufactured a catch-all or consumed participant capacity")
+        }
+    }
+
+    static func stableRepeatedRepliesAndOwnerContinuity() throws {
+        let ownerID = MeetingTranscriptAssembler.speakerID(attemptID: attempt, token: a)
+        let owner = MeetingSessionSpeaker(id: ownerID, displayName: "Synthetic owner", diarizationClusterID: "\(epoch):a",
+            trackKind: .microphone, isLocalUser: true, identityCandidates: [], generatedParticipantNumber: 0,
+            identityIsProvisional: false)
+        var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", priorSpeakers: [owner])
+        for index in 0..<6 {
+            let start = Double(index * 20)
+            var main = word(11_000 + index * 2, start, start + 6)
+            var reply = word(11_001 + index * 2, start + 6.1, start + 6.2)
+            main.nativeSpeakerAssignment = .assigned(a)
+            reply.nativeSpeakerAssignment = .assigned(b); reply.text = "нет"
+            let result = try update(&tail, [main, reply], [.init(token: a, start: start, end: start + 6),
+                .init(token: b, start: start + 6.1, end: start + 7.1)], end: start + 20)
+            check(result.inserted[1].text == "нет" && result.inserted[1].nativeSpeakerAssignment == .assigned(b))
+            check(result.speakers.first { $0.id == ownerID }?.isLocalUser == true)
+            check(result.inserted[0].speakerID == ownerID)
+            if index < 4 {
+                check(result.speakers.count == 1 && result.inserted[1].speakerID == ownerID,
+                    "A brief reply consumed a separate participant before native qualification")
+            } else {
+                check(result.speakers.count == 2 && result.inserted[1].speakerID != ownerID,
+                    "Accumulated actual brief replies never admitted the real second person")
+                check(result.speakers.first { $0.id == result.inserted[1].speakerID }?.generatedParticipantNumber == 1)
+            }
+        }
+        var recovery = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", priorSpeakers: [owner])
+        var rows = [word(12_000, 0, 6), word(12_001, 6.1, 8.1), word(12_002, 8.2, 10.1), word(12_003, 10.2, 10.4)]
+        rows[0].nativeSpeakerAssignment = .assigned(a); rows[3].nativeSpeakerAssignment = .assigned(a)
+        let actual = [MeetingBackendSpeakerActivity(token: a, start: 0, end: 6), .init(token: a, start: 10.2, end: 10.4)]
+        let result = try update(&recovery, rows, actual, end: 11)
+        check(result.inserted[0].speakerID == ownerID && result.inserted[3].speakerID == ownerID,
+            "Unscored text stole the returning proven owner's identity")
+        check(result.speakers.count == 1 && result.speakers[0].isLocalUser)
+        check(result.inserted[1].speakerID == nil && result.inserted[2].speakerID == nil,
+            "A long unsupported run escaped the bounded contextual limit")
+    }
+
+    static func stableFinalPublicationBoundaries() throws {
+        let aID = MeetingTranscriptAssembler.speakerID(attemptID: attempt, token: a)
+        let bID = MeetingTranscriptAssembler.speakerID(attemptID: attempt, token: b)
+        let people = [MeetingSessionSpeaker(id: aID, displayName: "Synthetic owner", diarizationClusterID: "\(epoch):a",
+            trackKind: .microphone, isLocalUser: true, identityCandidates: [], generatedParticipantNumber: 0),
+            MeetingSessionSpeaker(id: bID, displayName: "Synthetic alias", diarizationClusterID: "\(epoch):b",
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [], generatedParticipantNumber: 2,
+            usesCustomDisplayName: true)]
+        func finalize(_ rows: [MeetingTranscriptSegment], barriers: [MeetingSpeakerAttributionInterval] = [],
+                      blocked: Bool = false) throws -> MeetingPCMTranscriptBatch {
+            try Tail.finalizingProtectedTranscript(.init(segments: rows, speakers: people), attemptID: attempt,
+                policy: .standard, speakerNameFormat: "Speaker %lld", barriersByTrack: [trackID: barriers],
+                contextualBarrierEpochIDs: blocked ? [epoch] : [], epochForSegment: { _ in epoch })
+        }
+        func anchored(_ index: Int, _ start: Double, token: MeetingBackendSpeakerToken = a) -> MeetingTranscriptSegment {
+            var row = word(index, start, start + 0.04)
+            row.nativeSpeakerAssignment = .assigned(token)
+            row.speakerID = token == a ? aID : bID
+            row.attributionState = .assigned
+            return row
+        }
+        let prefix = (0..<2_048).map { anchored(20_000 + $0, Double($0) * 0.1) }
+        var after = word(23_000, 204.8, 204.84)
+        after.text = "да"
+        let withLeft = try finalize(prefix + [after])
+        let compactLeft = try finalize([prefix.last!, after])
+        check(withLeft.segments.last == compactLeft.segments.last && withLeft.segments.last?.speakerID == aID,
+            "A short reply after the word-cap boundary lost its independent left anchor")
+
+        var before = word(23_001, 204.7, 204.74)
+        before.text = "нет"
+        let right = anchored(23_002, 204.8, token: b)
+        var beforePrefix = Array(prefix.prefix(2_047))
+        beforePrefix[2_046].status = .provisional
+        let withRight = try finalize(beforePrefix + [before, right])
+        let compactRight = try finalize([beforePrefix.last!, before, right])
+        check(withRight.segments[2_047] == compactRight.segments[1] && withRight.segments[2_047].speakerID == bID,
+            "A short reply before the word-cap boundary lost its independent right anchor")
+
+        let cap = Tail.Limits().maximumRetainedTextBytes
+        var largeLeft = anchored(23_003, 0)
+        largeLeft.text = String(repeating: "x", count: cap - 2)
+        var byteReply = word(23_004, 0.1, 0.14)
+        byteReply.text = "да"
+        let bytesAfter = try finalize([largeLeft, byteReply])
+        check(bytesAfter.segments[1].speakerID == aID, "Text-byte capacity severed left contextual evidence")
+        largeLeft.text = String(repeating: "x", count: cap - byteReply.text.utf8.count)
+        byteReply.nativeSpeakerAssignment = .assigned(b)
+        let byteRight = anchored(23_005, 0.2, token: b)
+        let bytesBefore = try finalize([largeLeft, byteReply, byteRight])
+        check(bytesBefore.segments[1].speakerID == bID,
+            "Text-byte capacity hid the right native-token cue and chose the wrong existing person")
+
+        // A whole dense run is evaluated once, even when several former word and byte chunks
+        // would have split it. Its context cannot escape the finite duration limit.
+        for step in [0.0001, 0.001] {
+            let dense = (0..<5_000).map { offset -> MeetingTranscriptSegment in
+                var row = word(30_000 + offset, 0.1 + Double(offset) * step, 0.1 + Double(offset) * step + 0.00001)
+                // Canonical media times have millisecond precision and must remain nonempty.
+                row.end = .init(value: row.start.value + 1, timescale: row.start.timescale)
+                row.text = String(repeating: "r", count: 300)
+                return row
+            }
+            let value = try finalize([anchored(23_006, 0)] + dense)
+            check(value.segments.dropFirst().allSatisfy { $0.speakerID == (step < 0.001 ? aID : nil) },
+                "Storage chunking changed complete-run context or bypassed its duration bound")
+            check(value.segments.map(\.nativeTiming) == ([anchored(23_006, 0)] + dense).map(\.nativeTiming))
+            check(value.speakers == withLeft.speakers, "Indexed context changed aliases, owner evidence or participant numbers")
+        }
+        var noise = word(23_007, 0.06, 0.08)
+        noise.text = "\u{2014}"
+        var protected = word(23_008, 0.1, 0.14)
+        protected.text = "***"; protected.containsPrivacyReplacement = true
+        let masked = try finalize([anchored(23_009, 0), noise, protected])
+        check(masked.segments[1].speakerID == nil && masked.segments[2].speakerID == aID)
+        let barred = try finalize(prefix + [after], barriers: [.init(start: 204.75, end: 204.79)])
+        check(barred.segments.last?.speakerID == nil, "An indexed lookup crossed an excluded interval")
+        let blocked = try finalize([prefix.last!, after], blocked: true)
+        check(blocked.segments.last?.speakerID == nil, "An unsafe epoch acquired contextual identity")
+        var manual = after
+        manual.speakerID = bID; manual.isUserSpeakerAssigned = true
+        check(try finalize(prefix + [manual]).segments.last == manual, "Indexed context overwrote a manual participant correction")
+        largeLeft.text = String(repeating: "x", count: cap + 1)
+        do { _ = try finalize([largeLeft, byteReply]); check(false, "An oversized source row bypassed its text bound") }
+        catch Tail.Failure.retainedTextLimit { check(true) }
+    }
+
+    static func stableFinalPublicationCancellation() async throws {
+        let original = [word(40_000, 0, 0.2)]
+        let cancelled = Task { () throws -> MeetingPCMTranscriptBatch in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try Tail.finalizingProtectedTranscript(.init(segments: original), attemptID: attempt,
+                policy: .standard, speakerNameFormat: "Speaker %lld", epochForSegment: { _ in epoch })
+        }
+        do { _ = try await cancelled.value; check(false, "Cancelled indexed publication returned a partial transcript") }
+        catch is CancellationError { check(original[0].speakerID == nil && original[0].speakerAttribution == nil) }
     }
 
     static func finalProtectedPublication() throws {
@@ -260,7 +480,7 @@ import Foundation
         rows[3].sourceTrackID = otherTrack
         let scopes = [rows[0].id: epoch, rows[1].id: nextEpoch, rows[2].id: nextEpoch, rows[3].id: applicationEpoch]
         let input = MeetingPCMTranscriptBatch(segments: rows)
-        let final = try Tail.finalizingProtectedTranscript(input, attemptID: attempt, policy: .standard,
+        let final = try Tail.finalizingProtectedTranscript(input, attemptID: attempt, policy: legacy,
             speakerNameFormat: "Speaker %lld", trackKinds: [otherTrack: .applicationAudio],
             epochForSegment: { scopes[$0.id] })
         check(final.segments.allSatisfy { $0.speakerID != nil && $0.speakerIdentityIsProvisional == true })
@@ -272,32 +492,32 @@ import Foundation
             check(before.text == after.text && before.nativeSpeakerAssignment == after.nativeSpeakerAssignment
                 && before.nativeTiming == after.nativeTiming && before.speakerAttribution == after.speakerAttribution)
         }
-        let again = try Tail.finalizingProtectedTranscript(final, attemptID: attempt, policy: .standard,
+        let again = try Tail.finalizingProtectedTranscript(final, attemptID: attempt, policy: legacy,
             speakerNameFormat: "Speaker %lld", epochForSegment: { scopes[$0.id] })
         check(again.segments == final.segments && again.speakers == final.speakers)
-        let legacy = try Tail.finalizingProtectedTranscript(input, attemptID: attempt, policy: .init(),
+        let unnamed = try Tail.finalizingProtectedTranscript(input, attemptID: attempt, policy: .init(),
             speakerNameFormat: "Speaker %lld", epochForSegment: { scopes[$0.id] })
-        check(legacy.segments == rows && legacy.speakers.isEmpty)
+        check(unnamed.segments == rows && unnamed.speakers.isEmpty)
         let withGap = try Tail.finalizingProtectedTranscript(.init(segments: Array(rows.prefix(2))),
-            attemptID: attempt, policy: .standard, speakerNameFormat: "Speaker %lld",
+            attemptID: attempt, policy: legacy, speakerNameFormat: "Speaker %lld",
             barriersByTrack: [trackID: [.init(start: 0.4, end: 0.5)]], epochForSegment: { _ in epoch })
         check(withGap.segments[0].speakerID != withGap.segments[1].speakerID, "Coverage barrier did not split preliminary identity")
         let nestedRows = [word(1_100, 1, 4), word(1_101, 3, 3.2), word(1_102, 3.1, 3.3)]
         let nestedBarrier = try Tail.finalizingProtectedTranscript(.init(segments: nestedRows),
-            attemptID: attempt, policy: .standard, speakerNameFormat: "Speaker %lld",
+            attemptID: attempt, policy: legacy, speakerNameFormat: "Speaker %lld",
             barriersByTrack: [trackID: [.init(start: 2, end: 2.5)]], epochForSegment: { _ in epoch })
         check(nestedBarrier.segments[0].speakerID != nestedBarrier.segments[1].speakerID,
             "A prior enclosing word consumed a nested excluded interval")
         check(nestedBarrier.segments[1].speakerID == nestedBarrier.segments[2].speakerID)
         let noNestedBarrier = try Tail.finalizingProtectedTranscript(.init(segments: nestedRows),
-            attemptID: attempt, policy: .standard, speakerNameFormat: "Speaker %lld", epochForSegment: { _ in epoch })
+            attemptID: attempt, policy: legacy, speakerNameFormat: "Speaker %lld", epochForSegment: { _ in epoch })
         check(Set(noNestedBarrier.segments.compactMap(\.speakerID)).count == 1,
             "Ordinary nested word envelopes split a continuous preliminary bout")
         // Cross both the word-count and text-byte working bounds without splitting a bout.
         var long = (0..<4_200).map { index in word(2_000 + index, Double(index) * 0.1, Double(index) * 0.1 + 0.04) }
         for index in long.indices { long[index].text = String(repeating: "x", count: 300) }
         let bounded = try Tail.finalizingProtectedTranscript(.init(segments: long), attemptID: attempt,
-            policy: .standard, speakerNameFormat: "Speaker %lld", epochForSegment: { _ in epoch })
+            policy: legacy, speakerNameFormat: "Speaker %lld", epochForSegment: { _ in epoch })
         check(bounded.speakers.count == 1 && Set(bounded.segments.compactMap(\.speakerID)).count == 1)
         let raw = try MeetingTranscriptAssembler(speakerNameFormat: "Speaker %lld").assemblePCMWindow(
             attemptID: attempt, epoch: epoch, offset: 0, duration: 1,
@@ -308,8 +528,8 @@ import Foundation
         let recoveryRows = [word(7_000, 0, 6), word(7_001, 6.1, 8.1), word(7_002, 8.2, 10.1), word(7_003, 10.2, 10.4)]
         let native = try MeetingPCMRecordingAttribution.assemble(transcript: .init(segments: recoveryRows),
             activity: [.init(token: a, start: 0, end: 6), .init(token: a, start: 10.2, end: 10.4)],
-            epoch: epoch, attemptID: attempt, duration: 11, speakerNameFormat: "Speaker %lld")
-        let unsafeEpoch = try Tail.finalizingProtectedTranscript(native, attemptID: attempt, policy: .standard,
+            epoch: epoch, attemptID: attempt, duration: 11, speakerNameFormat: "Speaker %lld", speakerAttributionPolicy: legacy)
+        let unsafeEpoch = try Tail.finalizingProtectedTranscript(native, attemptID: attempt, policy: legacy,
             speakerNameFormat: "Speaker %lld", contextualBarrierEpochIDs: [epoch], epochForSegment: { _ in epoch })
         check(unsafeEpoch.segments[1].speakerID == unsafeEpoch.segments[2].speakerID,
             "Unplaceable quarantine manufactured one identity per admitted unknown word")

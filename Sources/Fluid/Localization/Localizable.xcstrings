@@ -1,19 +1,19 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "%@ (provisional)": {
+    "This is me": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ (provisional)"
+            "value": "This is me"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ (предварительно)"
+            "value": "Это я"
           }
         }
       }

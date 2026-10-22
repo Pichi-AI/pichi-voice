@@ -394,18 +394,19 @@ struct MeetingResultCanvas: View {
 
     /// Naming is reached by clicking a speaker's name, so the sheet opens on the one clicked.
     private func presentAssignSpeakers(focusing speakerID: SessionSpeakerID?) {
-        guard self.isQuiescent, !self.session.activeSpeakers.isEmpty else { return }
+        guard self.isQuiescent, !self.session.readableSpeakers.isEmpty else { return }
         self.assignSpeakersFocus = speakerID
         self.isShowingAssignSpeakers = true
     }
 
     private func chipTint(for speaker: MeetingSessionSpeaker) -> Color? {
-        speaker.isLocalUser ? self.theme.palette.accent : self.speakerTints[speaker.id]
+        self.speakerTints[speaker.id]
     }
 
     private var speakerTints: [SessionSpeakerID: Color] {
-        let scheme = self.theme.palette.nativeColorScheme(fallback: self.colorScheme)
-        return MeetingSpeakerPalette.tints(for: self.session.activeSpeakers, isDark: scheme == .dark)
+        MeetingSpeakerPalette.tintIndices(for: self.session.speakers).mapValues { index in
+            MeetingSpeakerPalette.labelColor(forSpeakerIndex: index, theme: self.theme, colorScheme: self.colorScheme)
+        }
     }
 
     private var hasEchoSegments: Bool {
@@ -413,8 +414,9 @@ struct MeetingResultCanvas: View {
     }
 
     /// Single projection so shown and copied never disagree.
-    private func visibleSegments(sorted: [MeetingTranscriptSegment]) -> [MeetingTranscriptSegment] {
-        self.showsProbableEchoes ? sorted : sorted.filter { !$0.isEcho }
+    private func visibleSegments(sorted: [MeetingTranscriptSegment],
+        presentations: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation]) -> [MeetingTranscriptSegment] {
+        sorted.filter { $0.isEcho ? self.showsProbableEchoes : presentations[$0.id] != nil }
     }
 
     /// Preserve correction and playback members while sharing one full-session reading map.
@@ -424,7 +426,7 @@ struct MeetingResultCanvas: View {
         presentations: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation]
     ) -> [(segment: MeetingTranscriptSegment, presentation: MeetingSpeakerPresentation,
            showsLabel: Bool, speaker: MeetingSessionSpeaker?)] {
-        let speakers = Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map { ($0.id, $0) })
+        let speakers = Dictionary(uniqueKeysWithValues: self.session.readableSpeakers.map { ($0.id, $0) })
         var previousIdentity: String?
         var previousTrack: MeetingAudioTrackID?
         return visibleSegments.map { segment in
@@ -440,10 +442,10 @@ struct MeetingResultCanvas: View {
 
     var body: some View {
         let sorted = self.session.transcriptSegments.sorted { $0.start.seconds < $1.start.seconds }
-        let visibleSegments = self.visibleSegments(sorted: sorted)
-        let visibleSpeakerIDs = Set(visibleSegments.compactMap(\.speakerID))
-        let activeSpeakers = self.session.activeSpeakers.filter { visibleSpeakerIDs.contains($0.id) }
         let presentations = MeetingTranscriptExporter.speakerPresentations(in: self.session)
+        let visibleSegments = self.visibleSegments(sorted: sorted, presentations: presentations)
+        let visibleSpeakerIDs = Set(visibleSegments.compactMap(\.speakerID))
+        let activeSpeakers = self.session.readableSpeakers.filter { visibleSpeakerIDs.contains($0.id) }
         let rows = self.rows(for: visibleSegments, presentations: presentations)
         // One scroller preserves a readable document at short window heights.
         let document = ScrollView {
@@ -461,9 +463,9 @@ struct MeetingResultCanvas: View {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                             self.speakerStrip(activeSpeakers)
                             if self.session.state == .completed,
-                               let note = Self.speakerAccuracyNote(speakerCount: self.session.activeSpeakers.count)
+                               let note = Self.speakerAccuracyNote(speakerCount: self.session.readableSpeakers.count)
                             {
-                                self.speakerAccuracyNoteView(note, speakerCount: self.session.activeSpeakers.count)
+                                self.speakerAccuracyNoteView(note, speakerCount: self.session.readableSpeakers.count)
                             }
                         }
                     }
@@ -504,8 +506,7 @@ struct MeetingResultCanvas: View {
                                             self.pendingUnknownSpeakerName = ""
                                         }
                                     },
-                                    isLocalUser: row.speaker?.isLocalUser == true,
-                                    reassignTargets: self.session.activeSpeakers.filter { $0.id != row.presentation.participantID },
+                                    reassignTargets: self.session.readableSpeakers.filter { $0.id != row.presentation.participantID },
                                     isQuiescent: self.isQuiescent,
                                     onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) },
                                     canPlayAudio: self.session.retention.audioDeletedAt == nil && self.session.hasFinalizedAudio && self.isQuiescent,
@@ -608,12 +609,11 @@ struct MeetingResultCanvas: View {
         }
         .sheet(isPresented: self.$isShowingAssignSpeakers) {
             MeetingAssignSpeakersSheet(
-                speakers: self.session.activeSpeakers,
-                quotesBySpeaker: Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map {
+                speakers: self.session.readableSpeakers,
+                quotesBySpeaker: Dictionary(uniqueKeysWithValues: self.session.readableSpeakers.map {
                     ($0.id, MeetingAssignSpeakersQuoteSource.sampleQuotes(for: $0.id, in: self.session.transcriptSegments))
                 }),
                 tints: self.speakerTints,
-                accentColor: self.theme.palette.accent,
                 focusedSpeakerID: self.assignSpeakersFocus,
                 onSave: self.onAssignSpeakers,
                 onCancel: { self.isShowingAssignSpeakers = false }
@@ -768,7 +768,7 @@ struct MeetingResultCanvas: View {
             .help(PichiLocalization.text("The You label applies only to this meeting."))
         }
         if !speaker.isLocalUser {
-            let eligibleTargets = self.session.activeSpeakers.filter {
+            let eligibleTargets = self.session.readableSpeakers.filter {
                 $0.id != speaker.id && !$0.isLocalUser && $0.trackKind == speaker.trackKind
             }
             if !eligibleTargets.isEmpty {
@@ -1110,7 +1110,7 @@ private struct MeetingSpeakerChip: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
             .font(self.theme.typography.captionStrong)
-            .foregroundStyle(self.theme.palette.readableText(self.tint))
+            .foregroundStyle(self.tint)
         }
         .buttonStyle(.borderless)
         .meetingHoverFeedback()
@@ -1125,7 +1125,6 @@ private struct MeetingTranscriptSegmentRow: View {
     let showsSpeakerLabel: Bool
     let speakerTint: Color?
     let onRenameSpeakerTapped: (() -> Void)?
-    let isLocalUser: Bool
     let reassignTargets: [MeetingSessionSpeaker]
     let isQuiescent: Bool
     let onReassign: (SessionSpeakerID) -> Void
@@ -1233,8 +1232,7 @@ private struct MeetingTranscriptSegmentRow: View {
     }
 
     private var nameColor: Color {
-        if self.isLocalUser { return self.theme.palette.accentText }
-        return self.speakerTint.map(self.theme.palette.readableText) ?? self.theme.palette.tertiaryText
+        self.speakerTint ?? self.theme.palette.secondaryText
     }
 }
 

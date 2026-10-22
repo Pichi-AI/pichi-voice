@@ -15,6 +15,7 @@ struct MobileMeetingRoot: View {
     let microphones: @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var scenePhase
@@ -34,6 +35,7 @@ struct MobileMeetingRoot: View {
     @State private var showRecordingSettings = false
     @State private var microphoneSnapshot = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
     @State private var edit: MeetingEditDraft?
+    @State private var participantEdit: MeetingParticipantEditDraft?
     @State private var speakerAssignment: MeetingSpeakerAssignmentDraft?
     @State private var deletion: Deletion?
     @State private var share: MeetingSharePayload?
@@ -123,8 +125,6 @@ struct MobileMeetingRoot: View {
                     case .segment(let segment):
                         result = try await coordinator.editTranscriptText(sessionID: draft.session.id, segmentID: segment.id, text: updated,
                             expectedRevision: segment.revision)
-                    case .speaker(let speaker):
-                        result = try await coordinator.renameSpeaker(sessionID: draft.session.id, speakerID: speaker.id, to: updated)
                     case .title:
                         result = try await coordinator.renameSession(sessionID: draft.session.id, to: updated)
                     case .paragraph:
@@ -209,8 +209,8 @@ struct MobileMeetingRoot: View {
         }
         .onAppear { updateRecordingScreenAwake() }
         .onChange(of: scenePhase) { _, _ in updateRecordingScreenAwake() }
-        .onChange(of: destination) { _, _ in playback.stop(); presentationLoader.cancel() }
-        .onChange(of: historyPath) { _, _ in playback.stop(); presentationLoader.cancel() }
+        .onChange(of: destination) { _, _ in playback.stop(); presentationLoader.cancel(); participantEdit = nil }
+        .onChange(of: historyPath) { _, _ in playback.stop(); presentationLoader.cancel(); participantEdit = nil }
         .onDisappear {
             presentationLoader.cancel()
             updateRecordingScreenAwake(isVisible: false)
@@ -524,7 +524,7 @@ struct MobileMeetingRoot: View {
     private var history: some View {
         let matches = sessions.filter { session in
             search.isEmpty || session.displayTitle.localizedCaseInsensitiveContains(search)
-                || session.activeSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
+                || session.readableSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
                 || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
         }
         return List(matches) { session in
@@ -565,152 +565,192 @@ struct MobileMeetingRoot: View {
     private func historySummary(_ session: MeetingSession) -> String {
         var parts = [session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)),
                      MeetingTranscriptExporter.timestampText(session.duration)]
-        if !session.activeSpeakers.isEmpty {
-            parts.append(PichiLocalization.format("%lld speakers", Int64(session.activeSpeakers.count)))
+        if !session.readableSpeakers.isEmpty {
+            parts.append(PichiLocalization.format("%lld speakers", Int64(session.readableSpeakers.count)))
         }
         if session.state != .completed { parts.append(PichiLocalization.text(sessionStatus(session.state))) }
         return parts.joined(separator: " · ")
     }
 
     private func transcript(_ session: MeetingSession) -> some View {
-        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map {
+        let speakerIndices = MeetingSpeakerPalette.tintIndices(for: session.speakers)
+        let names = Dictionary(uniqueKeysWithValues: session.readableSpeakers.map {
             ($0.id, MeetingTranscriptExporter.speakerDisplayName($0, language: PichiLocalization.language))
         })
         let readingInput = MeetingTranscriptExporter.ReadingInput(session)
         let paragraphs = transcriptReadingSource == readingInput ? transcriptReading : []
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text(session.displayTitle).font(theme.typography.title)
-                HStack {
-                    Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
-                    Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
-                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                HStack {
-                    // The desktop transcript's copy confirmation.
-                    let copied = copiedSessionID == session.id
-                    Button { copyTranscript(session) } label: {
-                        Label(PichiLocalization.text(copied ? "Copied" : "Copy"), systemImage: copied ? "checkmark" : "doc.on.doc")
-                            .frame(minHeight: 44)
-                    }.accessibilityIdentifier("transcript.copy")
-                        .accessibilityLabel(PichiLocalization.text(copied ? "Transcript copied" : "Copy transcript"))
-                    Menu {
-                        Button(PichiLocalization.text("Export as Text")) { exportTranscript(session, json: false) }
-                        Button(PichiLocalization.text("Export as JSON")) { exportTranscript(session, json: true) }
-                        Button(PichiLocalization.text("Export Protected Transcript")) { exportProtectedTranscript(session) }
-                            .disabled(!MeetingTranscriptExporter.canExportProtectedTranscript(session))
-                            .accessibilityIdentifier("transcript.exportProtected")
+        return ScrollViewReader { reader in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text(session.displayTitle).font(theme.typography.title)
+                    HStack {
+                        Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
+                        Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
+                    }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    HStack {
+                        // The desktop transcript's copy confirmation.
+                        let copied = copiedSessionID == session.id
+                        Button { copyTranscript(session) } label: {
+                            Label(PichiLocalization.text(copied ? "Copied" : "Copy"), systemImage: copied ? "checkmark" : "doc.on.doc")
+                                .frame(minHeight: 44)
+                        }.accessibilityIdentifier("transcript.copy")
+                            .accessibilityLabel(PichiLocalization.text(copied ? "Transcript copied" : "Copy transcript"))
+                        Menu {
+                            Button(PichiLocalization.text("Export as Text")) { exportTranscript(session, json: false) }
+                            Button(PichiLocalization.text("Export as JSON")) { exportTranscript(session, json: true) }
+                            Button(PichiLocalization.text("Export Protected Transcript")) { exportProtectedTranscript(session) }
+                                .disabled(!MeetingTranscriptExporter.canExportProtectedTranscript(session))
+                                .accessibilityIdentifier("transcript.exportProtected")
+                            if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
+                                if session.hasRetryableAudio {
+                                    Button(PichiLocalization.text("Retry transcription")) {
+                                        playback.stop()
+                                        run { _ = try await coordinator.retryProcessing(sessionID: session.id) }
+                                    }.disabled(!coordinator.isQuiescent)
+                                }
+                                Button(PichiLocalization.text("Export Audio")) { exportAudio(session) }
+                                Button(PichiLocalization.text("Delete Audio"), role: .destructive) { deletion = .audio(session) }
+                            }
+                            Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.displayTitle) }
+                            if coordinator.canUndoCorrection(sessionID: session.id) {
+                                Button(PichiLocalization.text("Undo correction")) {
+                                    run {
+                                        let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+                                        acceptCommittedSession(updated)
+                                    }
+                                }.disabled(!coordinator.isQuiescent || isBusy)
+                                    .accessibilityIdentifier("transcript.undo")
+                            }
+                            Button(PichiLocalization.text("Delete Meeting"), role: .destructive) { deletion = .meeting(session) }
+                        } label: { Label(PichiLocalization.text("More"), systemImage: "ellipsis").frame(minHeight: 44) }
+                            .accessibilityIdentifier("transcript.more")
+                        Spacer()
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
                         if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
-                            if session.hasRetryableAudio {
-                                Button(PichiLocalization.text("Retry transcription")) {
-                                    playback.stop()
-                                    run { _ = try await coordinator.retryProcessing(sessionID: session.id) }
-                                }.disabled(!coordinator.isQuiescent)
-                            }
-                            Button(PichiLocalization.text("Export Audio")) { exportAudio(session) }
-                            Button(PichiLocalization.text("Delete Audio"), role: .destructive) { deletion = .audio(session) }
+                            Text(PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls."))
                         }
-                        Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.displayTitle) }
-                        if coordinator.canUndoCorrection(sessionID: session.id) {
-                            Button(PichiLocalization.text("Undo correction")) {
-                                run {
-                                    let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
-                                    acceptCommittedSession(updated)
+                    }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    Text(PichiLocalization.text("Transcript")).font(theme.typography.sectionTitle)
+                    Divider()
+                    if !session.readableSpeakers.isEmpty {
+                        Text(PichiLocalization.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
+                            .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        Text(PichiLocalization.text("The You label applies only to this meeting."))
+                            .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        if UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact {
+                            ScrollView(.horizontal) {
+                                HStack(spacing: theme.metrics.spacing.sm) {
+                                    ForEach(session.readableSpeakers) { speaker in
+                                        participantButton(speaker, session: session, colorIndex: speakerIndices[speaker.id], expands: false)
+                                    }
                                 }
-                            }.disabled(!coordinator.isQuiescent || isBusy)
-                                .accessibilityIdentifier("transcript.undo")
+                            }.scrollIndicators(.hidden).accessibilityIdentifier("transcript.speakers")
+                        } else {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), alignment: .leading)], alignment: .leading,
+                                      spacing: theme.metrics.spacing.sm) {
+                                ForEach(session.readableSpeakers) { speaker in
+                                    participantButton(speaker, session: session, colorIndex: speakerIndices[speaker.id], expands: true)
+                                }
+                            }.accessibilityIdentifier("transcript.speakers")
                         }
-                        Button(PichiLocalization.text("Delete Meeting"), role: .destructive) { deletion = .meeting(session) }
-                    } label: { Label(PichiLocalization.text("More"), systemImage: "ellipsis").frame(minHeight: 44) }
-                        .accessibilityIdentifier("transcript.more")
-                    Spacer()
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
-                    if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
-                        Text(PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls."))
+                        // Keep the editor in the vertical transcript scroll hierarchy, rather
+                        // than inside the phone's horizontal participant strip.
+                        if let draft = participantEdit, draft.sessionID == session.id, draft.paragraphID == nil,
+                           let speaker = session.speakers.first(where: { $0.id == draft.speakerID }) {
+                            participantEditor(speaker, session: session, draft: draft)
+                        }
                     }
-                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                Text(PichiLocalization.text("Transcript")).font(theme.typography.sectionTitle)
-                Divider()
-                if !session.activeSpeakers.isEmpty {
-                    Text(PichiLocalization.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
-                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                    Text(PichiLocalization.text("The You label applies only to this meeting."))
-                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                    if UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact {
-                        ScrollView(.horizontal) {
-                            HStack(spacing: theme.metrics.spacing.sm) {
-                                ForEach(session.activeSpeakers) { speaker in
-                                    participantButton(speaker, session: session, expands: false)
-                                }
-                            }
-                        }.scrollIndicators(.hidden).accessibilityIdentifier("transcript.speakers")
-                    } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), alignment: .leading)], alignment: .leading,
-                                  spacing: theme.metrics.spacing.sm) {
-                            ForEach(session.activeSpeakers) { speaker in
-                                participantButton(speaker, session: session, expands: true)
-                            }
-                        }.accessibilityIdentifier("transcript.speakers")
+                    if let message = playback.errorMessage {
+                        Text(PichiLocalization.text(message)).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
                     }
-                }
-                if let message = playback.errorMessage {
-                    Text(PichiLocalization.text(message)).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
-                }
-                LazyVStack(alignment: .leading, spacing: theme.metrics.spacing.xl) {
-                    ForEach(paragraphs) { paragraph in
-                        transcriptParagraph(paragraph, session: session, names: names)
+                    LazyVStack(alignment: .leading, spacing: theme.metrics.spacing.xl) {
+                        ForEach(paragraphs) { paragraph in
+                            transcriptParagraph(paragraph, session: session, names: names)
+                        }
                     }
+                }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
+            }.accessibilityIdentifier("meeting.transcript")
+                .scrollDismissesKeyboard(.interactively)
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                    guard let draft = participantEdit, draft.sessionID == session.id else { return }
+                    withAnimation { reader.scrollTo(draft.id, anchor: .bottom) }
                 }
-            }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
-        }.accessibilityIdentifier("meeting.transcript")
-            .task(id: readingInput) {
-                do {
-                    let projection = try await MeetingTranscriptExporter.readingParagraphs(for: session)
-                    try Task.checkCancellation()
-                    transcriptReading = projection
-                    transcriptReadingSource = readingInput
-                } catch is CancellationError { }
-                catch { report(error) }
-            }
+                .task(id: participantEdit?.id) {
+                    guard let draft = participantEdit, draft.sessionID == session.id else { return }
+                    // Wait for the expanded editor to enter the scroll layout. This task is
+                    // cancelled with its view or a different tapped participant.
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    withAnimation { reader.scrollTo(draft.id, anchor: .bottom) }
+                }
+                .task(id: readingInput) {
+                    do {
+                        let projection = try await MeetingTranscriptExporter.readingParagraphs(for: session)
+                        try Task.checkCancellation()
+                        transcriptReading = projection
+                        transcriptReadingSource = readingInput
+                    } catch is CancellationError { }
+                    catch { report(error) }
+                }
+        }
     }
 
-    private func participantButton(_ speaker: MeetingSessionSpeaker, session: MeetingSession, expands: Bool) -> some View {
-        HStack(spacing: theme.metrics.spacing.xs) {
-            Button {
-                edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
-            } label: {
-                Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language), systemImage: "person.crop.circle")
-                    .font(theme.typography.captionStrong)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
-            }.accessibilityIdentifier("transcript.speaker.\(speaker.id)")
-            Menu {
-                Button(PichiLocalization.text("Rename Speaker"), systemImage: "pencil") {
-                    edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
+    private func participantButton(_ speaker: MeetingSessionSpeaker, session: MeetingSession, colorIndex: Int?, expands: Bool) -> some View {
+        Button {
+            participantEdit = MeetingParticipantEditDraft(sessionID: session.id, speaker: speaker)
+        } label: {
+            Text(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language))
+                .font(theme.typography.captionStrong)
+                .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: colorIndex,
+                    theme: theme, colorScheme: colorScheme))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
+        }.accessibilityIdentifier("transcript.speaker.\(speaker.id)")
+            .accessibilityHint(PichiLocalization.text("Speaker name"))
+            .disabled(!coordinator.isQuiescent || isBusy)
+    }
+
+    /// The same inline editor serves the roster and a fragment's resolved reading owner.
+    /// Only the fragment-specific action opens the existing scoped attribution picker.
+    private func participantEditor(_ speaker: MeetingSessionSpeaker, session: MeetingSession,
+                                   draft: MeetingParticipantEditDraft,
+                                   segments: [MeetingTranscriptSegment]? = nil) -> some View {
+        MeetingParticipantInlineEditor(name: draft.name, isLocalUser: speaker.isLocalUser,
+            save: { name in
+                guard coordinator.isQuiescent, !isBusy else { return }
+                run {
+                    let updated = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speaker.id, to: name)
+                    acceptCommittedSession(updated)
+                    participantEdit = nil
                 }
-                Button(PichiLocalization.text(speaker.isLocalUser ? "Remove You designation" : "Mark as You"),
-                       systemImage: speaker.isLocalUser ? "person.crop.circle.badge.minus" : "person.crop.circle.badge.checkmark") {
-                    guard coordinator.isQuiescent, !isBusy else { return }
-                    run {
-                        let updated = try await coordinator.setLocalUserSpeaker(sessionID: session.id,
-                            speakerID: speaker.isLocalUser ? nil : speaker.id)
-                        acceptCommittedSession(updated)
-                    }
-                }.accessibilityIdentifier("transcript.participant.\(speaker.isLocalUser ? "removeYou" : "markYou").\(speaker.id)")
-            } label: {
-                Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44)
-            }
-            .accessibilityLabel(PichiLocalization.text("Participant actions"))
-            .accessibilityHint(PichiLocalization.text("The You label applies only to this meeting."))
-            .accessibilityIdentifier("transcript.participant.actions.\(speaker.id)")
-        }.disabled(!coordinator.isQuiescent || isBusy)
+            }, cancel: { participantEdit = nil }, designate: {
+                guard coordinator.isQuiescent, !isBusy else { return }
+                run {
+                    let updated = try await coordinator.setLocalUserSpeaker(sessionID: session.id,
+                        speakerID: speaker.isLocalUser ? nil : speaker.id)
+                    acceptCommittedSession(updated)
+                    participantEdit = nil
+                }
+            }, reassign: segments.map { members in
+                {
+                    participantEdit = nil
+                    speakerAssignment = MeetingSpeakerAssignmentDraft(session: session, segments: members)
+                }
+            })
+            .id(draft.id)
+            .disabled(!coordinator.isQuiescent || isBusy)
     }
 
     private func transcriptParagraph(_ paragraph: MeetingTranscriptExporter.DisplayParagraph, session: MeetingSession,
                                      names: [SessionSpeakerID: String]) -> some View {
         let segment = paragraph.firstSegment
+        // The reading projection can bridge an unresolved first fragment to its owner.
+        // Style that same readable identity without changing the stored attribution.
+        let presentation = MeetingTranscriptExporter.speakerPresentation(for: paragraph, in: session, speakerNames: names)
+        let participant = presentation.participantID.flatMap { id in session.speakers.first { $0.id == id } }
         let isAudioExpanded = paragraph.segments.contains { $0.id == playback.activeSegmentID }
         return VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
             HStack(alignment: .top, spacing: theme.metrics.spacing.sm) {
@@ -719,19 +759,30 @@ struct MobileMeetingRoot: View {
                     .padding(.top, theme.metrics.spacing.sm)
                 if let label = MeetingTranscriptExporter.captionLabel(for: paragraph, in: session,
                     speakerNames: names, language: PichiLocalization.language) {
-                    Text(label)
-                        .font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
-                        .padding(.top, theme.metrics.spacing.sm)
+                    Button {
+                        if let participant {
+                            participantEdit = MeetingParticipantEditDraft(sessionID: session.id,
+                                speaker: participant, paragraphID: paragraph.id)
+                        } else {
+                            speakerAssignment = MeetingSpeakerAssignmentDraft(session: session, segments: paragraph.segments)
+                        }
+                    } label: {
+                        Text(label)
+                            .font(theme.typography.captionStrong)
+                            .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: presentation.participantIndex,
+                                theme: theme, colorScheme: colorScheme))
+                            .frame(minHeight: 44, alignment: .leading)
+                    }.disabled(!coordinator.isQuiescent || isBusy)
+                        .accessibilityIdentifier("transcript.reassign.\(segment.id)")
+                } else if !names.isEmpty {
+                    Button(PichiLocalization.text("Change speaker")) {
+                        speakerAssignment = MeetingSpeakerAssignmentDraft(session: session, segments: paragraph.segments)
+                    }.font(theme.typography.captionStrong)
+                        .frame(minHeight: 44)
+                        .disabled(!coordinator.isQuiescent || isBusy)
+                        .accessibilityIdentifier("transcript.reassign.\(segment.id)")
                 }
                 Spacer(minLength: 0)
-                Button {
-                    speakerAssignment = MeetingSpeakerAssignmentDraft(session: session, segments: paragraph.segments)
-                } label: {
-                    Image(systemName: "person.2")
-                        .frame(minWidth: 44, minHeight: 44)
-                }.disabled(!coordinator.isQuiescent || isBusy || session.activeSpeakers.isEmpty)
-                    .accessibilityLabel(PichiLocalization.text("Change speaker"))
-                    .accessibilityIdentifier("transcript.reassign.\(segment.id)")
                 if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
                     Button {
                         if isAudioExpanded { playback.stop() }
@@ -751,6 +802,10 @@ struct MobileMeetingRoot: View {
                 }.disabled(!coordinator.isQuiescent).accessibilityLabel(PichiLocalization.text("Edit"))
                     .accessibilityIdentifier("transcript.edit.\(segment.id)")
             }.buttonStyle(.borderless)
+            if let participant, let draft = participantEdit, draft.sessionID == session.id,
+               draft.speakerID == participant.id, draft.paragraphID == paragraph.id {
+                participantEditor(participant, session: session, draft: draft, segments: paragraph.segments)
+            }
             Text(paragraph.text).font(theme.typography.body).lineSpacing(theme.metrics.spacing.xs)
                 .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
             if isAudioExpanded {
@@ -854,8 +909,77 @@ struct MobileMeetingRoot: View {
     }
 }
 
+/// A location identifies the tapped label so only that label expands, even when a
+/// participant occurs in both the roster and several transcript fragments.
+private struct MeetingParticipantEditDraft: Identifiable {
+    let id = UUID()
+    let sessionID: MeetingSessionID
+    let speakerID: SessionSpeakerID
+    let paragraphID: MeetingTranscriptSegmentID?
+    let name: String
+
+    init(sessionID: MeetingSessionID, speaker: MeetingSessionSpeaker, paragraphID: MeetingTranscriptSegmentID? = nil) {
+        self.sessionID = sessionID; self.speakerID = speaker.id; self.paragraphID = paragraphID
+        self.name = speaker.displayName
+    }
+}
+
+private struct MeetingParticipantInlineEditor: View {
+    let isLocalUser: Bool
+    let save: (String) -> Void
+    let cancel: () -> Void
+    let designate: () -> Void
+    let reassign: (() -> Void)?
+    @Environment(\.theme) private var theme
+    @State private var name: String
+    @FocusState private var isNameFocused: Bool
+
+    init(name: String, isLocalUser: Bool, save: @escaping (String) -> Void,
+         cancel: @escaping () -> Void, designate: @escaping () -> Void, reassign: (() -> Void)?) {
+        self._name = State(initialValue: name); self.isLocalUser = isLocalUser
+        self.save = save; self.cancel = cancel; self.designate = designate; self.reassign = reassign
+    }
+
+    private var canSave: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+            TextField(PichiLocalization.text("Speaker name"), text: $name)
+                .font(theme.typography.body)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .frame(minHeight: 44)
+                .focused($isNameFocused)
+                .submitLabel(.done)
+                .onSubmit { if canSave { save(name) } }
+                .accessibilityIdentifier("transcript.participant.name")
+            HStack(spacing: theme.metrics.spacing.md) {
+                Button { save(name) } label: {
+                    Text(PichiLocalization.text("Save")).frame(minWidth: 44, minHeight: 44)
+                }.disabled(!canSave)
+                    .accessibilityIdentifier("transcript.participant.save")
+                Button(action: cancel) {
+                    Text(PichiLocalization.text("Cancel")).frame(minWidth: 44, minHeight: 44)
+                }.accessibilityIdentifier("transcript.participant.cancel")
+            }.frame(minHeight: 44)
+            Button(action: designate) {
+                Text(PichiLocalization.text(isLocalUser ? "Remove You designation" : "This is me"))
+                    .frame(minWidth: 44, minHeight: 44, alignment: .leading)
+            }.accessibilityIdentifier("transcript.participant.\(isLocalUser ? "removeYou" : "markYou")")
+            if let reassign {
+                Button(action: reassign) {
+                    Text(PichiLocalization.text("Change speaker")).frame(minWidth: 44, minHeight: 44, alignment: .leading)
+                }.accessibilityIdentifier("transcript.participant.changeSpeaker")
+            }
+        }.font(theme.typography.captionStrong)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("transcript.participant.editor")
+            .onAppear { isNameFocused = true }
+    }
+}
+
 struct MeetingEditDraft: Identifiable {
-    enum Kind { case segment(MeetingTranscriptSegment), paragraph([MeetingTranscriptSegment]), speaker(MeetingSessionSpeaker), title }
+    enum Kind { case segment(MeetingTranscriptSegment), paragraph([MeetingTranscriptSegment]), title }
     let id = UUID()
     let session: MeetingSession
     let kind: Kind
@@ -953,12 +1077,11 @@ private struct MeetingSpeakerAssignmentSheet: View {
     private func participantList(for segments: [MeetingTranscriptSegment]) -> some View {
         List {
             Section {
-                ForEach(draft.session.activeSpeakers) { speaker in
+                ForEach(draft.session.readableSpeakers) { speaker in
                     Button {
                         assign(segments.map(\.id), speaker.id)
                     } label: {
-                        Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language),
-                              systemImage: "person.crop.circle")
+                        Text(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language))
                             .font(theme.typography.body)
                             .frame(minHeight: 44)
                     }.accessibilityIdentifier("transcript.reassign.target.\(speaker.id)")

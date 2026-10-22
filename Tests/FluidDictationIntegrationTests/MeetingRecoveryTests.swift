@@ -4272,7 +4272,11 @@ final class MeetingRecoveryTests: XCTestCase {
         expectedSpeakers[0].generatedParticipantNumber = 1
         expectedSpeakers[0].displayName = String(format: PichiLocalization.text("Speaker %lld"), Int64(1))
         expectedSpeakers[1].isLocalUser = true
+        expectedSpeakers[1].usesCustomDisplayName = false
+        expectedSpeakers[1].generatedParticipantNumber = 0
         XCTAssertEqual(replaced.speakers, expectedSpeakers)
+        XCTAssertEqual(MeetingTranscriptExporter.speakerDisplayName(replaced.speakers[1]), "You",
+                       "An explicit owner choice replaces even a custom alias with You")
         XCTAssertEqual(replaced.activeSpeakers.filter(\.isLocalUser).map(\.id), [speakerB])
         let disk = try await realStore.load(id: session.id)
         XCTAssertEqual(disk?.speakers, replaced.speakers)
@@ -4283,6 +4287,8 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(exportedLocalUsers[0]["id"] as? String, speakerB.uuidString)
         let cleared = try await coordinator.setLocalUserSpeaker(sessionID: session.id, speakerID: nil)
         expectedSpeakers[1].isLocalUser = false
+        expectedSpeakers[1].generatedParticipantNumber = 2
+        expectedSpeakers[1].displayName = String(format: PichiLocalization.text("Speaker %lld"), Int64(2))
         XCTAssertEqual(cleared.speakers, expectedSpeakers)
         for changed in [first, replaced, cleared] {
             XCTAssertEqual(changed.transcriptSegments, session.transcriptSegments)
@@ -4325,7 +4331,9 @@ final class MeetingRecoveryTests: XCTestCase {
         let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
         XCTAssertEqual(undone.speakers, session.speakers)
         XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
-        XCTAssertTrue(MeetingTranscriptExporter.text(for: undone).contains("(provisional)"))
+        XCTAssertTrue(undone.speakers[0].identityIsProvisional == true)
+        XCTAssertFalse(MeetingTranscriptExporter.text(for: undone).contains("(provisional)"),
+            "Undo restores internal uncertainty without adding a user-visible qualifier")
     }
 
     func testMeetingLocalUserRoleSurvivesPrivacyTextCorrectionAndItsUndo() async throws {
@@ -4383,7 +4391,11 @@ final class MeetingRecoveryTests: XCTestCase {
         let realStore = MeetingSessionStore(rootDirectory: dir)
         var (session, speakerA, speakerB, _) = self.makeCorrectionSession(state: .completed)
         session.speakers[0].isLocalUser = true
-        session.speakers[0].generatedParticipantNumber = 0
+        session.speakers[0].usesCustomDisplayName = true
+        session.speakers[0].displayName = "Former owner alias Ёё"
+        session.speakers[0].generatedParticipantNumber = nil
+        session.speakers[1].usesCustomDisplayName = true
+        session.speakers[1].displayName = "Selected alias Ёё"
         session.speakers[1].generatedParticipantNumber = 1
         try await realStore.create(session)
         let store = GatedThrowingSaveStore(inner: realStore, recorder: EventRecorder())
@@ -4400,6 +4412,12 @@ final class MeetingRecoveryTests: XCTestCase {
         let corrected = try await coordinator.setLocalUserSpeaker(sessionID: session.id, speakerID: speakerB)
         XCTAssertEqual(corrected.activeSpeakers.filter(\.isLocalUser).map(\.id), [speakerB])
         XCTAssertFalse(corrected.speakers.first(where: { $0.id == speakerA })?.isLocalUser == true)
+        XCTAssertEqual(corrected.speakers[0].displayName,
+                       String(format: PichiLocalization.text("Speaker %lld"), Int64(2)))
+        XCTAssertEqual(corrected.speakers[0].generatedParticipantNumber, 2)
+        XCTAssertEqual(corrected.speakers[0].usesCustomDisplayName, false)
+        XCTAssertEqual(MeetingTranscriptExporter.speakerDisplayName(corrected.speakers[1]), "You")
+        XCTAssertEqual(corrected.speakers[1].generatedParticipantNumber, 1)
         await store.throwOnNextSave()
         do {
             _ = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
@@ -4411,6 +4429,11 @@ final class MeetingRecoveryTests: XCTestCase {
         let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
         XCTAssertEqual(undone.speakers, session.speakers)
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+        let restoredDisk = try await realStore.load(id: session.id)
+        XCTAssertEqual(restoredDisk?.speakers, session.speakers,
+                       "Successful undo durably restores both custom aliases and their exact number provenance")
+        XCTAssertEqual(restoredDisk?.transcriptSegments, session.transcriptSegments)
+        XCTAssertEqual(restoredDisk?.audioTracks, session.audioTracks)
     }
 
     func testBatchSpeakerCorrectionIsOneSaveAndUndoIncludingOwnerAndManualProvenance() async throws {
@@ -5563,17 +5586,15 @@ final class MeetingRecoveryTests: XCTestCase {
 
         let before = MeetingSpeakerPalette.tintIndices(for: [speakerA, placeholder, speakerC])
         XCTAssertEqual(before[speakerA.id], 0)
-        XCTAssertNil(before[placeholder.id])
+        XCTAssertEqual(before[placeholder.id], 1)
         XCTAssertEqual(before[speakerC.id], 2)
-        XCTAssertNil(MeetingSpeakerPalette.tints(for: [speakerA, placeholder, speakerC], isDark: false)[placeholder.id])
+        let beforeTints = MeetingSpeakerPalette.tints(for: [speakerA, placeholder, speakerC], isDark: false)
 
         var renamedPlaceholder = placeholder
         renamedPlaceholder.displayName = "Jordan"
-        let after = MeetingSpeakerPalette.tintIndices(for: [speakerA, renamedPlaceholder, speakerC])
-        XCTAssertEqual(after[speakerA.id], 0)
-        XCTAssertEqual(after[renamedPlaceholder.id], 1)
-        XCTAssertEqual(after[speakerC.id], 2)
-        XCTAssertNotNil(MeetingSpeakerPalette.tints(for: [speakerA, renamedPlaceholder, speakerC], isDark: false)[renamedPlaceholder.id])
+        let canonical = [speakerA, renamedPlaceholder, speakerC]
+        XCTAssertEqual(MeetingSpeakerPalette.tintIndices(for: canonical), before)
+        XCTAssertEqual(MeetingSpeakerPalette.tints(for: canonical, isDark: false), beforeTints)
     }
 
     // MARK: - MeetingAssignSpeakersValidation.duplicateName

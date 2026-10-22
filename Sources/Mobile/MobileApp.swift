@@ -290,6 +290,11 @@ struct PichiVoiceMobileApp: App {
                 // UI-test application runs in another process and retains real startup.
                 if NSClassFromString("XCTestCase") != nil { return }
                 if ProcessInfo.processInfo.environment["PICHI_UI_CAPTION_REVIEW"] == "1" { return }
+                #if targetEnvironment(simulator)
+                // Saved-meeting presentation tests use the normal root/store while
+                // skipping unrelated launch-time artifact installation and inference.
+                if ProcessInfo.processInfo.environment["PICHI_UI_SAVED_MEETING_REVIEW"] == "1" { return }
+                #endif
                 #endif
                 await services.signalUIReady()
             }

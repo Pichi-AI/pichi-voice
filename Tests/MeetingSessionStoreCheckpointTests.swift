@@ -158,6 +158,83 @@ struct MeetingSessionStoreCheckpointTests {
               "Renaming after owner demotion recycled the named voice's original number")
         check(MeetingSessionSpeaker.numberingGeneratedParticipants(afterRenamedDemotion,
             speakerNameFormat: "Captured %lld") == afterRenamedDemotion, "Reserved numbering must be idempotent")
+        // Explicit owner transfer overrides only the chosen/former owners' aliases.
+        // Legacy and early-owner records have no positive number yet; all other reserved
+        // numbers, record order, transcript evidence and unrelated aliases remain stable.
+        for oldNumber in [nil, 0, 7] as [Int?] {
+            for selectedNumber in [nil, 3] as [Int?] {
+                var transfer = session
+                transfer.id = UUID()
+                transfer.state = .completed
+                var former = roleAlias
+                former.id = UUID()
+                former.displayName = "Former owner Ёё"
+                former.isLocalUser = true
+                former.generatedParticipantNumber = oldNumber
+                var selected = roleAlias
+                selected.id = UUID()
+                selected.displayName = "Chosen alias Ёё"
+                selected.generatedParticipantNumber = selectedNumber
+                var unrelated = roleAlias
+                unrelated.id = UUID()
+                unrelated.generatedParticipantNumber = 1
+                var merged = generated
+                merged.id = UUID()
+                merged.generatedParticipantNumber = 2
+                merged.mergedIntoSpeakerID = unrelated.id
+                transfer.speakers = [former, selected, unrelated, merged]
+                transfer.transcriptSegments = [session.transcriptSegments[0]]
+                transfer.transcriptSegments[0].speakerID = former.id
+                let original = transfer
+                var reasserted = transfer
+                try reasserted.setLocalUserSpeaker(id: former.id, speakerNameFormat: "Captured %lld")
+                check(MeetingTranscriptExporter.speakerDisplayName(reasserted.speakers[0]) == "You"
+                      && Array(reasserted.speakers.dropFirst()) == Array(original.speakers.dropFirst()),
+                      "An explicit current-owner choice must show You without changing another participant's alias")
+                try transfer.setLocalUserSpeaker(id: selected.id, speakerNameFormat: "Captured %lld")
+                let formerNumber = oldNumber.map { $0 > 0 ? $0 : (selectedNumber == nil ? 3 : 4) }
+                    ?? (selectedNumber == nil ? 3 : 4)
+                check(transfer.activeSpeakers.filter(\.isLocalUser).map(\.id) == [selected.id],
+                      "Explicit owner transfer must designate exactly the chosen participant")
+                check(transfer.speakers[0].generatedParticipantNumber == formerNumber
+                      && transfer.speakers[0].displayName == "Captured \(formerNumber)"
+                      && transfer.speakers[0].usesCustomDisplayName == false,
+                      "A former custom-named owner must become a stable generated participant")
+                check(MeetingTranscriptExporter.speakerDisplayName(transfer.speakers[1]) == "You"
+                      && transfer.speakers[1].usesCustomDisplayName == false,
+                      "An explicitly selected alias must show You")
+                check(transfer.speakers[1].generatedParticipantNumber == (selectedNumber ?? 0),
+                      "An owner choice must retain its published number or early-owner sentinel")
+                check(Array(transfer.speakers.suffix(2)) == [unrelated, merged],
+                      "Owner transfer must preserve unrelated aliases and merged number reservations")
+                check(transfer.speakers.map(\.id) == original.speakers.map(\.id)
+                      && transfer.transcriptSegments == original.transcriptSegments,
+                      "Owner transfer must preserve color admission slots and all transcript evidence")
+                let once = transfer
+                try transfer.setLocalUserSpeaker(id: selected.id, speakerNameFormat: "Captured %lld")
+                check(transfer == once, "Repeating an explicit owner choice must be a true no-op")
+                try await rolesStore.create(transfer)
+                var reopened = try await rolesStore.load(id: transfer.id)!
+                check(reopened.speakers == transfer.speakers
+                      && reopened.transcriptSegments == transfer.transcriptSegments
+                      && reopened.audioTracks == transfer.audioTracks,
+                      "An explicit owner transfer must survive filesystem reopen without changing the roster or sources")
+                try reopened.setLocalUserSpeaker(id: former.id, speakerNameFormat: "Captured %lld")
+                let demotedNumber = selectedNumber ?? (formerNumber == 3 ? 4 : 3)
+                check(reopened.speakers[1].displayName == "Captured \(demotedNumber)"
+                      && reopened.speakers[1].generatedParticipantNumber == demotedNumber
+                      && !reopened.speakers[1].isLocalUser,
+                      "A legacy selected owner must receive an unused stable number when later demoted")
+                check(reopened.speakers[0].generatedParticipantNumber == formerNumber,
+                      "Selecting the former owner again must preserve its published participant number")
+                try await rolesStore.save(reopened)
+                let reopenedAgain = try await rolesStore.load(id: reopened.id)
+                check(reopenedAgain?.speakers == reopened.speakers
+                      && reopenedAgain?.transcriptSegments == reopened.transcriptSegments
+                      && reopenedAgain?.audioTracks == reopened.audioTracks,
+                      "A second owner transfer must persist without changing source records")
+            }
+        }
         try Self.checkReadableTranscriptContract(check)
 
         try Self.checkPlainParticipantLabels(template: session, check: check)
@@ -1137,7 +1214,11 @@ struct MeetingSessionStoreCheckpointTests {
               "Attaching punctuation never claims a native speaker or changes silence timing")
         for symbol in ["(", "[", "«", "-", "\"", "🙂"] {
             var opener = baseline; opener.transcriptSegments[1].text = symbol
-            check(owner(opener) == nil, "Short nonlexical openers or symbols cannot enter the lexical residual path")
+            let before = opener
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: opener.transcriptSegments, in: opener)
+            check(paragraphs.allSatisfy { $0.segments.contains(where: \.hasReadableContent) }
+                  && opener == before && opener.transcriptSegments[1].speakerID == nil,
+                  "Adjacent symbols can be typography without a standalone row or new native identity")
         }
         var shortDigit = baseline; shortDigit.transcriptSegments[1].text = "7"
         check(owner(shortDigit) == firstSpeaker.id, "A bounded numeric lexical residual can remain with its adjacent outgoing voice")

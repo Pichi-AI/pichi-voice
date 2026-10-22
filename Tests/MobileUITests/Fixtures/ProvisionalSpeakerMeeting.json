@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "8EEC0000-2026-4000-8000-000000000021",
-  "title": "Синтетическая проверка предварительных участников",
+  "title": "Синтетическая проверка совместимости подписей",
   "languageCode": "ru",
   "mode": "inRoom",
   "selectedMicrophone": {
@@ -73,6 +73,15 @@
       "trackKind": "microphone",
       "identityCandidates": [],
       "generatedParticipantNumber": 3,
+      "identityIsProvisional": true
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000069",
+      "displayName": "Участник 4",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": [],
+      "generatedParticipantNumber": 4,
       "identityIsProvisional": true
     }
   ],
@@ -168,7 +177,7 @@
         "timescale": 1000
       },
       "speakerID": "00000000-0000-0000-0000-000000000067",
-      "text": "Ещё одна фраза с той же предварительной меткой.",
+      "text": "Ещё одна фраза того же участника.",
       "revision": 0,
       "status": "final",
       "overlap": "none",
@@ -208,6 +217,35 @@
       "nativeTiming": {
         "start": 302,
         "end": 302.7
+      },
+      "speakerIdentityIsProvisional": true,
+      "nativeSpeakerAssignment": {
+        "kind": "unassigned"
+      }
+    },
+    {
+      "id": "8EEC0000-2026-4000-8000-000000000006",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 304000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 304300,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000069",
+      "text": "-",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "unassigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-punctuation-only-5",
+      "nativeTiming": {
+        "start": 304,
+        "end": 304.3
       },
       "speakerIdentityIsProvisional": true,
       "nativeSpeakerAssignment": {

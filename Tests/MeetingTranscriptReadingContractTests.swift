@@ -37,6 +37,113 @@ extension MeetingSessionStoreCheckpointTests {
         }
         let both = [ta: a, tb: b]
         do {
+            var value = session
+            for index in value.speakers.indices {
+                value.speakers[index].generatedParticipantNumber = index + 1
+                value.speakers[index].usesCustomDisplayName = false
+            }
+            value.speakers[2].identityIsProvisional = true
+            let quote = word("\"", 0, raw: nil, selected: nil, owner: extra)
+            let body = word("Следующая реплика.", 0.08, raw: tb, selected: tb, owner: b, map: both)
+            value.transcriptSegments = [quote, body]
+            let original = value.transcriptSegments
+            let names = Dictionary(uniqueKeysWithValues: value.speakers.map { ($0.id, $0.displayName) })
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: original, in: value)
+            check(paragraphs.count == 1 && paragraphs[0].firstSegment.id == quote.id
+                  && paragraphs[0].captionSegment.id == body.id,
+                  "Leading typography keeps its source member while the lexical word owns its caption")
+            let presentation = MeetingTranscriptExporter.speakerPresentation(for: paragraphs[0],
+                in: value, speakerNames: names)
+            let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
+            check(presentation.participantID == b && presentation.participantIndex == 1
+                  && reading[quote.id] == presentation && reading[body.id] == presentation,
+                  "Paragraph and live reading map share the lexical owner's full-list color slot")
+            check(value.readableSpeakers.map(\.id) == [b]
+                  && value.speakers.firstIndex(where: { $0.id == extra }) == 2,
+                  "Hidden typography-only people reserve palette slots without entering the readable roster")
+            let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(value))
+            check(MeetingTranscriptExporter.speakerPresentations(in: restored)[body.id] == presentation
+                  && restored.transcriptSegments == original,
+                  "Reopen preserves the resolved color owner and every original source member")
+        }
+        do {
+            var value = session
+            for index in value.speakers.indices { value.speakers[index].generatedParticipantNumber = index + 1 }
+            let tc = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "noise-c")
+            let punctuation = word(".", 5, raw: tc, selected: tc, owner: extra, map: [tc: extra])
+            let short = word("я", 5.1, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
+            let real = word("Следующая реплика.", 10, raw: tb, selected: tb, owner: b, map: both)
+            value.transcriptSegments = [punctuation, short, real]
+            let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
+            check(reading[short.id]?.participantID == nil,
+                  "Punctuation-only native evidence cannot sponsor a phantom owner for a short lexical fragment")
+            check(value.readableSpeakers.map(\.id) == [b], "A punctuation-only native person stays out of the roster")
+            let portable = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: value)) as! [String: Any]
+            let roster = Set((portable["speakers"] as! [[String: Any]]).compactMap { $0["id"] as? String })
+            check((portable["segments"] as! [[String: Any]]).allSatisfy {
+                ($0["speakerID"] as? String).map(roster.contains) ?? true
+            }, "Every readable export participant reference belongs to its visible roster")
+        }
+        do {
+            var value = session
+            value.speakers[0].generatedParticipantNumber = 1
+            value.speakers[0].isLocalUser = true
+            value.speakers[1].generatedParticipantNumber = 2
+            value.speakers[2].generatedParticipantNumber = 3
+            value.speakers[2].identityIsProvisional = true
+            let first = word("Да", 0, raw: ta, selected: ta, owner: a, map: both)
+            let comma = word(",", 0.08, raw: nil, selected: nil, owner: extra)
+            let reply = word("нет", 1, raw: tb, selected: tb, owner: b, map: both)
+            let number = word("42", 1.2, raw: tb, selected: tb, owner: b, map: both)
+            let noise = ["-", "\u{2014}", "...", " \t\n", "\u{200B}\u{2060}\u{FEFF}",
+                         "\u{034F}", "\u{FE0F}", "\u{0301}", "\u{115F}"]
+                .enumerated().map { word($0.element, 6 + Double($0.offset), raw: nil, selected: nil, owner: extra) }
+            var mask = word("***", 20, raw: tb, selected: tb, owner: b, map: both)
+            mask.containsPrivacyReplacement = true
+            value.transcriptSegments = [first, comma, reply, number] + noise + [mask]
+            let original = value.transcriptSegments
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: original, in: value)
+            check(paragraphs.first?.text == "Да,", "Adjacent punctuation remains inside a normal phrase")
+            check(paragraphs.flatMap(\.segments).map(\.id) == [first.id, comma.id, reply.id, number.id, mask.id],
+                  "Standalone artifacts have no readable paragraph; useful replies, numbers and privacy masks survive")
+            check(value.readableSpeakers.map(\.id) == [a, b], "Noise-only generated people stay out of the roster")
+            check(value.speakers.map(\.generatedParticipantNumber) == [1, 2, 3],
+                  "Rendering never renumbers existing people or rewrites evidence")
+            let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
+            check(noise.allSatisfy { reading[$0.id] == nil } && reading[comma.id]?.participantID == a,
+                  "Live projection shares artifact suppression and typography ownership without native reassignment")
+            check(value.transcriptSegments == original, "Reading does not mutate original native evidence")
+            var onlyNoise = value
+            onlyNoise.transcriptSegments = noise
+            check(onlyNoise.readableSpeakers.isEmpty
+                  && MeetingTranscriptExporter.displayParagraphs(for: noise, in: onlyNoise).isEmpty
+                  && MeetingTranscriptExporter.speakerPresentations(in: onlyNoise).isEmpty
+                  && MeetingTranscriptExporter.text(for: onlyNoise).isEmpty,
+                  "A noise-only meeting has no readable rows, speaker headers or automatically visible people")
+            var adjacent = value
+            let quote = word("\"", 0.16, raw: nil, selected: nil, owner: extra)
+            adjacent.transcriptSegments = [first, comma, quote]
+            check(MeetingTranscriptExporter.displayParagraphs(for: adjacent.transcriptSegments, in: adjacent)
+                .flatMap(\.segments).map(\.id) == [first.id, comma.id, quote.id],
+                "A contiguous run of punctuation retains every original member")
+            let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(value))
+            check(restored.transcriptSegments == original && restored.readableSpeakers.map(\.id) == [a, b],
+                  "Stop and reopen preserve source evidence while keeping noise out of the roster")
+            check(MeetingTranscriptExporter.text(for: restored) == MeetingTranscriptExporter.text(for: value)
+                  && MeetingTranscriptExporter.text(for: value).contains("***"),
+                  "Readable export preserves protected masks and remains stable after reopen")
+            value.speakers[2].usesCustomDisplayName = true
+            value.speakers[2].displayName = "Manual alias"
+            check(value.readableSpeakers.last?.displayName == "Manual alias", "A manual alias is never removed by automatic roster filtering")
+            for text in ["да", "нет", "я", "Ёё", "0", "3.14", "[ИМЯ]"] {
+                check(MeetingTranscriptSegment.textContainsLexicalContent(text), "Useful short text remains lexical: \(text)")
+            }
+            for text in ["\u{034F}", "\u{FE0F}", "\u{0301}", "\u{115F}", "\u{1160}"] {
+                check(!MeetingTranscriptSegment.textContainsLexicalContent(text), "Invisible and combining-only scalars do not sponsor speech")
+            }
+            check(MeetingTranscriptSegment.textContainsLexicalContent("е\u{0301}"), "Diacritics in actual lexical speech remain intact")
+        }
+        do {
             var provisional = word("A synthetic reply.", 4, raw: nil, selected: nil, owner: b,
                 rule: .insufficientSupport)
             provisional.attributionState = .unassigned
@@ -47,12 +154,23 @@ extension MeetingSessionStoreCheckpointTests {
             let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
             let presentation = reading[provisional.id]!
             check(presentation.participantID == b && presentation.isEstimated,
-                  "A preliminary participant has its own readable identity instead of the previous voice")
-            check(MeetingTranscriptExporter.speakerLabel(for: presentation).contains("(provisional)"),
-                  "Preliminary identity must be visibly qualified")
+                  "A saved legacy participant retains its readable identity and internal uncertainty")
+            let speakerNames = Dictionary(uniqueKeysWithValues: value.speakers.map { ($0.id, $0.displayName) })
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: value.transcriptSegments, in: value)
+            for language in [PichiInterfaceLanguage.english, .russian] {
+                check(MeetingTranscriptExporter.speakerLabel(for: presentation, language: language) == "Другое имя"
+                      && MeetingTranscriptExporter.captionLabel(for: presentation, language: language) == "Другое имя"
+                      && MeetingTranscriptExporter.captionLabel(for: paragraphs[1], in: value,
+                          speakerNames: speakerNames, language: language) == "Другое имя",
+                      "Live, history and readable-export captions never append legacy uncertainty in either language")
+            }
+            check(MeetingTranscriptExporter.text(for: value) == "[00:00] Имя Ёё: An earlier voice.\n\n[00:04] Другое имя: A synthetic reply.",
+                  "Readable export keeps the complete reply and unqualified participant name")
             let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(value))
             check(MeetingTranscriptExporter.speakerPresentations(in: restored)[provisional.id] == presentation,
-                  "Preliminary identity and caption survive Stop and reopen")
+                  "Legacy identity and internal uncertainty survive Stop and reopen")
+            check(MeetingTranscriptExporter.text(for: restored) == MeetingTranscriptExporter.text(for: value),
+                  "Stop and reopen keep readable export free of generated uncertainty suffixes")
             let exported = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: value)) as! [String: Any]
             let exportedSpeakers = exported["speakers"] as! [[String: Any]]
             check(exportedSpeakers.contains { $0["identityIsProvisional"] as? Bool == true },
@@ -71,6 +189,19 @@ extension MeetingSessionStoreCheckpointTests {
             value.transcriptSegments[1].speakerAttribution = nil
             check(!MeetingTranscriptExporter.speakerPresentation(for: value.transcriptSegments[1], in: value).isEstimated,
                   "One qualified identity record refines older word references without rewriting text")
+        }
+        for alias in ["Участник 2", "Имя (provisional)", "Имя (предварительно)"] {
+            for isLocalUser in [false, true] {
+                let name = MeetingSpeakerPresentation.Name(displayName: alias, isLocalUser: isLocalUser,
+                    usesCustomDisplayName: true, isProvisional: true)
+                for label in [MeetingSpeakerPresentation.Label.identified(name), .estimated(name)] {
+                    let presentation = MeetingSpeakerPresentation(identity: "synthetic-legacy-alias", label: label)
+                    for language in [PichiInterfaceLanguage.english, .russian] {
+                        check(MeetingTranscriptExporter.captionLabel(for: presentation, language: language) == alias,
+                              "Uncertainty formatting never rewrites a user-provided alias, including literal suffix words")
+                    }
+                }
+            }
         }
         let unknown = word("Я", 0.04, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
         let first = word("Начало.", 10.3, raw: ta, selected: ta, owner: a, map: both)
@@ -110,6 +241,18 @@ extension MeetingSessionStoreCheckpointTests {
             let labels = MeetingTranscriptExporter.speakerPresentations(in: session)
             check(labels.values.allSatisfy { $0.participantID == a && $0.isEstimated },
                   "The leading-neighbor convention is an estimated reading owner, not new acoustic evidence")
+            let paragraphPresentation = MeetingTranscriptExporter.speakerPresentation(
+                for: reading[0], in: session, speakerNames: names)
+            check(paragraphPresentation == labels[prefix.id],
+                  "Mobile paragraph styling and the desktop/live map resolve the same reading participant")
+            check(paragraphPresentation.participantIndex == 0 && paragraphPresentation.markingEstimated().participantIndex == 0,
+                  "Reading labels retain the participant's canonical admission slot")
+            var merged = session
+            merged.speakers[0].mergedIntoSpeakerID = b
+            let mergedParagraph = MeetingTranscriptExporter.speakerPresentation(
+                for: reading[0], in: merged, speakerNames: names)
+            check(mergedParagraph.participantID == b && mergedParagraph.participantIndex == 1,
+                  "A projected alias uses its active participant's color without recoloring other identities")
             check(MeetingTranscriptExporter.text(for: session) == "[00:00] Имя Ёё: Я ещё Начало.",
                   "Text export and the saved reading view share the incoming participant and complete phrase")
             let projected = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: session)) as! [String: Any]

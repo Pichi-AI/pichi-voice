@@ -1,0 +1,317 @@
+{
+  "schemaVersion": 1,
+  "id": "C010C010-2026-4000-8000-000000000021",
+  "title": "Synthetic speaker colors / Цвета участников",
+  "languageCode": "ru",
+  "mode": "inRoom",
+  "selectedMicrophone": {
+    "captureDeviceID": "synthetic-navigation-microphone",
+    "displayName": "Synthetic microphone",
+    "role": "unknown"
+  },
+  "startedAt": "2026-10-16T12:00:00Z",
+  "endedAt": "2026-10-16T12:00:32Z",
+  "updatedAt": "2026-10-16T12:00:32Z",
+  "timebase": {
+    "startedHostTime": 0,
+    "machTimebaseNumerator": 1,
+    "machTimebaseDenominator": 1
+  },
+  "state": "completed",
+  "events": [],
+  "failures": [],
+  "audioStorageMode": "memoryOnly",
+  "audioTracks": [
+    {
+      "id": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "kind": "microphone",
+      "sourceIdentifier": "synthetic-navigation-microphone",
+      "sourceDisplayName": "Synthetic microphone",
+      "timebase": {
+        "startedHostTime": 0,
+        "machTimebaseNumerator": 1,
+        "machTimebaseDenominator": 1
+      },
+      "health": {
+        "status": "stopped",
+        "level": 0,
+        "droppedSampleCount": 0
+      },
+      "chunks": []
+    }
+  ],
+  "speakers": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "displayName": "Owner placeholder",
+      "isLocalUser": true,
+      "usesCustomDisplayName": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "displayName": "Анна Ёлкина",
+      "isLocalUser": false,
+      "usesCustomDisplayName": true,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "displayName": "Борис",
+      "isLocalUser": false,
+      "usesCustomDisplayName": true,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000004",
+      "displayName": "Вера",
+      "isLocalUser": false,
+      "usesCustomDisplayName": true,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000005",
+      "displayName": "Георгий",
+      "isLocalUser": false,
+      "usesCustomDisplayName": true,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000006",
+      "displayName": "Дина",
+      "isLocalUser": false,
+      "usesCustomDisplayName": true,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000007",
+      "displayName": "Евгений",
+      "isLocalUser": false,
+      "usesCustomDisplayName": true,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000008",
+      "displayName": "Жанна",
+      "isLocalUser": false,
+      "usesCustomDisplayName": true,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    }
+  ],
+  "transcriptSegments": [
+    {
+      "id": "C010C010-2026-4000-8000-000000000001",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 0,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 4000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000001",
+      "text": "Синтетическая реплика 1. Ёжик обсуждает план встречи. This is synthetic speech text.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "utterance",
+      "nativeUnitID": "synthetic-color-1",
+      "nativeTiming": {
+        "start": 0,
+        "end": 4
+      }
+    },
+    {
+      "id": "C010C010-2026-4000-8000-000000000002",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 4000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 8000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000002",
+      "text": "Синтетическая реплика 2. Ёжик обсуждает план встречи. This is synthetic speech text.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "utterance",
+      "nativeUnitID": "synthetic-color-2",
+      "nativeTiming": {
+        "start": 4,
+        "end": 8
+      }
+    },
+    {
+      "id": "C010C010-2026-4000-8000-000000000003",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 8000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 12000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000003",
+      "text": "Синтетическая реплика 3. Ёжик обсуждает план встречи. This is synthetic speech text.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "utterance",
+      "nativeUnitID": "synthetic-color-3",
+      "nativeTiming": {
+        "start": 8,
+        "end": 12
+      }
+    },
+    {
+      "id": "C010C010-2026-4000-8000-000000000004",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 12000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 16000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000004",
+      "text": "Синтетическая реплика 4. Ёжик обсуждает план встречи. This is synthetic speech text.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "utterance",
+      "nativeUnitID": "synthetic-color-4",
+      "nativeTiming": {
+        "start": 12,
+        "end": 16
+      }
+    },
+    {
+      "id": "C010C010-2026-4000-8000-000000000005",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 16000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 20000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000005",
+      "text": "Синтетическая реплика 5. Ёжик обсуждает план встречи. This is synthetic speech text.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "utterance",
+      "nativeUnitID": "synthetic-color-5",
+      "nativeTiming": {
+        "start": 16,
+        "end": 20
+      }
+    },
+    {
+      "id": "C010C010-2026-4000-8000-000000000006",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 20000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 24000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000006",
+      "text": "Синтетическая реплика 6. Ёжик обсуждает план встречи. This is synthetic speech text.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "utterance",
+      "nativeUnitID": "synthetic-color-6",
+      "nativeTiming": {
+        "start": 20,
+        "end": 24
+      }
+    },
+    {
+      "id": "C010C010-2026-4000-8000-000000000007",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 24000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 28000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000007",
+      "text": "Синтетическая реплика 7. Ёжик обсуждает план встречи. This is synthetic speech text.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "utterance",
+      "nativeUnitID": "synthetic-color-7",
+      "nativeTiming": {
+        "start": 24,
+        "end": 28
+      }
+    },
+    {
+      "id": "C010C010-2026-4000-8000-000000000008",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 28000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 32000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000008",
+      "text": "Синтетическая реплика 8. Ёжик обсуждает план встречи. This is synthetic speech text.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "utterance",
+      "nativeUnitID": "synthetic-color-8",
+      "nativeTiming": {
+        "start": 28,
+        "end": 32
+      }
+    }
+  ],
+  "retention": {},
+  "processingAttempts": [],
+  "transcriptTimeDomain": "meetingRelative",
+  "transcriptIsComplete": true,
+  "speakerLabelsEnabled": true,
+  "piiRedactionEnabled": true
+}

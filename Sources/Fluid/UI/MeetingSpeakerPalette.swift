@@ -3,8 +3,8 @@ import SwiftUI
 /// Stable per-speaker tints for the transcript. Colour is decoration on top of the name, never
 /// the only way to tell speakers apart, so it stays quiet enough to read a whole meeting in.
 nonisolated enum MeetingSpeakerPalette {
-    /// Muted in light (pastels wash out on white), lifted in dark. Ordered so neighbouring
-    /// speakers stay distinguishable to the common forms of colour blindness.
+    /// Muted in light (pastels wash out on white), lifted in dark. Keep the six
+    /// inherited light/dark hue pairs shared across every participant renderer.
     private static let tints: [(light: (Int, Int, Int), dark: (Int, Int, Int))] = [
         (light: (0x33, 0x55, 0x86), dark: (0x84, 0xa9, 0xda)),
         (light: (0x4c, 0x6c, 0x3d), dark: (0x93, 0xbb, 0x82)),
@@ -29,20 +29,25 @@ nonisolated enum MeetingSpeakerPalette {
             green: Double(value.green) / 255, blue: Double(value.blue) / 255)
     }
 
-    /// The unnamed catch-all bucket for mic audio that isn't confidently the local user.
+    /// Persisted legacy bucket name. Names never select a participant's colour.
     static let unknownMicrophoneSpeakerName = "Microphone / Unknown"
 
-    /// Index allocated by position so renaming one speaker never recolours the others.
-    /// The unnamed catch-all gets an index but no tint — it is a bucket, not a person.
+    /// Shared small-label ink for headers, participant chips and transcript rows.
+    /// Nil is unresolved speech, not a participant. Resolve physical surfaces first
+    /// so an imported palette cannot check one appearance and draw another.
+    @MainActor static func labelColor(forSpeakerIndex index: Int?, theme: AppTheme, colorScheme: ColorScheme) -> Color {
+        guard let index else { return theme.palette.secondaryText }
+        let scheme = theme.palette.nativeColorScheme(fallback: colorScheme)
+        return theme.palette.readableText(self.tint(forSpeakerIndex: index, isDark: scheme == .dark),
+            minimumContrast: 4.5)
+    }
+
+    /// Use the complete persisted session.speakers admission order. Local, unnamed
+    /// and merged records reserve their slots; only the displayed view is filtered
+    /// or reordered. The first six admitted identities therefore have distinct
+    /// inherited tints, and later identities repeat the finite palette.
     static func tintIndices(for speakers: [MeetingSessionSpeaker]) -> [SessionSpeakerID: Int] {
-        var indices: [SessionSpeakerID: Int] = [:]
-        var next = 0
-        for speaker in speakers where !speaker.isLocalUser {
-            defer { next += 1 }
-            guard speaker.displayName != Self.unknownMicrophoneSpeakerName else { continue }
-            indices[speaker.id] = next
-        }
-        return indices
+        Dictionary(uniqueKeysWithValues: speakers.enumerated().map { ($0.element.id, $0.offset) })
     }
 
     static func tints(for speakers: [MeetingSessionSpeaker], isDark: Bool) -> [SessionSpeakerID: Color] {

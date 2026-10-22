@@ -20,7 +20,9 @@ typealias SessionSpeakerID = UUID
 struct MeetingSessionSpeaker: Identifiable {
     let id: SessionSpeakerID
     var displayName: String
-    let isLocalUser: Bool
+    var isLocalUser: Bool
+    var mergedIntoSpeakerID: SessionSpeakerID? = nil
+    var generatedParticipantNumber: Int? = nil
 }
 struct MeetingTranscriptSegment {
     enum Status { case final, partial }
@@ -64,7 +66,7 @@ enum ParticipantInputContrastTests {
         var body: some View {
             MeetingAssignSpeakersSheet(
                 speakers: [.init(id: Self.speakerID, displayName: "Ёжик ёлка", isLocalUser: false)],
-                quotesBySpeaker: [:], tints: [:], accentColor: self.state.theme.palette.accent,
+                quotesBySpeaker: [:], tints: [:],
                 onSave: { self.observations.saveCalls.append($0); return nil },
                 onCancel: { self.observations.cancelCalls += 1 })
                 // The presentation adapter passes custom theme and caller tint.
