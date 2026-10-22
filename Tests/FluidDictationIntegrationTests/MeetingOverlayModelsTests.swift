@@ -688,10 +688,10 @@ final class MeetingHistorySnapshotTests: XCTestCase {
         await initial.value
         var corrected = original
         corrected.title = "Corrected"
-        snapshot.applySavedSession(corrected)
+        snapshot.applyCommitted(corrected)
         XCTAssertEqual(snapshot.sessions, [corrected, other])
         XCTAssertEqual(loader.calls, 1, "publishing a saved correction performs no history read")
-        snapshot.applySavedSession(original) // Undo uses the same publication path.
+        snapshot.applyCommitted(original) // Undo uses the same publication path.
         XCTAssertEqual(snapshot.sessions, [original, other])
         XCTAssertEqual(loader.calls, 1)
     }
@@ -708,10 +708,10 @@ final class MeetingHistorySnapshotTests: XCTestCase {
         await loader.waitForCall(2)
         var first = original
         first.title = "First correction"
-        snapshot.applySavedSession(first)
+        snapshot.applyCommitted(first)
         var second = first
         second.title = "Second correction"
-        snapshot.applySavedSession(second)
+        snapshot.applyCommitted(second)
         XCTAssertEqual(snapshot.sessions, [second])
         loader.finish(.success([original]))
         await loader.waitForCall(3)
@@ -728,8 +728,8 @@ final class MeetingHistorySnapshotTests: XCTestCase {
         let saved = self.session()
         let initial = Task { await snapshot.refresh() }
         await loader.waitForCall(1)
-        snapshot.applySavedSession(saved)
-        snapshot.applySavedSession(saved)
+        snapshot.applyCommitted(saved)
+        snapshot.applyCommitted(saved)
         XCTAssertEqual(snapshot.sessions, [saved])
         loader.finish(.success([]))
         await loader.waitForCall(2)
