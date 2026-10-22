@@ -1396,7 +1396,7 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
-    /// Previously saved uncertainty metadata keeps plain captions after reopening.
+    /// Previously saved uncertainty keeps plain captions; a separate punctuation identity stays hidden.
     func testLegacyParticipantCaptionsStayPlainAfterReopen() throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Legacy participant fixtures are simulator-only")
@@ -1418,6 +1418,8 @@ final class MobileNavigationUITests: XCTestCase {
                 XCTAssertTrue(firstCaption.waitForExistence(timeout: 5), "Saved uncertainty metadata keeps a plain participant caption")
                 XCTAssertFalse(app.staticTexts.matching(NSPredicate(format:
                     "label CONTAINS[c] %@ OR label CONTAINS[c] %@", "(provisional)", "(предварительно)")).firstMatch.exists)
+                XCTAssertFalse(app.staticTexts["Участник 4"].firstMatch.exists,
+                    "A generated participant supported only by punctuation is absent from the roster")
                 capture("provisional-\(language)-reopen-\(iteration)")
                 let last = app.descendants(matching: .any)["transcript.paragraph.8EEC0000-2026-4000-8000-000000000005"].firstMatch
                 try revealParagraphAboveNavigation(last, step: "provisional-\(language)-tail-\(iteration)")
@@ -1426,6 +1428,9 @@ final class MobileNavigationUITests: XCTestCase {
                     "The virtualized saved participant keeps its fully visible plain caption after scrolling")
                 XCTAssertFalse(app.staticTexts.matching(NSPredicate(format:
                     "label CONTAINS[c] %@ OR label CONTAINS[c] %@", "(provisional)", "(предварительно)")).firstMatch.exists)
+                XCTAssertFalse(app.descendants(matching: .any)["transcript.paragraph.8EEC0000-2026-4000-8000-000000000006"].firstMatch.exists,
+                    "A saved punctuation-only row does not produce a visible paragraph after reopen")
+                XCTAssertFalse(app.staticTexts["Участник 4"].firstMatch.exists)
                 capture("provisional-\(language)-tail-visible-\(iteration)")
                 app.terminate()
             }
