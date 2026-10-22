@@ -38,6 +38,32 @@ extension MeetingSessionStoreCheckpointTests {
         let both = [ta: a, tb: b]
         do {
             var value = session
+            value.speakers[2].identityIsProvisional = true
+            let quote = word("\"", 0, raw: nil, selected: nil, owner: extra)
+            let body = word("Следующая реплика.", 0.08, raw: tb, selected: tb, owner: b, map: both)
+            value.transcriptSegments = [quote, body]
+            let original = value.transcriptSegments
+            let names = Dictionary(uniqueKeysWithValues: value.speakers.map { ($0.id, $0.displayName) })
+            let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: original, in: value)
+            check(paragraphs.count == 1 && paragraphs[0].firstSegment.id == quote.id
+                  && paragraphs[0].captionSegment.id == body.id,
+                  "Leading typography keeps its source member while the lexical word owns its caption")
+            let presentation = MeetingTranscriptExporter.speakerPresentation(for: paragraphs[0],
+                in: value, speakerNames: names)
+            let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
+            check(presentation.participantID == b && presentation.participantIndex == 1
+                  && reading[quote.id] == presentation && reading[body.id] == presentation,
+                  "Paragraph and live reading map share the lexical owner's full-list color slot")
+            check(value.readableSpeakers.map(\.id) == [b]
+                  && value.speakers.firstIndex(where: { $0.id == extra }) == 2,
+                  "Hidden typography-only people reserve palette slots without entering the readable roster")
+            let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(value))
+            check(MeetingTranscriptExporter.speakerPresentations(in: restored)[body.id] == presentation
+                  && restored.transcriptSegments == original,
+                  "Reopen preserves the resolved color owner and every original source member")
+        }
+        do {
+            var value = session
             for index in value.speakers.indices { value.speakers[index].generatedParticipantNumber = index + 1 }
             let tc = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "noise-c")
             let punctuation = word(".", 5, raw: tc, selected: tc, owner: extra, map: [tc: extra])
