@@ -148,25 +148,37 @@ private final class KeepAliveServer: @unchecked Sendable {
     }
 }
 
-/// The fixture intercepts every URL before networking. It records the actual session
-/// passed to the URLSession delegate, including sessions recreated by the idle pool.
+/// Async URLSession convenience methods consume task-completion callbacks. Observe the
+/// actual session invalidation delegate instead, and inspect the client's private pool
+/// only at settled calls or while URLProtocol holds the sole outstanding operation.
 private nonisolated final class IdlePoolReceipt: @unchecked Sendable {
     private let lock = NSLock()
-    private var completed: [URLSession] = []
+    private var invalidated = Set<ObjectIdentifier>()
+    private var invalidationWaiters: [ObjectIdentifier: [XCTestExpectation]] = [:]
     private var pending: IdlePoolProtocol?
     let heldStarted = XCTestExpectation(description: "Owned held request started")
-    let firstCompleted = XCTestExpectation(description: "First owned request completed")
-    let completions: XCTestExpectation
 
-    init(completions: Int) {
-        self.completions = XCTestExpectation(description: "Owned session completions")
-        self.completions.expectedFulfillmentCount = completions
+    func didInvalidate(_ session: URLSession) {
+        let waiters = self.lock.withLock {
+            let id = ObjectIdentifier(session)
+            self.invalidated.insert(id)
+            return self.invalidationWaiters.removeValue(forKey: id) ?? []
+        }
+        for waiter in waiters { waiter.fulfill() }
     }
-    var sessions: [URLSession] { self.lock.withLock { self.completed } }
-    func completed(_ session: URLSession) {
-        let first = self.lock.withLock { self.completed.append(session); return self.completed.count == 1 }
-        if first { self.firstCompleted.fulfill() }
-        self.completions.fulfill()
+    func hasInvalidated(_ session: URLSession) -> Bool {
+        self.lock.withLock { self.invalidated.contains(ObjectIdentifier(session)) }
+    }
+    func invalidationExpectation(for session: URLSession) -> XCTestExpectation {
+        let expectation = XCTestExpectation(description: "Owned session invalidated")
+        let complete = self.lock.withLock {
+            let id = ObjectIdentifier(session)
+            if self.invalidated.contains(id) { return true }
+            self.invalidationWaiters[id, default: []].append(expectation)
+            return false
+        }
+        if complete { expectation.fulfill() }
+        return expectation
     }
     func hold(_ request: IdlePoolProtocol) {
         self.lock.withLock { self.pending = request }
@@ -180,11 +192,14 @@ private nonisolated final class IdlePoolReceipt: @unchecked Sendable {
 
 private nonisolated final class IdlePoolProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var receipt: IdlePoolReceipt?
-    private let owner = IdlePoolProtocol.receipt
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        if self.request.url?.path.contains("/held/") == true { self.owner?.hold(self) }
+        guard let owner = Self.receipt else {
+            self.client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+            return
+        }
+        if self.request.url?.path.contains("/held/") == true { owner.hold(self) }
         else { self.reply() }
     }
     func reply() {
@@ -200,8 +215,8 @@ private nonisolated final class IdlePoolProtocol: URLProtocol, @unchecked Sendab
 private nonisolated final class IdlePoolDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     let receipt: IdlePoolReceipt
     init(_ receipt: IdlePoolReceipt) { self.receipt = receipt }
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        self.receipt.completed(session)
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        self.receipt.didInvalidate(session)
     }
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
@@ -233,61 +248,98 @@ final class LLMClientIdleOwnershipTests: XCTestCase {
         return config
     }
 
-    func testCloudPoolIdleRotationPreservesRedirectDenialAndConfiguration() async throws {
-        let receipt = IdlePoolReceipt(completions: 2)
-        let (client, seed) = self.interceptedClient(receipt)
-        defer { seed.invalidateAndCancel(); IdlePoolProtocol.receipt = nil }
-        let config = self.interceptedConfig("https://ai.api.cloud.yandex.net/v1", cloud: true)
-        _ = try await client.call(config)
-        await self.fulfillment(of: [receipt.firstCompleted], timeout: 2)
-        _ = try await client.call(config)
-        await self.fulfillment(of: [receipt.completions], timeout: 2)
-        let sessions = receipt.sessions
-        XCTAssertEqual(sessions.count, 2)
-        guard sessions.count == 2 else { return }
-        defer { sessions.forEach { $0.invalidateAndCancel() } }
-        XCTAssertFalse(sessions[0] === sessions[1], "The actual cloud pool rotated after idle")
-        for session in sessions {
-            XCTAssertTrue(session.configuration.protocolClasses?.contains { $0 == IdlePoolProtocol.self } == true)
-            XCTAssertFalse(session.configuration.httpShouldSetCookies)
-            let delegate = try XCTUnwrap(session.delegate as? IdlePoolDelegate,
-                "Idle recreation must retain the credential-safe delegate")
-            let request = URLRequest(url: URL(string: "https://attacker.invalid/redirect-target")!)
-            let response = HTTPURLResponse(url: URL(string: config.baseURL)!, statusCode: 302,
-                httpVersion: nil, headerFields: ["Location": request.url!.absoluteString])!
-            let task = session.dataTask(with: URL(string: config.baseURL)!)
-            defer { task.cancel() }
-            delegate.urlSession(session, task: task, willPerformHTTPRedirection: response, newRequest: request) {
-                XCTAssertNil($0, "The actual rotated session's delegate must reject forwarding credentials")
-            }
+    /// Reflect real production storage rather than recreating the pooling algorithm in a fixture.
+    /// Never call this while another task can acquire or release this client's pool.
+    private func pool(_ client: LLMClient, cloud: Bool) throws -> URLSession {
+        try XCTUnwrap(Mirror(reflecting: client).children.first {
+            $0.label == (cloud ? "cloudSession" : "session")
+        }?.value as? URLSession)
+    }
+
+    private func cleanup(_ sessions: [URLSession], receipt: IdlePoolReceipt) async {
+        var identities = Set<ObjectIdentifier>()
+        let unique = sessions.filter { identities.insert(ObjectIdentifier($0)).inserted }
+        let finished = unique.map { receipt.invalidationExpectation(for: $0) }
+        for session in unique { session.invalidateAndCancel() }
+        await self.fulfillment(of: finished, timeout: 2)
+        if IdlePoolProtocol.receipt === receipt { IdlePoolProtocol.receipt = nil }
+    }
+
+    private func assertRedirectDenied(_ session: URLSession, baseURL: String) throws {
+        XCTAssertTrue(session.configuration.protocolClasses?.contains { $0 == IdlePoolProtocol.self } == true)
+        XCTAssertFalse(session.configuration.httpShouldSetCookies)
+        let delegate = try XCTUnwrap(session.delegate as? IdlePoolDelegate,
+            "Idle recreation must retain the credential-safe delegate")
+        let request = URLRequest(url: URL(string: "https://attacker.invalid/redirect-target")!)
+        let response = HTTPURLResponse(url: URL(string: baseURL)!, statusCode: 302,
+            httpVersion: nil, headerFields: ["Location": request.url!.absoluteString])!
+        let task = session.dataTask(with: URL(string: baseURL)!)
+        defer { task.cancel() }
+        delegate.urlSession(session, task: task, willPerformHTTPRedirection: response, newRequest: request) {
+            XCTAssertNil($0, "The actual rotated session's delegate must reject forwarding credentials")
         }
     }
 
-    func testIdleRotationNeverInvalidatesAnActiveRequest() async throws {
-        let receipt = IdlePoolReceipt(completions: 3)
+    func testCloudPoolIdleRotationPreservesRedirectDenialAndConfiguration() async throws {
+        let receipt = IdlePoolReceipt()
         let (client, seed) = self.interceptedClient(receipt)
-        defer { seed.invalidateAndCancel(); IdlePoolProtocol.receipt = nil }
-        _ = try await client.call(self.interceptedConfig("https://idle.pool.invalid/v1"))
-        await self.fulfillment(of: [receipt.firstCompleted], timeout: 2)
-        let held = Task { try await client.call(self.interceptedConfig("https://idle.pool.invalid/held/v1")) }
-        await self.fulfillment(of: [receipt.heldStarted], timeout: 2)
+        var sessions = [seed]
+        do {
+            let config = self.interceptedConfig("https://ai.api.cloud.yandex.net/v1", cloud: true)
+            _ = try await client.call(config)
+            let first = try self.pool(client, cloud: true)
+            sessions.append(first)
+            try self.assertRedirectDenied(first, baseURL: config.baseURL)
+            let invalidated = receipt.invalidationExpectation(for: first)
+            _ = try await client.call(config)
+            let second = try self.pool(client, cloud: true)
+            sessions.append(second)
+            XCTAssertFalse(first === second, "The actual cloud pool rotated after idle")
+            await self.fulfillment(of: [invalidated], timeout: 2)
+            XCTAssertTrue(receipt.hasInvalidated(first), "The superseded owned session was actually invalidated")
+            XCTAssertFalse(receipt.hasInvalidated(second))
+            try self.assertRedirectDenied(second, baseURL: config.baseURL)
+        } catch {
+            if let current = try? self.pool(client, cloud: true) { sessions.append(current) }
+            await self.cleanup(sessions, receipt: receipt)
+            throw error
+        }
+        await self.cleanup(sessions, receipt: receipt)
+    }
+
+    func testIdleRotationNeverInvalidatesAnActiveRequest() async throws {
+        let receipt = IdlePoolReceipt()
+        let (client, seed) = self.interceptedClient(receipt)
+        // The injected cloud clone is also owned, although this case uses the standard pool.
+        var sessions = [seed, try self.pool(client, cloud: true)]
+        var held: Task<LLMClient.Response, Error>?
         do {
             _ = try await client.call(self.interceptedConfig("https://idle.pool.invalid/v1"))
+            let first = try self.pool(client, cloud: false)
+            sessions.append(first)
+            let invalidated = receipt.invalidationExpectation(for: first)
+            let pending = Task { try await client.call(self.interceptedConfig("https://idle.pool.invalid/held/v1")) }
+            held = pending
+            await self.fulfillment(of: [receipt.heldStarted], timeout: 2)
+            let active = try self.pool(client, cloud: false)
+            sessions.append(active)
+            XCTAssertFalse(first === active, "The idle pool must rotate before the held request")
+            await self.fulfillment(of: [invalidated], timeout: 2)
+            XCTAssertFalse(receipt.hasInvalidated(active))
+            _ = try await client.call(self.interceptedConfig("https://idle.pool.invalid/v1"))
+            XCTAssertTrue(active === (try self.pool(client, cloud: false)), "Overlapping calls retain the same active pool")
+            XCTAssertFalse(receipt.hasInvalidated(active), "A held operation must not be invalidated by another call")
             receipt.finishHeld()
-            let result = try await held.value
+            let result = try await pending.value
             XCTAssertEqual(result.content, "Synthetic result.")
         } catch {
             receipt.finishHeld()
-            held.cancel()
-            _ = await held.result
+            held?.cancel()
+            _ = await held?.result
+            if let current = try? self.pool(client, cloud: false) { sessions.append(current) }
+            await self.cleanup(sessions, receipt: receipt)
             throw error
         }
-        await self.fulfillment(of: [receipt.completions], timeout: 2)
-        let sessions = receipt.sessions
-        defer { sessions.forEach { $0.invalidateAndCancel() } }
-        XCTAssertEqual(sessions.count, 3)
-        guard sessions.count == 3 else { return }
-        XCTAssertFalse(sessions[0] === sessions[1], "The idle pool must rotate before the held request")
-        XCTAssertTrue(sessions[1] === sessions[2], "Overlapping calls retain the same active pool")
+        await self.cleanup(sessions, receipt: receipt)
     }
 }
