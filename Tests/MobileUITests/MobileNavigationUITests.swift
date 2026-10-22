@@ -1322,6 +1322,14 @@ final class MobileNavigationUITests: XCTestCase {
 
     /// Direct names expose the inline editor; explicit owner corrections replace one another.
     func testParticipantInlineNameAndOwnerTransferSmoke() throws {
+        try participantInlineNameAndOwnerTransfer(onlyLanguage: "en")
+    }
+
+    func testParticipantInlineNameAndOwnerTransferSmokeRussianDark() throws {
+        try participantInlineNameAndOwnerTransfer(onlyLanguage: "ru")
+    }
+
+    private func participantInlineNameAndOwnerTransfer(onlyLanguage: String) throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Participant correction fixtures are simulator-only")
         #else
@@ -1332,7 +1340,7 @@ final class MobileNavigationUITests: XCTestCase {
         for (language, appearance, history, ownerName, thisIsMe, generatedName) in [
             ("en", "light", "History", "You", "This is me", "Speaker 1"),
             ("ru", "dark", "История", "Вы", "Это я", "Участник 1")
-        ] {
+        ] where language == onlyLanguage {
             func openFixture() throws {
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
                     "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
