@@ -321,15 +321,41 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
             attemptID: attempt, tokens: [token], speakerNameFormat: "Frozen %lld")
         try await processing.checkpoint(.init(segments: [], speakers: promoted))
         XCTAssertEqual(coordinator.activeSession?.speakers.filter(\.isLocalUser).count, 1)
+        // Combined regression: a short unresolved turn takes the real protected-tail path
+        // after owner promotion, then merges through the coordinator and durable store.
+        // Runtime refresh scoring has separate actual-source tests; this verifies its
+        // retained owner result is not erased by the new preliminary reading identity.
+        let unresolved = MeetingTranscriptSegment(id: UUID(),
+            start: .init(value: 20_100, timescale: 1_000),
+            end: .init(value: 20_400, timescale: 1_000), sourceTrackID: track.id,
+            speakerID: nil, text: "Synthetic brief reply.", revision: 0, status: .final,
+            overlap: .none, completeness: .complete, attributionState: .unassigned,
+            nativePrecision: .word, nativeUnitID: "combined-short-reply",
+            nativeSpeakerAssignment: .unassigned, nativeTiming: .init(start: 20.1, end: 20.4))
+        var tail = try MeetingStreamingProtectedWordTail(attemptID: attempt,
+            epoch: token.analysisEpochID, speakerNameFormat: "Frozen %lld", priorSpeakers: promoted)
+        let finalTail = try tail.finish(safeWords: .init(segments: [unresolved]), activity: [],
+            watermarks: .init(asrStableThrough: 21, diarizationProcessedThrough: 21, privacySafeThrough: 21),
+            attemptID: attempt, epoch: token.analysisEpochID)
+        let preliminaryID = try XCTUnwrap(finalTail.inserted.first?.speakerID)
+        XCTAssertFalse(anonymous.speakers.contains { $0.id == preliminaryID })
+        XCTAssertEqual(finalTail.inserted.first?.speakerIdentityIsProvisional, true)
+        XCTAssertEqual(finalTail.inserted.first?.nativeSpeakerAssignment, unresolved.nativeSpeakerAssignment)
+        XCTAssertEqual(finalTail.inserted.first?.nativeTiming, unresolved.nativeTiming)
+        try await processing.checkpoint(.init(segments: finalTail.inserted, speakers: finalTail.speakers))
+        XCTAssertEqual(coordinator.activeSession?.speakers.filter(\.isLocalUser).count, 1)
         let stopped = try await coordinator.stopAndTranscribe()
         let stored = try await MeetingSessionStore(rootDirectory: root).load(id: session.id)
         let reopened = try XCTUnwrap(stored)
         XCTAssertEqual(stopped.state, .completed)
         XCTAssertEqual(reopened.speakers, stopped.speakers)
-        XCTAssertEqual(reopened.speakers.map(\.id), anonymous.speakers.map(\.id))
-        XCTAssertEqual(reopened.speakers.map(\.generatedParticipantNumber), [1, 2])
+        XCTAssertEqual(reopened.speakers.map(\.id), anonymous.speakers.map(\.id) + [preliminaryID])
+        XCTAssertEqual(reopened.speakers.map(\.generatedParticipantNumber), [1, 2, 3])
+        XCTAssertEqual(reopened.speakers.first { $0.id == preliminaryID }?.identityIsProvisional, true)
+        XCTAssertFalse(reopened.speakers.contains { $0.id == preliminaryID && $0.isLocalUser })
+        XCTAssertTrue(reopened.speakers.allSatisfy { !$0.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         XCTAssertEqual(reopened.speakers.filter(\.isLocalUser).map(\.id), promoted.filter(\.isLocalUser).map(\.id))
-        XCTAssertEqual(reopened.transcriptSegments, anonymous.segments)
+        XCTAssertEqual(reopened.transcriptSegments, anonymous.segments + finalTail.inserted)
     }
 
     func testDurablePCMCheckpointsPromoteAndRevokeOwnerWithoutReplacingManualAliases() async throws {
