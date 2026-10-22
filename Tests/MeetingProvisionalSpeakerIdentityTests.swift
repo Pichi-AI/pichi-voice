@@ -43,6 +43,7 @@ import Foundation
     }
     static func main() throws {
         try recoveryAndPartitions()
+        try contextualRecoveryAndNewFinalBout()
         try shortTokenQualification()
         try refinementRetiresOnlyUncommittedIdentity()
         try finalProtectedPublication()
@@ -142,6 +143,57 @@ import Foundation
             }
         }
     }
+    static func contextualRecoveryAndNewFinalBout() throws {
+        let words = [word(8_000, 0, 6), word(8_001, 6.1, 8.1), word(8_002, 8.2, 10.1),
+            word(8_003, 10.2, 10.4), word(8_004, 11.2, 11.4), word(8_005, 11.5, 11.6),
+            word(8_006, 11.7, 12), word(8_007, 12.1, 12.3), word(8_008, 12.4, 12.6)]
+        let activity = [MeetingBackendSpeakerActivity(token: a, start: 0, end: 6),
+            .init(token: a, start: 10.2, end: 10.4), .init(token: a, start: 11.2, end: 11.4),
+            .init(token: a, start: 11.7, end: 12)]
+        let native = try MeetingPCMRecordingAttribution.assemble(transcript: .init(segments: words),
+            activity: activity, epoch: epoch, attemptID: attempt, duration: 13, speakerNameFormat: "Speaker %lld")
+        check(native.segments[5].nativeSpeakerAssignment == .unassigned)
+        check(native.segments[5].speakerAttribution?.rule == .neighborAgreement)
+        check(native.segments[5].speakerAttribution?.selectedToken == a)
+        let final = try Tail.finalizingProtectedTranscript(native, attemptID: attempt, policy: .standard,
+            speakerNameFormat: "Speaker %lld", epochForSegment: { _ in epoch })
+        func verify(_ rows: [MeetingTranscriptSegment]) {
+            let recovered = rows[1].speakerID
+            check(recovered != nil && recovered != rows[0].speakerID)
+            check(rows[1...6].allSatisfy { $0.speakerID == recovered && $0.speakerIdentityIsProvisional == true },
+                "A same-token contextual gap dropped provisional recovery")
+            check(rows[7].speakerID != recovered && rows[7].speakerID == rows[8].speakerID,
+                "A new unresolved final turn inherited the recovered participant")
+            check(rows.allSatisfy { $0.speakerID != nil })
+            check(rows.map(\.nativeSpeakerAssignment) == native.segments.map(\.nativeSpeakerAssignment))
+            check(rows.map(\.nativeTiming) == native.segments.map(\.nativeTiming))
+            check(rows.map(\.speakerAttribution) == native.segments.map(\.speakerAttribution))
+        }
+        verify(final.segments)
+        for cut in [native.segments.count, 5, 6] {
+            var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
+            let end = cut == native.segments.count ? 13 : native.segments[cut - 1].nativeTiming!.end
+            let prefixActivity = activity.compactMap { entry -> MeetingBackendSpeakerActivity? in
+                let clipped = min(entry.end, end)
+                return clipped > entry.start ? .init(token: entry.token, start: entry.start, end: clipped) : nil
+            }
+            let first = try update(&tail, Array(native.segments.prefix(cut)), prefixActivity, end: end)
+            var rows = first.inserted
+            if cut < native.segments.count {
+                let next = try update(&tail, Array(native.segments.dropFirst(cut)), activity, end: 13)
+                rows += next.inserted
+                for revision in next.revisions {
+                    if let index = rows.firstIndex(where: { $0.id == revision.segmentID }) { try revision.apply(to: &rows[index]) }
+                }
+            }
+            let stopped = try tail.finish(activity: activity, watermarks: marks(13), attemptID: attempt,
+                epoch: epoch, activityAvailableFrom: tail.retainActivityFrom)
+            for revision in stopped.revisions {
+                if let index = rows.firstIndex(where: { $0.id == revision.segmentID }) { try revision.apply(to: &rows[index]) }
+            }
+            verify(rows)
+        }
+    }
     static func boundariesCapacityAndAtomicity() throws {
         var overlapping = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
         let cluster = try update(&overlapping,
@@ -224,6 +276,17 @@ import Foundation
             attemptID: attempt, policy: .standard, speakerNameFormat: "Speaker %lld",
             barriersByTrack: [trackID: [.init(start: 0.4, end: 0.5)]], epochForSegment: { _ in epoch })
         check(withGap.segments[0].speakerID != withGap.segments[1].speakerID, "Coverage barrier did not split preliminary identity")
+        let nestedRows = [word(1_100, 1, 4), word(1_101, 3, 3.2), word(1_102, 3.1, 3.3)]
+        let nestedBarrier = try Tail.finalizingProtectedTranscript(.init(segments: nestedRows),
+            attemptID: attempt, policy: .standard, speakerNameFormat: "Speaker %lld",
+            barriersByTrack: [trackID: [.init(start: 2, end: 2.5)]], epochForSegment: { _ in epoch })
+        check(nestedBarrier.segments[0].speakerID != nestedBarrier.segments[1].speakerID,
+            "A prior enclosing word consumed a nested excluded interval")
+        check(nestedBarrier.segments[1].speakerID == nestedBarrier.segments[2].speakerID)
+        let noNestedBarrier = try Tail.finalizingProtectedTranscript(.init(segments: nestedRows),
+            attemptID: attempt, policy: .standard, speakerNameFormat: "Speaker %lld", epochForSegment: { _ in epoch })
+        check(Set(noNestedBarrier.segments.compactMap(\.speakerID)).count == 1,
+            "Ordinary nested word envelopes split a continuous preliminary bout")
         // Cross both the word-count and text-byte working bounds without splitting a bout.
         var long = (0..<4_200).map { index in word(2_000 + index, Double(index) * 0.1, Double(index) * 0.1 + 0.04) }
         for index in long.indices { long[index].text = String(repeating: "x", count: 300) }

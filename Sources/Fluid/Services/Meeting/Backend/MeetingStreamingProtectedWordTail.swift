@@ -528,7 +528,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 || source.nativeUnitID?.isEmpty != false || source.nativeSpeakerAssignment == nil
             // Speech bouts include ordinary pauses between ASR words. Once a native slot
             // resumes provisionally, its pauses obey the same identity continuity as that
-            // slot; only a different actual token or an explicit barrier ends the recovery.
+            // slot. A new unresolved bout, a different token or a barrier ends the recovery.
             let maximumGap = state.bout?.recoveryToken != nil ? Double.infinity : self.policy.maximumUnknownRunSeconds
             let contiguous = state.lastEnd.map {
                 timing.start - $0 <= maximumGap + self.policy.comparisonTolerance
@@ -553,10 +553,21 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 }
                 return native
             }()
+            let contextualContinuationToken: MeetingBackendSpeakerToken? = {
+                guard validIdentity, let summary = resolved[index].speakerAttribution,
+                      let token = summary.selectedToken, token.analysisEpochID == self.epoch,
+                      summary.unitID == source.nativeUnitID,
+                      summary.rawAssignment == source.nativeSpeakerAssignment,
+                      resolved[index].nativeSpeakerAssignment == source.nativeSpeakerAssignment,
+                      summary.selectedSpeakerID == resolved[index].speakerID,
+                      resolved[index].speakerID == MeetingTranscriptAssembler.speakerID(attemptID: self.attemptID, token: token)
+                else { return nil }
+                return token
+            }()
             if validIdentity {
-                if allowRecovery, let token = independentToken, var bout = state.bout,
+                if allowRecovery, let token = independentToken ?? contextualContinuationToken, var bout = state.bout,
                    !barrier, (bout.recoveryToken == token
-                    || (bout.precedingToken == token
+                    || (independentToken == token && bout.precedingToken == token
                         && bout.end - bout.start > self.policy.maximumUnknownRunSeconds + self.policy.comparisonTolerance)) {
                     // A sustained unscored speech passage breaks product identity continuity.
                     // A return of the same native slot alone cannot prove the same person.
@@ -573,6 +584,10 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                     resolved[index].speakerIdentityIsProvisional = identity?.identityIsProvisional == true ? true : nil
                 }
             } else {
+                // Missing selection after a resumed slot is a new uncertain turn. A bounded
+                // contextual decision selecting that same slot stays in the branch above.
+                if state.bout?.recoveryToken != nil,
+                   resolved[index].speakerAttribution?.selectedToken == nil { state.bout = nil }
                 var bout: ProvisionalBout
                 if let current = state.bout { bout = current }
                 else {
@@ -658,7 +673,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 policy: policy, priorSpeakers: result.speakers)
             let barriers = try MeetingSpeakerAttribution.unionedIntervals(barriersByTrack[epoch.trackID] ?? [])
             var barrierCursor = 0
-            var previousEnd: TimeInterval?
+            var previousStart: TimeInterval?
             var offset = 0
             while offset < indices.count {
                 try Task.checkCancellation()
@@ -678,14 +693,16 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 for segment in resolved {
                     let timing = Self.timing(segment)
                     guard MeetingEvidenceInterval.isValid(start: timing.start, end: timing.end) else { throw Failure.invalidWord }
-                    if let previousEnd {
-                        while barrierCursor < barriers.count, barriers[barrierCursor].end <= previousEnd {
+                    if let previousStart {
+                        // A long or nested prior envelope must not consume a later exclusion.
+                        // Starts are monotonic in this scope; ends may enclose subsequent words.
+                        while barrierCursor < barriers.count, barriers[barrierCursor].end <= previousStart {
                             barrierCursor += 1
                         }
                         if barrierCursor < barriers.count, barriers[barrierCursor].start < timing.end,
-                           barriers[barrierCursor].end > previousEnd { resetBefore.insert(segment.id) }
+                           barriers[barrierCursor].end > previousStart { resetBefore.insert(segment.id) }
                     }
-                    previousEnd = max(previousEnd ?? timing.end, timing.end)
+                    previousStart = timing.start
                 }
                 owner.retained = resolved.map { .init(original: $0, published: $0, committed: false) }
                 try owner.applyProvisionalIdentities(to: &resolved,
