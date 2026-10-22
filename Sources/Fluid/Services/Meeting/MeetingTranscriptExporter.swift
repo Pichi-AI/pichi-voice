@@ -366,7 +366,7 @@ nonisolated enum MeetingTranscriptExporter {
         }
         let interruptions = segments.map { safe($0) && isInterruption($0) }
         let anchors: [SessionSpeakerID?] = segments.enumerated().map { index, value in
-            guard safe(value), value.speakerAttributionInference == nil else { return nil }
+            guard safe(value), value.hasReadableContent, value.speakerAttributionInference == nil else { return nil }
             // Older continuation policies could override a clean native reply. Its exact
             // recovered token/UUID mapping is an original acoustic anchor, not the old
             // contextual choice. Do not let a second reading pass swallow it again.
@@ -449,7 +449,7 @@ nonisolated enum MeetingTranscriptExporter {
             return summary
         }
         func anchorToken(_ segment: MeetingTranscriptSegment) -> MeetingBackendSpeakerToken? {
-            guard safeNative(segment), segment.attributionState == .assigned,
+            guard safeNative(segment), segment.hasReadableContent, segment.attributionState == .assigned,
                   let native = segment.nativeSpeakerAssignment, case let .assigned(token) = native,
                   token.analysisEpochID.trackID == segment.sourceTrackID,
                   self.resolvedSpeakerID(segment.speakerID, in: session, activeSpeakerIDs: active) != nil
@@ -665,7 +665,7 @@ nonisolated enum MeetingTranscriptExporter {
             return word.revision == 0 || allowsRevisedCompactTiming
         }
         func anchor(_ word: MeetingTranscriptSegment) -> (SessionSpeakerID, MeetingBackendSpeakerToken)? {
-            guard safe(word), word.attributionState == .assigned,
+            guard safe(word), word.hasReadableContent, word.attributionState == .assigned,
                   let id = self.resolvedSpeakerID(word.speakerID, in: session, activeSpeakerIDs: active),
                   case let .assigned(token) = word.nativeSpeakerAssignment,
                   token.analysisEpochID.trackID == word.sourceTrackID else { return nil }
@@ -780,7 +780,7 @@ nonisolated enum MeetingTranscriptExporter {
                     || segment.attributionState == .overlappingSpeakers)
         }
         func anchor(_ segment: MeetingTranscriptSegment) -> SessionSpeakerID? {
-            guard untouched(segment), segment.overlap == .none, segment.attributionState == .assigned,
+            guard untouched(segment), segment.hasReadableContent, segment.overlap == .none, segment.attributionState == .assigned,
                   let speaker = segment.speakerID,
                   self.resolvedSpeakerID(speaker, in: session, activeSpeakerIDs: active) != nil else { return nil }
             return speaker

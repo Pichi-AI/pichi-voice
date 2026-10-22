@@ -38,6 +38,24 @@ extension MeetingSessionStoreCheckpointTests {
         let both = [ta: a, tb: b]
         do {
             var value = session
+            for index in value.speakers.indices { value.speakers[index].generatedParticipantNumber = index + 1 }
+            let tc = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "noise-c")
+            let punctuation = word(".", 5, raw: tc, selected: tc, owner: extra, map: [tc: extra])
+            let short = word("я", 5.1, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
+            let real = word("Следующая реплика.", 10, raw: tb, selected: tb, owner: b, map: both)
+            value.transcriptSegments = [punctuation, short, real]
+            let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
+            check(reading[short.id]?.participantID == nil,
+                  "Punctuation-only native evidence cannot sponsor a phantom owner for a short lexical fragment")
+            check(value.readableSpeakers.map(\.id) == [b], "A punctuation-only native person stays out of the roster")
+            let portable = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: value)) as! [String: Any]
+            let roster = Set((portable["speakers"] as! [[String: Any]]).compactMap { $0["id"] as? String })
+            check((portable["segments"] as! [[String: Any]]).allSatisfy {
+                ($0["speakerID"] as? String).map(roster.contains) ?? true
+            }, "Every readable export participant reference belongs to its visible roster")
+        }
+        do {
+            var value = session
             value.speakers[0].generatedParticipantNumber = 1
             value.speakers[0].isLocalUser = true
             value.speakers[1].generatedParticipantNumber = 2
