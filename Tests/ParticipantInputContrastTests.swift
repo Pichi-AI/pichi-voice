@@ -61,6 +61,8 @@ enum ParticipantInputContrastTests {
     @MainActor private final class SheetObservations {
         var saveCalls = [[SessionSpeakerID: String]]()
         var cancelCalls = 0
+        func record(_ edits: MeetingSpeakerEdits) { self.saveCalls.append(edits.names) }
+        func record(_ names: [SessionSpeakerID: String]) { self.saveCalls.append(names) }
     }
     private struct SheetHost: View {
         @ObservedObject var state: State
@@ -71,7 +73,7 @@ enum ParticipantInputContrastTests {
             MeetingAssignSpeakersSheet(
                 speakers: [.init(id: Self.speakerID, displayName: "Ёжик ёлка", isLocalUser: false)],
                 quotesBySpeaker: [:], tints: [:],
-                onSave: { self.observations.saveCalls.append($0.names); return nil },
+                onSave: { self.observations.record($0); return nil },
                 onCancel: { self.observations.cancelCalls += 1 })
                 // The presentation adapter passes custom theme and caller tint.
                 // Root font/foreground/native colorScheme must come FROM SHEET.

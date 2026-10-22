@@ -514,6 +514,11 @@ wpm_root = input_part(input_paths[0], '    private var wpmEditorPopover: some Vi
 wpm_root = wpm_root.replace('private var wpmEditorPopover: some View', 'var body: some View', 1)
 transcript_root = input_part(input_paths[1], 'struct MeetingTranscriptTextEditor: View {')
 dictionary_root = input_part(input_paths[2], 'struct EditDictionaryEntrySheet: View {')
+if input_revision and 'let isCaptureBusy: Bool' not in dictionary_root:
+    # Metadata-only compatibility for historical appearance negative controls.
+    # The old rendering and actions remain verbatim; the extra value stays idle.
+    dictionary_root = dictionary_root.replace('struct EditDictionaryEntrySheet: View {',
+        'struct EditDictionaryEntrySheet: View {\n    let isCaptureBusy: Bool', 1)
 dictionary_chrome = input_part(input_paths[2], 'private struct DictionaryInputChrome: ViewModifier {',
                               'private struct DictionaryFocusDismissMonitor: NSViewRepresentable {')
 dictionary_preview = input_part(input_paths[2], 'private struct DictionaryReplacementPreview: View {', '// MARK: - Edit Entry Sheet')
@@ -530,12 +535,15 @@ Path(sys.argv[1]).with_name('ProductionNativeInputPresentations.swift').write_te
     + transcript_root + dictionary_root + dictionary_chrome + dictionary_preview + dictionary_parser + meeting_actions
     + '\n// Service delivery and physical-input monitoring are excluded; no appearance logic is adapted.\n'
       'extension View { func dictionaryDictationInput(focused: Bool) -> some View { self } }\n'
-      'private struct DictionaryFocusDismissMonitor: View { var body: some View { EmptyView() } }\n')
+      'private struct DictionaryFocusDismissMonitor: View { var body: some View { EmptyView() } }\n'
+      'private struct DictionaryWordPlayground: View {\n'
+      ' let word: String; let onPracticeMore: (() -> Void)?; @Binding var busy: Bool\n'
+      ' var body: some View { preconditionFailure("Practice inference is excluded from appearance probes"); return EmptyView() }\n}\n')
 Path(sys.argv[1]).with_name('NativeInputPresentationProductionSource.json').write_text(json.dumps({
     'sourceSHA256': {path: hashlib.sha256(source.encode()).hexdigest() for path, source in input_sources.items()},
     'legacySourceRevision': subprocess.check_output(['git', 'rev-parse', input_revision], text=True).strip() if input_revision else None,
     'adapters': ['WPM property renamed body, inert settings/state initialized to synthetic 55',
-                 'Exact dictionary metadata/parser; inert dictation delivery and physical input monitor',
+                 'Exact dictionary metadata/parser; inert dictation delivery and physical input monitor; closed practice inference branch fails if entered',
                  'Complete transcript and dictionary roots, input chrome and replacement preview',
                  'Complete shared meeting hover and glass action implementations'],
     'outsideTheme': 'environment(theme) only', 'nativeReachability': 'SKIP: parent-owned frozen app required',
