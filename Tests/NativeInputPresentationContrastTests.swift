@@ -75,7 +75,7 @@ enum NativeInputPresentationContrastTests {
                     window.appearance = NSApp.appearance
                     await self.settle(host)
                     let current = self.inputs(host)
-                    precondition(current.count == (kind == 2 ? 2 : 1), "Exact production roots must mount all native inputs")
+                    precondition(current.count == (kind == 2 ? 2 : 1), "Exact production roots must mount all native inputs: brand=\(brand) kind=\(kind) step=\(step) count=\(current.count) views=\(current.map { String(describing: type(of: $0)) + (($0 as? NSTextView)?.isFieldEditor == true ? ":fieldEditor" : "") })")
                     if !retainedInputs.isEmpty {
                         precondition(zip(current, retainedInputs).allSatisfy { $0 === $1 }, "Hot themes retain native input identity")
                     }
