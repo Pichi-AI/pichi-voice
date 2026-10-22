@@ -2157,7 +2157,9 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             coverageReceipts: bundle.coverageReceipts
         ))
         XCTAssertEqual(assembly.segments.map(\.text), ["a", "b"])
-        XCTAssertEqual(assembly.speakers.count, 1, "only the unambiguous assigned slot mints a speaker")
+        XCTAssertEqual(assembly.speakers.count, 2, "The ambiguous fragment gets its own preliminary reading identity")
+        XCTAssertEqual(assembly.segments[1].speakerIdentityIsProvisional, true)
+        XCTAssertNotEqual(assembly.segments[0].speakerID, assembly.segments[1].speakerID)
         let resolved = try XCTUnwrap(assembly.sidecar.dispositions.first { $0.unitID == unitsByText["b"]?.id })
         XCTAssertEqual(resolved.disposition, .ambiguousUnassigned)
         let outside = try XCTUnwrap(assembly.sidecar.dispositions.first { $0.unitID == unitsByText["c"]?.id })
