@@ -80,6 +80,9 @@ struct AudioWaveformBars: View {
 /// first and ripples outward, the spectrum tilts the shape, and a slow idle wave keeps the
 /// bars breathing while the user is quiet.
 final class WaveformSimulation {
+    // Avoid the synthesized main-actor deinit runtime abort on macOS 15.4+ (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     private var heights: [CGFloat] = []
     private var velocities: [CGFloat] = []
     private var energyHistory: [CGFloat] = Array(repeating: 0, count: 32)

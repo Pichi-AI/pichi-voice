@@ -106,7 +106,7 @@ struct BottomWaveformView: View {
             maxHeight: self.maxHeight,
             level: { self.audioLevel.isLive ? OverlayAudioLevelState.shared.level : 0 },
             noiseThreshold: self.noiseThreshold,
-            isAnimating: self.contentState.isBottomOverlayPresented && !self.isProcessingVisualActive,
+            isAnimating: self.contentState.isBottomOverlayPresented && !self.isWaitingForMicrophone && !self.isProcessingVisualActive,
             isIdleWaveEnabled: self.audioLevel.isLive,
             glowIntensity: self.isReleaseAnimationActive ? 0 : self.currentGlowIntensity,
             glowRadius: self.isReleaseAnimationActive ? 0 : self.currentGlowRadius

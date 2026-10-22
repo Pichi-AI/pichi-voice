@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A stationary blue invitation with quiet motion inside; capture uses a static red control.
+/// A stationary branded invitation with quiet motion inside; capture uses a static red control.
 struct FluidRecordInvitationStyle: ButtonStyle {
     let inviting: Bool
     let recording: Bool
@@ -56,7 +56,139 @@ struct FluidRecordInvitationStyle: ButtonStyle {
     }
 }
 
-/// Only this small background redraws. The label, hit target, and surrounding layout stay fixed.
+#if os(macOS)
+/// Core Animation moves the decoration without scheduling SwiftUI layout on every frame.
+private struct FluidRecordInvitationSurface: NSViewRepresentable {
+    let animate: Bool
+    let recording: Bool
+    let reduceTransparency: Bool
+    @Environment(\.theme) private var theme
+
+    func makeNSView(context: Context) -> FluidRecordInvitationLayerView {
+        FluidRecordInvitationLayerView()
+    }
+
+    static func dismantleNSView(_ view: FluidRecordInvitationLayerView, coordinator: ()) {
+        view.stopAnimations()
+    }
+
+    func updateNSView(_ view: FluidRecordInvitationLayerView, context: Context) {
+        view.configure(
+            animate: self.animate,
+            recording: self.recording,
+            reduceTransparency: self.reduceTransparency,
+            fill: NSColor(self.recording ? .red : self.theme.palette.accent),
+            decoration: AppTheme.Palette.contrastingInk(on: self.theme.palette.accent) == .white ? .black : .white
+        )
+    }
+}
+
+private final class FluidRecordInvitationLayerView: NSView {
+    private let gradient = CAGradientLayer()
+    private let glow = CAGradientLayer()
+    private let dots = (0..<12).map { _ in CALayer() }
+    private var animate = false
+    private var recording = false
+    private var reduceTransparency = false
+    private var lastSize: CGSize?
+    private var fill = NSColor.clear
+    private var decoration = NSColor.clear
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        self.wantsLayer = true
+        self.layer?.masksToBounds = true
+        self.gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        self.gradient.endPoint = CGPoint(x: 1, y: 0.5)
+        self.layer?.addSublayer(self.gradient)
+        self.glow.type = .radial
+        self.glow.startPoint = CGPoint(x: 0.5, y: 0.35)
+        self.glow.endPoint = CGPoint(x: 1, y: 0.9)
+        self.layer?.addSublayer(self.glow)
+        for dot in self.dots {
+            self.layer?.addSublayer(dot)
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    func configure(animate: Bool, recording: Bool, reduceTransparency: Bool, fill: NSColor, decoration: NSColor) {
+        guard self.lastSize == nil || self.animate != animate || self.recording != recording || self.reduceTransparency != reduceTransparency || self.fill != fill || self.decoration != decoration else { return }
+        self.fill = fill
+        self.decoration = decoration
+        self.animate = animate
+        self.recording = recording
+        self.reduceTransparency = reduceTransparency
+        self.lastSize = nil
+        self.needsLayout = true
+    }
+
+    func stopAnimations() {
+        self.glow.removeAllAnimations()
+        for dot in self.dots { dot.removeAllAnimations() }
+    }
+
+    override func layout() {
+        super.layout()
+        guard self.bounds.width > 0, self.bounds.height > 0, self.lastSize != self.bounds.size else { return }
+        self.lastSize = self.bounds.size
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        self.layer?.cornerRadius = self.bounds.height / 2
+        self.gradient.frame = self.bounds
+        // Preserve the brand surface/foreground pair while moving only decoration off SwiftUI's display loop.
+        self.gradient.colors = [self.fill.cgColor, self.fill.cgColor]
+        self.glow.colors = [self.decoration.withAlphaComponent(0.08).cgColor, NSColor.clear.cgColor]
+        self.glow.frame = self.bounds
+        self.glow.isHidden = self.recording || self.reduceTransparency
+        self.glow.removeAllAnimations()
+        if self.animate, !self.glow.isHidden {
+            let drift = CABasicAnimation(keyPath: "startPoint")
+            drift.fromValue = CGPoint(x: 0.22, y: 0.35)
+            drift.toValue = CGPoint(x: 0.78, y: 0.35)
+            drift.duration = 12
+            drift.autoreverses = true
+            drift.repeatCount = .infinity
+            drift.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            self.glow.add(drift, forKey: "drift")
+        }
+        for (index, dot) in self.dots.enumerated() {
+            dot.removeAllAnimations()
+            dot.isHidden = self.recording
+            let fraction = (Double(index) * 0.61_803_398_875).truncatingRemainder(dividingBy: 1)
+            let diameter = 1.5 + Double(index % 3) * 0.45
+            let opacity = self.reduceTransparency ? 0.45 : 0.32
+            dot.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
+            dot.cornerRadius = diameter / 2
+            dot.backgroundColor = self.decoration.cgColor
+            dot.position = CGPoint(x: self.bounds.width * fraction, y: self.bounds.height * (0.18 + Double((index * 7) % 13) / 13 * 0.64))
+            dot.opacity = Float(opacity * min(1, min(fraction, 1 - fraction) * 12))
+            if self.animate, !self.recording {
+                let travel = CABasicAnimation(keyPath: "position.x")
+                travel.fromValue = 0
+                travel.toValue = self.bounds.width
+                let fade = CAKeyframeAnimation(keyPath: "opacity")
+                fade.values = [0, opacity, opacity, 0]
+                fade.keyTimes = [0, 0.0833, 0.9167, 1]
+                let motion = CAAnimationGroup()
+                motion.animations = [travel, fade]
+                motion.duration = 24
+                motion.timeOffset = fraction * 24
+                motion.repeatCount = .infinity
+                dot.add(motion, forKey: "motion")
+            }
+        }
+        CATransaction.commit()
+    }
+}
+
+#else
 private struct FluidRecordInvitationSurface: View {
     let animate: Bool
     let recording: Bool
@@ -105,6 +237,8 @@ private struct FluidRecordInvitationSurface: View {
         .accessibilityHidden(true)
     }
 }
+
+#endif
 
 struct ProviderDefaultButton: View {
     let isCurrent: Bool

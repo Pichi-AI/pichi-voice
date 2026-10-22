@@ -7,6 +7,43 @@ import XCTest
 
 @MainActor
 final class SettingsNavigationStateTests: XCTestCase {
+    func testFluidMeetHasASettingsDestinationEvenWhenDisabled() {
+        var state = SettingsNavigationState()
+        state.present(.fluidMeet, returningTo: .history)
+        XCTAssertEqual(state.selectedSection?.title, AppBrand.text("FluidMeet Settings"))
+        XCTAssertEqual(SettingsSection.fluidMeet.searchTarget, .fluidMeet)
+        XCTAssertEqual(SettingsSearchTarget.fluidMeet.section, .fluidMeet)
+        XCTAssertEqual(SettingsSearchIndex.results(for: "disable meetings").first?.section, .fluidMeet)
+        XCTAssertEqual(state.dismiss(), .history)
+    }
+
+    func testFluidMeetTogglePreservesDetectionPreferencesAndOnlyNotifiesOnChanges() {
+        let suite = "pichi-test-fluid-meet-toggle-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        let nativeDetection = settings.meetingAutoDetectEnabled
+        let browserDetection = settings.meetingAutoDetectBrowserEnabled
+        let recordingDefaults = defaults.object(forKey: "MeetingRecordingDefaults") as? Data
+        var changes = 0
+        let observation = NotificationCenter.default.publisher(for: .fluidMeetEnabledChanged)
+            .sink { _ in changes += 1 }
+        defer { observation.cancel() }
+
+        XCTAssertTrue(settings.fluidMeetEnabled, "Existing users keep FluidMeet enabled")
+        for _ in 0..<3 {
+            settings.fluidMeetEnabled = false
+            XCTAssertFalse(settings.fluidMeetEnabled)
+            settings.fluidMeetEnabled = false
+            settings.fluidMeetEnabled = true
+            XCTAssertTrue(settings.fluidMeetEnabled)
+        }
+        XCTAssertEqual(changes, 6, "Repeated assignments must not restart detection")
+        XCTAssertEqual(settings.meetingAutoDetectEnabled, nativeDetection)
+        XCTAssertEqual(settings.meetingAutoDetectBrowserEnabled, browserDetection)
+        XCTAssertEqual(defaults.object(forKey: "MeetingRecordingDefaults") as? Data, recordingDefaults)
+    }
+
     func testPresentAndDismissRestoresPreviousAppDestination() {
         var state = SettingsNavigationState()
 
@@ -398,7 +435,7 @@ final class SettingsNavigationStateTests: XCTestCase {
     func testSettingsSectionsHaveStableTitlesAndIcons() {
         XCTAssertEqual(
             SettingsSection.allCases.map(\.title),
-            ["General", "Dictation", "Dictation Formatting", "Shortcuts", "Notifications", "Audio", "Overlay", "Data & Diagnostics", "Experimental"]
+            ["General", AppBrand.text("FluidMeet Settings"), "Dictation", "Dictation Formatting", "Shortcuts", "Notifications", "Audio", "Overlay", "Data & Diagnostics", "Experimental"]
         )
         XCTAssertTrue(SettingsSection.allCases.allSatisfy { !$0.systemImage.isEmpty })
         XCTAssertEqual(SettingsSection.overlay.systemImage, "rectangle.on.rectangle")
@@ -438,6 +475,7 @@ final class SettingsNavigationStateTests: XCTestCase {
 
     func testSettingsSearchMatchesPrefixesAliasesAndMultipleWords() {
         XCTAssertEqual(SettingsSearchIndex.results(for: "start").first?.target, .launchAtStartup)
+        XCTAssertEqual(SettingsSearchIndex.results(for: "meeting shortcut").first?.target, .meetingRecordingShortcut)
         XCTAssertTrue(SettingsSearchIndex.results(for: "mic").contains { $0.target == .inputDevicePriority })
         XCTAssertEqual(SettingsSearchIndex.results(for: "audio device").first?.section, .audio)
     }
