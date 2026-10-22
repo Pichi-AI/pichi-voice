@@ -38,6 +38,10 @@ extension MeetingSessionStoreCheckpointTests {
         let both = [ta: a, tb: b]
         do {
             var value = session
+            for index in value.speakers.indices {
+                value.speakers[index].generatedParticipantNumber = index + 1
+                value.speakers[index].usesCustomDisplayName = false
+            }
             value.speakers[2].identityIsProvisional = true
             let quote = word("\"", 0, raw: nil, selected: nil, owner: extra)
             let body = word("Следующая реплика.", 0.08, raw: tb, selected: tb, owner: b, map: both)
