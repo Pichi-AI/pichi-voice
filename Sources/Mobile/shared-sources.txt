@@ -97,6 +97,7 @@ Sources/Fluid/Services/Meeting/MeetingCaptureControlling.swift
 Sources/Fluid/Services/Meeting/MeetingEchoDetector.swift
 Sources/Fluid/Services/Meeting/MeetingEchoSignalScorer.swift
 Sources/Fluid/Services/Meeting/MeetingMicrophoneEvidence.swift
+Sources/Fluid/Services/Meeting/MeetingMicrophonePCMNormalizer.swift
 Sources/Fluid/Services/Meeting/MeetingModelResidencyCoordinator.swift
 Sources/Fluid/Services/Meeting/MeetingLocationService.swift
 Sources/Fluid/Services/Meeting/MeetingModels.swift
