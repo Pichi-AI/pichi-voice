@@ -73,13 +73,15 @@ private nonisolated enum Refusal: Error { case notUsed }
             let ownerV4 = ownerV3 + (profile.supportsOwnerVoiceVerification ? ";owner-confirm=full-two-5s-v4" : "")
             let cadenceV1 = ownerV3 + (profile.supportsOwnerVoiceVerification ? ";owner-final=live-cadence-v1" : "")
             let combined = ownerV4 + (profile.supportsOwnerVoiceVerification ? ";owner-final=live-cadence-v1" : "")
+            let continuity = combined + (profile.supportsOwnerVoiceVerification ? ";owner-refresh=measured-continuity-v1" : "")
             try require(profile.legacyOwnerStreamingImplementationFingerprint == ownerV1
                         && profile.ownerV2StreamingImplementationFingerprint == ownerV2
                         && profile.ownerV3StreamingImplementationFingerprint == ownerV3
                         && profile.ownerV4StreamingImplementationFingerprint == ownerV4
                         && profile.ownerCadenceStreamingImplementationFingerprint == cadenceV1
-                        && profile.streamingImplementationFingerprint == combined,
-                        "Earlier literal recipes remain frozen; current recipe composes full evidence and final cadence")
+                        && profile.ownerV4CadenceStreamingImplementationFingerprint == combined
+                        && profile.streamingImplementationFingerprint == continuity,
+                        "Earlier literal recipes remain frozen; current recipe adds measured evidence continuity")
             let recipes: [(String, Bool, Bool, Bool, Bool, Bool)] = [
                 (profile.implementationFingerprint, false, false, false, false, false),
                 (ownerV1, true, false, false, false, false),
@@ -87,7 +89,8 @@ private nonisolated enum Refusal: Error { case notUsed }
                 (ownerV3, true, true, true, false, false),
                 (ownerV4, true, true, true, true, false),
                 (cadenceV1, true, true, true, false, true),
-                (combined, true, true, true, true, true)
+                (combined, true, true, true, true, true),
+                (continuity, true, true, true, true, true)
             ]
             for (fingerprint, owner, adaptive, live, full, cadence) in recipes {
                 let supported = profile.supportsOwnerVoiceVerification
@@ -99,8 +102,11 @@ private nonisolated enum Refusal: Error { case notUsed }
                             && profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: fingerprint) == (supported && full)
                             && profile.preservesStreamingOwnerCadenceAtEOF(implementationFingerprint: fingerprint) == (supported && cadence),
                             "Frozen recipes preserve their independent evidence, live and EOF capabilities")
+                try require(profile.preservesStreamingOwnerEvidenceOnInconclusiveRefresh(implementationFingerprint: fingerprint)
+                            == (supported && fingerprint == continuity),
+                            "Only the current exact recipe may preserve unavailable refresh evidence")
             }
-            for fingerprint in [profile.implementationFingerprint, ownerV1, ownerV2, ownerV3, ownerV4, cadenceV1, combined] {
+            for fingerprint in [profile.implementationFingerprint, ownerV1, ownerV2, ownerV3, ownerV4, cadenceV1, combined, continuity] {
                 for suffix in [";changed", ";compute=cpuAndGPU", ";owner-final=unknown"] {
                     let changed = fingerprint + suffix
                     try require(!profile.acceptsStreamingImplementationFingerprint(changed)
@@ -108,7 +114,8 @@ private nonisolated enum Refusal: Error { case notUsed }
                                 && !profile.verifiesLiveStreamingOwner(implementationFingerprint: changed)
                                 && !profile.usesAdaptiveStreamingOwnerEvidence(implementationFingerprint: changed)
                                 && !profile.requiresFullStreamingOwnerEvidence(implementationFingerprint: changed)
-                                && !profile.preservesStreamingOwnerCadenceAtEOF(implementationFingerprint: changed),
+                                && !profile.preservesStreamingOwnerCadenceAtEOF(implementationFingerprint: changed)
+                                && !profile.preservesStreamingOwnerEvidenceOnInconclusiveRefresh(implementationFingerprint: changed),
                                 "Arbitrary suffixes cannot acquire any owner capability")
                 }
             }

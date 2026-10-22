@@ -120,7 +120,7 @@ struct MeetingStreamingTranscriptStateTests {
     }
     static func state(privacy: MeetingTranscriptPrivacyContext? = nil, limits: State.Limits = .init()) throws -> State {
         try .init(attemptID: attempt, track: track(),
-            configuration: .init(speakerProcessingMode: .streaming), privacyContext: privacy,
+            configuration: .init(speakerProcessingMode: .streaming, speakerAttributionPolicy: .init()), privacyContext: privacy,
             limits: limits, speakerNameFormat: "Speaker %lld")
     }
     static func word(_ index: Int, start: Double? = nil, end: Double? = nil,

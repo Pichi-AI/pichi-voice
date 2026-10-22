@@ -24,6 +24,36 @@ private nonisolated struct AssemblerFixtureObserver: MeetingChunkAudioObserving 
 final class MeetingTranscriptAssemblerTests: XCTestCase {
     private let backendID = MeetingBackendID(rawValue: "fixture.assembler")
 
+    func testCanonicalFinalPublicationNamesUnresolvedSpeechWithoutChangingNativeEvidence() throws {
+        let chunk = self.chunk(sequence: 0, start: 100, end: 110)
+        let mic = self.track(kind: .microphone, chunks: [chunk],
+            eras: [self.era(protection: .voiceProcessed, start: 100)])
+        let plan = self.plan(mode: .inRoom, tracks: [mic])
+        let manifest = try self.buildManifest(plan: plan,
+            observations: [(mic.id, chunk, self.observed(chunk, duration: 10))])
+        let span = try XCTUnwrap(manifest.track(mic.id)?.spans.first)
+        let units = [
+            self.unit(id: "unknown-first", span: span, analysisStart: 1, analysisEnd: 1.2, speaker: .unassigned),
+            self.unit(id: "unknown-continuation", span: span, analysisStart: 1.5, analysisEnd: 1.7, speaker: .unassigned),
+            self.unit(id: "unknown-later", span: span, analysisStart: 7, analysisEnd: 7.2, speaker: .unassigned)]
+        func assemble(_ policy: MeetingSpeakerAttributionPolicy) throws -> MeetingAssemblyResult {
+            try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+                evidence: self.evidence(plan: plan, units: units), coverageReceipts: self.receipts(for: manifest),
+                echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, MeetingUnitEchoVerdict.notEcho) }),
+                speakerAttributionPolicy: policy))
+        }
+        let result = try assemble(.standard)
+        let legacy = try assemble(.init())
+        XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil && $0.speakerIdentityIsProvisional == true })
+        XCTAssertEqual(result.segments[0].speakerID, result.segments[1].speakerID)
+        XCTAssertNotEqual(result.segments[1].speakerID, result.segments[2].speakerID)
+        XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), legacy.segments.map(\.nativeSpeakerAssignment))
+        XCTAssertEqual(result.segments.map(\.nativeTiming), legacy.segments.map(\.nativeTiming))
+        XCTAssertEqual(result.sidecar.units, legacy.sidecar.units)
+        XCTAssertEqual(result.sidecar.speakerActivity, legacy.sidecar.speakerActivity)
+        XCTAssertEqual(result.sidecar.dispositions, legacy.sidecar.dispositions)
+    }
+
     func testPCMWindowUsesExistingIdentityAndOffsetWithoutCreatingAudioManifest() throws {
         let attempt = UUID()
         let track = UUID()
@@ -155,10 +185,12 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         let result = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: UUID(), epoch: epoch,
             offset: 0, duration: 13, units: units,
             activity: [.init(token: main, start: 0, end: 6), .init(token: weak, start: 7, end: 7.1)])
-        XCTAssertEqual(result.speakers.count, 1)
-        XCTAssertNil(result.segments[1].speakerID)
-        XCTAssertEqual(result.segments[1].speakerAttribution?.selectedToken, weak,
-            "The native candidate survives even when it cannot establish a product person")
+        XCTAssertEqual(result.speakers.count, 2)
+        XCTAssertNotNil(result.segments[1].speakerID)
+        XCTAssertEqual(result.segments[1].speakerIdentityIsProvisional, true)
+        XCTAssertEqual(result.speakers.first { $0.id == result.segments[1].speakerID }?.identityIsProvisional, true,
+            "A long ASR envelope cannot qualify a short acoustic identity")
+        XCTAssertEqual(result.segments[1].nativeSpeakerAssignment, .assigned(weak))
     }
 
     func testSidecarAttributionReplaysAndRejectsChangedPolicyWithoutRewritingNativeEvidence() throws {
@@ -202,6 +234,34 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(decision.rule, .barrier)
         XCTAssertNil(decision.selectedToken)
         XCTAssertEqual(result.sidecar.units, units.sorted { $0.id < $1.id })
+    }
+
+    func testExcludedWordsBreakProvisionalPublicationBout() throws {
+        for outsideActivity in [false, true] {
+            let (plan, manifest, span) = try self.onlineMicFixture()
+            let a = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "a")
+            let b = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "b")
+            let assignment: MeetingBackendSpeakerAssignment = outsideActivity ? .ambiguous([a, b]) : .unassigned
+            let before = self.unit(id: "before", span: span, analysisStart: 1, analysisEnd: 1.2, speaker: assignment)
+            let excluded = self.unit(id: "excluded", span: span, analysisStart: 1.3, analysisEnd: 1.5, speaker: .unassigned)
+            let after = self.unit(id: "after", span: span, analysisStart: 1.6, analysisEnd: 1.8, speaker: assignment)
+            let units = [before, excluded, after]
+            let activity = outsideActivity ? [a, b].flatMap { token in
+                [MeetingBackendSpeakerActivity(token: token, start: 1, end: 1.2),
+                 .init(token: token, start: 1.6, end: 1.8)]
+            } : []
+            let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+                evidence: .init(backendID: plan.backendID, attemptID: plan.attemptID, units: units, speakerActivity: activity),
+                coverageReceipts: self.receipts(for: manifest),
+                echoVerdicts: [before.id: .notEcho, after.id: .notEcho,
+                    excluded.id: outsideActivity ? .notEcho : .echoSuppressed(duplicateOfUnitID: nil)]))
+            XCTAssertEqual(result.segments.count, 2)
+            XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil && $0.speakerIdentityIsProvisional == true })
+            XCTAssertNotEqual(result.segments[0].speakerID, result.segments[1].speakerID)
+            XCTAssertEqual(result.sidecar.units, units.sorted { $0.id < $1.id })
+            XCTAssertEqual(result.sidecar.dispositions.first { $0.unitID == excluded.id }?.disposition,
+                outsideActivity ? .outsideActivity : .echoSuppressed)
+        }
     }
 
     func testPostStopIndexedBatchHandlesNestedUtteranceWithoutMovingNativeWords() throws {
@@ -694,8 +754,11 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
             evidence: self.evidence(plan: plan, units: units), coverageReceipts: self.receipts(for: manifest),
             echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, .notEcho) })))
-        XCTAssertNil(result.segments[1].speakerID,
-                     "Raw ambiguity without acoustic supports must not be converted into a guessed incoming voice")
+        XCTAssertNotNil(result.segments[1].speakerID)
+        XCTAssertNotEqual(result.segments[1].speakerID, result.segments[0].speakerID)
+        XCTAssertNotEqual(result.segments[1].speakerID, result.segments[2].speakerID,
+                     "A preliminary identity cannot become a guessed incoming voice")
+        XCTAssertEqual(result.segments[1].speakerIdentityIsProvisional, true)
         XCTAssertNil(result.segments[1].speakerAttributionInference)
         XCTAssertEqual(result.segments[1].nativeUnitID, "unknown")
         XCTAssertEqual(result.segments[1].nativeSpeakerAssignment, .ambiguous([a, b]))
@@ -737,7 +800,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(result.sidecar.speakerIdentityLinks.count, 1)
     }
 
-    func testBriefSpeakerBesideSubstantialSpeakerKeepsTextWithoutName() throws {
+    func testBriefSpeakerBesideSubstantialSpeakerKeepsTextWithPreliminaryName() throws {
         let (plan, manifest, spans) = try self.twoEpochMicrophone()
         let slot = { (label: String) in
             MeetingBackendSpeakerAssignment.assigned(.init(analysisEpochID: spans[0].analysisEpochID, label: label))
@@ -763,15 +826,16 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
 
         let result = try assemble([talker, cough], "Speaker %lld")
 
-        XCTAssertEqual(result.speakers.map(\.displayName), ["Speaker 1"])
+        XCTAssertEqual(result.speakers.map(\.displayName), ["Speaker 1", "Speaker 2"])
         let coughSegment = try XCTUnwrap(result.segments.first { $0.text == "hmm" }, "brief speech stays in the transcript")
-        XCTAssertNil(coughSegment.speakerID)
-        XCTAssertEqual(coughSegment.attributionState, .unassigned)
+        XCTAssertNotNil(coughSegment.speakerID)
+        XCTAssertEqual(coughSegment.speakerIdentityIsProvisional, true)
+        XCTAssertEqual(coughSegment.attributionState, .assigned)
         XCTAssertNotNil(result.segments.first { $0.text.hasPrefix("one") }?.speakerID)
         // A track where every slot is brief keeps its speakers.
         XCTAssertEqual(try assemble([cough], "Speaker %lld").speakers.count, 1)
         let russian = try assemble([talker, cough], PichiLocalization.text("Speaker %lld", language: .russian, bundle: .main))
-        XCTAssertEqual(russian.speakers.map(\.displayName), ["Участник 1"])
+        XCTAssertEqual(russian.speakers.map(\.displayName), ["Участник 1", "Участник 2"])
         XCTAssertEqual(russian.speakers.map(\.id), result.speakers.map(\.id))
         XCTAssertEqual(russian.speakers.map(\.diarizationClusterID), result.speakers.map(\.diarizationClusterID))
         XCTAssertEqual(russian.segments, result.segments)
@@ -1125,7 +1189,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
 
     // MARK: - Ambiguity and activity
 
-    func testAmbiguousUnitAppearsExactlyOnceUnassigned() throws {
+    func testAmbiguousUnitAppearsExactlyOnceWithPreliminaryIdentity() throws {
         let (plan, manifest, span) = try self.onlineMicFixture()
         let unit = self.unit(
             id: "u-amb",
@@ -1148,11 +1212,13 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(self.dispositions(result)[unit.id]?.disposition, .ambiguousUnassigned)
         let matching = result.segments.filter { $0.text == "overlapped" }
         XCTAssertEqual(matching.count, 1)
-        XCTAssertNil(matching[0].speakerID)
+        XCTAssertNotNil(matching[0].speakerID)
+        XCTAssertEqual(matching[0].speakerIdentityIsProvisional, true)
         XCTAssertEqual(matching[0].overlap, .ambiguous)
         XCTAssertEqual(matching[0].attributionState, .overlappingSpeakers)
-        // Ambiguity candidates are reported, never resolved into product speakers.
-        XCTAssertTrue(result.speakers.isEmpty)
+        // A preliminary reading identity never resolves the native ambiguity candidates.
+        XCTAssertEqual(result.speakers.count, 1)
+        XCTAssertEqual(result.speakers[0].identityIsProvisional, true)
     }
 
     func testUncertainTimingIsAdmittedAsAmbiguous() throws {
@@ -1172,12 +1238,14 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(record.disposition, .ambiguousUnassigned)
         XCTAssertEqual(record.reasonCode, "timingUncertain")
         let segment = try XCTUnwrap(result.segments.first)
-        XCTAssertNil(segment.speakerID)
+        XCTAssertNotNil(segment.speakerID)
+        XCTAssertEqual(segment.speakerIdentityIsProvisional, true)
         // Timing uncertainty is not speaker overlap: the segment carries no cross-speaker overlap
         // marker, only the distinct `timingUncertain` attribution state.
         XCTAssertEqual(segment.overlap, .none)
         XCTAssertEqual(segment.attributionState, .timingUncertain)
-        XCTAssertTrue(result.speakers.isEmpty)
+        XCTAssertEqual(result.speakers.count, 1)
+        XCTAssertEqual(result.speakers[0].identityIsProvisional, true)
     }
 
     func testUnitOutsideSpeakerActivityIsExcluded() throws {
@@ -1911,7 +1979,8 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(assignedSegment.attributionState, .assigned)
 
         let unassignedSegment = try XCTUnwrap(result.segments.first { $0.text == "noEvidence" })
-        XCTAssertNil(unassignedSegment.speakerID)
+        XCTAssertNotNil(unassignedSegment.speakerID)
+        XCTAssertEqual(unassignedSegment.speakerIdentityIsProvisional, true)
         XCTAssertEqual(unassignedSegment.overlap, .none)
         XCTAssertEqual(unassignedSegment.attributionState, .unassigned)
     }

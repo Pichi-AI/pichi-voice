@@ -4260,7 +4260,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let first = try await coordinator.setLocalUserSpeaker(sessionID: session.id, speakerID: speakerA)
         var expectedSpeakers = session.speakers
         expectedSpeakers[0].isLocalUser = true
-        expectedSpeakers[0].generatedParticipantNumber = 0
+        expectedSpeakers[0].generatedParticipantNumber = 1
         XCTAssertEqual(first.speakers, expectedSpeakers)
         XCTAssertTrue(MeetingTranscriptExporter.text(for: first).contains("You:"))
         let repeated = try await coordinator.setLocalUserSpeaker(sessionID: session.id, speakerID: speakerA)
@@ -4300,6 +4300,32 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
         XCTAssertEqual(redactor.preparations, 0, "A roster role is user metadata and requires no transcript NER")
         XCTAssertTrue(redactor.inputs.isEmpty)
+    }
+
+    func testProvisionalParticipantOwnerChoicePersistsAndUndoRestoresUncertainty() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var (session, speakerA, _, _) = self.makeCorrectionSession(state: .completed)
+        session.speakers[0].identityIsProvisional = true
+        for index in session.transcriptSegments.indices where session.transcriptSegments[index].speakerID == speakerA {
+            session.transcriptSegments[index].speakerIdentityIsProvisional = true
+            session.transcriptSegments[index].nativeSpeakerAssignment = .unassigned
+            session.transcriptSegments[index].attributionState = .unassigned
+        }
+        try await store.create(session)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let selected = try await coordinator.setLocalUserSpeaker(sessionID: session.id, speakerID: speakerA)
+        XCTAssertEqual(selected.speakers[0].identityIsProvisional, false)
+        XCTAssertTrue(MeetingTranscriptExporter.text(for: selected).contains("You:"))
+        let saved = try await store.load(id: session.id)
+        XCTAssertEqual(saved?.speakers, selected.speakers)
+        XCTAssertEqual(saved?.transcriptSegments, session.transcriptSegments, "A role choice never rewrites native evidence")
+        let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        XCTAssertEqual(undone.speakers, session.speakers)
+        XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
+        XCTAssertTrue(MeetingTranscriptExporter.text(for: undone).contains("(provisional)"))
     }
 
     func testMeetingLocalUserRoleSurvivesPrivacyTextCorrectionAndItsUndo() async throws {
@@ -5466,7 +5492,7 @@ final class MeetingRecoveryTests: XCTestCase {
             sessionID: session.id,
             names: [speakerA: "Erik", speakerB: "Maya"]
         )
-        XCTAssertTrue(renamed.speakers.allSatisfy { $0.generatedParticipantNumber == nil })
+        XCTAssertEqual(renamed.speakers.map(\.generatedParticipantNumber), [1, 2])
         let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
 
         let namesByID = Dictionary(uniqueKeysWithValues: undone.speakers.map { ($0.id, $0.displayName) })

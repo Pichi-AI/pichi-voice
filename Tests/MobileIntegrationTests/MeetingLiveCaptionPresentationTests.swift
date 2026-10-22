@@ -185,7 +185,7 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         XCTAssertEqual(paragraphs.flatMap(\.rows), rows)
     }
 
-    func testSourceOnlyPartialContinuesReadableParticipantWithoutChangingItsEvidence() {
+    func testSourceOnlyPartialDoesNotBorrowThePreviousParticipant() {
         let id = UUID()
         let participant = MeetingSpeakerPresentation(identity: "person", label: .identified(.init(displayName: "Участник", isLocalUser: false)))
         var snapshot = MeetingLiveTranscriptSnapshot.empty
@@ -197,13 +197,14 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         snapshot.partials[.you] = .init(id: UUID(), text: "следующий", start: 2)
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
         XCTAssertEqual(rows.map(\.showsLabel), [true, false])
-        XCTAssertEqual(rows[1].participant, participant.markingEstimated())
-        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 1)
+        XCTAssertNil(rows[1].participant)
+        XCTAssertEqual(rows[1].readingTurnStart, 2)
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 2)
         XCTAssertNil(snapshot.partials[.you]?.stableUTF16Count,
                      "Readable ownership does not mutate provisional recognition evidence")
     }
 
-    func testLiveUnresolvedTextHasNoPseudoSpeakerHeadersAndKeepsFirstWordTurnTime() {
+    func testLiveUnresolvedTextPreservesUncertaintyAndBreaksPreviousParticipantContinuity() {
         let participant = MeetingSpeakerPresentation(identity: "person",
             label: .identified(.init(displayName: "Участник 1", isLocalUser: false)))
         let other = MeetingSpeakerPresentation(identity: "different-person",
@@ -221,17 +222,43 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         let original = snapshot
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
         let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
-        XCTAssertEqual(rows.map(\.showsLabel), [false, true, false, false, true, false])
+        XCTAssertEqual(rows.map(\.showsLabel), [false, true, false, true, true, false])
         XCTAssertNil(rows[0].captionLabel)
         XCTAssertEqual(rows[1].captionLabel, "00:07 Участник 1")
         XCTAssertEqual(rows[4].captionLabel, "01:15 Участник 1",
                        "Distinct identities remain separate even when users give them the same name")
-        XCTAssertEqual(paragraphs.map { $0.text() }, ["До определения", "Начало\n", "А продолжение", "ответ и дальше"])
-        XCTAssertEqual(paragraphs[2].captionLabel, "00:07 Участник 1",
-                       "A layout-only paragraph keeps the original participant turn timestamp")
-        XCTAssertFalse(paragraphs[2].showsLabel, "Layout continuation does not duplicate the header or timestamp")
+        XCTAssertEqual(paragraphs.map { $0.text() }, ["До определения", "Начало\n", "А", "продолжение", "ответ", "и дальше"])
+        XCTAssertEqual(rows[2].participant, unknown, "Unresolved evidence never borrows a preceding voice")
+        XCTAssertNil(paragraphs[2].captionLabel)
+        XCTAssertEqual(paragraphs[3].captionLabel, "00:10 Участник 1",
+                       "An unresolved voice boundary resets the next explicit participant turn timestamp")
+        XCTAssertTrue(paragraphs[3].showsLabel)
         XCTAssertEqual(snapshot, original)
         XCTAssertEqual(paragraphs.flatMap(\.rows).map(\.id), snapshot.utterances.map(\.id) + [snapshot.partials[.you]!.id])
+    }
+
+    func testExplicitEstimatedParticipantStaysDistinctFromPreviousOwnerOnOneMicrophone() {
+        let owner = MeetingSpeakerPresentation(identity: "owner",
+            label: .identified(.init(displayName: "You", isLocalUser: true)))
+        let incoming = MeetingSpeakerPresentation(identity: "provisional-incoming",
+            label: .estimated(.init(displayName: "Участник 2", isLocalUser: false)))
+        let candidates = MeetingSpeakerPresentation(identity: "competing-voices",
+            label: .candidates([nil, nil], relation: .simultaneous))
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.utterances = [
+            .init(id: UUID(), speaker: .you, text: "Первая речь.", start: 0, end: 1, participant: owner),
+            .init(id: UUID(), speaker: .you, text: "Новая", start: 2, end: 2.2, participant: incoming),
+            .init(id: UUID(), speaker: .you, text: "речь.", start: 2.3, end: 3, participant: incoming),
+            .init(id: UUID(), speaker: .you, text: "Одновременно", start: 4, end: 5, participant: candidates),
+        ]
+        let original = snapshot
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(rows.map(\.participant), [owner, incoming, incoming, candidates])
+        XCTAssertEqual(rows.map(\.showsLabel), [true, true, false, false])
+        XCTAssertEqual(rows.map(\.readingTurnStart), [0, 2, 2, 4])
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).map { $0.text() },
+                       ["Первая речь.", "Новая речь.", "Одновременно"])
+        XCTAssertEqual(snapshot, original, "Reading presentation never changes speaker evidence")
     }
 
     func testSourceOnlyAndUncertainCaptionLabelsStayAbsentEvenInDirectPreviewRows() {

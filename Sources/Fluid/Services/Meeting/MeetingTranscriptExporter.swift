@@ -126,7 +126,10 @@ nonisolated enum MeetingTranscriptExporter {
         switch label {
         case .unknown:
             return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
-        case let .identified(value), let .estimated(value): return name(value)
+        case let .identified(value), let .estimated(value):
+            return value.isProvisional
+                ? String(format: PichiLocalization.text("%@ (provisional)", language: language, bundle: bundle), name(value))
+                : name(value)
         case let .interrupting(value, _): return name(value)
         case .candidates: return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         }
@@ -138,6 +141,19 @@ nonisolated enum MeetingTranscriptExporter {
     ) -> MeetingSpeakerPresentation.Label {
         func name(_ speakerID: SessionSpeakerID?) -> MeetingSpeakerPresentation.Name? {
             self.speakerName(speakerID, in: session, speakerNames: speakerNames)
+        }
+        if segment.isUserSpeakerAssigned != true, let speakerID = segment.speakerID,
+           let speaker = session.activeSpeakers.first(where: {
+               $0.id == self.resolvedAliasID(speakerID, in: session)
+           }), speaker.identityIsProvisional != nil,
+           let value = name(speakerID) {
+            if speaker.identityIsProvisional == true {
+                return .estimated(.init(displayName: value.displayName, isLocalUser: false,
+                    usesCustomDisplayName: value.usesCustomDisplayName, isProvisional: true))
+            }
+            if segment.speakerIdentityIsProvisional == true {
+                return segment.speakerAttribution?.rule.isHeuristic == true ? .estimated(value) : .identified(value)
+            }
         }
         if segment.attributionState != .timingUncertain, let attribution = segment.speakerAttribution,
            attribution.selectedSpeakerID == segment.speakerID {
@@ -295,6 +311,17 @@ nonisolated enum MeetingTranscriptExporter {
         for segment: MeetingTranscriptSegment, legacySpeakerID: SessionSpeakerID?,
         in session: MeetingSession, speakerNames: [SessionSpeakerID: String]
     ) -> String {
+        if segment.isUserSpeakerAssigned != true, let speakerID = segment.speakerID {
+            let resolved = self.resolvedAliasID(speakerID, in: session)
+            if let speaker = session.activeSpeakers.first(where: { $0.id == resolved }), speaker.identityIsProvisional != nil {
+                if speaker.identityIsProvisional == true {
+                    return [resolved.uuidString, "provisional"].joined(separator: "|")
+                }
+                if segment.speakerIdentityIsProvisional == true {
+                    return [resolved.uuidString, "assigned"].joined(separator: "|")
+                }
+            }
+        }
         if let speaker = legacySpeakerID ?? segment.speakerID,
            legacySpeakerID != nil || segment.attributionState == nil || segment.attributionState == .assigned {
             return [self.resolvedAliasID(speaker, in: session).uuidString, "assigned"].joined(separator: "|")
@@ -882,7 +909,7 @@ nonisolated enum MeetingTranscriptExporter {
     static func json(for session: MeetingSession) throws -> Data {
         let speakers = session.activeSpeakers.map {
             ExportedSpeaker(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser,
-                usesCustomDisplayName: $0.usesCustomDisplayName)
+                usesCustomDisplayName: $0.usesCustomDisplayName, identityIsProvisional: $0.identityIsProvisional)
         }
         let activeSpeakerIDs = Set(speakers.map(\.id))
         let segments = session.transcriptSegments
@@ -900,6 +927,7 @@ nonisolated enum MeetingTranscriptExporter {
                     text: $0.text,
                     isUserTextEdited: $0.isUserTextEdited,
                     isUserSpeakerAssigned: $0.isUserSpeakerAssigned,
+                    speakerIdentityIsProvisional: $0.speakerIdentityIsProvisional,
                     revision: $0.revision,
                     status: $0.status.rawValue,
                     overlap: $0.overlap.rawValue,
@@ -1021,7 +1049,8 @@ nonisolated enum MeetingTranscriptExporter {
             sessionID: session.id, title: title, languageCode: session.languageCode,
             startedAt: session.startedAt, endedAt: session.endedAt, durationSeconds: durationSeconds,
             speakers: session.activeSpeakers.map {
-                .init(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser)
+                .init(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser,
+                    identityIsProvisional: $0.identityIsProvisional)
             }, segments: segments)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -1084,6 +1113,7 @@ private struct ExportedSpeaker: Codable {
     var displayName: String
     var isLocalUser: Bool
     var usesCustomDisplayName: Bool?
+    var identityIsProvisional: Bool?
 }
 
 /// A separate DTO is necessary because the full JSON export intentionally preserves
@@ -1105,6 +1135,7 @@ nonisolated private struct PortableTranscript: Encodable {
         let id: UUID
         let displayName: String
         let isLocalUser: Bool
+        let identityIsProvisional: Bool?
     }
 
     struct Segment: Encodable {
@@ -1130,6 +1161,7 @@ private struct ExportedSegment: Codable {
     var text: String
     var isUserTextEdited: Bool?
     var isUserSpeakerAssigned: Bool?
+    var speakerIdentityIsProvisional: Bool?
     var revision: Int
     var status: String
     var overlap: String

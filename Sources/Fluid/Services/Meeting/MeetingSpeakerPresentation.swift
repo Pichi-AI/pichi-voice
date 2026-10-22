@@ -8,11 +8,15 @@ nonisolated struct MeetingSpeakerPresentation: Sendable, Equatable {
         let isLocalUser: Bool
         /// An explicit alias replaces the localized owner label without changing identity.
         let usesCustomDisplayName: Bool?
+        /// A stable product identity awaiting acoustic confirmation, never a known-person match.
+        let isProvisional: Bool
 
-        init(displayName: String, isLocalUser: Bool, usesCustomDisplayName: Bool? = nil) {
+        init(displayName: String, isLocalUser: Bool, usesCustomDisplayName: Bool? = nil,
+             isProvisional: Bool = false) {
             self.displayName = displayName
             self.isLocalUser = isLocalUser
             self.usesCustomDisplayName = usesCustomDisplayName
+            self.isProvisional = isProvisional
         }
     }
 

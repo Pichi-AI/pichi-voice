@@ -12,6 +12,7 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
         let overlap: MeetingTranscriptOverlap
         let attributionState: MeetingTranscriptAttributionState?
         let speakerAttribution: MeetingTranscriptSpeakerAttribution?
+        let speakerIdentityIsProvisional: Bool?
 
         init(_ segment: MeetingTranscriptSegment) {
             self.segmentID = segment.id
@@ -19,17 +20,21 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
             self.overlap = segment.overlap
             self.attributionState = segment.attributionState
             self.speakerAttribution = segment.speakerAttribution
+            self.speakerIdentityIsProvisional = segment.speakerIdentityIsProvisional
         }
 
         @discardableResult
         func apply(to segment: inout MeetingTranscriptSegment) throws -> Bool {
             guard segment.id == self.segmentID else { throw SpeakerRevisionFailure.identityMismatch }
+            // A delayed acoustic callback must never undo an explicit participant correction.
+            guard segment.isUserSpeakerAssigned != true else { return false }
             guard Self(segment) != self else { return false }
             guard segment.revision < Int.max else { throw SpeakerRevisionFailure.revisionOverflow }
             segment.speakerID = self.speakerID
             segment.overlap = self.overlap
             segment.attributionState = self.attributionState
             segment.speakerAttribution = self.speakerAttribution
+            segment.speakerIdentityIsProvisional = self.speakerIdentityIsProvisional
             segment.revision += 1
             return true
         }
@@ -103,7 +108,17 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
         for speaker in self.speakers {
             if let index = indices[speaker.id] {
                 result[index].isLocalUser = speaker.isLocalUser
-            } else if result.count < MeetingSpeakerVoiceSamples.maximumProfiles {
+                if speaker.identityIsProvisional == false {
+                    result[index].identityIsProvisional = false
+                }
+                if speaker.identityIsProvisional == true, speaker.diarizationClusterID == nil,
+                   let target = speaker.mergedIntoSpeakerID, result[index].mergedIntoSpeakerID == nil,
+                   result[index].identityIsProvisional == true,
+                   result[index].generatedParticipantNumber != nil,
+                   result[index].usesCustomDisplayName != true {
+                    result[index].mergedIntoSpeakerID = target
+                }
+            } else if result.count < MeetingSessionSpeaker.maximumParticipants {
                 indices[speaker.id] = result.count
                 result.append(speaker)
             }
