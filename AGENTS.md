@@ -21,8 +21,28 @@ Read [development setup](docs/development/codex.md) and [upstream strategy](docs
 
 - Give each agent a bounded scope, the relevant existing contracts, the starting commit and the checks it owns. Every agent must read these instructions, including the architecture requirements below.
 - The parent agent owns integration. Review each completed branch's diff, integrate its commits into the parent task worktree, resolve conflicts there and run checks against the combined result. Do not treat passing isolated checks as proof that the integrated app works.
-- Keep native build directories, package checkouts and private test artifacts isolated per worktree. One parent agent owns interactive app and device testing so agents do not compete for the user's UI or microphone.
+- Keep native build directories, package checkouts and private test artifacts isolated per worktree. The parent coordinates interactive testing and may assign distinct owned simulators and test containers to agents for parallel runs. The physical device, foreground desktop UI, microphone and audio routing each require one explicit owner; never compete for them.
 - Run an independent code review against the integrated commit. Record the reviewed revision, fix material findings and repeat the affected checks before publishing. Stop completed child agents after collecting their results.
+
+## Short iterations and verification cost
+
+**IMPORTANT:** Optimize time to a verified, usable increment. Preserve the acceptance, privacy and signing requirements below; reduce repeated work and coordination delays.
+
+- Start with the smallest end-to-end change that advances the requested outcome. Identify affected targets, required checks and an approximate duration for the slowest dependency before expensive work. Obtain early feedback from a targeted build or short smoke test. Do not expand a delivery into unrelated cleanup or a new testing framework.
+- Pin input branch/PR SHAs before combined testing and recheck them before publication. Keep each running test bound to its immutable candidate. For late commits, inspect the delta and repeat the checks it invalidates instead of restarting every suite.
+- Scale verification to the change. Documentation-only changes need applicable formatting, links and instruction-consistency checks, not app builds, model runs or device tests. For code, run focused checks first and the required broader checks on the stable combined candidate. Do not repeat a successful check merely for status.
+- Reuse a prior result only when the relevant source, resources, configuration, toolchain and test inputs are unchanged or their equivalence is demonstrated. Record the tested revision, scope, result and duration in existing local evidence. A reused result must not be presented as a fresh runtime test of changed code.
+- Before a long UI suite, smoke-test the changed screens and navigation on the required form factors, languages and themes. Fix obvious layout and interaction defects before running exhaustive edit/undo/reopen sequences. First-use and fake-loader tests need containers free of real model caches; stage real-model tests and replays in separate owned environments.
+- Preflight the screenshot/review/acknowledgement path with a few steps before a long run. Review the exact revision and frame, and atomically acknowledge that frame only. Reuse reviewed images only after exact decoded-pixel equality of the application area; document any excluded system-only region, retain full originals and preserve the original review provenance. New application pixels require review. Diagnose excessive review waits or harness failures before raising timeouts; retain failed runs and repeat only the invalidated cases.
+
+## Resource scheduling and coordination
+
+- **MUST** parallelize independent implementation, review and checks when this shortens completion time. Delegate bounded work with a clear output, owned resources and completion condition. Keep trivial or tightly coupled edits with one agent; do not create extra agents or worktrees without useful independent work.
+- Before expensive jobs, inspect available CPU, memory pressure and existing task ownership once. Choose concurrency from the actual resource budget, leaving headroom for the user's work. Parallelize isolated builds, lightweight checks and simulator UI runs when capacity permits; avoid both blanket single-job serialization and unbounded fan-out. Reduce concurrency if swapping, contention or degraded responsiveness appears.
+- Identify the owner and IDs/paths for each simulator, build directory, model cache and capture process in the existing task state or handoff. Coordinate with that owner before using a shared resource. Never stop another session's processes, reset its simulator or mutate its caches. Performance measurements require an appropriately isolated run; label measurements made under concurrent load.
+- Reuse verified artifacts and immutable inputs where safe, but never share mutable DerivedData, package checkouts, preferences or test containers. Use separate namespaces for synthetic first-use tests and real-model replays. Do not redownload or repeatedly copy models already available as verified inputs when a safe local reuse mechanism exists.
+- Prefer completion events and bounded status waits to repeated polling. While a dependency runs, do useful independent work. Report completed stages, blockers and changes to the expected path instead of narrating unchanged waits. If a stage exceeds its estimate, identify the actual bottleneck before adding retries or more workers.
+- Stop completed agents and owned capture/test processes promptly. Release reservations after joined cleanup. Remove or archive only this task's unneeded worktrees after preserving required ignored artifacts; never delete another session's work or valuable backups to save space.
 
 ## Verification
 
