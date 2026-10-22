@@ -446,6 +446,8 @@ fileprivate final class BrowserCaptureEvents: @unchecked Sendable {
     func record(_ event: MeetingCaptureEvent) {
         self.lock.withLock {
             switch event {
+            case .audioComparisonProbeStarted:
+                XCTFail("Ordinary continuity capture must not arm diagnostic recording")
             case .trackHealth: self.counts.trackHealthEvents += 1
             case .chunkFinalized: self.counts.finalizedChunkEvents += 1
             case let .captureMethodChanged(_, _, ack):
