@@ -155,9 +155,19 @@ final class PrivateAIProviderPromptFormatTests: XCTestCase {
             name: "Default", builtInLabel: "Default", hasAppOverride: false, usesSelectedPrivateModel: false, modelID: ""
         )
         let choices = DictationOverlayPresentationInput.Choices(available: smart, unavailable: fallback)
-        XCTAssertEqual(choices.resolve(verifiedModelID: "mini", modelName: { $0.isEmpty ? "" : "Fluid-1 Mini" }).label, "Smart · Mini")
+        XCTAssertEqual(choices.resolve(verifiedModelID: "mini", modelName: { $0.isEmpty ? "" : "Fluid-1 Mini" }).label, "Smart · Fluid-1 Mini")
         XCTAssertEqual(choices.resolve(verifiedModelID: nil, modelName: { $0 }).label, "Basic")
         XCTAssertEqual(smart.resolve(verifiedModelID: nil, modelName: { $0 }).label, "Basic")
+
+        let custom = DictationOverlayPresentationInput.Candidate(
+            name: "Мой Fluid-1 профиль", builtInLabel: nil, hasAppOverride: true,
+            usesSelectedPrivateModel: false, modelID: "custom-model"
+        )
+        XCTAssertEqual(
+            custom.resolve(verifiedModelID: nil, modelName: { _ in "Fluid-1 Custom" }).label,
+            "Мой Fluid-1 профиль · Fluid-1 Custom",
+            "User labels and model attribution remain verbatim"
+        )
     }
 
     func testWarmupRequestRespectsOffExternalPrivateAndAppOverrides() {

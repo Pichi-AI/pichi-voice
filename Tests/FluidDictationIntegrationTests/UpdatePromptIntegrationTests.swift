@@ -56,11 +56,17 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         ] {
             context.fixture.setReply(version: version, downloadable: downloadable)
             let options = try await context.updater.fetchRecentReleaseBuildOptions(
-                owner: "example", repo: "unused", olderThanCurrent: true
+                owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName, olderThanCurrent: true
             )
             XCTAssertEqual(options.map(\.version), expected)
             XCTAssertFalse(context.updater.isUpdateInProgress, "Listing versions never starts installation")
         }
+        context.fixture.setReply(version: "v0.0.1", downloadable: true, archiveRepository: "unrelated-app")
+        let unrelated = try await context.updater.fetchRecentReleaseBuildOptions(
+            owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName, olderThanCurrent: true
+        )
+        XCTAssertTrue(unrelated.isEmpty, "An archive from another application is not installable")
+        XCTAssertFalse(context.updater.isUpdateInProgress)
     }
 
     func testSelectedRollbackInstallsOnlyTheExactOlderRelease() async throws {
@@ -679,7 +685,10 @@ private final nonisolated class UpdateFixture: @unchecked Sendable {
 
     var requestCount: Int { self.lock.withLock { self.count } }
 
-    func setReply(version: String?, status: Int = 200, held: Bool = false, downloadable: Bool = false) {
+    func setReply(
+        version: String?, status: Int = 200, held: Bool = false, downloadable: Bool = false,
+        archiveRepository: String = AppBrand.repositoryName
+    ) {
         self.lock.withLock {
             self.status = status
             self.held = held
@@ -687,7 +696,7 @@ private final nonisolated class UpdateFixture: @unchecked Sendable {
                 let raw = $0.hasPrefix("v") ? String($0.dropFirst()) : $0
                 let assets = downloadable
                     ? """
-                    [{"name":"fluid-oss-\(raw).zip","content_type":"application/zip","browser_download_url":"https://example.com/build.zip"}]
+                    [{"name":"\(archiveRepository)-\(raw).zip","content_type":"application/zip","browser_download_url":"https://example.com/build.zip"}]
                     """
                     : "[]"
                 return """
