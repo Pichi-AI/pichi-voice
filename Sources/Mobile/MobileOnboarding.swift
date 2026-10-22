@@ -2,7 +2,8 @@ import SwiftUI
 
 /// A native, resumable presentation of the same model, privacy and voice operations as Settings.
 /// Desktop onboarding uses AppKit window/permission controls; mobile reuses its service contracts,
-/// portable brand mark, text roles, local model metadata and progressive preparation semantics.
+/// the shared onboarding light, icon, hero, progress and motion, text roles, local model metadata
+/// and progressive preparation semantics.
 struct MobileOnboarding: View {
     @ObservedObject var asr: ASRService
     @ObservedObject var required: MobileRequiredResources
@@ -11,112 +12,196 @@ struct MobileOnboarding: View {
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selected: SettingsStore.SpeechModel?
     @State private var advancing = false
     @State private var error: String?
     @State private var operation: Task<Void, Never>?
     private var step: Int { settings.mobileSetupStep }
+    private var isCompact: Bool { horizontalSizeClass == .compact }
     private let titles = ["Welcome", "Choose Voice Engine", "Automatic speaker labels", "Data cleanup", "My voice", "Meeting location", "Ready to meet"]
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: theme.metrics.spacing.lg) {
-                    HStack {
-                        PichiBrandMark(size: 36, color: theme.palette.accent)
-                        Text(AppBrand.appName).font(theme.typography.sectionTitle)
-                        Spacer()
-                        Text("\(step + 1) / \(titles.count)").font(theme.typography.caption).monospacedDigit()
+            ZStack {
+                FluidOnboardingLight(breathes: step == 0).ignoresSafeArea()
+                VStack(spacing: 0) {
+                    if step > 0 {
+                        FluidOnboardingCompactProgress(value: Double(step + 1) / Double(titles.count))
+                            .accessibilityElement()
+                            .accessibilityLabel(PichiLocalization.text("Setup progress"))
+                            .accessibilityValue("\(step + 1) / \(titles.count)")
+                            .padding(.top, 12)
+                            .transition(.opacity)
                     }
-                    ProgressView(value: Double(step + 1), total: Double(titles.count)).accessibilityLabel(PichiLocalization.text("Setup progress"))
-                    Text(PichiLocalization.text(titles[step])).font(theme.typography.title)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("onboarding.step.\(step)")
-                    content
-                    if let error {
-                        Text(error).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
-                            .accessibilityIdentifier("onboarding.error")
+                    // Only the page moves; the light, progress and actions stay in place.
+                    ZStack {
+                        page.id(step).transition(reduceMotion ? .opacity : FluidOnboardingMotion.stepTransition)
                     }
-                }.foregroundStyle(theme.palette.primaryText)
-                    .padding(24).frame(maxWidth: 680, alignment: .leading).frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
-            .safeAreaInset(edge: .bottom) { footer }
-            .background(theme.palette.windowBackground)
+            .safeAreaInset(edge: .bottom, spacing: 0) { footer }
+            .foregroundStyle(theme.palette.primaryText)
+            .tint(theme.palette.accent)
+            .toolbar(.hidden, for: .navigationBar)
         }
+        .animation(reduceMotion ? FluidOnboardingMotion.crossfade : FluidOnboardingMotion.step, value: step)
         .task { if selected == nil { selected = settings.mobileSetupSelectedModel ?? settings.selectedSpeechModel } }
         .onChange(of: selected) { _, model in settings.mobileSetupSelectedModel = model }
         .onDisappear { operation?.cancel(); asr.cancelModelDownload() }
     }
 
-    @ViewBuilder private var content: some View {
-        switch step {
-        case 0:
-            Text(PichiLocalization.text("Record conversations, follow the transcript as people speak, and return to any moment later. Everything is processed on this device."))
-                .font(theme.typography.body)
-            Label(PichiLocalization.text("Live meeting transcripts"), systemImage: "waveform")
-            Label(PichiLocalization.text("Automatic speaker labels"), systemImage: "person.2")
-            Label(PichiLocalization.text("Optional local data cleanup"), systemImage: "lock.shield")
+    @ViewBuilder private var page: some View {
+        if step == 0 {
+            // The desktop welcome, scaled to the screen like the desktop window.
+            OnboardingFittedContent(width: isCompact ? 640 : theme.metrics.onboardingSurface.landing.contentWidth + 48) {
+                FluidOnboardingLandingHero(
+                    eyebrow: AppBrand.appName,
+                    title: "Just speak.",
+                    accentTitle: "We'll handle the rest.",
+                    firstDetail: PichiLocalization.text("Record your meeting. Come back to every word."),
+                    secondDetail: "Built for creators, thinkers, and builders."
+                ) { welcomeHighlights }
+                    .padding(24)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("onboarding.step.0")
+        } else {
+            GeometryReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        FluidOnboardingCompactAppIconMark()
+                            .padding(.bottom, 22)
+                        Text(PichiLocalization.text(titles[step]))
+                            .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("onboarding.step.\(step)")
+                        if let subtitle {
+                            Text(PichiLocalization.text(subtitle))
+                                .font(.fluidSystem(size: 15, weight: .medium))
+                                .foregroundStyle(theme.palette.secondaryText)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.top, 14)
+                        }
+                        VStack(alignment: .leading, spacing: 16) {
+                            content
+                            if let error {
+                                Text(error).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
+                                    .accessibilityIdentifier("onboarding.error")
+                            }
+                        }
+                        .padding(.top, 26)
+                    }
+                    // The desktop column, centered like a desktop step, so cards, text and actions line up.
+                    .padding(.horizontal, 24).padding(.vertical, 28)
+                    .frame(maxWidth: 632 + 48).frame(maxWidth: .infinity, minHeight: proxy.size.height)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+            }
+        }
+    }
+
+    private var welcomeHighlights: some View {
+        VStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 14) {
+                highlight("Live meeting transcripts", systemImage: "waveform")
+                highlight("Automatic speaker labels", systemImage: "person.2")
+                highlight("Optional local data cleanup", systemImage: "lock.shield")
+            }
+            .mobileOnboardingCard()
+            .frame(maxWidth: 520)
             Text(PichiLocalization.text("An internet connection is needed once to download your selected voice model and the resources for speaker labels."))
                 .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 520)
+        }
+    }
+
+    private func highlight(_ title: String, systemImage: String) -> some View {
+        Label {
+            Text(PichiLocalization.text(title)).font(.fluidSystem(size: 17, weight: .medium))
+        } icon: {
+            Image(systemName: systemImage).foregroundStyle(theme.palette.accentText).frame(width: 24)
+        }
+    }
+
+    private var subtitle: String? {
+        switch step {
+        case 1: "Choose a local speech model. You can change it later in Settings. Speed and memory use depend on your device."
+        case 2: "Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."
+        case 6: "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings."
+        default: nil
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch step {
         case 1:
-            Text(PichiLocalization.text("Choose a local speech model. You can change it later in Settings. Speed and memory use depend on your device."))
-                .font(theme.typography.body)
             ForEach(asr.availableMeetingModels, id: \.id) { model in
-                VStack(alignment: .leading, spacing: 8) {
-                Button { selected = model } label: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(model.displayName).font(theme.typography.bodyStrong)
-                            Spacer()
-                            Image(systemName: selected == model ? "checkmark.circle.fill" : "circle")
+                let isSelected = selected == model
+                VStack(alignment: .leading, spacing: 10) {
+                    Button { selected = model } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(model.displayName).font(theme.typography.bodyStrong)
+                                Spacer()
+                                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(isSelected ? theme.palette.accentText : theme.palette.secondaryText)
+                            }
+                            Text(PichiLocalization.text(model.cardDescription)).font(theme.typography.bodySmall)
+                            Text(PichiLocalization.text(model.languageSupport)).font(theme.typography.caption)
+                                .foregroundStyle(theme.palette.secondaryText)
+                            Text(model.downloadSize).font(theme.typography.caption).monospacedDigit()
+                                .foregroundStyle(theme.palette.secondaryText)
                         }
-                        Text(PichiLocalization.text(model.cardDescription)).font(theme.typography.bodySmall)
-                        Text(PichiLocalization.text(model.languageSupport)).font(theme.typography.caption)
-                        Text(model.downloadSize).font(theme.typography.caption).monospacedDigit()
-                    }.foregroundStyle(theme.palette.primaryText).padding(16)
-                        .background(theme.palette.secondaryText.opacity(selected == model ? 0.12 : 0.05),
-                                    in: RoundedRectangle(cornerRadius: theme.metrics.corners.md))
-                }.buttonStyle(.plain).disabled(advancing)
-                    .accessibilityIdentifier("onboarding.model.\(model.id)")
-                    .accessibilityAddTraits(selected == model ? .isSelected : [])
-                    MobileModelDetails(modelID: model.id).padding(.horizontal, 16)
+                        .foregroundStyle(theme.palette.primaryText)
+                        .contentShape(Rectangle())
+                    }.buttonStyle(.plain).disabled(advancing)
+                        .accessibilityIdentifier("onboarding.model.\(model.id)")
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    MobileModelDetails(modelID: model.id)
                 }
+                .mobileOnboardingCard(isSelected: isSelected)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isSelected)
             }
         case 2:
-            Text(PichiLocalization.text("Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."))
-                .font(theme.typography.body)
-            Text(PichiLocalization.text("Text and participant labels update in fragments. A delay is normal while enough speech is collected."))
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-            MobileRequiredResourcesStatus(resources: required)
-            Text(PichiLocalization.text("Speech detection and speaker resources prepare automatically. This installs files without loading every speech model into memory."))
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            VStack(alignment: .leading, spacing: 12) {
+                MobileRequiredResourcesStatus(resources: required)
+                Text(PichiLocalization.text("Text and participant labels update in fragments. A delay is normal while enough speech is collected."))
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                Text(PichiLocalization.text("Speech detection and speaker resources prepare automatically. This installs files without loading every speech model into memory."))
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            }
+            .mobileOnboardingCard()
         case 3:
-            MobileAudioPrivacyControls()
-            MobilePrivacyActivationControls(activation: privacy)
+            MobileAudioPrivacyControls().mobileOnboardingCard()
+            MobilePrivacyActivationControls(activation: privacy).mobileOnboardingCard()
         case 4:
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "waveform").symbolEffect(.variableColor, options: .repeating, isActive: !reduceMotion)
-                    .foregroundStyle(theme.palette.accent)
+                    .foregroundStyle(theme.palette.accentText)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(PichiLocalization.text("You")).font(theme.typography.captionStrong).foregroundStyle(theme.palette.accent)
+                    Text(PichiLocalization.text("You")).font(theme.typography.captionStrong).foregroundStyle(theme.palette.accentText)
                     Text(PichiLocalization.text("Your speech can carry your own label."))
                         .font(theme.typography.body)
                 }
-            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-                .background(theme.palette.secondaryText.opacity(0.06), in: RoundedRectangle(cornerRadius: theme.metrics.corners.md))
-                .accessibilityIdentifier("onboarding.youDemo")
+            }
+            .mobileOnboardingCard(isSelected: true)
+            .accessibilityIdentifier("onboarding.youDemo")
             Text(PichiLocalization.text("Find a quiet place and read the phrase below. The microphone starts only when you choose Set up my voice. You can skip this step."))
-                .font(theme.typography.bodySmall)
-            MeetingOwnerVoiceSettingsContent(audioArbiter: audioArbiter, microphone: nil)
+                .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
+            MeetingOwnerVoiceSettingsContent(audioArbiter: audioArbiter, microphone: nil).mobileOnboardingCard()
         case 5:
-            MeetingLocationSettingsContent()
+            MeetingLocationSettingsContent().mobileOnboardingCard()
         default:
             Label(PichiLocalization.text("Your meeting setup is ready"), systemImage: "checkmark.circle.fill")
                 .font(theme.typography.sectionTitle).foregroundStyle(theme.palette.success)
-            Text(PichiLocalization.text("Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings."))
-                .font(theme.typography.body)
+                .frame(maxWidth: .infinity)
             if advancing && asr.modelPreparationPhase == nil {
-                ProgressView(PichiLocalization.text("Checking setup…"))
+                ProgressView(PichiLocalization.text("Checking setup…")).frame(maxWidth: .infinity)
             }
         }
     }
@@ -126,36 +211,70 @@ struct MobileOnboarding: View {
             if advancing && (step == 1 || asr.modelPreparationPhase != nil) {
                 MobileASRPreparationStatus(asr: asr)
             }
-        HStack(spacing: 16) {
-            if step > 0 {
-                Button(PichiLocalization.text("Back")) { error = nil; settings.mobileSetupStep -= 1 }
-                    .disabled(advancing).accessibilityIdentifier("onboarding.back")
-            }
-            Spacer()
-            if step == 4 || step == 5 {
-                Button(PichiLocalization.text("Skip")) {
-                    if step == 5 { AppServices.shared.meetingLocation.setEnabled(false) }
-                    settings.mobileSetupStep = step + 1
+            HStack(spacing: 12) {
+                if step > 0 {
+                    pill("Back", prominent: false) { error = nil; settings.mobileSetupStep -= 1 }
+                        .disabled(advancing).accessibilityIdentifier("onboarding.back")
                 }
+                Spacer(minLength: 0)
+                if step == 4 || step == 5 {
+                    pill("Skip", prominent: false) {
+                        if step == 5 { AppServices.shared.meetingLocation.setEnabled(false) }
+                        settings.mobileSetupStep = step + 1
+                    }
                     .disabled(advancing).accessibilityIdentifier("onboarding.skip")
+                }
+                if advancing {
+                    pill("Cancel", prominent: false) { operation?.cancel(); asr.cancelModelDownload() }
+                        .accessibilityIdentifier("onboarding.cancel")
+                }
+                // The welcome page keeps the desktop's wide first step.
+                pill(step == 6 ? "Get started" : error == nil ? "Next" : "Try again", prominent: true, minWidth: step == 0 ? 236 : nil) { next() }
+                    .disabled(advancing || (step == 3 && privacy.isPreparing))
+                    .accessibilityIdentifier("onboarding.next")
             }
-            if advancing {
-                Button(PichiLocalization.text("Cancel")) { operation?.cancel(); asr.cancelModelDownload() }
-                    .accessibilityIdentifier("onboarding.cancel")
-            }
-            Button(PichiLocalization.text(step == 6 ? "Get started" : error == nil ? "Next" : "Try again")) { next() }
-                .buttonStyle(.borderedProminent).foregroundStyle(theme.palette.accentForeground)
-                .disabled(advancing || (step == 3 && privacy.isPreparing))
-                .accessibilityIdentifier("onboarding.next")
-        }.controlSize(.large)
-        }.padding(20).frame(maxWidth: 680).frame(maxWidth: .infinity)
-            .background(theme.palette.windowBackground)
+        }
+        .padding(.horizontal, isCompact ? 20 : FluidOnboardingLayout.footerHorizontalInset)
+        .padding(.top, 16).padding(.bottom, isCompact ? 8 : 24)
+        // Content scrolls beneath the actions and fades into the light instead of meeting a bar.
+        .background {
+            LinearGradient(stops: [.init(color: theme.palette.windowBackground.opacity(0), location: 0),
+                                   .init(color: theme.palette.windowBackground, location: 0.3)],
+                           startPoint: .top, endPoint: .bottom)
+                .padding(.top, -28)
+                .ignoresSafeArea()
+        }
     }
+
+    /// The desktop footer actions: capsules of one size, with the accent only on the way forward.
+    @ViewBuilder private func pill(_ title: String, prominent: Bool, minWidth: CGFloat? = nil,
+                                   action: @escaping () -> Void) -> some View {
+        // The large capsule adds about 20 pt on each side of the label.
+        let label = Text(PichiLocalization.text(title))
+            .font(.fluidSystem(size: FluidOnboardingLayout.footerButtonFontSize, weight: .semibold))
+            .lineLimit(1)
+            .frame(minWidth: isCompact ? nil : (minWidth ?? FluidOnboardingLayout.footerButtonWidth) - 40)
+        if prominent {
+            Button(action: action) { label }
+                .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).controlSize(.large)
+                .foregroundStyle(theme.palette.accentForeground)
+        } else {
+            Button(action: action) { label }
+                .buttonStyle(.bordered).buttonBorderShape(.capsule).controlSize(.large)
+                .tint(theme.palette.primaryText)
+        }
+    }
+
+    /// Pages whose Next prepares resources (the cases in `next()`); the others advance at once,
+    /// so no Cancel action flashes into the footer during the page transition.
+    private static let preparingSteps: Set<Int> = [1, 2, 3, 6]
 
     private func next() {
         guard !advancing else { return }
         let current = step
-        error = nil; advancing = true
+        error = nil
+        guard Self.preparingSteps.contains(current) else { settings.mobileSetupStep = current + 1; return }
+        advancing = true
         operation = Task { @MainActor in
             defer { advancing = false; operation = nil }
             do {
@@ -295,5 +414,28 @@ struct MobileModelDetails: View {
             }.font(theme.typography.captionStrong)
                 .accessibilityIdentifier("model.details.\(modelID)")
         }
+    }
+}
+
+/// The desktop onboarding card: a faint ink fill and hairline, with an accent edge and glow when selected.
+private struct MobileOnboardingCard: ViewModifier {
+    @Environment(\.theme) private var theme
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        content
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(shape.fill(theme.palette.primaryText.opacity(isSelected ? 0.075 : 0.04)))
+            .overlay(shape.stroke(isSelected ? theme.palette.accent.opacity(0.92) : theme.palette.primaryText.opacity(0.10),
+                                  lineWidth: isSelected ? 1.4 : 1))
+            .shadow(color: theme.palette.accent.opacity(isSelected ? 0.18 : 0), radius: 18)
+    }
+}
+
+private extension View {
+    func mobileOnboardingCard(isSelected: Bool = false) -> some View {
+        modifier(MobileOnboardingCard(isSelected: isSelected))
     }
 }

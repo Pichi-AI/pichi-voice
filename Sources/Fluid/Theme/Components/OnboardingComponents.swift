@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 enum FluidOnboardingLayout {
@@ -168,9 +172,6 @@ private extension View {
 
 struct FluidOnboardingLandingBackdrop: View {
     @Environment(\.theme) private var theme
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isBreathing = false
     let glowCenter: UnitPoint
     let breathes: Bool
 
@@ -180,7 +181,33 @@ struct FluidOnboardingLandingBackdrop: View {
     }
 
     var body: some View {
-        // The original layered light, drawn from the active brand palette instead of fixed blue.
+        FluidOnboardingLight(glowCenter: self.glowCenter, breathes: self.breathes)
+            // A crisp card edge: the old feathered mask let the window's rectangle show through
+            // the fade, which read as a second, uglier boundary on light desktops.
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(
+                        RadialGradient(colors: [self.theme.palette.accentText.opacity(0.45), self.theme.palette.cardBorder],
+                                       center: self.glowCenter, startRadius: 0, endRadius: 620),
+                        lineWidth: 1
+                    )
+            }
+            .ignoresSafeArea()
+    }
+}
+
+/// The original layered light, drawn from the active brand palette instead of fixed blue.
+/// Desktop frames it as a window card; mobile fills the screen with it.
+struct FluidOnboardingLight: View {
+    @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isBreathing = false
+    var glowCenter = UnitPoint(x: 0.5, y: 0.18)
+    var breathes = true
+
+    var body: some View {
         let isDark = self.colorScheme == .dark
         let accent = FluidOnboardingLandingColors.blue
         let isStill = self.reduceMotion || !self.breathes
@@ -196,21 +223,10 @@ struct FluidOnboardingLandingBackdrop: View {
         .id(isStill)
         // Swap at once: a crossfade of two backdrops would let the transparent window show through.
         .transition(.identity)
-        // A crisp card edge: the old feathered mask let the window's rectangle show through
-        // the fade, which read as a second, uglier boundary on light desktops.
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(
-                    RadialGradient(colors: [self.theme.palette.accentText.opacity(0.45), self.theme.palette.cardBorder],
-                                   center: self.glowCenter, startRadius: 0, endRadius: 620),
-                    lineWidth: 1
-                )
-        }
-        .ignoresSafeArea()
     }
 }
 
+#if os(macOS)
 struct FluidOnboardingWindowTransparency: NSViewRepresentable {
     func makeNSView(context _: Context) -> NSView {
         FluidOnboardingWindowTransparencyView()
@@ -280,6 +296,7 @@ private final class FluidOnboardingWindowTransparencyView: NSView {
         self.snapshot = nil
     }
 }
+#endif
 
 struct FluidOnboardingCompactProgress: View {
     @Environment(\.theme) private var theme
@@ -318,7 +335,7 @@ struct FluidOnboardingCompactAppIconMark: View {
     }
 
     var body: some View {
-        Image(nsImage: PichiBrandMark.appIcon)
+        PichiBrandMark.appIconImage
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
@@ -329,6 +346,7 @@ struct FluidOnboardingCompactAppIconMark: View {
     }
 }
 
+#if os(macOS)
 struct FluidOnboardingLandingHoverTracker: NSViewRepresentable {
     let onMove: (CGPoint, CGSize) -> Void
     let onExit: () -> Void
@@ -540,6 +558,7 @@ private final class LandingPrimaryNSButton: NSButton {
         return self.isHovering ? Self.hoverColor : Self.normalColor
     }
 }
+#endif
 
 private struct FluidOnboardingAppIconMark: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -557,7 +576,7 @@ private struct FluidOnboardingAppIconMark: View {
                 .scaleEffect(x: self.isBreathing ? 1.05 : 1, y: 1)
                 .offset(y: 58)
 
-            Image(nsImage: PichiBrandMark.appIcon)
+            PichiBrandMark.appIconImage
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
@@ -606,8 +625,14 @@ private struct FluidOnboardingPortalGlow: View {
 
 enum FluidOnboardingLandingColors {
     private static var dark: Bool {
-        SettingsStore.shared.themePreference == .dark || (SettingsStore.shared.themePreference == .system
-            && NSApplication.shared.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+        #if os(macOS)
+        let systemIsDark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        #else
+        // The scene keeps the system style; the app's explicit preference is applied below.
+        let systemIsDark = UIApplication.shared.connectedScenes.lazy
+            .compactMap { ($0 as? UIWindowScene)?.traitCollection.userInterfaceStyle }.first == .dark
+        #endif
+        return SettingsStore.shared.themePreference == .dark || (SettingsStore.shared.themePreference == .system && systemIsDark)
     }
     static var blue: Color { Color(hex: self.dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? FluidBrandColors.blue }
     static var foreground: Color {
