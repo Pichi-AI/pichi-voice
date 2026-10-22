@@ -5562,18 +5562,16 @@ final class MeetingRecoveryTests: XCTestCase {
         let speakerC = self.makeSpeaker(name: "Speaker C")
 
         let before = MeetingSpeakerPalette.tintIndices(for: [speakerA, placeholder, speakerC])
-        XCTAssertEqual(before[speakerA.id], 0)
-        XCTAssertNil(before[placeholder.id])
-        XCTAssertEqual(before[speakerC.id], 2)
-        XCTAssertNil(MeetingSpeakerPalette.tints(for: [speakerA, placeholder, speakerC], isDark: false)[placeholder.id])
+        for speaker in [speakerA, placeholder, speakerC] {
+            XCTAssertEqual(before[speaker.id], MeetingSpeakerPalette.index(forSpeakerID: speaker.id))
+        }
+        let beforeTints = MeetingSpeakerPalette.tints(for: [speakerA, placeholder, speakerC], isDark: false)
 
         var renamedPlaceholder = placeholder
         renamedPlaceholder.displayName = "Jordan"
-        let after = MeetingSpeakerPalette.tintIndices(for: [speakerA, renamedPlaceholder, speakerC])
-        XCTAssertEqual(after[speakerA.id], 0)
-        XCTAssertEqual(after[renamedPlaceholder.id], 1)
-        XCTAssertEqual(after[speakerC.id], 2)
-        XCTAssertNotNil(MeetingSpeakerPalette.tints(for: [speakerA, renamedPlaceholder, speakerC], isDark: false)[renamedPlaceholder.id])
+        let reordered = [speakerC, renamedPlaceholder, speakerA]
+        XCTAssertEqual(MeetingSpeakerPalette.tintIndices(for: reordered), before)
+        XCTAssertEqual(MeetingSpeakerPalette.tints(for: reordered, isDark: false), beforeTints)
     }
 
     // MARK: - MeetingAssignSpeakersValidation.duplicateName

@@ -22,8 +22,23 @@ enum MeetingSpeakerPaletteContrastTests {
         inverted.theme = BrandTheme(light: inverted.theme!.dark, dark: inverted.theme!.light)
         packages.append(("inverted", try BrandPackage.decode(inverted.encoded())))
 
-        let speakers = (0..<6).map { index in
-            MeetingSessionSpeaker(id: UUID(), displayName: "Synthetic \(index) Ёё", isLocalUser: false)
+        // Eight identities exercise all six inherited slots and palette reuse.
+        let expectedIndices = [5, 4, 3, 2, 1, 0, 5, 4]
+        let speakers = expectedIndices.indices.map { index in
+            MeetingSessionSpeaker(id: UUID(uuidString: "01234567-89ab-cdef-0123-456789abc00\(index)")!,
+                displayName: "Synthetic \(index) Ёё", isLocalUser: false)
+        }
+        for (speaker, expected) in zip(speakers, expectedIndices) {
+            precondition(MeetingSpeakerPalette.index(forSpeakerID: speaker.id) == expected,
+                "The explicit UUID-byte mapping must remain identical across launches and platforms")
+        }
+        for (text, expected) in [
+            ("11234567-89ab-cdef-0123-456789abc000", 3),
+            ("01234567-99ab-cdef-0123-456789abc000", 3),
+            ("01234567-89ab-cdef-1123-456789abc000", 1),
+        ] {
+            precondition(MeetingSpeakerPalette.index(forSpeakerID: UUID(uuidString: text)!) == expected,
+                "Bytes throughout the UUID must participate in the fixed mapping")
         }
         var contrasts = 0, immutableChecks = 0, legacyFailures = 0, liveChecks = 0
         for (brand, package) in packages {
@@ -43,9 +58,11 @@ enum MeetingSpeakerPaletteContrastTests {
                         var checked: [SessionSpeakerID: Color] = [:]
                         var liveFills: [Color] = []
                         guardAppearance.performAsCurrentDrawingAppearance {
-                            tints = ProductionSpeakerPaletteProducer(session: .init(activeSpeakers: speakers),
+                            tints = MeetingSpeakerPalette.tints(for: speakers, isDark: physical == .dark)
+                            checked = ProductionSpeakerPaletteProducer(session: .init(activeSpeakers: speakers),
                                 theme: theme, colorScheme: ambient).currentTints()
-                            for speaker in speakers { checked[speaker.id] = theme.palette.readableText(tints[speaker.id]!) }
+                            precondition(MeetingSpeakerPalette.labelColor(for: nil, theme: theme, colorScheme: ambient)
+                                == theme.palette.secondaryText, "Unresolved speech must keep neutral semantic ink")
                             for microphone in [false, true] {
                                 for partial in [false, true] {
                                     liveFills.append(ProductionLiveSpeakerPaletteProducer(
@@ -67,16 +84,22 @@ enum MeetingSpeakerPaletteContrastTests {
                                         "Live partial/final fill opacity must remain unchanged")
                                     liveChecks += 1
                                 }
-                                for (index, speaker) in speakers.enumerated() {
+                                for speaker in speakers {
+                                    let index = MeetingSpeakerPalette.index(forSpeakerID: speaker.id)
                                     let rgb = MeetingSpeakerPalette.rgb(forSpeakerIndex: index, isDark: physical == .dark)
                                     let expected = [Double(rgb.red), Double(rgb.green), Double(rgb.blue)].map { $0 / 255 }
                                     precondition(self.equal(UIContrastTests.components(tints[speaker.id]!), expected),
-                                        "\(brand): actual palette producer must retain physical RGB across opposite draw appearances")
+                                        "\(brand): actual palette selector must retain physical RGB across opposite draw appearances")
                                     immutableChecks += 1
+                                    let expectedInk = theme.palette.readableText(
+                                        MeetingSpeakerPalette.tint(forSpeakerID: speaker.id, isDark: physical == .dark),
+                                        minimumContrast: 4.5)
                                     let ink = UIContrastTests.components(checked[speaker.id]!)
+                                    precondition(self.equal(ink, UIContrastTests.components(expectedInk)),
+                                        "Production labels must preserve the UUID tint whenever it meets small-text contrast")
                                     for surface in surfaces {
-                                        precondition(UIContrastTests.contrast(ink, UIContrastTests.components(surface)) >= 3,
-                                            "\(brand): stable proposed ink or existing fallback must meet all six surface contrasts")
+                                        precondition(UIContrastTests.contrast(ink, UIContrastTests.components(surface)) >= 4.5,
+                                            "\(brand): small participant labels must meet 4.5 on all six surfaces")
                                         contrasts += 1
                                     }
                                 }
@@ -109,25 +132,32 @@ enum MeetingSpeakerPaletteContrastTests {
             }
         }
 
-        let first = speakers[0], last = speakers[2]
-        var unknown = MeetingSessionSpeaker(id: UUID(), displayName: MeetingSpeakerPalette.unknownMicrophoneSpeakerName, isLocalUser: false)
-        let local = MeetingSessionSpeaker(id: UUID(), displayName: "Synthetic local", isLocalUser: true)
-        let before = MeetingSpeakerPalette.tintIndices(for: [local, first, unknown, last])
-        precondition(before[first.id] == 0 && before[last.id] == 2 && before[unknown.id] == nil && before[local.id] == nil)
-        let beforeColors = [false, true].map {
-            MeetingSpeakerPalette.tints(for: [local, first, unknown, last], isDark: $0)
+        let indices = MeetingSpeakerPalette.tintIndices(for: speakers)
+        var renamed = speakers
+        // A name identical to the old catch-all spelling is still just metadata.
+        for index in renamed.indices {
+            renamed[index].displayName = MeetingSpeakerPalette.unknownMicrophoneSpeakerName
+            renamed[index].isLocalUser = index == 2
         }
-        precondition(beforeColors.allSatisfy { $0[local.id] == nil && $0[unknown.id] == nil })
-        unknown.displayName = "Synthetic renamed"
-        let after = MeetingSpeakerPalette.tintIndices(for: [local, first, unknown, last])
-        precondition(after[first.id] == 0 && after[last.id] == 2 && after[unknown.id] == 1 && after[local.id] == nil)
-        for (index, dark) in [false, true].enumerated() {
-            let colors = MeetingSpeakerPalette.tints(for: [local, first, unknown, last], isDark: dark)
-            precondition(colors[first.id] == beforeColors[index][first.id] && colors[last.id] == beforeColors[index][last.id],
-                "Renaming the unknown bucket cannot recolor other stable speaker IDs")
-            precondition(colors[unknown.id] != nil && colors[local.id] == nil)
+        renamed.reverse()
+        precondition(MeetingSpeakerPalette.tintIndices(for: renamed) == indices,
+            "Renaming, owner confirmation and reorder cannot change any participant's slot")
+        for dark in [false, true] {
+            let original = MeetingSpeakerPalette.tints(for: speakers, isDark: dark)
+            precondition(MeetingSpeakerPalette.tints(for: renamed, isDark: dark) == original)
+            let filtered = Array(renamed.dropFirst(3))
+            let filteredColors = MeetingSpeakerPalette.tints(for: filtered, isDark: dark)
+            for speaker in filtered {
+                precondition(filteredColors[speaker.id] == original[speaker.id],
+                    "Filtering or merging peers must not recolor remaining identities")
+            }
+            for speaker in speakers {
+                let reopenedID = UUID(uuidString: speaker.id.uuidString)!
+                precondition(MeetingSpeakerPalette.tint(forSpeakerID: reopenedID, isDark: dark) == original[speaker.id],
+                    "Restoring the persisted UUID must recover the same tint without process-local state")
+            }
         }
-        print("Speaker palette: \(immutableChecks) immutable RGB checks; \(contrasts) six-surface contrast checks; \(liveChecks) source-bound live microphone/remote partial/final fill checks; \(legacyFailures) legacy dynamic negative controls; local/unknown/renamed index contracts preserved")
+        print("Speaker palette: \(immutableChecks) immutable RGB checks; \(contrasts) six-surface small-label contrast checks; \(liveChecks) source-bound live microphone/remote partial/final fill checks; \(legacyFailures) legacy dynamic negative controls; eight UUID/name/owner/reorder/filter/restored-ID contracts")
         print("SKIP: actual native meeting header/row pixels, hot/cold UI replay, pointer and keyboard interactions")
     }
 }

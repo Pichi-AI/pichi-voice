@@ -57,12 +57,12 @@ struct MeetingAssignSpeakersSheet: View {
     let speakers: [MeetingSessionSpeaker]
     let quotesBySpeaker: [SessionSpeakerID: [String]]
     let tints: [SessionSpeakerID: Color]
-    let accentColor: Color
     let focusedSpeakerID: SessionSpeakerID?
     let onSave: ([SessionSpeakerID: String]) async -> String?
     let onCancel: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @State private var drafts: [SessionSpeakerID: String]
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -72,7 +72,6 @@ struct MeetingAssignSpeakersSheet: View {
         speakers: [MeetingSessionSpeaker],
         quotesBySpeaker: [SessionSpeakerID: [String]],
         tints: [SessionSpeakerID: Color],
-        accentColor: Color,
         focusedSpeakerID: SessionSpeakerID? = nil,
         onSave: @escaping ([SessionSpeakerID: String]) async -> String?,
         onCancel: @escaping () -> Void
@@ -80,7 +79,6 @@ struct MeetingAssignSpeakersSheet: View {
         self.speakers = speakers
         self.quotesBySpeaker = quotesBySpeaker
         self.tints = tints
-        self.accentColor = accentColor
         self.focusedSpeakerID = focusedSpeakerID
         self.onSave = onSave
         self.onCancel = onCancel
@@ -165,7 +163,8 @@ struct MeetingAssignSpeakersSheet: View {
 
     @ViewBuilder
     private func row(for speaker: MeetingSessionSpeaker) -> some View {
-        let tint = speaker.isLocalUser ? self.accentColor : (self.tints[speaker.id] ?? self.theme.palette.tertiaryText)
+        let tint = self.tints[speaker.id] ?? MeetingSpeakerPalette.labelColor(
+            for: speaker.id, theme: self.theme, colorScheme: self.colorScheme)
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Circle()
@@ -175,7 +174,7 @@ struct MeetingAssignSpeakersSheet: View {
                     .font(self.theme.typography.captionSmall)
                     .tracking(1.1)
                     .textCase(.uppercase)
-                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .foregroundStyle(tint)
             }
 
             let quotes = self.quotesBySpeaker[speaker.id] ?? []

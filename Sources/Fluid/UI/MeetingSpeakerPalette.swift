@@ -3,8 +3,8 @@ import SwiftUI
 /// Stable per-speaker tints for the transcript. Colour is decoration on top of the name, never
 /// the only way to tell speakers apart, so it stays quiet enough to read a whole meeting in.
 nonisolated enum MeetingSpeakerPalette {
-    /// Muted in light (pastels wash out on white), lifted in dark. Ordered so neighbouring
-    /// speakers stay distinguishable to the common forms of colour blindness.
+    /// Muted in light (pastels wash out on white), lifted in dark. Keep the six
+    /// inherited light/dark hue pairs shared across every participant renderer.
     private static let tints: [(light: (Int, Int, Int), dark: (Int, Int, Int))] = [
         (light: (0x33, 0x55, 0x86), dark: (0x84, 0xa9, 0xda)),
         (light: (0x4c, 0x6c, 0x3d), dark: (0x93, 0xbb, 0x82)),
@@ -29,20 +29,38 @@ nonisolated enum MeetingSpeakerPalette {
             green: Double(value.green) / 255, blue: Double(value.blue) / 255)
     }
 
-    /// The unnamed catch-all bucket for mic audio that isn't confidently the local user.
+    /// Persisted legacy bucket name. Names never select a participant's colour.
     static let unknownMicrophoneSpeakerName = "Microphone / Unknown"
 
-    /// Index allocated by position so renaming one speaker never recolours the others.
-    /// The unnamed catch-all gets an index but no tint — it is a bucket, not a person.
-    static func tintIndices(for speakers: [MeetingSessionSpeaker]) -> [SessionSpeakerID: Int] {
-        var indices: [SessionSpeakerID: Int] = [:]
-        var next = 0
-        for speaker in speakers where !speaker.isLocalUser {
-            defer { next += 1 }
-            guard speaker.displayName != Self.unknownMicrophoneSpeakerName else { continue }
-            indices[speaker.id] = next
+    /// A UUID's bytes give the same bounded slot on every launch and platform.
+    /// FNV-1a is explicit because Swift's Hasher is randomized per process. The
+    /// finite inherited palette repeats; names, owner status and list order do not
+    /// participate in the mapping.
+    static func index(forSpeakerID speakerID: SessionSpeakerID) -> Int {
+        let hash = withUnsafeBytes(of: speakerID.uuid) { bytes in
+            bytes.reduce(UInt64(14_695_981_039_346_656_037)) { hash, byte in
+                (hash ^ UInt64(byte)) &* 1_099_511_628_211
+            }
         }
-        return indices
+        return Int(hash % UInt64(self.tints.count))
+    }
+
+    static func tint(forSpeakerID speakerID: SessionSpeakerID, isDark: Bool) -> Color {
+        self.tint(forSpeakerIndex: self.index(forSpeakerID: speakerID), isDark: isDark)
+    }
+
+    /// Shared small-label ink for headers, participant chips and transcript rows.
+    /// Nil is unresolved speech, not a participant. Resolve physical surfaces first
+    /// so an imported palette cannot check one appearance and draw another.
+    @MainActor static func labelColor(for participantID: SessionSpeakerID?, theme: AppTheme, colorScheme: ColorScheme) -> Color {
+        guard let participantID else { return theme.palette.secondaryText }
+        let scheme = theme.palette.nativeColorScheme(fallback: colorScheme)
+        return theme.palette.readableText(self.tint(forSpeakerID: participantID, isDark: scheme == .dark),
+            minimumContrast: 4.5)
+    }
+
+    static func tintIndices(for speakers: [MeetingSessionSpeaker]) -> [SessionSpeakerID: Int] {
+        Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, self.index(forSpeakerID: $0.id)) })
     }
 
     static func tints(for speakers: [MeetingSessionSpeaker], isDark: Bool) -> [SessionSpeakerID: Color] {

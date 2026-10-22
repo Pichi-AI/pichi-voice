@@ -434,24 +434,44 @@ speaker_producer = snippet('Sources/Fluid/UI/MeetingSessionCanvases.swift',
 import re
 speaker_calls = {}
 for caller in Path('Sources').rglob('*.swift'):
-    calls = re.findall(r'\bMeetingSpeakerPalette\s*\.\s*(tints?)\s*\(', caller.read_text())
+    calls = re.findall(r'\bMeetingSpeakerPalette\s*\.\s*(tints?|labelColor)\s*\(', caller.read_text())
     if calls:
         speaker_calls[str(caller)] = calls
-assert speaker_calls == {
-    'Sources/Fluid/UI/MeetingSessionCanvases.swift': ['tints'],
+expected_speaker_calls = {
+    'Sources/Fluid/UI/MeetingSessionCanvases.swift': ['labelColor'],
+    'Sources/Fluid/UI/MeetingAssignSpeakersSheet.swift': ['labelColor'],
     'Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift': ['tint'],
-}, f'Uncovered production speaker palette caller: {speaker_calls}'
+}
 live_source = Path('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift').read_text()
+# A bounded standalone branch can contain only the shared/desktop increment.
+# The integrated mobile/live increment has these exact additional consumers.
+if 'MeetingSpeakerPalette.labelColor(' in live_source:
+    expected_speaker_calls['Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift'] = ['labelColor', 'tint', 'labelColor']
+    for participant in ('self.paragraph.participant?.participantID', 'self.row.participant?.participantID'):
+        assert f'MeetingSpeakerPalette.labelColor(for: {participant},' in live_source
+mobile_source = Path('Sources/Mobile/MobileMeetingRoot.swift').read_text()
+if 'MeetingSpeakerPalette.labelColor(' in mobile_source:
+    expected_speaker_calls['Sources/Mobile/MobileMeetingRoot.swift'] = ['labelColor', 'labelColor']
+    for participant in ('speaker.id', 'participantID'):
+        assert f'MeetingSpeakerPalette.labelColor(for: {participant},' in mobile_source
+assert speaker_calls == expected_speaker_calls, f'Uncovered production speaker palette caller: {speaker_calls}'
 for marker in ('    private var fill: Color {', '    private var isMicrophone: Bool {'):
     assert live_source.count(marker) == 1, f'Expected one production label: {marker}'
 live_fill = declaration(live_source, '    private var fill: Color {')
 live_microphone = declaration(live_source, '    private var isMicrophone: Bool {')
-assert '.foregroundStyle(self.theme.palette.readableText(self.tint))' in speaker_canvas
-assert 'self.speakerTint.map(self.theme.palette.readableText)' in speaker_canvas
+assert '.foregroundStyle(self.tint)' in speaker_canvas
+assert 'self.speakerTint ?? self.theme.palette.secondaryText' in speaker_canvas
+chip_tint = declaration(speaker_canvas, '    private func chipTint(for speaker: MeetingSessionSpeaker) -> Color? {')
+name_color = declaration(speaker_canvas, '    private var nameColor: Color {')
+assert 'isLocalUser' not in chip_tint + name_color, 'Owner confirmation must retain the UUID tint'
+assignment = Path('Sources/Fluid/UI/MeetingAssignSpeakersSheet.swift').read_text()
+assert 'let tint = self.tints[speaker.id] ?? MeetingSpeakerPalette.labelColor(' in assignment
+assert '.foregroundStyle(tint)' in assignment
+assert 'speaker.isLocalUser ?' not in assignment
 with Path(sys.argv[1]).open('a') as output:
     # Reuse the complete participant sheet's inert Identifiable metadata.
     output.write(speaker_source)
-    output.write('struct ProductionSpeakerPaletteProducer {\n'
+    output.write('@MainActor struct ProductionSpeakerPaletteProducer {\n'
         ' struct Session { let activeSpeakers: [MeetingSessionSpeaker] }\n'
         ' let session: Session; let theme: AppTheme; let colorScheme: ColorScheme\n'
         + speaker_producer + '\n func currentTints() -> [SessionSpeakerID: Color] { self.speakerTints }\n}\n')
