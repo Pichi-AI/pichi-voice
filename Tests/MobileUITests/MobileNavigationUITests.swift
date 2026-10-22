@@ -6,6 +6,15 @@ final class MobileNavigationUITests: XCTestCase {
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
+        if name.contains("testSpeakerColorsNativeSmoke") {
+            #if !targetEnvironment(simulator)
+            throw XCTSkip("Synthetic speaker color smoke is simulator-only")
+            #else
+            guard ProcessInfo.processInfo.environment["PICHI_SPEAKER_COLOR_SMOKE"] == "1" else {
+                throw XCTSkip("Stage SpeakerColorMeeting.json in an owned simulator and opt in")
+            }
+            #endif
+        }
         if name.contains("testFragmentParticipantCorrectionScopesUndoAndReopen")
             || name.contains("testManualYouDesignationSwitchClearUndoAndReopen")
             || name.contains("testTranscriptScrollKeepsNavigationControlsReadable") {
@@ -41,6 +50,11 @@ final class MobileNavigationUITests: XCTestCase {
         if !productionDownload { XCUIDevice.shared.orientation = .portrait }
         app = XCUIApplication()
         if !productionDownload { app.launchArguments += ["-PichiInterfaceLanguage", "en"] }
+        if name.contains("testSpeakerColorsNativeSmoke") {
+            app.launchArguments += ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
+                "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO",
+                "-MeetingSpeakerProcessingMode", "afterRecording"]
+        }
         if productionSmoke {
             // Attach without restarting a running AUT, including an unowned recording.
             // The body checks idle state before it can claim a new recording.
@@ -1583,6 +1597,40 @@ final class MobileNavigationUITests: XCTestCase {
             scroll.swipeDown()
             XCTAssertTrue(back.isHittable)
             capture("navigation-surface-\(language)-returned")
+        }
+        #endif
+    }
+
+    /// A short presentation smoke. Identity/rename/owner mapping invariants are covered
+    /// separately without replaying the much longer correction and undo matrix.
+    func testSpeakerColorsNativeSmoke() throws {
+        #if targetEnvironment(simulator)
+        let fixtureID = "C010C010-2026-4000-8000-000000000021"
+        for (language, appearance, history, firstName) in [
+            ("en", "light", "History", "You"), ("ru", "dark", "История", "Вы")
+        ] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
+                "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO",
+                "-MeetingSpeakerProcessingMode", "afterRecording"]
+            app.launch()
+            capture("speaker-colors-\(appearance)-ready")
+            openNavigation("history", title: history)
+            capture("speaker-colors-\(appearance)-history")
+            let meeting = app.buttons["history.session.\(fixtureID)"]
+            XCTAssertTrue(meeting.waitForExistence(timeout: 10))
+            meeting.tap()
+            let scroll = app.scrollViews["meeting.transcript"]
+            XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+            let owner = app.buttons["transcript.speaker.00000000-0000-0000-0000-000000000001"]
+            XCTAssertTrue(owner.waitForExistence(timeout: 5))
+            XCTAssertEqual(owner.label, firstName)
+            capture("speaker-colors-\(appearance)-header")
+            scroll.swipeUp()
+            capture("speaker-colors-\(appearance)-paragraphs")
+            scroll.swipeUp()
+            capture("speaker-colors-\(appearance)-more-participants")
         }
         #endif
     }

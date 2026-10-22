@@ -15,6 +15,7 @@ struct MobileMeetingRoot: View {
     let microphones: @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var scenePhase
@@ -682,6 +683,8 @@ struct MobileMeetingRoot: View {
             } label: {
                 Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language), systemImage: "person.crop.circle")
                     .font(theme.typography.captionStrong)
+                    .foregroundStyle(MeetingSpeakerPalette.labelColor(for: speaker.id,
+                        theme: theme, colorScheme: colorScheme))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
@@ -711,6 +714,10 @@ struct MobileMeetingRoot: View {
     private func transcriptParagraph(_ paragraph: MeetingTranscriptExporter.DisplayParagraph, session: MeetingSession,
                                      names: [SessionSpeakerID: String]) -> some View {
         let segment = paragraph.firstSegment
+        // The reading projection can bridge an unresolved first fragment to its owner.
+        // Style that same readable identity without changing the stored attribution.
+        let participantID = MeetingTranscriptExporter.speakerPresentation(
+            for: paragraph, in: session, speakerNames: names).participantID
         let isAudioExpanded = paragraph.segments.contains { $0.id == playback.activeSegmentID }
         return VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
             HStack(alignment: .top, spacing: theme.metrics.spacing.sm) {
@@ -720,7 +727,9 @@ struct MobileMeetingRoot: View {
                 if let label = MeetingTranscriptExporter.captionLabel(for: paragraph, in: session,
                     speakerNames: names, language: PichiLocalization.language) {
                     Text(label)
-                        .font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
+                        .font(theme.typography.captionStrong)
+                        .foregroundStyle(MeetingSpeakerPalette.labelColor(for: participantID,
+                            theme: theme, colorScheme: colorScheme))
                         .padding(.top, theme.metrics.spacing.sm)
                 }
                 Spacer(minLength: 0)

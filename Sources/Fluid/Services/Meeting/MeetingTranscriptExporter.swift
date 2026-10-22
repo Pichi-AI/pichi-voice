@@ -61,6 +61,22 @@ nonisolated enum MeetingTranscriptExporter {
             label: label, participantID: self.readingParticipantID(segment.speakerID, label: label, in: session))
     }
 
+    /// A displayed paragraph can begin with an unresolved fragment or a merged alias.
+    /// Its styling and actions use the same resolved reading owner as the full-session map.
+    static func speakerPresentation(
+        for paragraph: DisplayParagraph, in session: MeetingSession,
+        speakerNames: [SessionSpeakerID: String]
+    ) -> MeetingSpeakerPresentation {
+        let first = paragraph.firstSegment
+        let projected = paragraph.projectedSpeakerID
+        let label = projected.flatMap { self.speakerName($0, in: session, speakerNames: speakerNames) }
+            .map(MeetingSpeakerPresentation.Label.estimated)
+            ?? self.speakerLabelValue(for: first, in: session, speakerNames: speakerNames)
+        return MeetingSpeakerPresentation(
+            identity: self.paragraphIdentity(for: first, legacySpeakerID: projected, in: session, speakerNames: speakerNames),
+            label: label, participantID: self.readingParticipantID(projected ?? first.speakerID, label: label, in: session))
+    }
+
     /// One contextual reading pass per session or bounded live batch. Original members remain
     /// untouched; every consumer uses the same projected owner without a per-word full scan.
     static func speakerPresentations(in session: MeetingSession,
@@ -74,15 +90,7 @@ nonisolated enum MeetingTranscriptExporter {
         let names = Dictionary(context.activeSpeakers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
         var result: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation] = [:]
         for paragraph in self.displayParagraphs(for: ordered, in: context) {
-            let first = paragraph.firstSegment
-            let projected = paragraph.projectedSpeakerID
-            let label = projected.flatMap { self.speakerName($0, in: context, speakerNames: names) }
-                .map(MeetingSpeakerPresentation.Label.estimated)
-                ?? self.speakerLabelValue(for: first, in: context, speakerNames: names)
-            let participant = self.readingParticipantID(projected ?? first.speakerID, label: label, in: context)
-            let presentation = MeetingSpeakerPresentation(
-                identity: self.paragraphIdentity(for: first, legacySpeakerID: projected, in: context, speakerNames: names),
-                label: label, participantID: participant)
+            let presentation = self.speakerPresentation(for: paragraph, in: context, speakerNames: names)
             for member in paragraph.segments { result[member.id] = presentation }
         }
         return result
