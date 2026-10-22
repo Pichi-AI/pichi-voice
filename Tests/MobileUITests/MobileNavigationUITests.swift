@@ -1327,6 +1327,7 @@ final class MobileNavigationUITests: XCTestCase {
                 }
                 meeting.tap()
                 XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+                assertParticipantHeadersHaveCompactLabels()
                 capture("manual-you-\(language)-opened")
             }
             func assertOnlyOwner(_ id: String?, step: String) {
@@ -1423,6 +1424,7 @@ final class MobileNavigationUITests: XCTestCase {
                 }
                 meeting.tap()
                 XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+                assertParticipantHeadersHaveCompactLabels()
                 capture("participant-correction-\(language)-opened")
             }
             func row(_ id: String) -> XCUIElement {
@@ -1842,6 +1844,19 @@ final class MobileNavigationUITests: XCTestCase {
                 && (self.app.buttons["meeting.start"].exists ? self.app.buttons["meeting.start"].isHittable : true)
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed)
+    }
+
+    private func assertParticipantHeadersHaveCompactLabels(file: StaticString = #filePath, line: UInt = #line) {
+        let names = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.speaker."))
+        XCTAssertGreaterThan(names.count, 0, file: file, line: line)
+        for name in names.allElementsBoundByIndex {
+            let speakerID = String(name.identifier.dropFirst("transcript.speaker.".count))
+            let actions = app.buttons["transcript.participant.actions.\(speakerID)"]
+            XCTAssertTrue(actions.exists, file: file, line: line)
+            XCTAssertLessThanOrEqual(name.frame.height, actions.frame.height + 1,
+                "Participant names must remain readable compact labels rather than tall, narrow word fragments",
+                file: file, line: line)
+        }
     }
 
     private func openNavigation(_ identifier: String, title: String) {

@@ -643,7 +643,7 @@ struct MobileMeetingRoot: View {
                             }
                         }.scrollIndicators(.hidden).accessibilityIdentifier("transcript.speakers")
                     } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading,
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), alignment: .leading)], alignment: .leading,
                                   spacing: theme.metrics.spacing.sm) {
                             ForEach(session.activeSpeakers) { speaker in
                                 participantButton(speaker, session: session, expands: true)
@@ -679,6 +679,8 @@ struct MobileMeetingRoot: View {
             } label: {
                 Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language), systemImage: "person.crop.circle")
                     .font(theme.typography.captionStrong)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
             }.accessibilityIdentifier("transcript.speaker.\(speaker.id)")
             Menu {
