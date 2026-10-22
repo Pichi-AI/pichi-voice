@@ -814,6 +814,8 @@ nonisolated struct MeetingIdentityCandidate: Codable, Identifiable, Equatable, S
 }
 
 nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Sendable {
+    /// Product identities are lightweight metadata, independent of bounded voice embeddings.
+    static let maximumParticipants = 4_096
     var id: SessionSpeakerID
     var displayName: String
     var diarizationClusterID: String?
@@ -834,6 +836,9 @@ nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Send
     /// Explicit user alias, independent of automatic owner recognition and generated labels.
     /// Nil retains the display convention of sessions saved before this provenance existed.
     var usesCustomDisplayName: Bool? = nil
+    /// A named reading identity is not proof of an acoustic match. False is an explicit
+    /// qualification receipt; nil preserves the meaning of older participant records.
+    var identityIsProvisional: Bool? = nil
 
     /// Keep published numbers with their identities, including owners and merged records.
     /// New assembler placeholders can collide; repair them in stable admission order without
@@ -983,6 +988,9 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     var nativeSpeakerAssignment: MeetingBackendSpeakerAssignment? = nil
     var nativeTiming: MeetingTranscriptNativeTiming? = nil
     var speakerAttribution: MeetingTranscriptSpeakerAttribution? = nil
+    /// A stable reading identity while acoustic identity is unresolved. Native assignments,
+    /// timing and attribution summaries remain evidence and are never rewritten to claim it.
+    var speakerIdentityIsProvisional: Bool? = nil
 
     var isEcho: Bool {
         self.isLikelyEcho == true
@@ -1199,6 +1207,10 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         var changed = false
         for index in self.speakers.indices {
             let isLocalUser = self.speakers[index].mergedIntoSpeakerID == nil && self.speakers[index].id == id
+            if isLocalUser, self.speakers[index].identityIsProvisional == true {
+                self.speakers[index].identityIsProvisional = false
+                changed = true
+            }
             if self.speakers[index].isLocalUser != isLocalUser {
                 self.speakers[index].isLocalUser = isLocalUser
                 changed = true
@@ -1246,6 +1258,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
             || self.transcriptSegments[index].speakerAttributionInference != nil
             || self.transcriptSegments[index].attributionState.map({ $0 != .assigned }) == true
             || self.transcriptSegments[index].overlap != .none
+            || (self.transcriptSegments[index].speakerIdentityIsProvisional == true
+                && self.transcriptSegments[index].isUserSpeakerAssigned != true)
             || replacingReadingSpeakerID.map({ $0 != speakerID }) == true else { return false }
         self.transcriptSegments[index].speakerID = speakerID
         self.transcriptSegments[index].isUserSpeakerAssigned = true
@@ -1645,8 +1659,14 @@ nonisolated extension MeetingSession {
                       (segment.nativeUnitID.map { $0 == attribution.unitID } ?? true),
                       (segment.nativeSpeakerAssignment.map { $0 == attribution.rawAssignment } ?? true),
                       !attribution.policyFingerprint.isEmpty,
-                      attribution.selectedSpeakerID == segment.speakerID,
+                      (attribution.selectedSpeakerID == segment.speakerID
+                        || (segment.speakerIdentityIsProvisional == true
+                            && segment.isUserSpeakerAssigned != true
+                            && segment.speakerID.map { id in self.speakers.contains {
+                                $0.id == id && $0.identityIsProvisional != nil
+                            } } == true)),
                       attribution.selectedSpeakerID == nil || attribution.selectedToken != nil,
+                      attribution.selectedSpeakerID.map({ speakerIDs.contains($0) }) ?? true,
                       Set(attribution.candidates.map(\.token)).count == attribution.candidates.count,
                       tokens.allSatisfy({ $0.analysisEpochID == epoch
                           && $0.analysisEpochID.trackID == segment.sourceTrackID

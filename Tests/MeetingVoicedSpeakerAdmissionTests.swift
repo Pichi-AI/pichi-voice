@@ -24,7 +24,7 @@ import Foundation
             nativeSpeakerAssignment: .assigned(token), nativeTiming: .init(start: start, end: end))
     }
 
-    static func tail(policy: MeetingSpeakerAttributionPolicy = .standard,
+    static func tail(policy: MeetingSpeakerAttributionPolicy = .init(),
                      limits: Tail.Limits = .init()) throws -> Tail {
         try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: policy, limits: limits)
     }
@@ -104,7 +104,7 @@ import Foundation
                 units: words.map { .init(id: $0.nativeUnitID!, trackID: epoch.trackID, analysisEpochID: epoch,
                     precision: .word, text: $0.text, analysisStart: $0.nativeTiming!.start,
                     analysisEnd: $0.nativeTiming!.end, speaker: $0.nativeSpeakerAssignment!, analysisSpanIDs: []) },
-                activity: activity)
+                activity: activity, speakerAttributionPolicy: .init())
         check(current.speakers.count == 1 && current.segments.last?.speakerID == nil,
               "Sparse CTC spikes caused the all-brief fallback to mint a punctuation voice")
         var value = try tail()
@@ -217,12 +217,12 @@ import Foundation
             let words = [short, word(4001, 7, 13, token: a)]
             let result = try MeetingPCMRecordingAttribution.assemble(
                 transcript: .init(segments: words, speakers: [main]), activity: activity,
-                epoch: epoch, attemptID: attempt, duration: 20, speakerNameFormat: "Speaker %lld")
+                epoch: epoch, attemptID: attempt, duration: 20, speakerNameFormat: "Speaker %lld", speakerAttributionPolicy: .init())
             check(result.speakers.allSatisfy { $0.diarizationClusterID != "\(epoch):b" },
                   "An unsafe forty-millisecond row sponsored a six-second identity before the tail")
             check(result.segments.map(\.text) == words.map(\.text))
             if kind == 6 { check(result.segments[0].speakerID == mainID, "Manual speaker assignment changed") }
-            var value = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", priorSpeakers: [main])
+            var value = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: .init(), priorSpeakers: [main])
             let output = try update(&value, words: words, activity: activity, end: 20)
             check(output.speakers.allSatisfy { $0.diarizationClusterID != "\(epoch):b" })
             check(value.admittedVoiceSeconds(for: b) == 0)
@@ -245,13 +245,13 @@ import Foundation
         // retains its identity and alias through the assembler's existing registry merge.
         let batch = try MeetingPCMRecordingAttribution.assemble(
             transcript: .init(segments: words, speakers: [manual]), activity: activity,
-            epoch: epoch, attemptID: attempt, duration: 20, speakerNameFormat: "Speaker %lld")
+            epoch: epoch, attemptID: attempt, duration: 20, speakerNameFormat: "Speaker %lld", speakerAttributionPolicy: .init())
         check(batch.segments[0].speakerID == cID)
         check(batch.speakers.filter { $0.id == cID }.count == 1)
         check(batch.speakers.first(where: { $0.id == cID })?.displayName == manual.displayName)
         check(batch.speakers.first(where: { $0.id == cID })?.isLocalUser == false,
               "Complete-attempt owner verification must revoke an unsupported owner label")
-        var value = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld",
+        var value = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: .init(),
                              priorSpeakers: [manual])
         let output = try update(&value, words: words, activity: activity, end: 20)
         check(output.inserted[0].speakerID == cID)
@@ -314,7 +314,7 @@ import Foundation
         for variant in variants {
             let activity = variant + [mainActivity]
             let batch = try MeetingPCMRecordingAttribution.assemble(transcript: .init(segments: words),
-                activity: activity, epoch: epoch, attemptID: attempt, duration: 20, speakerNameFormat: "Speaker %lld")
+                activity: activity, epoch: epoch, attemptID: attempt, duration: 20, speakerNameFormat: "Speaker %lld", speakerAttributionPolicy: .init())
             check(batch.segments[0].speakerID != nil && batch.speakers.count == 2)
             if let expected { check(batch.segments == expected) } else { expected = batch.segments }
             var value = try tail()

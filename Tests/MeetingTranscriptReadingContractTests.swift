@@ -36,6 +36,42 @@ extension MeetingSessionStoreCheckpointTests {
             return value
         }
         let both = [ta: a, tb: b]
+        do {
+            var provisional = word("A synthetic reply.", 4, raw: nil, selected: nil, owner: b,
+                rule: .insufficientSupport)
+            provisional.attributionState = .unassigned
+            provisional.speakerIdentityIsProvisional = true
+            var value = session
+            value.speakers[1].identityIsProvisional = true
+            value.transcriptSegments = [word("An earlier voice.", 0, raw: ta, selected: ta, owner: a, map: both), provisional]
+            let reading = MeetingTranscriptExporter.speakerPresentations(in: value)
+            let presentation = reading[provisional.id]!
+            check(presentation.participantID == b && presentation.isEstimated,
+                  "A preliminary participant has its own readable identity instead of the previous voice")
+            check(MeetingTranscriptExporter.speakerLabel(for: presentation).contains("(provisional)"),
+                  "Preliminary identity must be visibly qualified")
+            let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(value))
+            check(MeetingTranscriptExporter.speakerPresentations(in: restored)[provisional.id] == presentation,
+                  "Preliminary identity and caption survive Stop and reopen")
+            let exported = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: value)) as! [String: Any]
+            let exportedSpeakers = exported["speakers"] as! [[String: Any]]
+            check(exportedSpeakers.contains { $0["identityIsProvisional"] as? Bool == true },
+                  "Canonical export preserves preliminary identity provenance")
+            let portable = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: value)) as! [String: Any]
+            check((portable["speakers"] as! [[String: Any]]).contains { $0["identityIsProvisional"] as? Bool == true },
+                  "Protected transcript-only export preserves preliminary provenance without native acoustic data")
+            value.transcriptSegments[1].isUserSpeakerAssigned = true
+            value.transcriptSegments[1].attributionState = .assigned
+            value.transcriptSegments[1].speakerAttribution = nil
+            check(!MeetingTranscriptExporter.speakerPresentation(for: value.transcriptSegments[1], in: value).isEstimated,
+                  "An explicit user participant correction overrides the preliminary marker")
+            value.transcriptSegments[1] = provisional
+            value.speakers[1].identityIsProvisional = false
+            value.transcriptSegments[1].attributionState = .assigned
+            value.transcriptSegments[1].speakerAttribution = nil
+            check(!MeetingTranscriptExporter.speakerPresentation(for: value.transcriptSegments[1], in: value).isEstimated,
+                  "One qualified identity record refines older word references without rewriting text")
+        }
         let unknown = word("Я", 0.04, raw: nil, selected: nil, owner: nil, rule: .insufficientSupport)
         let first = word("Начало.", 10.3, raw: ta, selected: ta, owner: a, map: both)
         session.transcriptSegments = [unknown, first]

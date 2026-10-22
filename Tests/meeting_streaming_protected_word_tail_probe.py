@@ -115,7 +115,7 @@ full += "nonisolated enum MeetingAssemblyError: Error { case invalidCoverageRece
 full += declaration((meeting / "MeetingStreamingPCMController.swift").read_text(),
                     "struct MeetingStreamingPCMObservation")
 (BUILD / "StreamingStateContracts.swift").write_text(full)
-subprocess.run([
+state_command = [
     "xcrun", "swiftc", "-O", "-swift-version", "6", "-strict-concurrency=complete",
     "-default-isolation", "MainActor", "-parse-as-library", "-module-cache-path", str(BUILD / "ModuleCache"),
     str(BUILD / "StreamingStateContracts.swift"), str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
@@ -130,5 +130,11 @@ subprocess.run([
     str(meeting / "MeetingTimelineTrace.swift"),
     str(meeting / "MeetingStreamingTranscriptState.swift"),
     str(ROOT / "Tests/MeetingStreamingTranscriptStateTests.swift"), "-o", str(BUILD / "state-tests")
-], cwd=ROOT, check=True)
+]
+subprocess.run(state_command, cwd=ROOT, check=True)
 subprocess.run([str(BUILD / "state-tests")], cwd=ROOT, check=True)
+
+provisional_command = [arg.replace("MeetingStreamingTranscriptStateTests.swift", "MeetingProvisionalSpeakerIdentityTests.swift")
+                       .replace("state-tests", "provisional-tests") for arg in state_command]
+subprocess.run(provisional_command, cwd=ROOT, check=True)
+subprocess.run([str(BUILD / "provisional-tests")], cwd=ROOT, check=True)

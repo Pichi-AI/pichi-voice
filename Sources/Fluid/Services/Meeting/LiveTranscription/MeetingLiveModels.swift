@@ -201,9 +201,9 @@ nonisolated enum MeetingLiveBubbleComposer {
                             showsLabel: false, start: partial.start))
         }
 
-        // Unresolved words and provisional hypotheses continue the last readable participant
-        // on their own capture source. This is a transient reading projection only: the snapshot
-        // retains its original uncertainty, IDs, text and timing for later speaker corrections.
+        // A capture source can contain several voices. Only explicit participant evidence
+        // continues a readable turn; unresolved words and source-only hypotheses cannot
+        // borrow the previous participant's identity.
         var readingTurns: [MeetingLiveSpeaker: (participant: MeetingSpeakerPresentation, start: TimeInterval)] = [:]
         for index in rows.indices {
             let source = rows[index].speaker
@@ -213,11 +213,8 @@ nonisolated enum MeetingLiveBubbleComposer {
                     ?? rows[index].start
                 readingTurns[source] = (participant, start)
                 rows[index].readingTurnStart = start
-            } else if let previous {
-                rows[index].participant = previous.participant.markingEstimated()
-                rows[index].readingTurnStart = previous.start
             } else {
-                rows[index].participant = nil
+                readingTurns.removeValue(forKey: source)
                 rows[index].readingTurnStart = rows[index].start
             }
         }
