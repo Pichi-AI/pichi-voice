@@ -358,7 +358,7 @@ struct OnboardingFlowView: View {
     var body: some View {
         // One still backdrop, light and progress for every step; only step content moves.
         ZStack {
-            FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter)
+            FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter, breathes: self.step == .landing)
             FluidOnboardingLandingHoverTracker(
                 onMove: { location, size in self.updateLandingGlow(location: location, in: size) },
                 onExit: { self.resetLandingGlow() }
@@ -374,7 +374,7 @@ struct OnboardingFlowView: View {
 
             if self.step != .landing {
                 FluidOnboardingCompactProgress(value: self.compactProgressValue)
-                    .padding(.top, 28)
+                    .padding(.top, FluidOnboardingLayout.progressTopInset)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .transition(.opacity)
             }
@@ -596,8 +596,7 @@ struct OnboardingFlowView: View {
         GeometryReader { proxy in
             ZStack {
                 VStack(spacing: 0) {
-                    // The shared chrome draws the progress bar; keep its space.
-                    Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
                     OnboardingFittedContent(width: 760) {
                         VStack(spacing: 0) {
@@ -1037,8 +1036,7 @@ struct OnboardingFlowView: View {
         GeometryReader { proxy in
             ZStack {
                 VStack(spacing: 0) {
-                    // The shared chrome draws the progress bar; keep its space.
-                    Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
                     OnboardingFittedContent(width: 760) {
                         VStack(spacing: 0) {
@@ -1162,8 +1160,7 @@ struct OnboardingFlowView: View {
         GeometryReader { proxy in
             ZStack {
                 VStack(spacing: 0) {
-                    // The shared chrome draws the progress bar; keep its space.
-                    Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
                     OnboardingFittedContent(width: 760) {
                         VStack(spacing: 0) {
@@ -1247,8 +1244,7 @@ struct OnboardingFlowView: View {
         GeometryReader { proxy in
             ZStack {
                 VStack(spacing: 0) {
-                    // The shared chrome draws the progress bar; keep its space.
-                    Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
                     OnboardingFittedContent(width: 760) {
                         VStack(spacing: 0) {
@@ -2343,7 +2339,7 @@ private extension OnboardingFlowView {
             isListening: self.asr.isRunning,
             isRecordingShortcut: self.isRecordingPrimaryShortcut,
             onBack: self.forThisStep { self.goBack() },
-            onSkip: {
+            onSkip: self.forThisStep {
                 let origin = self.settings.analyticsOnboardingOrigin
                 self.markAISkipped()
                 self.finishOnboardingAtGettingStarted()
@@ -2353,7 +2349,7 @@ private extension OnboardingFlowView {
                     completesFlow: self.settings.onboardingCompleted
                 )
             },
-            onFinishSetup: {
+            onFinishSetup: self.forThisStep {
                 let origin = self.settings.analyticsOnboardingOrigin
                 self.finishOnboardingAtGettingStarted()
                 self.completeCurrentStep(

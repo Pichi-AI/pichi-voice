@@ -8,6 +8,8 @@ enum FluidOnboardingLayout {
     static let footerButtonWidth: CGFloat = 144
     static let footerButtonHeight: CGFloat = 52
     static let footerButtonFontSize: CGFloat = 17
+    static let progressTopInset: CGFloat = 28
+    static var progressReservedHeight: CGFloat { FluidOnboardingCompactProgress.height + progressTopInset }
 }
 
 struct OnboardingModelInfoTooltip: View {
@@ -129,14 +131,10 @@ enum FluidOnboardingMotion {
     static let crossfade = Animation.easeInOut(duration: 0.2)
     static let stagger: Double = 0.07
 
-    /// Starts the breath, or holds light at rest under Reduce Motion. Callers key their view on
-    /// `reduceMotion`, so a new identity drops a running breath when the setting turns on.
-    static func breathe(_ isBreathing: Binding<Bool>, reduceMotion: Bool) {
-        guard !reduceMotion else {
-            isBreathing.wrappedValue = false
-            return
-        }
-        withAnimation(Self.breath) { isBreathing.wrappedValue = true }
+    /// Starts the breath, or settles the light at rest. Callers key the breathing view on `isStill`,
+    /// so a new identity drops a running repeat-forever animation and appears again.
+    static func breathe(_ isBreathing: Binding<Bool>, isStill: Bool) {
+        withAnimation(isStill ? nil : Self.breath) { isBreathing.wrappedValue = !isStill }
     }
 
     /// Content enters with a short rise; the previous step fades out quickly so the two never
@@ -174,15 +172,18 @@ struct FluidOnboardingLandingBackdrop: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isBreathing = false
     let glowCenter: UnitPoint
+    let breathes: Bool
 
-    init(glowCenter: UnitPoint = UnitPoint(x: 0.5, y: 0.18)) {
+    init(glowCenter: UnitPoint = UnitPoint(x: 0.5, y: 0.18), breathes: Bool = true) {
         self.glowCenter = glowCenter
+        self.breathes = breathes
     }
 
     var body: some View {
         // The original layered light, drawn from the active brand palette instead of fixed blue.
         let isDark = self.colorScheme == .dark
         let accent = FluidOnboardingLandingColors.blue
+        let isStill = self.reduceMotion || !self.breathes
         ZStack {
             self.theme.palette.windowBackground
             RadialGradient(colors: [accent.opacity(isDark ? 0.22 : 0.13), accent.opacity(isDark ? 0.07 : 0.04), .clear],
@@ -191,8 +192,10 @@ struct FluidOnboardingLandingBackdrop: View {
             RadialGradient(colors: [self.theme.palette.primaryText.opacity(isDark ? 0.035 : 0.02), .clear],
                            center: .center, startRadius: 0, endRadius: 520)
         }
-        .id(self.reduceMotion)
-        .onAppear { FluidOnboardingMotion.breathe(self.$isBreathing, reduceMotion: self.reduceMotion) }
+        .onAppear { FluidOnboardingMotion.breathe(self.$isBreathing, isStill: isStill) }
+        .id(isStill)
+        // Swap at once: a crossfade of two backdrops would let the transparent window show through.
+        .transition(.identity)
         // A crisp card edge: the old feathered mask let the window's rectangle show through
         // the fade, which read as a second, uglier boundary on light desktops.
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -562,8 +565,8 @@ private struct FluidOnboardingAppIconMark: View {
                 .shadow(color: Color.black.opacity(0.56), radius: 20, x: 0, y: 15)
                 .shadow(color: FluidOnboardingLandingColors.blue.opacity(0.58), radius: 36, x: 0, y: 0)
         }
+        .onAppear { FluidOnboardingMotion.breathe(self.$isBreathing, isStill: self.reduceMotion) }
         .id(self.reduceMotion)
-        .onAppear { FluidOnboardingMotion.breathe(self.$isBreathing, reduceMotion: self.reduceMotion) }
         .frame(width: 360, height: 176)
         .accessibilityHidden(true)
     }

@@ -79,7 +79,7 @@ struct OnboardingAIEnhancementStepView: View {
         return GeometryReader { proxy in
             ZStack {
                 VStack(spacing: 24) {
-                    Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
                     Spacer()
                     FluidOnboardingCompactAppIconMark()
                     Text(AppBrand.text("AI text cleanup with Fluid Intelligence"))
@@ -127,7 +127,7 @@ struct OnboardingAIEnhancementStepView: View {
         GeometryReader { proxy in
             ZStack {
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
                     self.mainContent
                     if !self.isReady {
                         self.offerStatus
