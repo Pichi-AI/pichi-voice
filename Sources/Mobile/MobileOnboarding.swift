@@ -23,9 +23,11 @@ struct MobileOnboarding: View {
     @State private var advancing = false
     @State private var error: String?
     @State private var operation: Task<Void, Never>?
-    @State private var pageShownAt = Date.distantPast
+    @State private var pageShownAt = -TimeInterval.infinity
+    @State private var highlightsHeight: CGFloat = 0
     private var step: Int { settings.mobileSetupStep }
-    private var isCompact: Bool { horizontalSizeClass == .compact }
+    /// Phones in either orientation; Plus and Pro Max phones report a regular width in landscape.
+    private var isCompact: Bool { horizontalSizeClass == .compact || verticalSizeClass == .compact }
     private let titles = ["Welcome", "Choose Voice Engine", "Automatic speaker labels", "Data cleanup", "My voice", "Meeting location", "Ready to meet"]
 
     /// Desktop measures: the step column, the hero widths and the wide first action.
@@ -33,7 +35,11 @@ struct MobileOnboarding: View {
         static let column: CGFloat = 632
         static let compactHero: CGFloat = 640
         static let highlights: CGFloat = 520
+        static let landscapeHighlights: CGFloat = 360
+        static let minimumHero: CGFloat = 220
         static let welcomeAction: CGFloat = 236
+        /// Large text still fits three Russian actions on a 375 pt phone.
+        static let maximumActionFontSize: CGFloat = 20
         /// The large capsule adds about 20 pt on each side of its label.
         static let actionInsets: CGFloat = 40
     }
@@ -47,6 +53,7 @@ struct MobileOnboarding: View {
                     .accessibilityRepresentation {
                         ProgressView(value: Double(step + 1), total: Double(titles.count))
                             .accessibilityLabel(PichiLocalization.text("Setup progress"))
+                            .accessibilityValue(PichiLocalization.format("Step %lld of %lld", step + 1, titles.count))
                     }
                     .accessibilityHidden(step == 0)
                     .opacity(step == 0 ? 0 : 1)
@@ -62,14 +69,14 @@ struct MobileOnboarding: View {
         .foregroundStyle(theme.palette.primaryText)
         .tint(theme.palette.accent)
         .animation(reduceMotion ? FluidOnboardingMotion.crossfade : FluidOnboardingMotion.step, value: step)
-        .onChange(of: step) { pageShownAt = .now }
+        .onChange(of: step) { pageShownAt = ProcessInfo.processInfo.systemUptime }
         .task { if selected == nil { selected = settings.mobileSetupSelectedModel ?? settings.selectedSpeechModel } }
         .onChange(of: selected) { _, model in settings.mobileSetupSelectedModel = model }
         .onDisappear { operation?.cancel(); asr.cancelModelDownload() }
     }
 
     /// A new page needs a moment to arrive; a quick second tap must not act on it unseen.
-    private var isSettling: Bool { Date.now.timeIntervalSince(pageShownAt) < 0.35 }
+    private var isSettling: Bool { ProcessInfo.processInfo.systemUptime - pageShownAt < 0.35 }
 
     @ViewBuilder private var page: some View {
         if step == 0 {
@@ -117,12 +124,25 @@ struct MobileOnboarding: View {
     /// the hero scales; the highlights keep their reading size beside or below it.
     @ViewBuilder private var welcome: some View {
         if isCompact {
-            let layout = verticalSizeClass == .compact ? AnyLayout(HStackLayout(spacing: 16)) : AnyLayout(VStackLayout(spacing: 12))
-            layout {
-                hero(width: Metrics.compactHero) { EmptyView() }
-                welcomeHighlights
-                    .frame(maxWidth: verticalSizeClass == .compact ? 360 : Metrics.highlights)
-                    .padding(.horizontal, 20).padding(.bottom, 8)
+            let isLandscape = verticalSizeClass == .compact
+            let layout = isLandscape ? AnyLayout(HStackLayout(spacing: 16)) : AnyLayout(VStackLayout(spacing: 12))
+            GeometryReader { proxy in
+                // Large text scrolls instead of pushing the highlights under the actions.
+                ScrollView {
+                    layout {
+                        hero(width: Metrics.compactHero) { EmptyView() }
+                            .frame(height: isLandscape ? proxy.size.height
+                                : max(Metrics.minimumHero, proxy.size.height - highlightsHeight - 12))
+                        welcomeHighlights
+                            .frame(maxWidth: isLandscape ? Metrics.landscapeHighlights : Metrics.highlights)
+                            // Clear of the fade behind the actions.
+                            .padding(.horizontal, 20).padding(.bottom, 28)
+                            .background { GeometryReader { Color.clear.preference(key: WelcomeHighlightsHeight.self, value: $0.size.height) } }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .onPreferenceChange(WelcomeHighlightsHeight.self) { highlightsHeight = $0 }
             }
         } else {
             hero(width: theme.metrics.onboardingSurface.landing.contentWidth + 48) { welcomeHighlights }
@@ -251,33 +271,7 @@ struct MobileOnboarding: View {
             if advancing && (step == 1 || asr.modelPreparationPhase != nil) {
                 MobileASRPreparationStatus(asr: asr)
             }
-            HStack(spacing: isCompact ? 8 : 12) {
-                if step > 0 {
-                    pill("Back", prominent: false) {
-                        guard !isSettling else { return }
-                        error = nil; settings.mobileSetupStep -= 1
-                    }
-                        .disabled(advancing).accessibilityIdentifier("onboarding.back")
-                }
-                Spacer(minLength: 0)
-                if step == 4 || step == 5 {
-                    pill("Skip", prominent: false) {
-                        guard !isSettling else { return }
-                        if step == 5 { AppServices.shared.meetingLocation.setEnabled(false) }
-                        settings.mobileSetupStep = step + 1
-                    }
-                    .disabled(advancing).accessibilityIdentifier("onboarding.skip")
-                }
-                if advancing {
-                    pill("Cancel", prominent: false) { operation?.cancel(); asr.cancelModelDownload() }
-                        .accessibilityIdentifier("onboarding.cancel")
-                }
-                // The welcome page keeps the desktop's wide first step.
-                pill(step == 6 ? "Get started" : error == nil ? "Next" : "Try again", prominent: true,
-                     minWidth: step == 0 ? Metrics.welcomeAction : nil) { next() }
-                    .disabled(advancing || (step == 3 && privacy.isPreparing))
-                    .accessibilityIdentifier("onboarding.next")
-            }
+            HStack(spacing: isCompact ? 8 : 12) { backAction; Spacer(minLength: 0); optionalActions; nextAction }
         }
         .padding(.horizontal, isCompact ? 20 : FluidOnboardingLayout.footerHorizontalInset)
         .padding(.top, 16).padding(.bottom, isCompact ? 8 : 24)
@@ -291,13 +285,47 @@ struct MobileOnboarding: View {
         }
     }
 
+    @ViewBuilder private var backAction: some View {
+        if step > 0 {
+            pill("Back", prominent: false) {
+                guard !isSettling else { return }
+                error = nil; settings.mobileSetupStep -= 1
+            }
+            .disabled(advancing).accessibilityIdentifier("onboarding.back")
+        }
+    }
+
+    @ViewBuilder private var optionalActions: some View {
+        if step == 4 || step == 5 {
+            pill("Skip", prominent: false) {
+                guard !isSettling else { return }
+                // A replay keeps the location choice made before; a first setup declines the offer.
+                if step == 5, !settings.isReplayingMobileSetup { AppServices.shared.meetingLocation.setEnabled(false) }
+                settings.mobileSetupStep = step + 1
+            }
+            .disabled(advancing).accessibilityIdentifier("onboarding.skip")
+        }
+        if advancing {
+            pill("Cancel", prominent: false) { operation?.cancel(); asr.cancelModelDownload() }
+                .accessibilityIdentifier("onboarding.cancel")
+        }
+    }
+
+    private var nextAction: some View {
+        // The welcome page keeps the desktop's wide first step.
+        pill(step == 6 ? "Get started" : error == nil ? "Next" : "Try again", prominent: true,
+             minWidth: step == 0 ? Metrics.welcomeAction : nil) { next() }
+            .disabled(advancing || (step == 3 && privacy.isPreparing))
+            .accessibilityIdentifier("onboarding.next")
+    }
+
     /// The desktop footer actions: capsules of one size, with the accent only on the way forward.
     @ViewBuilder private func pill(_ title: String, prominent: Bool, minWidth: CGFloat? = nil,
                                    action: @escaping () -> Void) -> some View {
         let label = Text(PichiLocalization.text(title))
-            .font(.fluidSystem(size: actionSize, weight: .semibold))
+            .font(.fluidSystem(size: min(actionSize, Metrics.maximumActionFontSize), weight: .semibold))
             .lineLimit(1)
-            .minimumScaleFactor(0.85)
+            .minimumScaleFactor(0.75)
             .frame(minWidth: isCompact ? nil : (minWidth ?? FluidOnboardingLayout.footerButtonWidth) - Metrics.actionInsets)
         if prominent {
             Button(action: action) { label }
@@ -465,5 +493,12 @@ struct MobileModelDetails: View {
             }.font(theme.typography.captionStrong)
                 .accessibilityIdentifier("model.details.\(modelID)")
         }
+    }
+}
+
+private struct WelcomeHighlightsHeight: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

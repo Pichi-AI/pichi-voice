@@ -156,7 +156,7 @@ scheme = f'''<?xml version="1.0" encoding="UTF-8"?>
 '''
 SCHEME = ROOT / "Fluid.xcodeproj/xcshareddata/xcschemes/PichiVoiceMobile.xcscheme"
 if "--check" in sys.argv[1:]:
-    if PROJECT.read_text() != text or SCHEME.read_text() != scheme:
+    if PROJECT.read_text() != text or not SCHEME.exists() or SCHEME.read_text() != scheme:
         sys.exit("The mobile target differs from Sources/Mobile/shared-sources.txt. Run python3 scripts/dev/update-mobile-project.py.")
     print("Mobile target matches Sources/Mobile/shared-sources.txt")
     sys.exit(0)

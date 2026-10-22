@@ -312,7 +312,9 @@ struct MobileMeetingRoot: View {
             case .settings:
                 MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
                     required: required, privacyActivation: privacyActivation,
-                    canReplaySetup: coordinator.isQuiescent, reportError: report)
+                    canReplaySetup: coordinator.isQuiescent && !isBusy && asr.activeExclusiveActivity == nil
+                        && asr.downloadingModelId == nil,
+                    reportError: report)
             }
         }
         .navigationTitle(item == .meetings ? AppBrand.meetingName : PichiLocalization.text(item.title))

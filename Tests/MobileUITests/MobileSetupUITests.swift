@@ -122,8 +122,9 @@ final class MobileSetupUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light"]
         app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
         let sidebar = app.buttons["navigation.settings"]
-        if sidebar.waitForExistence(timeout: 10) { sidebar.tap() }
+        if sidebar.waitForExistence(timeout: 5) { sidebar.tap() }
         else { app.tabBars.buttons["Настройки"].tap() }
         let replay = app.buttons["settings.replaySetup"]
         XCTAssertTrue(replay.waitForExistence(timeout: 10))
@@ -137,6 +138,7 @@ final class MobileSetupUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.1"].firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.descendants(matching: .any)["onboarding.step.2"].firstMatch.waitForExistence(timeout: 2))
         XCTAssertFalse(app.buttons["onboarding.cancel"].exists, "The second tap must not start model preparation")
+        XCTAssertFalse(app.descendants(matching: .any)["onboarding.error"].exists)
         capture("replay-02-one-page-per-double-tap")
         app.terminate()
     }

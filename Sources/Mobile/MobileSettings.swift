@@ -13,7 +13,8 @@ struct MobileSettingsRoot: View {
     let microphones: [MeetingMicrophoneIdentity]
     @ObservedObject var required: MobileRequiredResources
     @ObservedObject var privacyActivation: MobilePrivacyActivation
-    /// Setup replaces the meeting interface, so it is offered only while no meeting is active.
+    /// Setup replaces the meeting interface, so it is offered only while no meeting, export or
+    /// model operation is running.
     let canReplaySetup: Bool
     let reportError: (Error) -> Void
     @ObservedObject private var settings = SettingsStore.shared
@@ -38,7 +39,10 @@ struct MobileSettingsRoot: View {
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
             Section {
-                Button { settings.resetMobileSetupProgress() } label: {
+                Button {
+                    guard canReplaySetup else { return }
+                    settings.resetMobileSetupProgress()
+                } label: {
                     Label(PichiLocalization.text("Replay onboarding"), systemImage: "arrow.counterclockwise")
                 }
                 .disabled(!canReplaySetup)
