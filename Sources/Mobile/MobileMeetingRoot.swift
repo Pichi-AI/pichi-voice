@@ -553,7 +553,10 @@ struct MobileMeetingRoot: View {
             if let session = sessions.first(where: { $0.id == id }) {
                 Group {
                     if session.state == .failed || session.state == .interrupted { recovery(session) } else { transcript(session) }
-                }.navigationBarTitleDisplayMode(.inline)
+                }
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbarBackground(theme.palette.toolbarBackground, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
             }
         }
     }

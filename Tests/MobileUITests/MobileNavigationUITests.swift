@@ -1520,6 +1520,39 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
+    /// Native captures cover both the initial header and its scroll-under transition.
+    /// The parent reviews the navigation surface as well as these hit-test assertions.
+    func testTranscriptScrollKeepsNavigationControlsReadable() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Synthetic saved-meeting navigation review is simulator-only")
+        #else
+        let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9025"
+        let lastID = "00000000-0000-0000-0000-202610210105"
+        for (language, appearance, history) in [("en", "light", "History"), ("ru", "dark", "История")] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launch()
+            capture("navigation-surface-\(language)-ready")
+            openNavigation("history", title: history)
+            let meeting = app.buttons["history.session.\(fixtureID)"]
+            XCTAssertTrue(meeting.waitForExistence(timeout: 10))
+            meeting.tap()
+            let scroll = app.scrollViews["meeting.transcript"]
+            XCTAssertTrue(scroll.waitForExistence(timeout: 10))
+            assertParticipantHeadersHaveCompactLabels()
+            capture("navigation-surface-\(language)-header")
+            let paragraph = app.descendants(matching: .any)["transcript.paragraph.\(lastID)"].firstMatch
+            try revealParagraphAboveNavigation(paragraph, step: "navigation-surface-\(language)-last")
+            let back = app.navigationBars.buttons.firstMatch
+            XCTAssertTrue(back.exists && back.isHittable)
+            capture("navigation-surface-\(language)-scrolled")
+            scroll.swipeDown()
+            XCTAssertTrue(back.isHittable)
+            capture("navigation-surface-\(language)-returned")
+        }
+        #endif
+    }
+
     func testSavedTranscriptCaptionContractInBothAppearances() throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Simulator-only saved transcript contract")
