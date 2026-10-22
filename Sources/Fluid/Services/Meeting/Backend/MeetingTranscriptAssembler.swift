@@ -346,7 +346,8 @@ nonisolated struct MeetingTranscriptAssembler {
             identityLinks: identityLinks,
             confirmedLocalUserTokens: input.confirmedLocalUserTokens,
             activity: evidence.speakerActivity,
-            useVoicedAdmission: input.speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true
+            useVoicedAdmission: input.speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true,
+            useProvisionalIdentities: input.speakerAttributionPolicy?.enableProvisionalSpeakerIdentities == true
         )
         let speakerIDsByToken = Dictionary(
             speakers.map { ($0.token, $0.speaker.id) },
@@ -400,6 +401,9 @@ nonisolated struct MeetingTranscriptAssembler {
                     nativeTiming: .init(start: presentation.start, end: presentation.end),
                     speakerAttribution: decisionsByID[unit.id].flatMap {
                         MeetingTranscriptSpeakerAttribution.readingSummary(decision: $0, speakerIDs: speakerIDsByToken)
+                    },
+                    speakerIdentityIsProvisional: speakerID.flatMap { id in
+                        speakers.first { $0.speaker.id == id }?.speaker.identityIsProvisional == true ? true : nil
                     }
                 )
                 return (sourceOffsets[unit.id] ?? 0, segment)
@@ -706,6 +710,7 @@ nonisolated struct MeetingTranscriptAssembler {
         confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = [],
         activity: [MeetingBackendSpeakerActivity] = [],
         useVoicedAdmission: Bool = false,
+        useProvisionalIdentities: Bool = false,
         contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = [],
         voicedAdmissionUnitIDs: Set<String>? = nil,
         qualifiedNativeTokens: Set<MeetingBackendSpeakerToken> = []
@@ -776,7 +781,7 @@ nonisolated struct MeetingTranscriptAssembler {
         let tracksWithSubstantialSpeaker = Set(wordsByIdentity.keys.filter(isSubstantial).map(\.analysisEpochID.trackID))
         let speakingTokens = tokens.filter { token in
             let identity = canonicalByToken[token] ?? token
-            return qualifiedNativeTokens.contains(token) || isSubstantial(identity)
+            return useProvisionalIdentities || qualifiedNativeTokens.contains(token) || isSubstantial(identity)
                 || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
         }
         let localIdentities = Set(confirmedLocalUserTokens.map { canonicalByToken[$0] ?? $0 })
@@ -785,8 +790,12 @@ nonisolated struct MeetingTranscriptAssembler {
             let scopedClusterID = Self.scopedClusterID(for: canonical)
             let speakerID = Self.speakerID(attemptID: attemptID, token: canonical)
             let isLocalUser = localIdentities.contains(canonical)
+            let qualified = qualifiedNativeTokens.contains(token) || isSubstantial(canonical) || isLocalUser
             if var prior = priorSpeakers.first(where: { $0.id == speakerID }) {
                 prior.isLocalUser = isLocalUser
+                if qualified, useProvisionalIdentities || prior.identityIsProvisional != nil {
+                    prior.identityIsProvisional = false
+                }
                 return (token, prior)
             }
             return (
@@ -798,7 +807,8 @@ nonisolated struct MeetingTranscriptAssembler {
                     trackKind: trackKinds[token.analysisEpochID.trackID] ?? .microphone,
                     isLocalUser: isLocalUser,
                     identityCandidates: [],
-                    generatedParticipantNumber: isLocalUser ? 0 : 1
+                    generatedParticipantNumber: isLocalUser ? 0 : 1,
+                    identityIsProvisional: useProvisionalIdentities ? !qualified : nil
                 )
             )
         }
@@ -887,6 +897,7 @@ nonisolated struct MeetingTranscriptAssembler {
                                          emitted: visible, identityLinks: identityLinks, priorSpeakers: reconciledPriorSpeakers,
                                          confirmedLocalUserTokens: confirmedLocalUserTokens, activity: activity,
                                          useVoicedAdmission: speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true,
+                                         useProvisionalIdentities: speakerAttributionPolicy?.enableProvisionalSpeakerIdentities == true,
                                          contextualBarriers: contextualBarriers,
                                          voicedAdmissionUnitIDs: voicedAdmissionUnitIDs)
         let speakerIDs = Dictionary(speakers.map { ($0.token, $0.speaker.id) }, uniquingKeysWith: { first, _ in first })
@@ -916,6 +927,9 @@ nonisolated struct MeetingTranscriptAssembler {
                 nativeTiming: .init(start: interval.start, end: interval.end),
                 speakerAttribution: decision.flatMap {
                     MeetingTranscriptSpeakerAttribution.readingSummary(decision: $0, speakerIDs: speakerIDs)
+                },
+                speakerIdentityIsProvisional: speakerID.flatMap { id in
+                    speakers.first { $0.speaker.id == id }?.speaker.identityIsProvisional == true ? true : nil
                 }
             )
         }
@@ -940,7 +954,8 @@ nonisolated struct MeetingTranscriptAssembler {
         let tokens = qualification.tokens.filter { token in
             let id = Self.speakerID(attemptID: attemptID, token: token), cluster = Self.scopedClusterID(for: token)
             // Do not resurrect a merged identity or replace conflicting/manual registry metadata.
-            return !priorSpeakers.contains { $0.id == id || $0.diarizationClusterID == cluster }
+            return !priorSpeakers.contains { ($0.id == id || $0.diarizationClusterID == cluster)
+                && $0.identityIsProvisional != true }
         }
         let admitted = self.makeSpeakers(attemptID: attemptID, trackKinds: [epoch.trackID: .microphone],
             emitted: [], identityLinks: [], priorSpeakers: priorSpeakers,
@@ -958,6 +973,7 @@ nonisolated struct MeetingTranscriptAssembler {
         let updated = speakers.map { source in
             var speaker = source
             speaker.isLocalUser = IDs.contains(speaker.id)
+            if speaker.isLocalUser, speaker.identityIsProvisional != nil { speaker.identityIsProvisional = false }
             return speaker
         }
         return MeetingSessionSpeaker.numberingGeneratedParticipants(updated, speakerNameFormat: speakerNameFormat)
@@ -971,6 +987,16 @@ nonisolated struct MeetingTranscriptAssembler {
     /// Product identities are still admitted and created only by this assembler.
     static func speakerID(attemptID: UUID, token: MeetingBackendSpeakerToken) -> SessionSpeakerID {
         Self.stableUUID("speaker:\(attemptID.uuidString):\(Self.scopedClusterID(for: token))")
+    }
+
+    /// The protected publication owner supplies the first word of an unresolved bout. This
+    /// is a product reading identity only; it carries no fabricated acoustic cluster or token.
+    func provisionalPCMSpeaker(attemptID: UUID, epoch: MeetingAnalysisEpochID,
+                               firstWordID: MeetingTranscriptSegmentID) -> MeetingSessionSpeaker {
+        .init(id: Self.stableUUID("provisional-speaker:\(attemptID):\(epoch):\(firstWordID)"),
+            displayName: String(format: self.speakerNameFormat, Int64(1)), diarizationClusterID: nil,
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [],
+            generatedParticipantNumber: 1, identityIsProvisional: true)
     }
 
     private static func mediaTime(_ seconds: TimeInterval) -> MeetingMediaTime {
@@ -1027,6 +1053,8 @@ nonisolated enum MeetingPCMRecordingAttribution {
         }
         func isManualSpeakerAssignment(_ segment: MeetingTranscriptSegment) -> Bool {
             if let explicit = segment.isUserSpeakerAssigned { return explicit }
+            if segment.speakerIdentityIsProvisional == true,
+               segment.isUserTextEdited != true, segment.originalText == nil { return false }
             guard speakerAttributionPolicy?.enableVoicedSpeakerAdmission == true,
                   let id = segment.speakerID, segment.speakerAttribution == nil,
                   segment.speakerAttributionInference == nil,
@@ -1103,6 +1131,7 @@ nonisolated enum MeetingPCMRecordingAttribution {
             result.segments[index].nativeSpeakerAssignment = attributed.segments[index].nativeSpeakerAssignment
             result.segments[index].nativeTiming = attributed.segments[index].nativeTiming
             result.segments[index].speakerAttribution = attributed.segments[index].speakerAttribution
+            result.segments[index].speakerIdentityIsProvisional = attributed.segments[index].speakerIdentityIsProvisional
         }
         return result
     }

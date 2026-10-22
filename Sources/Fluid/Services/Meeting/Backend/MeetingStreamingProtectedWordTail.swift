@@ -13,7 +13,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
 
         init(maximumRetainedWords: Int = 2_048, maximumRetainedSeconds: TimeInterval = 120,
              maximumActivityIntervals: Int = 8_192,
-             maximumSpeakers: Int = MeetingSpeakerVoiceSamples.maximumProfiles,
+             maximumSpeakers: Int = MeetingSessionSpeaker.maximumParticipants,
              maximumRetainedTextBytes: Int = 524_288) {
             self.maximumRetainedWords = maximumRetainedWords
             self.maximumRetainedSeconds = maximumRetainedSeconds
@@ -77,11 +77,27 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
     }
 
     private enum Phase: Sendable { case active, finished, cancelled }
+    private struct ProvisionalBout: Sendable {
+        let speakerID: SessionSpeakerID
+        let start: TimeInterval
+        var end: TimeInterval
+        let precedingToken: MeetingBackendSpeakerToken?
+        var recoveryToken: MeetingBackendSpeakerToken?
+    }
+    /// A scalar reading cursor, not another acoustic clusterer. Replaying retained words from
+    /// the pruned prefix makes both IDs and recovery boundaries independent of batch partitioning.
+    private struct ProvisionalReadingState: Sendable {
+        var lastEnd: TimeInterval?
+        var precedingToken: MeetingBackendSpeakerToken?
+        var bout: ProvisionalBout?
+        var isBarrier = false
+    }
     private struct Retained: Sendable {
         /// Never replace source evidence with an earlier contextual display choice.
         let original: MeetingTranscriptSegment
         var published: MeetingTranscriptSegment
         var committed: Bool
+        var provisionalStateAfter = ProvisionalReadingState()
     }
 
     let attemptID: UUID
@@ -94,6 +110,10 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
     let policyLookahead: TimeInterval
     private var phase: Phase = .active
     private var retained: [Retained] = []
+    private var provisionalPrefixState = ProvisionalReadingState()
+    /// A retired text prefix cannot be relabelled by a bounded future observation. One bit per
+    /// product identity prevents an automatic alias from changing already committed uncertainty.
+    private var committedProvisionalIdentities = Set<SessionSpeakerID>()
     private var speakers: [MeetingSessionSpeaker]
     private struct VoiceSupport: Sendable {
         var intervals: [MeetingSpeakerAttributionInterval] = []
@@ -125,7 +145,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         guard limits.maximumRetainedWords > 0, limits.maximumRetainedSeconds.isFinite,
               limits.maximumRetainedSeconds > lookahead,
               limits.maximumActivityIntervals > 0,
-              (1...MeetingSpeakerVoiceSamples.maximumProfiles).contains(limits.maximumSpeakers),
+              (1...MeetingSessionSpeaker.maximumParticipants).contains(limits.maximumSpeakers),
               limits.maximumRetainedTextBytes > 0,
               priorSpeakers.count <= limits.maximumSpeakers,
               Set(priorSpeakers.map(\.id)).count == priorSpeakers.count else { throw Failure.invalidConfiguration }
@@ -169,6 +189,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         self.retained.removeAll(keepingCapacity: false)
         self.speakers.removeAll(keepingCapacity: false)
         self.voiceSupport.removeAll(keepingCapacity: false)
+        self.provisionalPrefixState = .init()
+        self.committedProvisionalIdentities.removeAll(keepingCapacity: false)
         self.phase = .cancelled
     }
 
@@ -326,6 +348,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 resolved[index].speakerAttribution = .init(streamingSummary: summary,
                     knownToken: token, speakerID: known.id)
             }
+            try self.applyProvisionalIdentities(to: &resolved)
             for index in self.retained.indices where !self.retained[index].committed {
                 try Task.checkCancellation()
                 let patch = SpeakerRevision(resolved[index])
@@ -347,6 +370,11 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
             // cannot legitimately rescue this word. Commit the canonical uncertain outcome;
             // never invent an incoming speaker merely to drain a noisy meeting.
             self.retained[index].committed = true
+            if self.retained[index].published.speakerIdentityIsProvisional == true,
+               let id = self.retained[index].published.speakerID,
+               self.speakers.contains(where: { $0.id == id && $0.diarizationClusterID == nil }) {
+                self.committedProvisionalIdentities.insert(id)
+            }
             committedIDs.append(word.id)
             self.committedThrough = max(self.committedThrough, timing.end)
         }
@@ -359,6 +387,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
             self.phase = .finished
             self.retained.removeAll(keepingCapacity: false)
             self.voiceSupport.removeAll(keepingCapacity: false)
+            self.provisionalPrefixState = .init()
+            self.committedProvisionalIdentities.removeAll(keepingCapacity: false)
             self.committedThrough = max(self.committedThrough, watermarks.commonThrough)
             self.retainActivityFrom = self.committedThrough
         }
@@ -431,7 +461,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 support.intervals.removeAll(keepingCapacity: false)
             }
             self.voiceSupport[token] = support
-            guard self.voiceSupport.count <= self.limits.maximumSpeakers else { throw Failure.speakerLimit }
+            guard self.voiceSupport.count <= MeetingSpeakerVoiceSamples.maximumProfiles else { throw Failure.speakerLimit }
             guard self.retainedAdmissionIntervalCount <= self.limits.maximumActivityIntervals else { throw Failure.activityLimit }
         }
         let qualification = MeetingVoicedSpeakerAdmission(attemptID: self.attemptID, epoch: self.epoch,
@@ -478,6 +508,116 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         }
     }
 
+    /// Supply a durable reading identity only after canonical privacy admission and scoring.
+    /// An unknown bout is not an acoustic person: it cannot sponsor voice/owner matching and
+    /// never rewrites the native token or the resolver's original summary.
+    private mutating func applyProvisionalIdentities(to resolved: inout [MeetingTranscriptSegment]) throws {
+        guard self.policy.enableProvisionalSpeakerIdentities else { return }
+        var state = self.provisionalPrefixState
+        var speakerIndices = Dictionary(self.speakers.enumerated().map { ($0.element.id, $0.offset) },
+            uniquingKeysWith: { first, _ in first })
+        for index in resolved.indices {
+            try Task.checkCancellation()
+            let source = self.retained[index].original, timing = Self.timing(source)
+            let barrier = source.status != .final || source.completeness != .complete || source.isEcho
+                || source.attributionState == .timingUncertain || source.isUserSpeakerAssigned == true
+                || source.nativeUnitID?.isEmpty != false || source.nativeSpeakerAssignment == nil
+            // Speech bouts include ordinary pauses between ASR words. Once a native slot
+            // resumes provisionally, its pauses obey the same identity continuity as that
+            // slot; only a different actual token or an explicit barrier ends the recovery.
+            let maximumGap = state.bout?.recoveryToken != nil ? Double.infinity : self.policy.maximumUnknownRunSeconds
+            let contiguous = state.lastEnd.map {
+                timing.start - $0 <= maximumGap + self.policy.comparisonTolerance
+            } ?? false
+            if !contiguous || barrier != state.isBarrier { state = .init() }
+
+            let identity = resolved[index].speakerID.flatMap { speakerIndices[$0] }.map { self.speakers[$0] }
+            let validIdentity = identity.map { $0.mergedIntoSpeakerID == nil
+                && !$0.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } == true
+            if source.isUserSpeakerAssigned == true, validIdentity {
+                // Manual confirmation remains authoritative and is also a bout boundary.
+                self.retained[index].provisionalStateAfter = .init()
+                continue
+            }
+            let independentToken: MeetingBackendSpeakerToken? = {
+                guard validIdentity, case let .assigned(native) = resolved[index].nativeSpeakerAssignment,
+                      native.analysisEpochID == self.epoch,
+                      resolved[index].speakerID == MeetingTranscriptAssembler.speakerID(attemptID: self.attemptID, token: native)
+                else { return nil }
+                if let summary = resolved[index].speakerAttribution {
+                    guard summary.rule.isIndependentAcousticSelection, summary.selectedToken == native else { return nil }
+                }
+                return native
+            }()
+            if validIdentity {
+                if let token = independentToken, var bout = state.bout,
+                   !barrier, (bout.recoveryToken == token
+                    || (bout.precedingToken == token
+                        && bout.end - bout.start > self.policy.maximumUnknownRunSeconds + self.policy.comparisonTolerance)) {
+                    // A sustained unscored speech passage breaks product identity continuity.
+                    // A return of the same native slot alone cannot prove the same person.
+                    // Keep one explicitly provisional reading identity until another actual
+                    // token or a manual selection establishes a boundary. No text is inspected.
+                    bout.recoveryToken = token
+                    bout.end = max(bout.end, timing.end)
+                    state.bout = bout
+                    resolved[index].speakerID = bout.speakerID
+                    resolved[index].speakerIdentityIsProvisional = true
+                } else {
+                    state.bout = nil
+                    state.precedingToken = barrier ? nil : independentToken
+                    resolved[index].speakerIdentityIsProvisional = identity?.identityIsProvisional == true ? true : nil
+                }
+            } else {
+                var bout: ProvisionalBout
+                if let current = state.bout { bout = current }
+                else {
+                    let speaker = MeetingTranscriptAssembler(speakerNameFormat: self.speakerNameFormat)
+                        .provisionalPCMSpeaker(attemptID: self.attemptID, epoch: self.epoch, firstWordID: source.id)
+                    if speakerIndices[speaker.id] == nil {
+                        guard self.speakers.count < self.limits.maximumSpeakers else { throw Failure.speakerLimit }
+                        speakerIndices[speaker.id] = self.speakers.count
+                        self.speakers.append(speaker)
+                    }
+                    bout = .init(speakerID: speaker.id, start: timing.start, end: timing.end,
+                        precedingToken: barrier ? nil : state.precedingToken)
+                }
+                bout.end = max(bout.end, timing.end)
+                state.bout = bout
+                resolved[index].speakerID = bout.speakerID
+                resolved[index].speakerIdentityIsProvisional = true
+            }
+            state.lastEnd = max(state.lastEnd ?? timing.end, timing.end)
+            state.isBarrier = barrier
+            self.retained[index].provisionalStateAfter = state
+        }
+        // If every still-editable reference acquired the same actual identity, retain the
+        // preliminary record as an alias instead of leaving a ghost participant in the roster.
+        // Never merge an identity with a committed unresolved word or a surviving bout.
+        var refinementTargets: [SessionSpeakerID: Set<SessionSpeakerID>] = [:]
+        let referenced = Set(resolved.compactMap(\.speakerID))
+        for index in resolved.indices {
+            guard let old = self.retained[index].published.speakerID,
+                  self.retained[index].published.speakerIdentityIsProvisional == true,
+                  let target = resolved[index].speakerID, target != old,
+                  let targetIndex = speakerIndices[target], self.speakers[targetIndex].diarizationClusterID != nil
+            else { continue }
+            refinementTargets[old, default: []].insert(target)
+        }
+        for (old, targets) in refinementTargets {
+            guard targets.count == 1, let target = targets.first, !referenced.contains(old),
+                  !self.committedProvisionalIdentities.contains(old), let index = speakerIndices[old],
+                  self.speakers[index].diarizationClusterID == nil,
+                  self.speakers[index].identityIsProvisional == true,
+                  self.speakers[index].mergedIntoSpeakerID == nil,
+                  self.speakers[index].generatedParticipantNumber != nil,
+                  self.speakers[index].usesCustomDisplayName != true else { continue }
+            self.speakers[index].mergedIntoSpeakerID = target
+        }
+        self.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(self.speakers,
+            speakerNameFormat: self.speakerNameFormat)
+    }
+
     private static func identityOnly(_ speakers: [MeetingSessionSpeaker]) -> [MeetingSessionSpeaker] {
         speakers.map { source in
             var speaker = source
@@ -493,7 +633,11 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         let contextStart = max(0, (firstPendingStart ?? self.watermarks.commonThrough) - self.policyLookahead)
         // Keep the full original left anchor when it intersects the context horizon. A very long
         // native envelope fails the explicit retention cap rather than being silently clipped.
-        self.retained.removeAll { $0.committed && Self.timing($0.original).end < contextStart }
+        let retired = self.retained.prefix { $0.committed && Self.timing($0.original).end < contextStart }.count
+        if retired > 0 {
+            self.provisionalPrefixState = self.retained[retired - 1].provisionalStateAfter
+            self.retained.removeFirst(retired)
+        }
         let firstStart = self.retained.map { Self.timing($0.original).start }.min() ?? self.watermarks.commonThrough
         let boutPreroll = self.policy.enableBriefInterruption
             ? self.policy.maximumBriefInterruptionSeconds + self.policy.maximumBriefInterruptionGapSeconds : 0

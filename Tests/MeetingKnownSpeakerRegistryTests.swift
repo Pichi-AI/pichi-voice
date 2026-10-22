@@ -80,7 +80,7 @@ struct MeetingKnownSpeakerRegistryTests {
                 precision: .word, text: source.text, analysisStart: source.nativeTiming!.start,
                 analysisEnd: source.nativeTiming!.end, speaker: source.nativeSpeakerAssignment!, analysisSpanIDs: [])
         }
-        let decision = try MeetingSpeakerAttribution.resolve(units: units, activity: activity)
+        let decision = try MeetingSpeakerAttribution.resolve(units: units, activity: activity, policy: .init())
             .first { $0.unitID == words[target].nativeUnitID }!
         check(decision.selectedToken == b)
         words[target].speakerID = ids[b]
@@ -90,7 +90,7 @@ struct MeetingKnownSpeakerRegistryTests {
     }
 
     static func run(_ fixture: Fixture) throws -> Tail.Update {
-        var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld",
+        var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: .init(),
                             priorSpeakers: fixture.speakers)
         return try tail.update(safeWords: .init(segments: fixture.words), activity: fixture.activity,
             watermarks: .init(asrStableThrough: fixture.duration, diarizationProcessedThrough: fixture.duration,

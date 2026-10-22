@@ -39,7 +39,7 @@ struct MeetingStreamingProtectedWordTailTests {
     }
 
     static func tail(limits: Tail.Limits = .init(), prior: [MeetingSessionSpeaker] = [],
-                     policy: MeetingSpeakerAttributionPolicy = .standard) throws -> Tail {
+                     policy: MeetingSpeakerAttributionPolicy = .init()) throws -> Tail {
         try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld", policy: policy,
                  limits: limits, priorSpeakers: prior)
     }
@@ -208,7 +208,7 @@ struct MeetingStreamingProtectedWordTailTests {
                 diarizationClusterID: "\(epoch):known-\($0)", trackKind: .microphone,
                 isLocalUser: false, identityCandidates: [])
         }
-        var capacity = try tail(prior: full)
+        var capacity = try tail(limits: .init(maximumSpeakers: MeetingSpeakerVoiceSamples.maximumProfiles), prior: full)
         expect(.speakerLimit) {
             _ = try update(&capacity, words: [word(37, 0, 1)], activity: [activity("new", 0, 1)], end: 1)
         }
