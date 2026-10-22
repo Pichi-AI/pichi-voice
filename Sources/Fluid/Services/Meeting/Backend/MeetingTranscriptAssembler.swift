@@ -765,7 +765,8 @@ nonisolated struct MeetingTranscriptAssembler {
             if useStableSpeakerOpening, !MeetingTranscriptSegment.textContainsLexicalContent(unit.text) { continue }
             guard case let .assigned(token) = unit.speaker else { continue }
             if useVoicedAdmission {
-                guard MeetingTranscriptSegment.textContainsLexicalContent(unit.text) else { continue }
+                guard useStableSpeakerOpening ? MeetingTranscriptSegment.textContainsLexicalContent(unit.text)
+                    : unit.text.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }
                 if voicedAdmissionUnitIDs?.contains(unit.id) != false,
                    !contextualBarriers.contains(where: { $0.analysisEpochID == unit.analysisEpochID
                        && min($0.interval.end, unit.analysisEnd) - max($0.interval.start, unit.analysisStart)

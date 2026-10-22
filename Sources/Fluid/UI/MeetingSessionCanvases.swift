@@ -427,7 +427,7 @@ struct MeetingResultCanvas: View {
         let speakers = Dictionary(uniqueKeysWithValues: self.session.readableSpeakers.map { ($0.id, $0) })
         var previousIdentity: String?
         var previousTrack: MeetingAudioTrackID?
-        return visibleSegments.map { segment in
+        return visibleSegments.filter { presentations[$0.id] != nil || (self.showsProbableEchoes && $0.isEcho) }.map { segment in
             let presentation = presentations[segment.id]
                 ?? MeetingTranscriptExporter.speakerPresentation(for: segment, in: self.session)
             if previousTrack != segment.sourceTrackID { previousIdentity = nil }

@@ -997,7 +997,14 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     var containsPrivacyReplacement: Bool? = nil
 
     static func textContainsLexicalContent(_ text: String) -> Bool {
-        text.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+        text.unicodeScalars.contains { scalar in
+            guard !scalar.properties.isDefaultIgnorableCodePoint else { return false }
+            switch scalar.properties.generalCategory {
+            case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
+                 .decimalNumber, .letterNumber, .otherNumber: return true
+            default: return false
+            }
+        }
     }
 
     var hasLexicalContent: Bool { Self.textContainsLexicalContent(self.text) }

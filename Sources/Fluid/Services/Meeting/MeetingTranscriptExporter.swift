@@ -576,7 +576,7 @@ nonisolated enum MeetingTranscriptExporter {
                     && intervals[incomingPosition - 1].end - intervals[first].start
                         <= policy.maximumBoundaryResidualSeconds + policy.comparisonTolerance
                     && (first..<incomingPosition).allSatisfy {
-                        segments[$0].text.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+                        segments[$0].hasLexicalContent
                     }
                     && range.allSatisfy { index in
                         let word = segments[index]
@@ -714,7 +714,7 @@ nonisolated enum MeetingTranscriptExporter {
                     + policy.comparisonTolerance else { continue }
             } else {
                 guard (first...last).allSatisfy({ punctuation(segments[$0])
-                        || segments[$0].text.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) } }),
+                        || segments[$0].hasLexicalContent }),
                       tail.end.seconds - head.start.seconds <= policy.maximumBoundaryResidualSeconds
                         + policy.comparisonTolerance,
                       gap <= policy.maximumBoundaryResidualSeconds + policy.comparisonTolerance,

@@ -421,7 +421,8 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                   source.attributionState != .timingUncertain, source.originalText == nil,
                   source.isUserTextEdited != true, source.speakerAttributionInference == nil,
                   source.nativePrecision == .word, source.nativeUnitID?.isEmpty == false,
-                  source.text.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }),
+                  (self.policy.enableStableSpeakerOpening ? source.hasLexicalContent
+                    : source.text.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) })),
                   case let .assigned(token) = source.nativeSpeakerAssignment,
                   current.nativeSpeakerAssignment == .assigned(token), current.overlap == .none,
                   token.analysisEpochID == self.epoch,

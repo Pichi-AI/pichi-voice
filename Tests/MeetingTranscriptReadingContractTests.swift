@@ -47,9 +47,10 @@ extension MeetingSessionStoreCheckpointTests {
             let comma = word(",", 0.08, raw: nil, selected: nil, owner: extra)
             let reply = word("нет", 1, raw: tb, selected: tb, owner: b, map: both)
             let number = word("42", 1.2, raw: tb, selected: tb, owner: b, map: both)
-            let noise = ["-", "\u{2014}", "...", " \t\n", "\u{200B}\u{2060}\u{FEFF}"]
+            let noise = ["-", "\u{2014}", "...", " \t\n", "\u{200B}\u{2060}\u{FEFF}",
+                         "\u{034F}", "\u{FE0F}", "\u{0301}", "\u{115F}"]
                 .enumerated().map { word($0.element, 6 + Double($0.offset), raw: nil, selected: nil, owner: extra) }
-            var mask = word("***", 14, raw: tb, selected: tb, owner: b, map: both)
+            var mask = word("***", 20, raw: tb, selected: tb, owner: b, map: both)
             mask.containsPrivacyReplacement = true
             value.transcriptSegments = [first, comma, reply, number] + noise + [mask]
             let original = value.transcriptSegments
@@ -82,6 +83,10 @@ extension MeetingSessionStoreCheckpointTests {
             for text in ["да", "нет", "я", "Ёё", "0", "3.14", "[ИМЯ]"] {
                 check(MeetingTranscriptSegment.textContainsLexicalContent(text), "Useful short text remains lexical: \(text)")
             }
+            for text in ["\u{034F}", "\u{FE0F}", "\u{0301}", "\u{115F}", "\u{1160}"] {
+                check(!MeetingTranscriptSegment.textContainsLexicalContent(text), "Invisible and combining-only scalars do not sponsor speech")
+            }
+            check(MeetingTranscriptSegment.textContainsLexicalContent("е\u{0301}"), "Diacritics in actual lexical speech remain intact")
         }
         do {
             var provisional = word("A synthetic reply.", 4, raw: nil, selected: nil, owner: b,
