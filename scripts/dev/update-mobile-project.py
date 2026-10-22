@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Update only the mobile target's explicit shared-source membership, leaving desktop intact."""
+"""Update only the mobile target's explicit shared-source membership, leaving desktop intact.
+
+`--check` reports a project that no longer matches the manifest instead of writing it.
+"""
 from pathlib import Path
 import hashlib
 import json
 import re
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT = ROOT / "Fluid.xcodeproj/project.pbxproj"
@@ -141,7 +145,6 @@ for original_id, additions, marker in [("7C078D862E3B339200FB7CAC", [mobile_grou
     insertion = "".join("\n\t\t\t\t" + identifier + " /* Pichi mobile membership */," for identifier in additions)
     text, count = re.subn(pattern, lambda match: match.group(1)+insertion, text, count=1, flags=re.S)
     if count != 1: raise ValueError("Original project structure not found: " + original_id)
-PROJECT.write_text(text)
 
 scheme = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Scheme LastUpgradeVersion="2700" version="1.7">
@@ -151,5 +154,12 @@ scheme = f'''<?xml version="1.0" encoding="UTF-8"?>
 <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{app_target}" BuildableName="PichiVoiceMobile.app" BlueprintName="PichiVoiceMobile" ReferencedContainer="container:Fluid.xcodeproj"/></BuildableProductRunnable></ProfileAction><AnalyzeAction buildConfiguration="Debug"/><ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
 </Scheme>
 '''
-(ROOT / "Fluid.xcodeproj/xcshareddata/xcschemes/PichiVoiceMobile.xcscheme").write_text(scheme)
+SCHEME = ROOT / "Fluid.xcodeproj/xcshareddata/xcschemes/PichiVoiceMobile.xcscheme"
+if "--check" in sys.argv[1:]:
+    if PROJECT.read_text() != text or SCHEME.read_text() != scheme:
+        sys.exit("The mobile target differs from Sources/Mobile/shared-sources.txt. Run python3 scripts/dev/update-mobile-project.py.")
+    print("Mobile target matches Sources/Mobile/shared-sources.txt")
+    sys.exit(0)
+PROJECT.write_text(text)
+SCHEME.write_text(scheme)
 print(f"Mobile target: {len(sources)} shared and platform Swift files, {len(test_builds)} UI and {len(integration_builds)} hosted integration test files")
