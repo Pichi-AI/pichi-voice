@@ -655,6 +655,12 @@ struct MobileMeetingRoot: View {
                                 }
                             }.accessibilityIdentifier("transcript.speakers")
                         }
+                        // Keep the editor in the vertical transcript scroll hierarchy, rather
+                        // than inside the phone's horizontal participant strip.
+                        if let draft = participantEdit, draft.sessionID == session.id, draft.paragraphID == nil,
+                           let speaker = session.speakers.first(where: { $0.id == draft.speakerID }) {
+                            participantEditor(speaker, session: session, draft: draft)
+                        }
                     }
                     if let message = playback.errorMessage {
                         Text(PichiLocalization.text(message)).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
@@ -691,27 +697,20 @@ struct MobileMeetingRoot: View {
         }
     }
 
-    @ViewBuilder
     private func participantButton(_ speaker: MeetingSessionSpeaker, session: MeetingSession, colorIndex: Int?, expands: Bool) -> some View {
-        if let draft = participantEdit, draft.sessionID == session.id, draft.speakerID == speaker.id,
-           draft.paragraphID == nil {
-            participantEditor(speaker, session: session, draft: draft)
-                .frame(maxWidth: expands ? .infinity : 280, alignment: .leading)
-        } else {
-            Button {
-                participantEdit = MeetingParticipantEditDraft(sessionID: session.id, speaker: speaker)
-            } label: {
-                Text(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language))
-                    .font(theme.typography.captionStrong)
-                    .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: colorIndex,
-                        theme: theme, colorScheme: colorScheme))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
-            }.accessibilityIdentifier("transcript.speaker.\(speaker.id)")
-                .accessibilityHint(PichiLocalization.text("Speaker name"))
-                .disabled(!coordinator.isQuiescent || isBusy)
-        }
+        Button {
+            participantEdit = MeetingParticipantEditDraft(sessionID: session.id, speaker: speaker)
+        } label: {
+            Text(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language))
+                .font(theme.typography.captionStrong)
+                .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: colorIndex,
+                    theme: theme, colorScheme: colorScheme))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
+        }.accessibilityIdentifier("transcript.speaker.\(speaker.id)")
+            .accessibilityHint(PichiLocalization.text("Speaker name"))
+            .disabled(!coordinator.isQuiescent || isBusy)
     }
 
     /// The same inline editor serves the roster and a fragment's resolved reading owner.
