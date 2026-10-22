@@ -23,6 +23,9 @@ private nonisolated struct AssemblerFixtureObserver: MeetingChunkAudioObserving 
 /// exercised against spans the validator actually proved.
 final class MeetingTranscriptAssemblerTests: XCTestCase {
     private let backendID = MeetingBackendID(rawValue: "fixture.assembler")
+    // Frozen attempts predating stable opening retain preliminary reading identities. These
+    // fixtures exercise that replay contract explicitly instead of inheriting today's default.
+    private let provisionalPolicy = MeetingSpeakerAttributionPolicy(enableProvisionalSpeakerIdentities: true)
 
     func testCanonicalFinalPublicationNamesUnresolvedSpeechWithoutChangingNativeEvidence() throws {
         let chunk = self.chunk(sequence: 0, start: 100, end: 110)
@@ -42,8 +45,13 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                 echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, MeetingUnitEchoVerdict.notEcho) }),
                 speakerAttributionPolicy: policy))
         }
-        let result = try assemble(.standard)
+        let result = try assemble(self.provisionalPolicy)
         let legacy = try assemble(.init())
+        let standard = try assemble(.standard)
+        XCTAssertTrue(standard.segments.allSatisfy { $0.speakerID == nil && $0.speakerIdentityIsProvisional == nil })
+        XCTAssertTrue(standard.speakers.isEmpty, "Unqualified speech cannot open a participant under stable opening")
+        XCTAssertEqual(standard.sidecar.units, result.sidecar.units)
+        XCTAssertEqual(standard.sidecar.dispositions, result.sidecar.dispositions)
         XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil && $0.speakerIdentityIsProvisional == true })
         XCTAssertEqual(result.segments[0].speakerID, result.segments[1].speakerID)
         XCTAssertNotEqual(result.segments[1].speakerID, result.segments[2].speakerID)
@@ -184,13 +192,20 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                 analysisStart: 7, analysisEnd: 13, speaker: .assigned(weak), analysisSpanIDs: [])]
         let result = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: UUID(), epoch: epoch,
             offset: 0, duration: 13, units: units,
-            activity: [.init(token: main, start: 0, end: 6), .init(token: weak, start: 7, end: 7.1)])
+            activity: [.init(token: main, start: 0, end: 6), .init(token: weak, start: 7, end: 7.1)],
+            speakerAttributionPolicy: self.provisionalPolicy)
         XCTAssertEqual(result.speakers.count, 2)
         XCTAssertNotNil(result.segments[1].speakerID)
         XCTAssertEqual(result.segments[1].speakerIdentityIsProvisional, true)
         XCTAssertEqual(result.speakers.first { $0.id == result.segments[1].speakerID }?.identityIsProvisional, true,
             "A long ASR envelope cannot qualify a short acoustic identity")
         XCTAssertEqual(result.segments[1].nativeSpeakerAssignment, .assigned(weak))
+        let standard = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: UUID(), epoch: epoch,
+            offset: 0, duration: 13, units: units,
+            activity: [.init(token: main, start: 0, end: 6), .init(token: weak, start: 7, end: 7.1)])
+        XCTAssertEqual(standard.speakers.count, 1)
+        XCTAssertNil(standard.segments[1].speakerID, "A short acoustic identity cannot open an extra participant")
+        XCTAssertEqual(standard.segments[1].nativeSpeakerAssignment, .assigned(weak))
     }
 
     func testSidecarAttributionReplaysAndRejectsChangedPolicyWithoutRewritingNativeEvidence() throws {
@@ -254,7 +269,8 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                 evidence: .init(backendID: plan.backendID, attemptID: plan.attemptID, units: units, speakerActivity: activity),
                 coverageReceipts: self.receipts(for: manifest),
                 echoVerdicts: [before.id: .notEcho, after.id: .notEcho,
-                    excluded.id: outsideActivity ? .notEcho : .echoSuppressed(duplicateOfUnitID: nil)]))
+                    excluded.id: outsideActivity ? .notEcho : .echoSuppressed(duplicateOfUnitID: nil)],
+                speakerAttributionPolicy: self.provisionalPolicy))
             XCTAssertEqual(result.segments.count, 2)
             XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil && $0.speakerIdentityIsProvisional == true })
             XCTAssertNotEqual(result.segments[0].speakerID, result.segments[1].speakerID)
@@ -753,7 +769,8 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                       analysisStart: 1.2, analysisEnd: 3, speaker: .assigned(b))]
         let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
             evidence: self.evidence(plan: plan, units: units), coverageReceipts: self.receipts(for: manifest),
-            echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, .notEcho) })))
+            echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, .notEcho) }),
+            speakerAttributionPolicy: self.provisionalPolicy))
         XCTAssertNotNil(result.segments[1].speakerID)
         XCTAssertNotEqual(result.segments[1].speakerID, result.segments[0].speakerID)
         XCTAssertNotEqual(result.segments[1].speakerID, result.segments[2].speakerID,
@@ -794,9 +811,11 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             echoVerdicts: ["u-0": .notEcho, "u-1": .notEcho, "u-2": .notEcho]
         ))
         let speakerByUnit = Dictionary(uniqueKeysWithValues: zip(["u-0", "u-1", "u-2"], result.segments.map(\.speakerID)))
-        XCTAssertEqual(result.speakers.count, 2)
+        XCTAssertEqual(result.speakers.count, 1)
+        XCTAssertNotNil(speakerByUnit["u-0"] ?? nil)
+        XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), units.map { Optional($0.speaker) })
         XCTAssertEqual(speakerByUnit["u-0"], speakerByUnit["u-1"], "slot-0 keeps its name across the reset")
-        XCTAssertNotEqual(speakerByUnit["u-1"], speakerByUnit["u-2"], "a different slot stays a different speaker")
+        XCTAssertNil(speakerByUnit["u-2"] ?? nil, "A brief different slot cannot inherit the linked participant")
         XCTAssertEqual(result.sidecar.speakerIdentityLinks.count, 1)
     }
 
@@ -820,7 +839,8 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                 manifest: manifest,
                 evidence: self.evidence(plan: plan, units: units),
                 coverageReceipts: self.receipts(for: manifest),
-                echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, .notEcho) })
+                echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, .notEcho) }),
+                speakerAttributionPolicy: self.provisionalPolicy
             ))
         }
 
@@ -891,12 +911,25 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             self.unit(id: "u-0", span: spans[0], analysisStart: 1, analysisEnd: 2),
             self.unit(id: "u-1", span: spans[1], analysisStart: 6, analysisEnd: 7),
         ]
-        let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+        let standard = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
             plan: plan,
             manifest: manifest,
             evidence: self.evidence(plan: plan, units: units),
             coverageReceipts: self.receipts(for: manifest),
             echoVerdicts: ["u-0": .notEcho, "u-1": .notEcho]
+        ))
+        XCTAssertEqual(standard.speakers.count, 1, "An unlinked brief voice cannot open an extra participant")
+        XCTAssertNotNil(standard.segments.first?.speakerID)
+        XCTAssertNil(standard.segments.last?.speakerID, "A matching label alone does not establish identity across epochs")
+        XCTAssertTrue(standard.sidecar.speakerIdentityLinks.isEmpty)
+        XCTAssertEqual(standard.segments.map(\.nativeSpeakerAssignment), units.map { Optional($0.speaker) })
+        let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+            plan: plan,
+            manifest: manifest,
+            evidence: self.evidence(plan: plan, units: units),
+            coverageReceipts: self.receipts(for: manifest),
+            echoVerdicts: ["u-0": .notEcho, "u-1": .notEcho],
+            speakerAttributionPolicy: self.provisionalPolicy
         ))
         // Same label, same track, different epochs: two speakers, never one.
         XCTAssertEqual(result.speakers.count, 2)
@@ -917,7 +950,8 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                 backendID: plan.backendID, attemptID: plan.attemptID, units: units, voiceProfiles: profiles
             ),
             coverageReceipts: self.receipts(for: manifest),
-            echoVerdicts: ["u-0": .notEcho, "u-1": .notEcho]
+            echoVerdicts: ["u-0": .notEcho, "u-1": .notEcho],
+            speakerAttributionPolicy: self.provisionalPolicy
         ))
         XCTAssertEqual(matched.speakers.count, 1)
         XCTAssertEqual(Set(matched.segments.compactMap(\.speakerID)).count, 1)
@@ -1207,7 +1241,8 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             manifest: manifest,
             evidence: self.evidence(plan: plan, units: [unit]),
             coverageReceipts: self.receipts(for: manifest),
-            echoVerdicts: ["u-amb": .notEcho]
+            echoVerdicts: ["u-amb": .notEcho],
+            speakerAttributionPolicy: self.provisionalPolicy
         ))
         XCTAssertEqual(self.dispositions(result)[unit.id]?.disposition, .ambiguousUnassigned)
         let matching = result.segments.filter { $0.text == "overlapped" }
@@ -1232,7 +1267,8 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             manifest: manifest,
             evidence: self.evidence(plan: plan, units: [unit]),
             coverageReceipts: self.receipts(for: manifest),
-            echoVerdicts: ["u-0": .notEcho]
+            echoVerdicts: ["u-0": .notEcho],
+            speakerAttributionPolicy: self.provisionalPolicy
         ))
         let record = try XCTUnwrap(self.dispositions(result)[unit.id])
         XCTAssertEqual(record.disposition, .ambiguousUnassigned)
@@ -2074,7 +2110,8 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             manifest: manifest,
             evidence: self.evidence(plan: plan, units: [assignedUnit, unassignedUnit]),
             coverageReceipts: self.receipts(for: manifest),
-            echoVerdicts: ["u-assigned": .notEcho, "u-unassigned": .notEcho]
+            echoVerdicts: ["u-assigned": .notEcho, "u-unassigned": .notEcho],
+            speakerAttributionPolicy: self.provisionalPolicy
         ))
         XCTAssertEqual(self.dispositions(result)["u-assigned"]?.disposition, .emitted)
         XCTAssertEqual(self.dispositions(result)["u-unassigned"]?.disposition, .emitted)
