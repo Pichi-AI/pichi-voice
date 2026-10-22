@@ -5771,7 +5771,6 @@ final class MeetingRecoveryTests: XCTestCase {
                 speakers: speakers,
                 quotesBySpeaker: Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, ["A short sample of this speaker's words."]) }),
                 tints: [:],
-                accentColor: FluidBrandColors.blue,
                 onSave: { _ in actions += 1; return nil },
                 onCancel: { actions += 1 }
             )
