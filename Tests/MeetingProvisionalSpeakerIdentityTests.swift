@@ -52,6 +52,7 @@ import Foundation
         try boundariesCapacityAndAtomicity()
         try compatibility()
         try stableOpeningAndContext()
+        try invisibleScalarsCannotOpenSpeakers()
         try stableRepeatedRepliesAndOwnerContinuity()
         try stableFinalPublicationBoundaries()
         try await stableFinalPublicationCancellation()
@@ -262,6 +263,21 @@ import Foundation
         check(!prior.enableStableSpeakerOpening && prior.fingerprint == legacy.fingerprint)
         check(prior.fingerprint != MeetingSpeakerAttributionPolicy.standard.fingerprint)
         check(MeetingSpeakerAttributionPolicy.standard.enableStableSpeakerOpening)
+    }
+
+    static func invisibleScalarsCannotOpenSpeakers() throws {
+        for text in ["\u{034F}", "\u{FE0F}", "\u{0301}", "\u{115F}", " \u{200B}\u{2060}"] {
+            var source = word(40_000, 0, 0.08)
+            source.text = text; source.nativeSpeakerAssignment = .assigned(a)
+            var tail = try Tail(attemptID: attempt, epoch: epoch, speakerNameFormat: "Speaker %lld")
+            let result = try update(&tail, [source], [.init(token: a, start: 0, end: 6)], end: 7)
+            check(result.speakers.isEmpty && result.inserted[0].speakerID == nil,
+                "Invisible scalar-only output must not open even the first generated speaker")
+            check(tail.admittedVoiceSeconds(for: a) == 0,
+                "Invisible scalar-only output cannot sponsor native voiced admission")
+            check(result.inserted[0].text == text && result.inserted[0].nativeSpeakerAssignment == source.nativeSpeakerAssignment,
+                "Noise suppression preserves source evidence")
+        }
     }
 
     static func stableOpeningAndContext() throws {
