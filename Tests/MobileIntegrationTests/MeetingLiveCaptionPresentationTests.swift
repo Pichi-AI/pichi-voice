@@ -29,6 +29,31 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
             "Merged records reserve their slots across Stop and persisted reopen")
     }
 
+    func testExplicitOwnerTransferReplacesAliasesWithoutMovingColorSlots() throws {
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic owner transfer",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone")),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1))
+        session.speakers = (0..<3).map { index in
+            .init(id: UUID(), displayName: "Сохранённое имя Ёё \(index)", diarizationClusterID: nil,
+                trackKind: .microphone, isLocalUser: index == 0, identityCandidates: [],
+                generatedParticipantNumber: index, usesCustomDisplayName: true)
+        }
+        let slots = MeetingSpeakerPalette.tintIndices(for: session.speakers)
+        let unchanged = session.speakers[2]
+        try session.setLocalUserSpeaker(id: session.speakers[1].id, speakerNameFormat: "Участник %lld")
+        XCTAssertEqual(session.speakers[0].displayName, "Участник 3")
+        XCTAssertEqual(session.speakers[0].generatedParticipantNumber, 3)
+        XCTAssertEqual(session.speakers[0].usesCustomDisplayName, false)
+        XCTAssertEqual(MeetingTranscriptExporter.speakerDisplayName(session.speakers[1], language: .russian), "Вы")
+        XCTAssertEqual(session.speakers[1].generatedParticipantNumber, 1)
+        XCTAssertEqual(session.activeSpeakers.filter(\.isLocalUser).map(\.id), [session.speakers[1].id])
+        XCTAssertEqual(session.speakers[2], unchanged)
+        XCTAssertEqual(MeetingSpeakerPalette.tintIndices(for: session.speakers), slots)
+        let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(restored.speakers, session.speakers)
+        XCTAssertEqual(MeetingSpeakerPalette.tintIndices(for: restored.speakers), slots)
+    }
+
     func testBufferedCaptionCoverageDoesNotInventTimingForGrowingIdenticalWords() {
         let coarse = PichiMeetingCaptionRecognition(text: "Same words", endOfUtteranceProbability: nil)
         for count in [48_000, 96_000, 192_000] {

@@ -240,7 +240,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         case rename(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?, previousCustomDisplayName: Bool?)
         case reassign([SpeakerAssignmentCorrection])
         case localUserRole([(speakerID: SessionSpeakerID, previousIsLocalUser: Bool,
-                             previousName: String, previousGeneratedNumber: Int?, previousIdentityIsProvisional: Bool?)])
+                             previousName: String, previousGeneratedNumber: Int?, previousCustomDisplayName: Bool?,
+                             previousIdentityIsProvisional: Bool?)])
         case nameUnknown(
             segmentID: MeetingTranscriptSegmentID,
             createdSpeakerID: SessionSpeakerID,
@@ -1363,6 +1364,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             let previous = session.speakers.map { speaker in
                 (speakerID: speaker.id, previousIsLocalUser: speaker.isLocalUser,
                  previousName: speaker.displayName, previousGeneratedNumber: speaker.generatedParticipantNumber,
+                 previousCustomDisplayName: speaker.usesCustomDisplayName,
                  previousIdentityIsProvisional: speaker.identityIsProvisional)
             }
             try session.setLocalUserSpeaker(id: speakerID, speakerNameFormat: speakerNameFormat)
@@ -1781,6 +1783,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 session.speakers[index].isLocalUser = entry.previousIsLocalUser
                 session.speakers[index].displayName = entry.previousName
                 session.speakers[index].generatedParticipantNumber = entry.previousGeneratedNumber
+                session.speakers[index].usesCustomDisplayName = entry.previousCustomDisplayName
                 session.speakers[index].identityIsProvisional = entry.previousIdentityIsProvisional
             }
             return true

@@ -1247,7 +1247,23 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         }
         var changed = false
         for index in self.speakers.indices {
+            let wasLocalUser = self.speakers[index].isLocalUser
             let isLocalUser = self.speakers[index].mergedIntoSpeakerID == nil && self.speakers[index].id == id
+            // An explicit "This is me" replaces an alias with the owner label. A former
+            // owner returns to its reserved participant number, including legacy aliases.
+            // Other participants' aliases and all acoustic evidence remain untouched.
+            if wasLocalUser || isLocalUser {
+                if self.speakers[index].usesCustomDisplayName == true {
+                    self.speakers[index].usesCustomDisplayName = false
+                    changed = true
+                }
+                if self.speakers[index].generatedParticipantNumber == nil {
+                    // Zero keeps a selected legacy owner unnumbered until demotion; the
+                    // existing allocator then gives a former owner an unused positive slot.
+                    self.speakers[index].generatedParticipantNumber = 0
+                    changed = true
+                }
+            }
             if isLocalUser, self.speakers[index].identityIsProvisional == true {
                 self.speakers[index].identityIsProvisional = false
                 changed = true
@@ -1258,7 +1274,6 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
             }
         }
         guard changed else { return }
-        // An explicit alias protects its text while retaining any reserved identity number.
         self.speakers = MeetingSessionSpeaker.numberingGeneratedParticipants(self.speakers,
             speakerNameFormat: speakerNameFormat)
         self.updatedAt = Date()
