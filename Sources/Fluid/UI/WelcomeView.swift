@@ -132,6 +132,8 @@ struct OnboardingFlowView: View {
         let iconSize: CGFloat
         let isHovered: Bool
         let isEnabled: Bool
+        /// Treat `width` as a minimum and pad the title, so a longer translation widens the pill.
+        var growsWithTitle = false
     }
 
     private enum Step: Int, CaseIterable {
@@ -364,7 +366,7 @@ struct OnboardingFlowView: View {
     var body: some View {
         // One still backdrop, light and progress for every step; only step content moves.
         ZStack {
-            FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter)
+            FluidOnboardingLandingBackdrop(glowCenter: self.landingGlowCenter, breathes: self.step == .landing)
             FluidOnboardingLandingHoverTracker(
                 onMove: { location, size in self.updateLandingGlow(location: location, in: size) },
                 onExit: { self.resetLandingGlow() }
@@ -380,12 +382,12 @@ struct OnboardingFlowView: View {
 
             if self.step != .landing {
                 FluidOnboardingCompactProgress(value: self.compactProgressValue)
-                    .padding(.top, 28)
+                    .padding(.top, FluidOnboardingLayout.progressTopInset)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .transition(.opacity)
             }
         }
-        .animation(self.reduceMotion ? nil : FluidOnboardingMotion.step, value: self.currentStep)
+        .animation(self.reduceMotion ? FluidOnboardingMotion.crossfade : FluidOnboardingMotion.step, value: self.currentStep)
         .background {
             FluidOnboardingWindowTransparency()
         }
@@ -529,29 +531,35 @@ struct OnboardingFlowView: View {
     }
 
     private var landingStep: some View {
-        VStack(spacing: 0) {
-            OnboardingFittedContent(width: self.theme.metrics.onboardingSurface.landing.contentWidth + 48) {
-                FluidOnboardingLandingHero(
-                    eyebrow: AppBrand.appName,
-                    title: "Just speak.",
-                    accentTitle: "We'll handle the rest.",
-                    firstDetail: AppBrand.tagline,
-                    secondDetail: "Built for creators, thinkers, and builders."
-                ) { EmptyView() }
-                    .padding(24)
+        GeometryReader { proxy in
+            let landing = self.theme.metrics.onboardingSurface.landing
+
+            ZStack {
+                VStack(spacing: 0) {
+                    OnboardingFittedContent(width: landing.contentWidth + 48) {
+                        FluidOnboardingLandingHero(
+                            eyebrow: AppBrand.appName,
+                            title: "Just speak.",
+                            accentTitle: "We'll handle the rest.",
+                            firstDetail: AppBrand.tagline,
+                            secondDetail: "Built for creators, thinkers, and builders."
+                        ) { EmptyView() }
+                            .padding(24)
+                    }
+                    HStack {
+                        Spacer()
+                        FluidOnboardingLandingPrimaryButton(title: "Next", action: self.forThisStep { self.goNext() })
+                            .frame(
+                                width: FluidOnboardingLandingPrimaryButton.size.width,
+                                height: FluidOnboardingLandingPrimaryButton.size.height
+                            )
+                    }
+                    .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
+                    .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
-            HStack {
-                Spacer()
-                FluidOnboardingLandingPrimaryButton(title: "Next") { self.goNext() }
-                    .frame(
-                        width: FluidOnboardingLandingPrimaryButton.size.width,
-                        height: FluidOnboardingLandingPrimaryButton.size.height
-                    )
-            }
-            .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
-            .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func updateLandingGlow(location: CGPoint, in size: CGSize) {
@@ -595,66 +603,69 @@ struct OnboardingFlowView: View {
     }
 
     private var languageStep: some View {
-        VStack(spacing: 0) {
-            // The shared chrome draws the progress bar; keep its space.
-            Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
-
-            OnboardingFittedContent(width: 760) {
+        GeometryReader { proxy in
+            ZStack {
                 VStack(spacing: 0) {
-                    FluidOnboardingCompactAppIconMark()
-                        .padding(.bottom, 22)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
-                    Text("What language will\nyou speak most?")
-                        .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
-                        .foregroundStyle(self.theme.palette.primaryText)
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(4)
-                        .padding(.bottom, 18)
+                    OnboardingFittedContent(width: 760) {
+                        VStack(spacing: 0) {
+                            FluidOnboardingCompactAppIconMark()
+                                .padding(.bottom, 22)
 
-                    Text("We'll show the best voice engines for it.")
-                        .font(.fluidSystem(size: 15, weight: .medium))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .padding(.bottom, 26)
+                            Text("What language will\nyou speak most?")
+                                .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
+                                .foregroundStyle(self.theme.palette.primaryText)
+                                .multilineTextAlignment(.center)
+                                .lineSpacing(4)
+                                .padding(.bottom, 18)
 
-                    LazyVGrid(
-                        columns: [
-                            GridItem(.fixed(200), spacing: 16),
-                            GridItem(.fixed(200), spacing: 16),
-                            GridItem(.fixed(200), spacing: 16),
-                        ],
-                        spacing: 16
-                    ) {
-                        ForEach(self.popularOnboardingLanguages) { language in
-                            self.languageChoiceCard(for: language)
+                            Text("We'll show the best voice engines for it.")
+                                .font(.fluidSystem(size: 15, weight: .medium))
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .padding(.bottom, 26)
+
+                            LazyVGrid(
+                                columns: [
+                                    GridItem(.fixed(200), spacing: 16),
+                                    GridItem(.fixed(200), spacing: 16),
+                                    GridItem(.fixed(200), spacing: 16),
+                                ],
+                                spacing: 16
+                            ) {
+                                ForEach(self.popularOnboardingLanguages) { language in
+                                    self.languageChoiceCard(for: language)
+                                }
+
+                                self.otherLanguageCard
+                            }
+                            .frame(width: 632)
+
+                            if self.isShowingAllLanguages {
+                                self.allLanguagesPicker
+                                    .padding(.top, 18)
+                            }
+
+                            Text("You can change this later in Voice Engine settings.")
+                                .font(.fluidSystem(size: 12, weight: .medium))
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .padding(.top, 18)
                         }
-
-                        self.otherLanguageCard
-                    }
-                    .frame(width: 632)
-
-                    if self.isShowingAllLanguages {
-                        self.allLanguagesPicker
-                            .padding(.top, 18)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 30)
+                        .padding(.bottom, 12)
                     }
 
-                    Text("You can change this later in Voice Engine settings.")
-                        .font(.fluidSystem(size: 12, weight: .medium))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .padding(.top, 18)
+                    self.cinematicFooter(
+                        continueTitle: "Continue",
+                        canContinue: self.canContinue
+                    ) {
+                        self.handlePrimaryAction()
+                    }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 30)
-                .padding(.bottom, 12)
-            }
-
-            self.cinematicFooter(
-                continueTitle: "Continue",
-                canContinue: self.canContinue
-            ) {
-                self.handlePrimaryAction()
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func languageChoiceCard(for language: VoiceEngineLanguage) -> some View {
@@ -932,14 +943,15 @@ struct OnboardingFlowView: View {
                 title: title,
                 systemImage: nil,
                 tone: isPrimary ? .primary : .secondary,
-                width: 144,
-                height: 52,
-                fontSize: 17,
+                width: FluidOnboardingLayout.footerButtonWidth,
+                height: FluidOnboardingLayout.footerButtonHeight,
+                fontSize: FluidOnboardingLayout.footerButtonFontSize,
                 iconSize: 14,
                 isHovered: isHovered,
-                isEnabled: isEnabled
+                isEnabled: isEnabled,
+                growsWithTitle: true
             ),
-            action: action
+            action: self.forThisStep(action)
         ) { isHovered in
             self.setHoveredFooterButton(isHovered ? kind : nil)
         }
@@ -1031,269 +1043,278 @@ struct OnboardingFlowView: View {
     }
 
     private var voiceModelStep: some View {
-        VStack(spacing: 0) {
-            // The shared chrome draws the progress bar; keep its space.
-            Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
-
-            OnboardingFittedContent(width: 760) {
+        GeometryReader { proxy in
+            ZStack {
                 VStack(spacing: 0) {
-                    FluidOnboardingCompactAppIconMark()
-                        .padding(.bottom, 22)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
-                    Text("Choose your\nvoice engine")
-                        .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
-                        .foregroundStyle(self.theme.palette.primaryText)
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(4)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.bottom, 16)
+                    OnboardingFittedContent(width: 760) {
+                        VStack(spacing: 0) {
+                            FluidOnboardingCompactAppIconMark()
+                                .padding(.bottom, 22)
 
-                    Text(self.recommendedModelReasonText)
-                        .font(.fluidSystem(size: 15, weight: .medium))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .multilineTextAlignment(.center)
-                        .padding(.bottom, 14)
+                            Text("Choose your\nvoice engine")
+                                .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
+                                .foregroundStyle(self.theme.palette.primaryText)
+                                .multilineTextAlignment(.center)
+                                .lineSpacing(4)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.bottom, 16)
 
-                    Text(self.selectedOnboardingLanguage?.localizedDisplayName(locale: self.locale) ?? "")
-                        .font(.fluidSystem(size: 13, weight: .semibold))
-                        .foregroundStyle(self.theme.palette.accentText)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule()
-                                .fill(self.theme.palette.elevatedCardBackground)
-                                .overlay(Capsule().stroke(self.theme.palette.accent.opacity(0.24), lineWidth: 1))
-                        )
-                        .padding(.bottom, 18)
+                            Text(self.recommendedModelReasonText)
+                                .font(.fluidSystem(size: 15, weight: .medium))
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .multilineTextAlignment(.center)
+                                .padding(.bottom, 14)
 
-                    VStack(spacing: 10) {
-                        let defaultRoutes = self.isShowingOtherModelRoutes ? [] : self.defaultDisplayedModelRoutes
-                        if defaultRoutes.count == 1, let route = defaultRoutes.first {
-                            self.onboardingRouteCard(for: route)
-                        } else if !defaultRoutes.isEmpty {
-                            HStack(spacing: 16) {
-                                ForEach(defaultRoutes) { route in
+                            Text(self.selectedOnboardingLanguage?.localizedDisplayName(locale: self.locale) ?? "")
+                                .font(.fluidSystem(size: 13, weight: .semibold))
+                                .foregroundStyle(self.theme.palette.accentText)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule()
+                                        .fill(self.theme.palette.elevatedCardBackground)
+                                        .overlay(Capsule().stroke(self.theme.palette.accent.opacity(0.24), lineWidth: 1))
+                                )
+                                .padding(.bottom, 18)
+
+                            VStack(spacing: 10) {
+                                let defaultRoutes = self.isShowingOtherModelRoutes ? [] : self.defaultDisplayedModelRoutes
+                                if defaultRoutes.count == 1, let route = defaultRoutes.first {
                                     self.onboardingRouteCard(for: route)
+                                } else if !defaultRoutes.isEmpty {
+                                    HStack(spacing: 16) {
+                                        ForEach(defaultRoutes) { route in
+                                            self.onboardingRouteCard(for: route)
+                                        }
+                                    }
+                                }
+
+                                if !self.otherModelRoutes.isEmpty {
+                                    self.otherModelRoutesToggleButton
+                                }
+
+                                if self.isShowingOtherModelRoutes {
+                                    LazyVGrid(
+                                        columns: [
+                                            GridItem(.fixed(292), spacing: 16, alignment: .top),
+                                            GridItem(.fixed(292), spacing: 16, alignment: .top),
+                                        ],
+                                        spacing: 16
+                                    ) {
+                                        let page = min(self.otherModelsPage, max(0, (self.otherModelRoutes.count - 1) / 2))
+                                        ForEach(Array(self.otherModelRoutes.dropFirst(page * 2).prefix(2))) { route in
+                                            self.onboardingRouteCard(for: route, enablesHover: false)
+                                        }
+                                    }
+                                    HStack(spacing: 16) {
+                                        let lastPage = max(0, (self.otherModelRoutes.count - 1) / 2)
+                                        let page = min(self.otherModelsPage, lastPage)
+                                        Button("Previous models") { self.otherModelsPage = max(0, page - 1) }
+                                            .disabled(page == 0)
+                                        Text("\(page + 1) / \(lastPage + 1)")
+                                        Button("Next models") { self.otherModelsPage = min(lastPage, page + 1) }
+                                            .disabled(page == lastPage)
+                                    }
+                                    .font(self.theme.typography.caption)
                                 }
                             }
-                        }
-
-                        if !self.otherModelRoutes.isEmpty {
-                            self.otherModelRoutesToggleButton
-                        }
-
-                        if self.isShowingOtherModelRoutes {
-                            LazyVGrid(
-                                columns: [
-                                    GridItem(.fixed(292), spacing: 16, alignment: .top),
-                                    GridItem(.fixed(292), spacing: 16, alignment: .top),
-                                ],
-                                spacing: 16
-                            ) {
-                                let page = min(self.otherModelsPage, max(0, (self.otherModelRoutes.count - 1) / 2))
-                                ForEach(Array(self.otherModelRoutes.dropFirst(page * 2).prefix(2))) { route in
-                                    self.onboardingRouteCard(for: route, enablesHover: false)
-                                }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 2)
+                            .transaction { transaction in
+                                transaction.animation = nil
                             }
-                            HStack(spacing: 16) {
-                                let lastPage = max(0, (self.otherModelRoutes.count - 1) / 2)
-                                let page = min(self.otherModelsPage, lastPage)
-                                Button("Previous models") { self.otherModelsPage = max(0, page - 1) }
-                                    .disabled(page == 0)
-                                Text("\(page + 1) / \(lastPage + 1)")
-                                Button("Next models") { self.otherModelsPage = min(lastPage, page + 1) }
-                                    .disabled(page == lastPage)
+                            .frame(width: 608)
+
+                            if self.isModelPreparationInProgress {
+                                Label(AppBrand.text("First-time setup can take a few minutes while your Mac prepares the model. Please keep FluidVoice open."), systemImage: "clock.arrow.circlepath")
+                                    .font(self.theme.typography.captionStrong)
+                                    .foregroundStyle(self.theme.palette.warning)
+                                    .labelStyle(.titleAndIcon)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.86)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        Capsule()
+                                            .fill(self.theme.palette.elevatedCardBackground)
+                                            .overlay(Capsule().stroke(self.theme.palette.warning.opacity(0.24), lineWidth: 1))
+                                    )
+                                    .padding(.top, 14)
                             }
-                            .font(self.theme.typography.caption)
+
+                            Text("You can switch models later in Voice Engine settings.")
+                                .font(.fluidSystem(size: 12, weight: .medium))
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .padding(.top, self.isModelPreparationInProgress ? 8 : 18)
                         }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 2)
-                    .transaction { transaction in
-                        transaction.animation = nil
-                    }
-                    .frame(width: 608)
-
-                    if self.isModelPreparationInProgress {
-                        Label(AppBrand.text("First-time setup can take a few minutes while your Mac prepares the model. Please keep FluidVoice open."), systemImage: "clock.arrow.circlepath")
-                            .font(self.theme.typography.captionStrong)
-                            .foregroundStyle(self.theme.palette.warning)
-                            .labelStyle(.titleAndIcon)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.86)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(
-                                Capsule()
-                                    .fill(self.theme.palette.elevatedCardBackground)
-                                    .overlay(Capsule().stroke(self.theme.palette.warning.opacity(0.24), lineWidth: 1))
-                            )
-                            .padding(.top, 14)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 30)
+                        .padding(.bottom, 12)
                     }
 
-                    Text("You can switch models later in Voice Engine settings.")
-                        .font(.fluidSystem(size: 12, weight: .medium))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .padding(.top, self.isModelPreparationInProgress ? 8 : 18)
+                    self.cinematicFooter(
+                        continueTitle: "Continue",
+                        canContinue: self.canContinue
+                    ) {
+                        self.handlePrimaryAction()
+                    }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 30)
-                .padding(.bottom, 12)
-            }
-
-            self.cinematicFooter(
-                continueTitle: "Continue",
-                canContinue: self.canContinue
-            ) {
-                self.handlePrimaryAction()
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var permissionsStep: some View {
-        VStack(spacing: 0) {
-            // The shared chrome draws the progress bar; keep its space.
-            Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
-
-            OnboardingFittedContent(width: 760) {
+        GeometryReader { proxy in
+            ZStack {
                 VStack(spacing: 0) {
-                    FluidOnboardingCompactAppIconMark()
-                        .padding(.bottom, 22)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
-                    Text(AppBrand.text("Let FluidVoice\nlisten and type"))
-                        .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
-                        .foregroundStyle(self.theme.palette.primaryText)
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(4)
-                        .padding(.bottom, 16)
+                    OnboardingFittedContent(width: 760) {
+                        VStack(spacing: 0) {
+                            FluidOnboardingCompactAppIconMark()
+                                .padding(.bottom, 22)
 
-                    Text("Two quick permissions make dictation work anywhere.")
-                        .font(.fluidSystem(size: 15, weight: .medium))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .padding(.bottom, 28)
+                            Text(AppBrand.text("Let FluidVoice\nlisten and type"))
+                                .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
+                                .foregroundStyle(self.theme.palette.primaryText)
+                                .multilineTextAlignment(.center)
+                                .lineSpacing(4)
+                                .padding(.bottom, 16)
 
-                    VStack(spacing: 14) {
-                        self.permissionRow(
-                            stepNumber: 1,
-                            title: self.isMicrophoneReady ? "Microphone access allowed" : "Allow microphone",
-                            subtitle: self.microphonePermissionSubtitle,
-                            systemImage: "mic.fill",
-                            isReady: self.isMicrophoneReady,
-                            actionTitle: self.microphoneActionButtonTitle
-                        ) {
-                            self.handleMicrophoneAction()
-                        }
-
-                        if self.isMicrophoneReady {
-                            OnboardingMicrophoneSetupPanel(
-                                devices: self.orderedOnboardingInputDevices,
-                                selectedUID: self.selectedOnboardingInputUID,
-                                level: self.onboardingMicrophoneLevel,
-                                errorMessage: self.asr.microphonePreviewError,
-                                onSelect: { self.selectOnboardingMicrophone(uid: $0) }
-                            )
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
-
-                        self.permissionRow(
-                            stepNumber: 2,
-                            title: self.accessibilityPermissionTitle,
-                            subtitle: self.accessibilityPermissionSubtitle,
-                            systemImage: "keyboard.fill",
-                            isReady: self.isAccessibilityReady,
-                            statusTitle: self.accessibilityPermissionStatusTitle,
-                            actionTitle: self.accessibilityPermissionActionTitle
-                        ) {
-                            self.openAccessibilitySettings()
-                        }
-
-                        if !self.isAccessibilityReady {
-                            Text(AppBrand.text("Already enabled it? FluidVoice will update when macOS confirms access."))
-                                .font(.fluidSystem(size: 12, weight: .medium))
+                            Text("Two quick permissions make dictation work anywhere.")
+                                .font(.fluidSystem(size: 15, weight: .medium))
                                 .foregroundStyle(self.theme.palette.secondaryText)
-                                .padding(.top, 2)
-                        }
-                    }
-                    .frame(width: 632)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 34)
-                .padding(.bottom, 12)
-            }
+                                .padding(.bottom, 28)
 
-            self.cinematicFooter(
-                continueTitle: "Continue",
-                canContinue: self.canContinue
-            ) {
-                self.handlePrimaryAction()
+                            VStack(spacing: 14) {
+                                self.permissionRow(
+                                    stepNumber: 1,
+                                    title: self.isMicrophoneReady ? "Microphone access allowed" : "Allow microphone",
+                                    subtitle: self.microphonePermissionSubtitle,
+                                    systemImage: "mic.fill",
+                                    isReady: self.isMicrophoneReady,
+                                    actionTitle: self.microphoneActionButtonTitle
+                                ) {
+                                    self.handleMicrophoneAction()
+                                }
+
+                                if self.isMicrophoneReady {
+                                    OnboardingMicrophoneSetupPanel(
+                                        devices: self.orderedOnboardingInputDevices,
+                                        selectedUID: self.selectedOnboardingInputUID,
+                                        level: self.onboardingMicrophoneLevel,
+                                        errorMessage: self.asr.microphonePreviewError,
+                                        onSelect: { self.selectOnboardingMicrophone(uid: $0) }
+                                    )
+                                    .transition(.opacity.combined(with: .move(edge: .top)))
+                                }
+
+                                self.permissionRow(
+                                    stepNumber: 2,
+                                    title: self.accessibilityPermissionTitle,
+                                    subtitle: self.accessibilityPermissionSubtitle,
+                                    systemImage: "keyboard.fill",
+                                    isReady: self.isAccessibilityReady,
+                                    statusTitle: self.accessibilityPermissionStatusTitle,
+                                    actionTitle: self.accessibilityPermissionActionTitle
+                                ) {
+                                    self.openAccessibilitySettings()
+                                }
+
+                                if !self.isAccessibilityReady {
+                                    Text(AppBrand.text("Already enabled it? FluidVoice will update when macOS confirms access."))
+                                        .font(.fluidSystem(size: 12, weight: .medium))
+                                        .foregroundStyle(self.theme.palette.secondaryText)
+                                        .padding(.top, 2)
+                                }
+                            }
+                            .frame(width: 632)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 34)
+                        .padding(.bottom, 12)
+                    }
+
+                    self.cinematicFooter(
+                        continueTitle: "Continue",
+                        canContinue: self.canContinue
+                    ) {
+                        self.handlePrimaryAction()
+                    }
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var playgroundStep: some View {
-        VStack(spacing: 0) {
-            // The shared chrome draws the progress bar; keep its space.
-            Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
-
-            OnboardingFittedContent(width: 760) {
+        GeometryReader { proxy in
+            ZStack {
                 VStack(spacing: 0) {
-                    FluidOnboardingCompactAppIconMark()
-                        .padding(.bottom, 22)
+                    Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
-                    Text(AppBrand.text("FluidVoice is ready."))
-                        .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
-                        .foregroundStyle(self.theme.palette.primaryText)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.74)
-                        .padding(.horizontal, 32)
-                        .padding(.bottom, 14)
+                    OnboardingFittedContent(width: 760) {
+                        VStack(spacing: 0) {
+                            FluidOnboardingCompactAppIconMark()
+                                .padding(.bottom, 22)
 
-                    Text("Now let's try it out.")
-                        .font(.fluidSystem(size: 15, weight: .medium))
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .padding(.bottom, 28)
+                            Text(AppBrand.text("FluidVoice is ready."))
+                                .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
+                                .foregroundStyle(self.theme.palette.primaryText)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.74)
+                                .padding(.horizontal, 32)
+                                .padding(.bottom, 14)
 
-                    if let language = self.selectedOnboardingLanguage {
-                        OnboardingTryoutStepView(
-                            finalText: Binding(
-                                get: { self.asr.finalText },
-                                set: { self.asr.finalText = $0 }
-                            ),
-                            language: language,
-                            shortcutDisplay: self.onboardingShortcutDisplay,
-                            isReady: self.isPlaygroundReady,
-                            isRunning: self.asr.isRunning,
-                            isRecordingShortcut: self.isRecordingPrimaryShortcut,
-                            shortcutRecordingMessage: self.isRecordingPrimaryShortcut ? self.shortcutRecordingMessage : nil,
-                            onToggleShortcut: self.togglePrimaryShortcutRecording
-                        )
+                            Text("Now let's try it out.")
+                                .font(.fluidSystem(size: 15, weight: .medium))
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .padding(.bottom, 28)
+
+                            if let language = self.selectedOnboardingLanguage {
+                                OnboardingTryoutStepView(
+                                    finalText: Binding(
+                                        get: { self.asr.finalText },
+                                        set: { self.asr.finalText = $0 }
+                                    ),
+                                    language: language,
+                                    shortcutDisplay: self.onboardingShortcutDisplay,
+                                    isReady: self.isPlaygroundReady,
+                                    isRunning: self.asr.isRunning,
+                                    isRecordingShortcut: self.isRecordingPrimaryShortcut,
+                                    shortcutRecordingMessage: self.isRecordingPrimaryShortcut ? self.shortcutRecordingMessage : nil,
+                                    onToggleShortcut: self.togglePrimaryShortcutRecording
+                                )
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 34)
+                        .padding(.bottom, 12)
                     }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 34)
-                .padding(.bottom, 12)
-            }
 
-            self.cinematicFooter(
-                continueTitle: "Continue",
-                canContinue: self.canContinue,
-                continueAction: {
-                    self.handlePrimaryAction()
-                },
-                skipTitle: "Skip",
-                canSkip: !self.asr.isRunning && !self.isRecordingAnyShortcut,
-                skipAction: {
-                    let origin = self.settings.analyticsOnboardingOrigin
-                    AnalyticsService.shared.skipOnboardingTryout(origin: origin)
-                    self.settings.onboardingPlaygroundSkipped = true
-                    self.goNext(outcome: .skipped)
+                    self.cinematicFooter(
+                        continueTitle: "Continue",
+                        canContinue: self.canContinue,
+                        continueAction: {
+                            self.handlePrimaryAction()
+                        },
+                        skipTitle: "Skip",
+                        canSkip: !self.asr.isRunning && !self.isRecordingAnyShortcut,
+                        skipAction: {
+                            let origin = self.settings.analyticsOnboardingOrigin
+                            AnalyticsService.shared.skipOnboardingTryout(origin: origin)
+                            self.settings.onboardingPlaygroundSkipped = true
+                            self.goNext(outcome: .skipped)
+                        }
+                    )
                 }
-            )
+                .frame(width: proxy.size.width, height: proxy.size.height)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var microphoneActionButtonTitle: String {
@@ -1971,10 +1992,9 @@ struct OnboardingFlowView: View {
                     .minimumScaleFactor(0.72)
             }
             .foregroundStyle(foregroundColor)
-            // A longer translation widens the pill instead of shrinking into its edges.
-            .padding(.horizontal, configuration.width == nil ? 0 : 16)
-            .frame(minWidth: configuration.width, maxWidth: configuration.width == nil ? .infinity : nil)
-            .frame(height: configuration.height)
+            .padding(.horizontal, configuration.growsWithTitle ? 16 : 0)
+            .frame(width: configuration.growsWithTitle ? nil : configuration.width, height: configuration.height)
+            .frame(minWidth: configuration.growsWithTitle ? configuration.width : nil, maxWidth: configuration.width == nil ? .infinity : nil)
             .background(
                 shape
                     .fill(fillColor)
@@ -2110,7 +2130,8 @@ struct OnboardingFlowView: View {
                         fontSize: 13,
                         iconSize: 11,
                         isHovered: self.hoveredPermissionButtonID == buttonID,
-                        isEnabled: true
+                        isEnabled: true,
+                        growsWithTitle: true
                     ),
                     action: action
                 ) { isHovered in
@@ -2232,6 +2253,15 @@ struct OnboardingFlowView: View {
         self.asr.requestMicAccess()
     }
 
+    /// A fading step keeps its buttons and shortcuts until it leaves; bind them to the step that drew them.
+    private func forThisStep(_ action: @escaping () -> Void) -> () -> Void {
+        let step = self.step
+        return {
+            guard self.step == step else { return }
+            action()
+        }
+    }
+
     private func goBack() {
         self.activeShortcutRecordingTarget = nil
         self.shortcutRecordingMessage = nil
@@ -2322,65 +2352,68 @@ private extension OnboardingFlowView {
             isRunning: self.asr.isRunning || self.asr.isStarting,
             isListening: self.asr.isRunning,
             isRecordingShortcut: self.isRecordingPrimaryShortcut,
-            onBack: self.goBack,
-            onSkip: {
+            onBack: self.forThisStep { self.goBack() },
+            onSkip: self.forThisStep {
                 self.markAISkipped()
                 self.goNext(outcome: .skipped)
             },
-            onFinishSetup: {
+            onFinishSetup: self.forThisStep {
                 self.goNext(outcome: .completed)
             }
         )
     }
 
     var meetingLocationStep: some View {
-        VStack(spacing: 0) {
-            Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
 
-            OnboardingFittedContent(width: 760) {
-                VStack(spacing: self.theme.metrics.spacing.lg) {
-                    FluidOnboardingCompactAppIconMark(size: 66)
-                        .padding(.bottom, self.theme.metrics.spacing.sm)
+                OnboardingFittedContent(width: 760) {
+                    VStack(spacing: self.theme.metrics.spacing.lg) {
+                        FluidOnboardingCompactAppIconMark(size: 66)
+                            .padding(.bottom, self.theme.metrics.spacing.sm)
 
-                    Text(PichiLocalization.text("Meeting location"))
-                        .font(self.theme.typography.title)
-                        .foregroundStyle(self.theme.palette.primaryText)
-                        .multilineTextAlignment(.center)
+                        Text(PichiLocalization.text("Meeting location"))
+                            .font(self.theme.typography.title)
+                            .foregroundStyle(self.theme.palette.primaryText)
+                            .multilineTextAlignment(.center)
 
-                    Text(PichiLocalization.text("Optional: Add the meeting address using your location."))
-                        .font(self.theme.typography.body)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
+                        Text(PichiLocalization.text("Optional: Add the meeting address using your location."))
+                            .font(self.theme.typography.body)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                    MeetingLocationSettingsContent()
-                        .frame(maxWidth: 560, alignment: .leading)
-                        .padding(self.theme.metrics.spacing.lg)
-                        .background(
-                            self.theme.palette.cardBackground,
-                            in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg)
-                        )
+                        MeetingLocationSettingsContent()
+                            .frame(maxWidth: 560, alignment: .leading)
+                            .padding(self.theme.metrics.spacing.lg)
+                            .background(
+                                self.theme.palette.cardBackground,
+                                in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg)
+                            )
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, self.theme.metrics.spacing.xxl)
+                    .padding(.vertical, self.theme.metrics.spacing.xl)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, self.theme.metrics.spacing.xxl)
-                .padding(.vertical, self.theme.metrics.spacing.xl)
+
+                self.cinematicFooter(
+                    continueTitle: "Finish Setup",
+                    canContinue: self.canContinue,
+                    continueAction: self.handlePrimaryAction,
+                    skipTitle: "Not now",
+                    canSkip: true,
+                    skipAction: {
+                        self.appServices.meetingLocation.setEnabled(false)
+                        self.finishLocationStep(outcome: .skipped)
+                    }
+                )
             }
-
-            self.cinematicFooter(
-                continueTitle: "Finish Setup",
-                canContinue: self.canContinue,
-                continueAction: self.handlePrimaryAction,
-                skipTitle: "Not now",
-                canSkip: true,
-                skipAction: {
-                    self.appServices.meetingLocation.setEnabled(false)
-                    self.finishLocationStep(outcome: .skipped)
-                }
-            )
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("onboarding.meeting-location")
     }
+
 
     var orderedOnboardingInputDevices: [AudioDevice.Device] {
         let devicesByUID = Dictionary(
