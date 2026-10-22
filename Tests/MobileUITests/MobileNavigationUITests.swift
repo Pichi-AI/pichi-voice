@@ -1414,14 +1414,14 @@ final class MobileNavigationUITests: XCTestCase {
                 XCTAssertTrue(meeting.waitForExistence(timeout: 5), "Stage the synthetic preliminary participant fixture")
                 meeting.tap()
                 XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
-                for number in [2, 3] {
-                    let caption = app.staticTexts["Участник \(number) (\(suffix))"].firstMatch
-                    XCTAssertTrue(caption.waitForExistence(timeout: 5), "Every preliminary speaker keeps a readable qualified name")
-                }
+                let firstCaption = app.staticTexts["Участник 2 (\(suffix))"].firstMatch
+                XCTAssertTrue(firstCaption.waitForExistence(timeout: 5), "The first preliminary speaker keeps a qualified name")
                 capture("provisional-\(language)-reopen-\(iteration)")
                 let last = app.descendants(matching: .any)["transcript.paragraph.8EEC0000-2026-4000-8000-000000000005"].firstMatch
                 try revealParagraphAboveNavigation(last, step: "provisional-\(language)-tail-\(iteration)")
-                XCTAssertTrue(app.staticTexts["Участник 3 (\(suffix))"].firstMatch.isHittable)
+                let finalCaption = app.staticTexts["Участник 3 (\(suffix))"].firstMatch
+                XCTAssertTrue(finalCaption.waitForExistence(timeout: 5) && finalCaption.isHittable,
+                    "The virtualized final speaker keeps a fully visible qualified caption after scrolling")
                 capture("provisional-\(language)-tail-visible-\(iteration)")
                 app.terminate()
             }
