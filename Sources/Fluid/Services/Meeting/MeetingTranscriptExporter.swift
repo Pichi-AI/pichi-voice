@@ -831,20 +831,36 @@ nonisolated enum MeetingTranscriptExporter {
         // open a paragraph. Standalone artifacts remain available in canonical JSON/evidence.
         var typographyAnchors: [MeetingTranscriptSegmentID: MeetingTranscriptSegment] = [:]
         let maximumGap = MeetingSpeakerAttributionPolicy.standard.maximumNeighborGapSeconds
-        for index in segments.indices where !segments[index].hasReadableContent {
-            let value = segments[index]
-            let neighbors = [index - 1, index + 1].filter { segments.indices.contains($0) }
+        var typographyIndex = 0
+        while typographyIndex < segments.count {
+            guard !segments[typographyIndex].hasReadableContent else { typographyIndex += 1; continue }
+            let first = typographyIndex
+            while typographyIndex + 1 < segments.count, !segments[typographyIndex + 1].hasReadableContent {
+                typographyIndex += 1
+            }
+            let last = typographyIndex
+            typographyIndex += 1
+            let neighbors = [first - 1, last + 1].filter { segments.indices.contains($0) }
             for neighbor in neighbors {
                 let anchor = segments[neighbor]
-                let gap = neighbor < index ? value.start.seconds - anchor.end.seconds : anchor.start.seconds - value.end.seconds
-                guard anchor.hasReadableContent, anchor.sourceTrackID == value.sourceTrackID,
-                      anchor.status == value.status, anchor.completeness == value.completeness,
-                      anchor.isEcho == value.isEcho, gap >= -0.001, gap <= maximumGap,
+                let gap = neighbor < first ? segments[first].start.seconds - anchor.end.seconds
+                    : anchor.start.seconds - segments[last].end.seconds
+                let start = min(anchor.start.seconds, segments[first].start.seconds)
+                let end = max(anchor.end.seconds, segments[last].end.seconds)
+                guard anchor.hasReadableContent, gap >= -0.001, gap <= maximumGap,
+                      segments[last].end.seconds - segments[first].start.seconds
+                        <= MeetingSpeakerAttributionPolicy.standard.maximumUnknownRunSeconds,
+                      (first...last).allSatisfy({
+                          let value = segments[$0]
+                          let priorGap = $0 > first ? value.start.seconds - segments[$0 - 1].end.seconds : 0
+                          return anchor.sourceTrackID == value.sourceTrackID && anchor.status == value.status
+                              && anchor.completeness == value.completeness && anchor.isEcho == value.isEcho
+                              && priorGap >= -0.001 && priorGap <= maximumGap
+                      }),
                       !(session.transcriptCoverageGaps ?? []).contains(where: {
-                          $0.trackID == value.sourceTrackID && $0.start < max(anchor.end.seconds, value.end.seconds)
-                              && $0.end > min(anchor.start.seconds, value.start.seconds)
+                          $0.trackID == anchor.sourceTrackID && $0.start < end && $0.end > start
                       }) else { continue }
-                typographyAnchors[value.id] = anchor
+                for index in first...last { typographyAnchors[segments[index].id] = anchor }
                 break
             }
         }

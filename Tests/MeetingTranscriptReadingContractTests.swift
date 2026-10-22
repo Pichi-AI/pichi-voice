@@ -64,6 +64,12 @@ extension MeetingSessionStoreCheckpointTests {
             check(noise.allSatisfy { reading[$0.id] == nil } && reading[comma.id]?.participantID == a,
                   "Live projection shares artifact suppression and typography ownership without native reassignment")
             check(value.transcriptSegments == original, "Reading does not mutate original native evidence")
+            var adjacent = value
+            let quote = word("\"", 0.16, raw: nil, selected: nil, owner: extra)
+            adjacent.transcriptSegments = [first, comma, quote]
+            check(MeetingTranscriptExporter.displayParagraphs(for: adjacent.transcriptSegments, in: adjacent)
+                .flatMap(\.segments).map(\.id) == [first.id, comma.id, quote.id],
+                "A contiguous run of punctuation retains every original member")
             let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(value))
             check(restored.transcriptSegments == original && restored.readableSpeakers.map(\.id) == [a, b],
                   "Stop and reopen preserve source evidence while keeping noise out of the roster")
