@@ -43,9 +43,10 @@ accessibility = snippet(settings, '                                    Button("O
                         '                                }\n\n                                self.instructionsBox(')
 backup = snippet(settings, '                Button(action: self.exportBackup) {',
                  '                Button(action: self.importBackup) {')
-updates = snippet(settings, '                                Button("Check for Updates") {',
-                  '                                Button("Release Notes") {')
-for control in [microphone, accessibility, backup, updates]:
+updates = snippet(settings, '                Button(PichiLocalization.text(self.updateActionTitle)) {',
+                  '\n\n                if self.updater.availableUpdateVersion != nil {')
+update_title = declaration(Path(settings).read_text(), '    private var updateActionTitle:').replace('private ', '', 1)
+for control in [microphone, accessibility, backup]:
     assert control.count('.buttonStyle(AccentButtonStyle(compact: true))') == 1
     assert '.buttonStyle(.borderedProminent)' not in control
 # Accessibility environment values are read-only in this SDK. These additional
@@ -88,7 +89,9 @@ words = snippet('Sources/Fluid/UI/StatsShareCard.swift',
 def fallback(control):
     assert control.count('.fluidGlassAction(prominent: true)') == 1
     return control.replace('.fluidGlassAction(prominent: true)', '.buttonStyle(AccentButtonStyle())')
-choose, copy, explore = map(fallback, [choose, copy, explore])
+# The shipping updater now uses the same native glass primary action as these
+# controls. Use its exact documented fallback for raster-only evidence too.
+choose, copy, explore, updates = map(fallback, [choose, copy, explore, updates])
 Path(sys.argv[1]).write_text('import SwiftUI\n'
     'struct DeleteRoleFixture: View {\n'
     '    @Environment(\\.theme) private var theme\n'
@@ -139,7 +142,7 @@ with Path(sys.argv[1]).open('a') as output:
         ('MicrophonePermissionFixture', microphone, 'private struct ASR { func requestMicAccess() {} }; private let asr = ASR()'),
         ('AccessibilityPermissionFixture', accessibility, 'private func openAccessibilitySettings() {}'),
         ('BackupPrimaryActionFixture', backup, 'private func exportBackup() {}'),
-        ('UpdatePrimaryActionFixture', updates, 'private struct Updater { let isCheckingForUpdates = false; let isUpdateInProgress = false; func checkForUpdatesManually() {} }; private let updater = Updater()'),
+        ('UpdatePrimaryActionFixture', updates, 'private struct Updater { let isCheckingForUpdates = false; let isUpdateInProgress = false; let availableUpdateVersion: String? = nil; func checkForUpdatesManually() {}; func showAvailableUpdate() {} }; private let updater = Updater(); private let isRollingBack = false\n' + update_title),
     ]:
         output.write('struct ' + name + ': View {\n    ' + dependencies + '\n'
             '    var body: some View {\n' + control + '\n    }\n}\n')
@@ -452,7 +455,7 @@ mobile_source = Path('Sources/Mobile/MobileMeetingRoot.swift').read_text()
 if 'MeetingSpeakerPalette.labelColor(' in mobile_source:
     expected_speaker_calls['Sources/Mobile/MobileMeetingRoot.swift'] = ['tintIndices', 'labelColor', 'labelColor']
     assert 'MeetingSpeakerPalette.tintIndices(for: session.speakers)' in mobile_source
-    for participant in ('colorIndex', 'participantIndex'):
+    for participant in ('colorIndex', 'presentation.participantIndex'):
         assert f'MeetingSpeakerPalette.labelColor(forSpeakerIndex: {participant},' in mobile_source
 assert speaker_calls == expected_speaker_calls, f'Uncovered production speaker palette caller: {speaker_calls}'
 for marker in ('    private var fill: Color {', '    private var isMicrophone: Bool {'):
@@ -469,7 +472,9 @@ assert 'let tint = self.tints[speaker.id] ?? self.theme.palette.secondaryText' i
 assert 'MeetingSpeakerPalette.tintIndices(for: self.session.speakers)' in speaker_producer
 assert 'activeSpeakers' not in speaker_producer
 assert '.foregroundStyle(tint)' in assignment
-assert 'speaker.isLocalUser ?' not in assignment
+# Owner status copy may vary; participant colors still cannot branch on owner identity.
+owner_status_label = 'Text(PichiLocalization.text(speaker.isLocalUser ? "Your microphone voice is kept separate" :'
+assert assignment.count('speaker.isLocalUser ?') == assignment.count(owner_status_label)
 with Path(sys.argv[1]).open('a') as output:
     # Reuse the complete participant sheet's inert Identifiable metadata.
     output.write(speaker_source)
@@ -509,6 +514,11 @@ wpm_root = input_part(input_paths[0], '    private var wpmEditorPopover: some Vi
 wpm_root = wpm_root.replace('private var wpmEditorPopover: some View', 'var body: some View', 1)
 transcript_root = input_part(input_paths[1], 'struct MeetingTranscriptTextEditor: View {')
 dictionary_root = input_part(input_paths[2], 'struct EditDictionaryEntrySheet: View {')
+if input_revision and 'let isCaptureBusy: Bool' not in dictionary_root:
+    # Metadata-only compatibility for historical appearance negative controls.
+    # The old rendering and actions remain verbatim; the extra value stays idle.
+    dictionary_root = dictionary_root.replace('struct EditDictionaryEntrySheet: View {',
+        'struct EditDictionaryEntrySheet: View {\n    let isCaptureBusy: Bool', 1)
 dictionary_chrome = input_part(input_paths[2], 'private struct DictionaryInputChrome: ViewModifier {',
                               'private struct DictionaryFocusDismissMonitor: NSViewRepresentable {')
 dictionary_preview = input_part(input_paths[2], 'private struct DictionaryReplacementPreview: View {', '// MARK: - Edit Entry Sheet')
@@ -525,12 +535,15 @@ Path(sys.argv[1]).with_name('ProductionNativeInputPresentations.swift').write_te
     + transcript_root + dictionary_root + dictionary_chrome + dictionary_preview + dictionary_parser + meeting_actions
     + '\n// Service delivery and physical-input monitoring are excluded; no appearance logic is adapted.\n'
       'extension View { func dictionaryDictationInput(focused: Bool) -> some View { self } }\n'
-      'private struct DictionaryFocusDismissMonitor: View { var body: some View { EmptyView() } }\n')
+      'private struct DictionaryFocusDismissMonitor: View { var body: some View { EmptyView() } }\n'
+      'private struct DictionaryWordPlayground: View {\n'
+      ' let word: String; let onPracticeMore: (() -> Void)?; @Binding var busy: Bool\n'
+      ' var body: some View { preconditionFailure("Practice inference is excluded from appearance probes"); return EmptyView() }\n}\n')
 Path(sys.argv[1]).with_name('NativeInputPresentationProductionSource.json').write_text(json.dumps({
     'sourceSHA256': {path: hashlib.sha256(source.encode()).hexdigest() for path, source in input_sources.items()},
     'legacySourceRevision': subprocess.check_output(['git', 'rev-parse', input_revision], text=True).strip() if input_revision else None,
     'adapters': ['WPM property renamed body, inert settings/state initialized to synthetic 55',
-                 'Exact dictionary metadata/parser; inert dictation delivery and physical input monitor',
+                 'Exact dictionary metadata/parser; inert dictation delivery and physical input monitor; closed practice inference branch fails if entered',
                  'Complete transcript and dictionary roots, input chrome and replacement preview',
                  'Complete shared meeting hover and glass action implementations'],
     'outsideTheme': 'environment(theme) only', 'nativeReachability': 'SKIP: parent-owned frozen app required',
@@ -540,22 +553,35 @@ Path(sys.argv[1]).with_name('NativeInputPresentationProductionSource.json').writ
 participant_path = 'Sources/Fluid/UI/MeetingAssignSpeakersSheet.swift'
 participant_revision = os.environ.get('PICHI_PARTICIPANT_INPUT_LEGACY_REVISION')
 participant_source = subprocess.check_output(['git', 'show', f'{participant_revision}:{participant_path}'], text=True) if participant_revision else Path(participant_path).read_text()
-participant_start = '            TextField(\n                speaker.displayName,'
-assert participant_source.count(participant_start) == 1
-participant_first = participant_source.index(participant_start)
-participant_last_marker = '            .disabled(self.isSaving)'
+participant_match = re.search(r'(?m)^(?P<indent>[ \t]*)TextField\(\n(?P=indent)    speaker\.displayName,', participant_source)
+assert participant_match is not None, 'Expected the exact production participant-name field'
+participant_first = participant_match.start()
+participant_indent = participant_match.group('indent')
+uses_edits = 'self.edits.names[speaker.id]' in participant_source
+participant_disabled = '.disabled(self.isSaving || self.edits.merges[speaker.id] != nil)' if uses_edits else '.disabled(self.isSaving)'
+participant_last_marker = participant_indent + participant_disabled
+assert participant_source.count(participant_last_marker) == 1
 participant_last = participant_source.index(participant_last_marker, participant_first) + len(participant_last_marker)
 participant_field = participant_source[participant_first:participant_last]
-Path(sys.argv[1]).with_name('ProductionParticipantSheet.swift').write_text(participant_source)
+# Keep the complete shipping edit value and sheet; only their external metadata is inert.
+meeting_models = Path('Sources/Fluid/Services/Meeting/MeetingModels.swift').read_text()
+edit_value = declaration(meeting_models, 'nonisolated struct MeetingSpeakerEdits:')
+Path(sys.argv[1]).with_name('ProductionParticipantSheet.swift').write_text(participant_source + '\n' + edit_value)
 with Path(sys.argv[1]).open('a') as output:
+    metadata = (' struct Speaker { let id: String; let displayName: String }\n'
+                ' @FocusState private var focusedField: String?\n'
+                ' let speaker = Speaker(id: "synthetic", displayName: "Участник Ёё")\n')
+    if uses_edits:
+        metadata = (' @FocusState private var focusedField: SessionSpeakerID?\n'
+            ' private let speaker = MeetingSessionSpeaker(id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!, displayName: "Участник Ёё", isLocalUser: false)\n'
+            ' private var edits: MeetingSpeakerEdits {\n'
+            '  get { .init(names: [self.speaker.id: self.drafts["synthetic"] ?? ""]) }\n'
+            '  nonmutating set { self.drafts["synthetic"] = newValue.names[self.speaker.id] }\n }\n')
     output.write('struct ProductionParticipantInputFixture: View {\n'
-        ' struct Speaker { let id: String; let displayName: String }\n'
         ' @Environment(\\.theme) private var theme\n'
         ' @Binding var drafts: [String: String]\n'
-        ' let isSaving: Bool\n'
-        ' @FocusState private var focusedField: String?\n'
-        ' let speaker = Speaker(id: "synthetic", displayName: "Участник Ёё")\n'
-        ' var body: some View {\n' + participant_field + '\n }\n}\n')
+        ' let isSaving: Bool\n' + metadata
+        + ' var body: some View {\n' + participant_field + '\n }\n}\n')
 Path(sys.argv[1]).with_name('ParticipantInputProductionSource.json').write_text(json.dumps({
     'source': participant_path, 'sourceSHA256': hashlib.sha256(participant_source.encode()).hexdigest(),
     'fieldSHA256': hashlib.sha256(participant_field.encode()).hexdigest(),

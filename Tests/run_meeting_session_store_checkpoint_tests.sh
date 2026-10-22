@@ -27,6 +27,15 @@ nonisolated struct MeetingResultSidecarStore {
     }
 }
 SWIFT
+# Project the authoritative shared version, without linking capture/model orchestration.
+python3 -S - "$task_test_dir/PipelineVersion.swift" <<'PYCODE'
+from pathlib import Path
+import sys
+source = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipeline.swift').read_text()
+versions = [line.strip() for line in source.splitlines() if line.strip().startswith('nonisolated static let pipelineVersion =')]
+assert len(versions) == 1, 'The pipeline owns one authoritative version'
+Path(sys.argv[1]).write_text('nonisolated enum MeetingProcessingPipeline {\n    ' + versions[0] + '\n}\n')
+PYCODE
 python3 Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift"
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O \
     -module-cache-path "$task_test_dir/module-cache" \
@@ -40,6 +49,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    "$task_test_dir/PipelineVersion.swift" \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift \
     Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     "$task_test_dir/ApplicationSupport.swift" Tests/MeetingSessionStoreCheckpointTests.swift \
