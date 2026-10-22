@@ -38,17 +38,18 @@ nonisolated struct MeetingNemotronModelArtifact: Equatable, Sendable {
         enum Preference: Equatable { case cpuOnly, devicePreferred }
         var streamingImplementationFingerprint = "synthetic-pinned-profile"
         func acceptsStreamingImplementationFingerprint(_ value: String) -> Bool {
-            value == self.streamingImplementationFingerprint || value == "synthetic-legacy-anonymous" || value == "synthetic-owner-v1" || ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined"].contains(value)
+            value == self.streamingImplementationFingerprint || value == "synthetic-legacy-anonymous" || value == "synthetic-owner-v1" || ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined", "synthetic-live-continuity"].contains(value)
         }
         func verifiesStreamingOwner(implementationFingerprint value: String) -> Bool {
-            value == self.streamingImplementationFingerprint || value == "synthetic-owner-v1" || ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined"].contains(value)
+            value == self.streamingImplementationFingerprint || value == "synthetic-owner-v1" || ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined", "synthetic-live-continuity"].contains(value)
         }
         func usesAdaptiveStreamingOwnerEvidence(implementationFingerprint value: String) -> Bool {
-            value == self.streamingImplementationFingerprint || ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined"].contains(value)
+            value == self.streamingImplementationFingerprint || ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined", "synthetic-live-continuity"].contains(value)
         }
-        func verifiesLiveStreamingOwner(implementationFingerprint value: String) -> Bool { ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined"].contains(value) }
-        func requiresFullStreamingOwnerEvidence(implementationFingerprint value: String) -> Bool { value == "synthetic-live-v4" || value == "synthetic-live-combined" }
-        func preservesStreamingOwnerCadenceAtEOF(implementationFingerprint value: String) -> Bool { value == "synthetic-live-cadence" || value == "synthetic-live-combined" }
+        func verifiesLiveStreamingOwner(implementationFingerprint value: String) -> Bool { ["synthetic-live", "synthetic-live-v4", "synthetic-live-cadence", "synthetic-live-combined", "synthetic-live-continuity"].contains(value) }
+        func requiresFullStreamingOwnerEvidence(implementationFingerprint value: String) -> Bool { value == "synthetic-live-v4" || value == "synthetic-live-combined" || value == "synthetic-live-continuity" }
+        func preservesStreamingOwnerCadenceAtEOF(implementationFingerprint value: String) -> Bool { value == "synthetic-live-cadence" || value == "synthetic-live-combined" || value == "synthetic-live-continuity" }
+        func preservesStreamingOwnerEvidenceOnInconclusiveRefresh(implementationFingerprint value: String) -> Bool { value == "synthetic-live-continuity" }
         var isExperimental = true
         var computePreference = Preference.cpuOnly
     }
@@ -131,21 +132,23 @@ nonisolated final class StreamingScopeFixture: @unchecked Sendable {
     nonisolated enum Response: Sendable { case matched, missing, duplicate, invalid, foreignToken, differentVoice, failure }
     let responses: [Int: Response]
     let distancesBySlot: [String: Float]
+    let embeddingsByCall: [Int: [[Float]]]
     func recordClipFrames(_ frames: [[Int]]) { self.lock.withLock { self.encoded = frames; self.encodedHistory.append(frames) } }
     var encodedClipFrames: [[Int]] { self.lock.withLock { self.encoded } }
     var encodedClipFrameHistory: [[[Int]]] { self.lock.withLock { self.encodedHistory } }
     var encoderCallCount: Int { self.lock.withLock { self.calls } }
     init(failEncoder: Bool = false, blockEncoder: Bool = false, blockEncoderAtCall: Int? = nil, responses: [Int: Response] = [:],
-         distancesBySlot: [String: Float] = [:]) {
+         distancesBySlot: [String: Float] = [:], embeddingsByCall: [Int: [[Float]]] = [:]) {
         self.failEncoder = failEncoder; self.blockEncoder = blockEncoder; self.blockEncoderAtCall = blockEncoderAtCall
         self.responses = responses; self.distancesBySlot = distancesBySlot
+        self.embeddingsByCall = embeddingsByCall
     }
     func profilesForCall(_ samples: [MeetingSpeakerVoiceSamples]) throws -> [MeetingSpeakerVoiceProfile] {
         let call = self.lock.withLock { self.calls += 1; return self.calls }
         let profiles = samples.map { sample in
             let distance = self.distancesBySlot[sample.token.label] ?? (sample.token.label == "slot-0" ? 0 : 1)
             let vector = syntheticVoiceVector(referenceDistance: distance)
-            return MeetingSpeakerVoiceProfile(token: sample.token, embeddings: [vector, vector])
+            return MeetingSpeakerVoiceProfile(token: sample.token, embeddings: self.embeddingsByCall[call] ?? [vector, vector])
         }
         switch self.responses[call] ?? .matched {
         case .matched: return profiles
@@ -611,7 +614,11 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
         try await ownerEOFDueEvidenceRevokes(policy: .streamingV4)
         try await ownerEOFCancellationJoins(policy: .streamingV4)
         try await v4IncompleteRivalBlocksUntilValidReplacement()
-        print("34 prepared streaming runtime contract groups passed")
+        try await unavailableRefreshPreservesMeasuredOwner()
+        try await inconclusiveMeasuredRefreshRetainsFullProof()
+        try await continuityProductionRecipeAndMeasuredRival()
+        try await ownerEOFCancellationJoins(policy: .streamingV4, preserveUnavailableEvidence: true)
+        print("38 prepared streaming runtime contract groups passed")
     }
 
     private nonisolated static var ownerDecisionLines: [String] {
@@ -633,12 +640,14 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
 
     private nonisolated static func ownerAdapter(scope: StreamingScopeFixture, recorder: Recorder,
         diarizer: any MeetingIncrementalNemotronDiarizerSession, trackID: UUID = UUID(),
-        policy: MeetingOwnerVoiceVerifier.Policy = .streamingV2
+        policy: MeetingOwnerVoiceVerifier.Policy = .streamingV2,
+        preserveUnavailableEvidence: Bool = false
     ) -> MeetingPreparedStreamingRuntime {
         MeetingPreparedStreamingRuntime(runtime: .init(scope: scope), asr: SyntheticASR(Recorder()),
             diarizer: diarizer, trackID: trackID, attemptID: UUID(), configuration: .init(),
             speakerNameFormat: "Speaker %lld", collectOwnerEvidence: true, useAdaptiveOwnerEvidence: true,
             verifyOwnerDuringCapture: true, ownerVerificationPolicy: policy, preserveOwnerCadenceAtEOF: true,
+            preserveOwnerEvidenceOnInconclusiveRefresh: preserveUnavailableEvidence,
             onProgress: { recorder.observation($0) })
     }
     @discardableResult private nonisolated static func recognizeOwnerRange(
@@ -904,6 +913,115 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
         print("PASS V4 incomplete rival blocks later unrelated batches and EOF, then valid replacement restores scoring")
     }
 
+    private nonisolated static func unavailableRefreshPreservesMeasuredOwner() async throws {
+        for response: StreamingScopeFixture.Response in [.missing, .duplicate, .invalid, .foreignToken, .failure] {
+            DebugLogger.shared.reset()
+            let scope = StreamingScopeFixture(responses: [4: response]), recorder = Recorder()
+            let source = OwnerReplayFixture(frames: 480_000)
+            let adapter = ownerAdapter(scope: scope, recorder: recorder,
+                diarizer: EOFDeferredOwnerDiarizer([.init(slotIndex: 0, start: 0, end: 30)], liveThrough: 320_000),
+                policy: .streamingV4, preserveUnavailableEvidence: true)
+            _ = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
+            let live = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<480_000)
+            try require(live.confirmedLocalUserTokens?.count == 1 && scope.encoderCallCount == 3,
+                "Continuity starts with a measured mature owner, not a presumed first speaker")
+            let final = try await adapter.finishStreaming()
+            try require(scope.encodedClipFrameHistory.count == 4 && final.confirmedLocalUserTokens == live.confirmedLocalUserTokens,
+                "Unavailable EOF refresh is not contrary acoustic evidence and cannot erase mature proof")
+            await adapter.cleanup()
+        }
+        for response: StreamingScopeFixture.Response in [.failure, .missing] {
+            let scope = StreamingScopeFixture(responses: [4: response, 5: .differentVoice])
+            let source = OwnerReplayFixture(frames: 640_000)
+            let adapter = ownerAdapter(scope: scope, recorder: Recorder(), diarizer: SyntheticDiarizer(Recorder()),
+                policy: .streamingV4, preserveUnavailableEvidence: true)
+            let prior = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
+            let unavailable = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<480_000)
+            let recovered = try await recognizeOwnerRange(adapter, source: source, range: 480_000..<640_000)
+            let final = try await adapter.finishStreaming()
+            try require(prior.confirmedLocalUserTokens?.count == 1
+                && unavailable.confirmedLocalUserTokens == prior.confirmedLocalUserTokens
+                && scope.encoderCallCount == 5 && recovered.confirmedLocalUserTokens == [] && final.confirmedLocalUserTokens == [],
+                "A live unavailable refresh preserves proof, then the next due measured contradiction still runs and revokes")
+            await adapter.cleanup()
+        }
+        print("PASS unavailable EOF refresh preserves previously measured owner proof")
+    }
+
+    private nonisolated static func inconclusiveMeasuredRefreshRetainsFullProof() async throws {
+        func vector(_ angle: Float) -> [Float] {
+            [cos(angle), sin(angle)] + [Float](repeating: 0, count: 254)
+        }
+        DebugLogger.shared.reset()
+        let initial = [vector(1), vector(0.8)]
+        let refresh = [vector(1), vector(-0.25)]
+        let scope = StreamingScopeFixture(responses: [5: .differentVoice], embeddingsByCall: [3: initial, 4: refresh])
+        let recorder = Recorder(), source = OwnerReplayFixture(frames: 640_000)
+        let adapter = ownerAdapter(scope: scope, recorder: recorder, diarizer: SyntheticDiarizer(Recorder()),
+            policy: .streamingV4, preserveUnavailableEvidence: true)
+        let confirmed = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
+        try require(confirmed.confirmedLocalUserTokens?.count == 1, "The exact V4 scorer must first confirm a mature coherent pair")
+        let inconclusive = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<480_000)
+        try require(scope.encoderCallCount == 4 && inconclusive.confirmedLocalUserTokens == confirmed.confirmedLocalUserTokens,
+            "Disagreement between owner-compatible query clips cannot erase an earlier coherent mature confirmation")
+        let contrary = try await recognizeOwnerRange(adapter, source: source, range: 480_000..<640_000)
+        let final = try await adapter.finishStreaming()
+        try require(contrary.confirmedLocalUserTokens == [] && final.confirmedLocalUserTokens == [],
+            "A complete new reference-distance contradiction must still revoke, including at Stop")
+        await adapter.cleanup()
+        let negativeScope = StreamingScopeFixture(embeddingsByCall: Dictionary(uniqueKeysWithValues: (1...5).map { ($0, refresh) }))
+        let negative = ownerAdapter(scope: negativeScope, recorder: Recorder(), diarizer: SyntheticDiarizer(Recorder()),
+            policy: .streamingV4, preserveUnavailableEvidence: true)
+        _ = try await recognizeOwnerRange(negative, source: source, range: 0..<320_000)
+        let neverConfirmed = try await recognizeOwnerRange(negative, source: source, range: 320_000..<640_000)
+        let negativeFinal = try await negative.finishStreaming()
+        try require(neverConfirmed.confirmedLocalUserTokens == [] && negativeFinal.confirmedLocalUserTokens == [],
+            "An owner-compatible but incoherent pair can never establish initial confirmation")
+        await negative.cleanup()
+        print("PASS owner-compatible inconclusive refresh retains full proof; measured contradiction revokes")
+    }
+
+    private nonisolated static func continuityProductionRecipeAndMeasuredRival() async throws {
+        for (fingerprint, preserves) in [("synthetic-live-combined", false), ("synthetic-live-continuity", true)] {
+            let scope = StreamingScopeFixture(responses: [4: .missing]), recorder = Recorder()
+            var configuration = MeetingFinalProcessingConfiguration()
+            configuration.diarizationFingerprint = fingerprint
+            let frozen = configuration, runtime = MeetingParakeetNemotronRuntime(scope: scope)
+            let controller = MeetingStreamingPCMController.deferred { body in
+                try await runtime.withPreparedStreamingPCM(trackID: UUID(), attemptID: UUID(), configuration: frozen,
+                    onProgress: { recorder.observation($0) }, body: body)
+            }
+            let source = OwnerReplayFixture(frames: 480_000)
+            let prior = try await controller.recognize(window: .fixture(samples: source.signal(0..<320_000), final: true), offset: 0)
+            try await controller.recordWindowProcessing(.init(sourceStartSample: 0, sourceFrameCount: 320_000,
+                chargedPendingFrames: 0, maximumPendingFrames: 960_000))
+            let refreshed = try await controller.recognize(window: .fixture(samples: source.signal(320_000..<480_000), final: true), offset: 20)
+            try await controller.recordWindowProcessing(.init(sourceStartSample: 320_000, sourceFrameCount: 160_000,
+                chargedPendingFrames: 0, maximumPendingFrames: 960_000))
+            let final = try await controller.finishStreaming()
+            try require(prior.confirmedLocalUserTokens?.count == 1 && scope.encoderCallCount == 4
+                && refreshed.confirmedLocalUserTokens?.count == (preserves ? 1 : 0)
+                && final.confirmedLocalUserTokens == refreshed.confirmedLocalUserTokens,
+                "The exact production leaf enables continuity only for the new recipe, with unchanged inference cadence")
+        }
+        DebugLogger.shared.reset()
+        let scope = StreamingScopeFixture(responses: [5: .missing], distancesBySlot: ["slot-1": 0.05]), recorder = Recorder()
+        let source = OwnerReplayFixture(frames: 736_000, ranges: [0..<192_000, 208_000..<352_000, 416_000..<736_000])
+        let adapter = ownerAdapter(scope: scope, recorder: recorder,
+            diarizer: ScheduledOwnerDiarizer([.init(slotIndex: 0, start: 0, end: 12),
+                .init(slotIndex: 1, start: 13, end: 22), .init(slotIndex: 0, start: 26, end: 46)]),
+            policy: .streamingV4, preserveUnavailableEvidence: true)
+        _ = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
+        _ = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<640_000)
+        let returned = try await recognizeOwnerRange(adapter, source: source, range: 640_000..<736_000)
+        let final = try await adapter.finishStreaming()
+        try require(recorder.progress.contains { $0.confirmedLocalUserTokens?.count == 1 }
+            && returned.confirmedLocalUserTokens == [] && final.confirmedLocalUserTokens == [],
+            "A measured close rival revokes confirmation; later missing rival evidence and returning speech cannot restore it")
+        await adapter.cleanup()
+        print("PASS exact continuity leaf, frozen old recipe, complete rival ranking and no stale re-promotion")
+    }
+
     private static func integerClockOwnsTranscriptOffsets() async throws {
         let recorder = Recorder(), runtime = make(recorder)
         _ = try await runtime.recognize(window: .fixture(samples: Array(repeating: 0.1, count: 292_800), final: true),
@@ -1111,12 +1229,14 @@ private actor EOFDeferredOwnerDiarizer: MeetingIncrementalNemotronDiarizerSessio
         print("PASS due EOF conflict, missing/invalid/failure revocation and complete-cache rival ambiguity")
     }
 
-    private nonisolated static func ownerEOFCancellationJoins(policy: MeetingOwnerVoiceVerifier.Policy = .streamingV2) async throws {
+    private nonisolated static func ownerEOFCancellationJoins(policy: MeetingOwnerVoiceVerifier.Policy = .streamingV2,
+        preserveUnavailableEvidence: Bool = false) async throws {
         DebugLogger.shared.reset()
         let scope = StreamingScopeFixture(blockEncoderAtCall: 4), recorder = Recorder(), native = Recorder()
         let source = OwnerReplayFixture(frames: 480_000)
         let adapter = ownerAdapter(scope: scope, recorder: recorder,
-            diarizer: EOFDeferredOwnerDiarizer([.init(slotIndex: 0, start: 0, end: 30)], liveThrough: 320_000, recorder: native), policy: policy)
+            diarizer: EOFDeferredOwnerDiarizer([.init(slotIndex: 0, start: 0, end: 30)], liveThrough: 320_000, recorder: native),
+            policy: policy, preserveUnavailableEvidence: preserveUnavailableEvidence)
         _ = try await recognizeOwnerRange(adapter, source: source, range: 0..<320_000)
         _ = try await recognizeOwnerRange(adapter, source: source, range: 320_000..<480_000)
         let decisions = ownerDecisionLines.count, observations = recorder.progress.count
