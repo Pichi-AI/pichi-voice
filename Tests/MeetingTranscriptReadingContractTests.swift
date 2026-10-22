@@ -57,6 +57,9 @@ extension MeetingSessionStoreCheckpointTests {
             let exportedSpeakers = exported["speakers"] as! [[String: Any]]
             check(exportedSpeakers.contains { $0["identityIsProvisional"] as? Bool == true },
                   "Canonical export preserves preliminary identity provenance")
+            let portable = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: value)) as! [String: Any]
+            check((portable["speakers"] as! [[String: Any]]).contains { $0["identityIsProvisional"] as? Bool == true },
+                  "Protected transcript-only export preserves preliminary provenance without native acoustic data")
             value.transcriptSegments[1].isUserSpeakerAssigned = true
             value.transcriptSegments[1].attributionState = .assigned
             value.transcriptSegments[1].speakerAttribution = nil

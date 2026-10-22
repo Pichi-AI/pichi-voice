@@ -1049,7 +1049,8 @@ nonisolated enum MeetingTranscriptExporter {
             sessionID: session.id, title: title, languageCode: session.languageCode,
             startedAt: session.startedAt, endedAt: session.endedAt, durationSeconds: durationSeconds,
             speakers: session.activeSpeakers.map {
-                .init(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser)
+                .init(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser,
+                    identityIsProvisional: $0.identityIsProvisional)
             }, segments: segments)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -1134,6 +1135,7 @@ nonisolated private struct PortableTranscript: Encodable {
         let id: UUID
         let displayName: String
         let isLocalUser: Bool
+        let identityIsProvisional: Bool?
     }
 
     struct Segment: Encodable {
