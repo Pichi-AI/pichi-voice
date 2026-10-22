@@ -12,9 +12,12 @@ import CryptoKit
 
 @MainActor
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
+    // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
+    nonisolated deinit {}
+
     nonisolated static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
-        version: "6",
+        version: "9",
         execution: .local,
         supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs,
         supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),

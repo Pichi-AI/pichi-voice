@@ -3,6 +3,9 @@ import CoreMedia
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
+#if arch(arm64)
+import FluidAudio
+#endif
 
 /// Opt-in replay harness: drives the REAL `MeetingLiveTranscriptionCoordinator` with a real,
 /// previously-recorded Zoom meeting's decoded microphone/application-audio WAVs, to see what the
@@ -17,6 +20,16 @@ final class MeetingLiveReplayTests: XCTestCase {
     private static let chunkFrames = 320 // 20ms @ 16kHz
     private static let sampleRate: Double = 16_000
     private static let trailingSilenceSeconds: Double = 3
+
+    func testReplayBufferUsesPerFrameTiming() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate, channels: 1, interleaved: false))
+        let pcm = try XCTUnwrap(Self.makeBuffer(format: format, samples: [Float](repeating: 0, count: Self.chunkFrames)[...]))
+        let description = try XCTUnwrap(Self.makeFormatDescription(format: format))
+        let sample = try XCTUnwrap(Self.makeSampleBuffer(pcm: pcm, formatDescription: description, pts: CMTime(seconds: 7, preferredTimescale: 16_000)))
+        XCTAssertEqual(CMSampleBufferGetDuration(sample).seconds, 0.02, accuracy: 0.000_001)
+        XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(sample).seconds, 7, accuracy: 0.000_001)
+        XCTAssertEqual(CMSampleBufferGetNumSamples(sample), Self.chunkFrames)
+    }
 
     func testReplayRealMeetingThroughLiveCoordinator() async throws {
         let env = ProcessInfo.processInfo.environment
@@ -444,7 +457,7 @@ final class MeetingLiveReplayTests: XCTestCase {
         guard copyStatus == kCMBlockBufferNoErr else { return nil }
 
         var timing = CMSampleTimingInfo(
-            duration: CMTime(value: CMTimeValue(frameCount), timescale: CMTimeScale(self.sampleRate)),
+            duration: CMTime(value: 1, timescale: CMTimeScale(self.sampleRate)),
             presentationTimeStamp: pts,
             decodeTimeStamp: .invalid
         )
