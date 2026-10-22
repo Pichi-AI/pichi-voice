@@ -413,8 +413,9 @@ struct MeetingResultCanvas: View {
     }
 
     /// Single projection so shown and copied never disagree.
-    private func visibleSegments(sorted: [MeetingTranscriptSegment]) -> [MeetingTranscriptSegment] {
-        self.showsProbableEchoes ? sorted : sorted.filter { !$0.isEcho }
+    private func visibleSegments(sorted: [MeetingTranscriptSegment],
+        presentations: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation]) -> [MeetingTranscriptSegment] {
+        sorted.filter { $0.isEcho ? self.showsProbableEchoes : presentations[$0.id] != nil }
     }
 
     /// Preserve correction and playback members while sharing one full-session reading map.
@@ -427,7 +428,7 @@ struct MeetingResultCanvas: View {
         let speakers = Dictionary(uniqueKeysWithValues: self.session.readableSpeakers.map { ($0.id, $0) })
         var previousIdentity: String?
         var previousTrack: MeetingAudioTrackID?
-        return visibleSegments.filter { presentations[$0.id] != nil || (self.showsProbableEchoes && $0.isEcho) }.map { segment in
+        return visibleSegments.map { segment in
             let presentation = presentations[segment.id]
                 ?? MeetingTranscriptExporter.speakerPresentation(for: segment, in: self.session)
             if previousTrack != segment.sourceTrackID { previousIdentity = nil }
@@ -440,10 +441,10 @@ struct MeetingResultCanvas: View {
 
     var body: some View {
         let sorted = self.session.transcriptSegments.sorted { $0.start.seconds < $1.start.seconds }
-        let visibleSegments = self.visibleSegments(sorted: sorted)
+        let presentations = MeetingTranscriptExporter.speakerPresentations(in: self.session)
+        let visibleSegments = self.visibleSegments(sorted: sorted, presentations: presentations)
         let visibleSpeakerIDs = Set(visibleSegments.compactMap(\.speakerID))
         let activeSpeakers = self.session.readableSpeakers.filter { visibleSpeakerIDs.contains($0.id) }
-        let presentations = MeetingTranscriptExporter.speakerPresentations(in: self.session)
         let rows = self.rows(for: visibleSegments, presentations: presentations)
         // One scroller preserves a readable document at short window heights.
         let document = ScrollView {

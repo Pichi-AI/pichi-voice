@@ -83,6 +83,13 @@ extension MeetingSessionStoreCheckpointTests {
             check(noise.allSatisfy { reading[$0.id] == nil } && reading[comma.id]?.participantID == a,
                   "Live projection shares artifact suppression and typography ownership without native reassignment")
             check(value.transcriptSegments == original, "Reading does not mutate original native evidence")
+            var onlyNoise = value
+            onlyNoise.transcriptSegments = noise
+            check(onlyNoise.readableSpeakers.isEmpty
+                  && MeetingTranscriptExporter.displayParagraphs(for: noise, in: onlyNoise).isEmpty
+                  && MeetingTranscriptExporter.speakerPresentations(in: onlyNoise).isEmpty
+                  && MeetingTranscriptExporter.text(for: onlyNoise).isEmpty,
+                  "A noise-only meeting has no readable rows, speaker headers or automatically visible people")
             var adjacent = value
             let quote = word("\"", 0.16, raw: nil, selected: nil, owner: extra)
             adjacent.transcriptSegments = [first, comma, quote]
