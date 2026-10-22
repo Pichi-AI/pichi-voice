@@ -1396,6 +1396,35 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
+    /// A synthetic protected publication, including a short final preliminary participant.
+    func testProvisionalParticipantsSurviveReopen() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Preliminary participant fixtures are simulator-only")
+        #else
+        let fixtureID = "8EEC0000-2026-4000-8000-000000000021"
+        for (language, appearance, history, suffix) in [
+            ("en", "light", "History", "provisional"),
+            ("ru", "dark", "История", "предварительно")
+        ] {
+            for iteration in 0..<2 {
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+                app.launch()
+                openNavigation("history", title: history)
+                let meeting = app.buttons["history.session.\(fixtureID)"]
+                XCTAssertTrue(meeting.waitForExistence(timeout: 5), "Stage the synthetic preliminary participant fixture")
+                meeting.tap()
+                XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+                for number in [2, 3] {
+                    let caption = app.staticTexts["Участник \(number) (\(suffix))"].firstMatch
+                    XCTAssertTrue(caption.waitForExistence(timeout: 5), "Every preliminary speaker keeps a readable qualified name")
+                }
+                capture("provisional-\(language)-reopen-\(iteration)")
+                app.terminate()
+            }
+        }
+        #endif
+    }
+
     /// Uses an isolated synthetic saved meeting. It never starts capture or a model.
     func testFragmentParticipantCorrectionScopesUndoAndReopen() throws {
         #if !targetEnvironment(simulator)
