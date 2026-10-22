@@ -472,7 +472,9 @@ assert 'let tint = self.tints[speaker.id] ?? self.theme.palette.secondaryText' i
 assert 'MeetingSpeakerPalette.tintIndices(for: self.session.speakers)' in speaker_producer
 assert 'activeSpeakers' not in speaker_producer
 assert '.foregroundStyle(tint)' in assignment
-assert 'speaker.isLocalUser ?' not in assignment
+# Owner status copy may vary; participant colors still cannot branch on owner identity.
+owner_status_label = 'Text(PichiLocalization.text(speaker.isLocalUser ? "Your microphone voice is kept separate" :'
+assert assignment.count('speaker.isLocalUser ?') == assignment.count(owner_status_label)
 with Path(sys.argv[1]).open('a') as output:
     # Reuse the complete participant sheet's inert Identifiable metadata.
     output.write(speaker_source)
@@ -543,22 +545,35 @@ Path(sys.argv[1]).with_name('NativeInputPresentationProductionSource.json').writ
 participant_path = 'Sources/Fluid/UI/MeetingAssignSpeakersSheet.swift'
 participant_revision = os.environ.get('PICHI_PARTICIPANT_INPUT_LEGACY_REVISION')
 participant_source = subprocess.check_output(['git', 'show', f'{participant_revision}:{participant_path}'], text=True) if participant_revision else Path(participant_path).read_text()
-participant_start = '            TextField(\n                speaker.displayName,'
-assert participant_source.count(participant_start) == 1
-participant_first = participant_source.index(participant_start)
-participant_last_marker = '            .disabled(self.isSaving)'
+participant_match = re.search(r'(?m)^(?P<indent>[ \t]*)TextField\(\n(?P=indent)    speaker\.displayName,', participant_source)
+assert participant_match is not None, 'Expected the exact production participant-name field'
+participant_first = participant_match.start()
+participant_indent = participant_match.group('indent')
+uses_edits = 'self.edits.names[speaker.id]' in participant_source
+participant_disabled = '.disabled(self.isSaving || self.edits.merges[speaker.id] != nil)' if uses_edits else '.disabled(self.isSaving)'
+participant_last_marker = participant_indent + participant_disabled
+assert participant_source.count(participant_last_marker) == 1
 participant_last = participant_source.index(participant_last_marker, participant_first) + len(participant_last_marker)
 participant_field = participant_source[participant_first:participant_last]
-Path(sys.argv[1]).with_name('ProductionParticipantSheet.swift').write_text(participant_source)
+# Keep the complete shipping edit value and sheet; only their external metadata is inert.
+meeting_models = Path('Sources/Fluid/Services/Meeting/MeetingModels.swift').read_text()
+edit_value = declaration(meeting_models, 'nonisolated struct MeetingSpeakerEdits:')
+Path(sys.argv[1]).with_name('ProductionParticipantSheet.swift').write_text(participant_source + '\n' + edit_value)
 with Path(sys.argv[1]).open('a') as output:
+    metadata = (' struct Speaker { let id: String; let displayName: String }\n'
+                ' @FocusState private var focusedField: String?\n'
+                ' let speaker = Speaker(id: "synthetic", displayName: "Участник Ёё")\n')
+    if uses_edits:
+        metadata = (' @FocusState private var focusedField: SessionSpeakerID?\n'
+            ' private let speaker = MeetingSessionSpeaker(id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!, displayName: "Участник Ёё", isLocalUser: false)\n'
+            ' private var edits: MeetingSpeakerEdits {\n'
+            '  get { .init(names: [self.speaker.id: self.drafts["synthetic"] ?? ""]) }\n'
+            '  nonmutating set { self.drafts["synthetic"] = newValue.names[self.speaker.id] }\n }\n')
     output.write('struct ProductionParticipantInputFixture: View {\n'
-        ' struct Speaker { let id: String; let displayName: String }\n'
         ' @Environment(\\.theme) private var theme\n'
         ' @Binding var drafts: [String: String]\n'
-        ' let isSaving: Bool\n'
-        ' @FocusState private var focusedField: String?\n'
-        ' let speaker = Speaker(id: "synthetic", displayName: "Участник Ёё")\n'
-        ' var body: some View {\n' + participant_field + '\n }\n}\n')
+        ' let isSaving: Bool\n' + metadata
+        + ' var body: some View {\n' + participant_field + '\n }\n}\n')
 Path(sys.argv[1]).with_name('ParticipantInputProductionSource.json').write_text(json.dumps({
     'source': participant_path, 'sourceSHA256': hashlib.sha256(participant_source.encode()).hexdigest(),
     'fieldSHA256': hashlib.sha256(participant_field.encode()).hexdigest(),

@@ -17,12 +17,16 @@ struct CloudTextProvider {
 // Shape-only meeting metadata for compiling the complete production sheet.
 // No persistence, session services, recordings or personal names are available.
 typealias SessionSpeakerID = UUID
+// Shape-only neighbor for the actual production edit value and merge controls.
+nonisolated enum MeetingAudioTrackKind: String, Codable, Sendable { case applicationAudio, microphone }
+nonisolated enum MeetingDomainError: Error { case cannotMergeSpeakers }
 struct MeetingSessionSpeaker: Identifiable {
     let id: SessionSpeakerID
     var displayName: String
     var isLocalUser: Bool
     var mergedIntoSpeakerID: SessionSpeakerID? = nil
     var generatedParticipantNumber: Int? = nil
+    var trackKind: MeetingAudioTrackKind = .microphone
 }
 struct MeetingTranscriptSegment {
     enum Status { case final, partial }
@@ -67,7 +71,7 @@ enum ParticipantInputContrastTests {
             MeetingAssignSpeakersSheet(
                 speakers: [.init(id: Self.speakerID, displayName: "Ёжик ёлка", isLocalUser: false)],
                 quotesBySpeaker: [:], tints: [:],
-                onSave: { self.observations.saveCalls.append($0); return nil },
+                onSave: { self.observations.saveCalls.append($0.names); return nil },
                 onCancel: { self.observations.cancelCalls += 1 })
                 // The presentation adapter passes custom theme and caller tint.
                 // Root font/foreground/native colorScheme must come FROM SHEET.
