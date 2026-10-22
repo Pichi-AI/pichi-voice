@@ -1378,6 +1378,7 @@ struct MeetingTranscriptTextEditor: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .appTheme(self.theme)
     }
 
     private func save() {
