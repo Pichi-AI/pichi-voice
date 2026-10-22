@@ -651,33 +651,56 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         resetBefore: Set<MeetingTranscriptSegmentID>, allowContext: Bool
     ) throws {
         guard allowContext else { return }
+        // CoW snapshot of this bounded tail. Earlier contextual writes cannot become anchors.
+        let attributed = resolved
+        try self.resolveExistingParticipantContext(count: attributed.count,
+            originalAt: { self.retained[$0].original }, attributedAt: { attributed[$0] },
+            resetsBefore: { resetBefore.contains(attributed[$0].id) }) { position, id, token in
+                resolved[position].speakerID = id
+                resolved[position].attributionState = .assigned
+                resolved[position].speakerIdentityIsProvisional = nil
+                resolved[position].speakerAttribution = .init(existingParticipantContext: attributed[position],
+                    token: token, speakerID: id, policy: self.policy)
+            }
+    }
+
+    /// Index access lets final publication inspect a complete run across storage chunks without
+    /// copying its text. Only two neighbor options and scalar run bounds are retained. Both input
+    /// accessors must read immutable snapshots, and contextual writes are never acoustic anchors.
+    private func resolveExistingParticipantContext(count: Int,
+        originalAt: (Int) -> MeetingTranscriptSegment,
+        attributedAt: (Int) -> MeetingTranscriptSegment,
+        resetsBefore: (Int) -> Bool,
+        assign: (Int, SessionSpeakerID, MeetingBackendSpeakerToken) -> Void
+    ) throws {
         let identities = Dictionary(self.speakers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         func safe(_ index: Int) -> Bool {
-            let source = self.retained[index].original
+            let source = originalAt(index)
             return source.hasReadableContent && source.status == .final && source.completeness == .complete
                 && !source.isEcho && source.attributionState != .timingUncertain
                 && source.isUserSpeakerAssigned != true && source.nativePrecision == .word
                 && source.nativeUnitID?.isEmpty == false && source.nativeSpeakerAssignment != nil
         }
         func anchor(_ index: Int) -> (id: SessionSpeakerID, token: MeetingBackendSpeakerToken)? {
-            guard resolved.indices.contains(index), safe(index),
-                  let id = resolved[index].speakerID, let speaker = identities[id],
-                  speaker.mergedIntoSpeakerID == nil,
-                  case let .assigned(token) = resolved[index].nativeSpeakerAssignment,
+            guard (0..<count).contains(index), safe(index) else { return nil }
+            let source = attributedAt(index)
+            guard let id = source.speakerID, let speaker = identities[id], speaker.mergedIntoSpeakerID == nil,
+                  case let .assigned(token) = source.nativeSpeakerAssignment,
                   token.analysisEpochID == self.epoch,
                   id == MeetingTranscriptAssembler.speakerID(attemptID: self.attemptID, token: token)
             else { return nil }
-            if let summary = resolved[index].speakerAttribution {
+            if let summary = source.speakerAttribution {
                 guard summary.rule.isIndependentAcousticSelection, summary.selectedToken == token else { return nil }
             }
             return (id, token)
         }
-        func neighborIndex(from initial: Int, step: Int) -> Int? {
+        func neighborIndex(from initial: Int, step: Int) throws -> Int? {
             var position = initial
-            while resolved.indices.contains(position) {
-                if resetBefore.contains(resolved[position].id) { return nil }
-                if self.retained[position].original.hasReadableContent { return position }
-                let source = self.retained[position].original
+            while (0..<count).contains(position) {
+                try Task.checkCancellation()
+                if resetsBefore(position) { return nil }
+                let source = originalAt(position)
+                if source.hasReadableContent { return position }
                 guard source.status == .final, source.completeness == .complete, !source.isEcho,
                       source.attributionState != .timingUncertain, source.isUserSpeakerAssigned != true else { return nil }
                 position += step
@@ -685,48 +708,54 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
             return nil
         }
         var index = 0
-        while index < resolved.count {
+        while index < count {
             try Task.checkCancellation()
-            guard resolved[index].speakerID == nil, safe(index) else { index += 1; continue }
+            guard attributedAt(index).speakerID == nil, safe(index) else { index += 1; continue }
             let first = index
             var last = index
-            while last + 1 < resolved.count, resolved[last + 1].speakerID == nil, safe(last + 1),
-                  !resetBefore.contains(resolved[last + 1].id),
-                  Self.timing(self.retained[last + 1].original).start - Self.timing(self.retained[last].original).end
-                    <= self.policy.maximumNeighborGapSeconds + self.policy.comparisonTolerance { last += 1 }
+            var end = Self.timing(originalAt(index)).end
+            while last + 1 < count, attributedAt(last + 1).speakerID == nil, safe(last + 1),
+                  !resetsBefore(last + 1),
+                  Self.timing(originalAt(last + 1)).start - Self.timing(originalAt(last)).end
+                    <= self.policy.maximumNeighborGapSeconds + self.policy.comparisonTolerance {
+                try Task.checkCancellation()
+                last += 1
+                end = max(end, Self.timing(originalAt(last)).end)
+            }
             index = last + 1
-            let start = Self.timing(self.retained[first].original).start
-            let end = (first...last).map { Self.timing(self.retained[$0].original).end }.max()!
+            let start = Self.timing(originalAt(first)).start
             guard end - start <= self.policy.maximumUnknownRunSeconds + self.policy.comparisonTolerance else { continue }
             var options: [(id: SessionSpeakerID, token: MeetingBackendSpeakerToken, gap: Double)] = []
-            if !resetBefore.contains(resolved[first].id), let position = neighborIndex(from: first - 1, step: -1),
+            if !resetsBefore(first), let position = try neighborIndex(from: first - 1, step: -1),
                let left = anchor(position) {
-                let gap = start - Self.timing(self.retained[position].original).end
+                let gap = start - Self.timing(originalAt(position)).end
                 if gap >= -self.policy.comparisonTolerance,
                    gap <= self.policy.maximumNeighborGapSeconds + self.policy.comparisonTolerance {
                     options.append((left.id, left.token, gap))
                 }
             }
-            if let position = neighborIndex(from: last + 1, step: 1), let right = anchor(position) {
-                let gap = Self.timing(self.retained[position].original).start - end
+            if let position = try neighborIndex(from: last + 1, step: 1), let right = anchor(position) {
+                let gap = Self.timing(originalAt(position)).start - end
                 if gap >= -self.policy.comparisonTolerance,
                    gap <= self.policy.maximumNeighborGapSeconds + self.policy.comparisonTolerance {
                     options.append((right.id, right.token, gap))
                 }
             }
             guard !options.isEmpty else { continue }
-            // A native cue for an already known person wins over distance. Otherwise choose
-            // the nearest real neighbor, with the preceding person as a deterministic tie.
-            let nativeTokens = Set((first...last).flatMap { self.retained[$0].original.nativeSpeakerAssignment?.tokens ?? [] })
-            let supported = options.filter { nativeTokens.contains($0.token) }
-            let chosen = (supported.isEmpty ? options : supported).min { $0.gap < $1.gap }!
+            // A native cue for an already known person wins over distance. Retain only the
+            // two option matches, rather than collecting arbitrary native tokens from a run.
+            var supported = [Bool](repeating: false, count: options.count)
             for position in first...last {
-                let source = resolved[position]
-                resolved[position].speakerID = chosen.id
-                resolved[position].attributionState = .assigned
-                resolved[position].speakerIdentityIsProvisional = nil
-                resolved[position].speakerAttribution = .init(existingParticipantContext: source,
-                    token: chosen.token, speakerID: chosen.id, policy: self.policy)
+                try Task.checkCancellation()
+                let native = originalAt(position).nativeSpeakerAssignment?.tokens ?? []
+                for option in options.indices where native.contains(options[option].token) { supported[option] = true }
+            }
+            let matching = options.indices.filter { supported[$0] }
+            let candidates = matching.isEmpty ? Array(options.indices) : matching
+            let chosen = options[candidates.min { options[$0].gap < options[$1].gap }!]
+            for position in first...last {
+                try Task.checkCancellation()
+                assign(position, chosen.id, chosen.token)
             }
         }
     }
@@ -765,6 +794,45 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
             var owner = try Self(attemptID: attemptID, epoch: epoch, speakerNameFormat: speakerNameFormat,
                 policy: policy, priorSpeakers: result.speakers)
             let barriers = try MeetingSpeakerAttribution.unionedIntervals(barriersByTrack[epoch.trackID] ?? [])
+            if policy.enableStableSpeakerOpening {
+                // Index the immutable epoch rather than splitting its contextual runs at word
+                // or text-byte chunk boundaries. One source value is inspected at a time.
+                for index in indices {
+                    try Task.checkCancellation()
+                    let source = transcript.segments[index], timing = Self.timing(source)
+                    guard MeetingEvidenceInterval.isValid(start: timing.start, end: timing.end) else { throw Failure.invalidWord }
+                    guard source.text.utf8.count + (source.originalText?.utf8.count ?? 0)
+                        <= owner.limits.maximumRetainedTextBytes else { throw Failure.retainedTextLimit }
+                }
+                if !contextualBarrierEpochIDs.contains(epoch) {
+                    try owner.resolveExistingParticipantContext(count: indices.count,
+                        originalAt: { transcript.segments[indices[$0]] },
+                        attributedAt: { transcript.segments[indices[$0]] },
+                        resetsBefore: { position in
+                            guard position > 0 else { return false }
+                            let previousStart = Self.timing(transcript.segments[indices[position - 1]]).start
+                            let end = Self.timing(transcript.segments[indices[position]]).end
+                            // Unioned exclusion ends are sorted. A nested word envelope must
+                            // not consume an exclusion needed by a later starting source row.
+                            var low = 0, high = barriers.count
+                            while low < high {
+                                let middle = low + (high - low) / 2
+                                if barriers[middle].end <= previousStart { low = middle + 1 }
+                                else { high = middle }
+                            }
+                            return low < barriers.count && barriers[low].start < end
+                        }) { position, id, token in
+                            let index = indices[position], source = transcript.segments[index]
+                            result.segments[index].speakerID = id
+                            result.segments[index].attributionState = .assigned
+                            result.segments[index].speakerIdentityIsProvisional = nil
+                            result.segments[index].speakerAttribution = .init(existingParticipantContext: source,
+                                token: token, speakerID: id, policy: policy)
+                        }
+                }
+                result.speakers = owner.speakers
+                continue
+            }
             var barrierCursor = 0
             var previousStart: TimeInterval?
             var offset = 0
