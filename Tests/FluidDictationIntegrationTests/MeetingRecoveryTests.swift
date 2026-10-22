@@ -5563,17 +5563,15 @@ final class MeetingRecoveryTests: XCTestCase {
 
         let before = MeetingSpeakerPalette.tintIndices(for: [speakerA, placeholder, speakerC])
         XCTAssertEqual(before[speakerA.id], 0)
-        XCTAssertNil(before[placeholder.id])
+        XCTAssertEqual(before[placeholder.id], 1)
         XCTAssertEqual(before[speakerC.id], 2)
-        XCTAssertNil(MeetingSpeakerPalette.tints(for: [speakerA, placeholder, speakerC], isDark: false)[placeholder.id])
+        let beforeTints = MeetingSpeakerPalette.tints(for: [speakerA, placeholder, speakerC], isDark: false)
 
         var renamedPlaceholder = placeholder
         renamedPlaceholder.displayName = "Jordan"
-        let after = MeetingSpeakerPalette.tintIndices(for: [speakerA, renamedPlaceholder, speakerC])
-        XCTAssertEqual(after[speakerA.id], 0)
-        XCTAssertEqual(after[renamedPlaceholder.id], 1)
-        XCTAssertEqual(after[speakerC.id], 2)
-        XCTAssertNotNil(MeetingSpeakerPalette.tints(for: [speakerA, renamedPlaceholder, speakerC], isDark: false)[renamedPlaceholder.id])
+        let canonical = [speakerA, renamedPlaceholder, speakerC]
+        XCTAssertEqual(MeetingSpeakerPalette.tintIndices(for: canonical), before)
+        XCTAssertEqual(MeetingSpeakerPalette.tints(for: canonical, isDark: false), beforeTints)
     }
 
     // MARK: - MeetingAssignSpeakersValidation.duplicateName

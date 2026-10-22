@@ -407,7 +407,9 @@ private struct MeetingNativeCaptionTable: UIViewRepresentable {
     private var appearance: Appearance {
         let theme = environment.theme, palette = theme.palette
         return Appearance(colors: [palette.primaryText, palette.secondaryText, palette.accent,
-            palette.accentText, palette.contentBackground],
+            palette.accentText, palette.contentBackground, palette.windowBackground,
+            palette.sidebarBackground, palette.cardBackground, palette.elevatedCardBackground,
+            palette.toolbarBackground],
             fonts: [theme.typography.body, theme.typography.captionStrong],
             brandStyle: theme.typography.brandStyle,
             spacing: [theme.metrics.spacing.xs, theme.metrics.spacing.sm],
@@ -974,6 +976,7 @@ private struct MeetingLiveParagraphRow: View, Equatable {
     var isTail = false
     var pending: MeetingPendingSpeechSnapshot = .empty
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
 
     static func == (lhs: MeetingLiveParagraphRow, rhs: MeetingLiveParagraphRow) -> Bool {
         lhs.paragraph == rhs.paragraph
@@ -999,7 +1002,8 @@ private struct MeetingLiveParagraphRow: View, Equatable {
             if self.paragraph.showsLabel, let label = self.paragraph.captionLabel {
                 Text(label)
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.paragraph.speaker == .you ? self.theme.palette.accentText : self.theme.palette.secondaryText)
+                    .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: self.paragraph.participant?.participantIndex,
+                        theme: self.theme, colorScheme: self.colorScheme))
                     .fixedSize(horizontal: false, vertical: true)
             }
             Group {
@@ -1064,7 +1068,8 @@ struct MeetingLiveBubbleRow: View, Equatable {
             if self.row.showsLabel, let label = self.sourceLabel {
                 Text(label)
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.isMicrophone ? self.theme.palette.accentText : self.theme.palette.secondaryText)
+                    .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: self.row.participant?.participantIndex,
+                        theme: self.theme, colorScheme: self.colorScheme))
                     .fixedSize(horizontal: false, vertical: true)
             }
             Group {

@@ -37,17 +37,21 @@ nonisolated struct MeetingSpeakerPresentation: Sendable, Equatable {
     let label: Label
     /// Reading owner for actions and styling; never substituted into stored acoustic evidence.
     let participantID: SessionSpeakerID?
+    /// Admission position in the full persisted speaker list, including merged records.
+    /// Presentation keeps this separate from editable names and participant numbering.
+    let participantIndex: Int?
 
-    init(identity: String, label: Label, participantID: SessionSpeakerID? = nil) {
+    init(identity: String, label: Label, participantID: SessionSpeakerID? = nil, participantIndex: Int? = nil) {
         self.identity = identity
         self.label = label
         self.participantID = participantID
+        self.participantIndex = participantIndex
     }
 
     /// Preserve the whole turn's internal estimate marker without changing the visible name.
     func markingEstimated() -> Self {
         guard case let .identified(name) = label else { return self }
-        return Self(identity: identity, label: .estimated(name), participantID: participantID)
+        return Self(identity: identity, label: .estimated(name), participantID: participantID, participantIndex: participantIndex)
     }
 
     var isEstimated: Bool {

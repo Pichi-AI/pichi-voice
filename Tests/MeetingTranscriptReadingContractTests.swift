@@ -110,6 +110,18 @@ extension MeetingSessionStoreCheckpointTests {
             let labels = MeetingTranscriptExporter.speakerPresentations(in: session)
             check(labels.values.allSatisfy { $0.participantID == a && $0.isEstimated },
                   "The leading-neighbor convention is an estimated reading owner, not new acoustic evidence")
+            let paragraphPresentation = MeetingTranscriptExporter.speakerPresentation(
+                for: reading[0], in: session, speakerNames: names)
+            check(paragraphPresentation == labels[prefix.id],
+                  "Mobile paragraph styling and the desktop/live map resolve the same reading participant")
+            check(paragraphPresentation.participantIndex == 0 && paragraphPresentation.markingEstimated().participantIndex == 0,
+                  "Reading labels retain the participant's canonical admission slot")
+            var merged = session
+            merged.speakers[0].mergedIntoSpeakerID = b
+            let mergedParagraph = MeetingTranscriptExporter.speakerPresentation(
+                for: reading[0], in: merged, speakerNames: names)
+            check(mergedParagraph.participantID == b && mergedParagraph.participantIndex == 1,
+                  "A projected alias uses its active participant's color without recoloring other identities")
             check(MeetingTranscriptExporter.text(for: session) == "[00:00] Имя Ёё: Я ещё Начало.",
                   "Text export and the saved reading view share the incoming participant and complete phrase")
             let projected = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.protectedTranscriptJSON(for: session)) as! [String: Any]

@@ -15,6 +15,7 @@ struct MobileMeetingRoot: View {
     let microphones: @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var scenePhase
@@ -573,6 +574,7 @@ struct MobileMeetingRoot: View {
     }
 
     private func transcript(_ session: MeetingSession) -> some View {
+        let speakerIndices = MeetingSpeakerPalette.tintIndices(for: session.speakers)
         let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map {
             ($0.id, MeetingTranscriptExporter.speakerDisplayName($0, language: PichiLocalization.language))
         })
@@ -641,7 +643,7 @@ struct MobileMeetingRoot: View {
                         ScrollView(.horizontal) {
                             HStack(spacing: theme.metrics.spacing.sm) {
                                 ForEach(session.activeSpeakers) { speaker in
-                                    participantButton(speaker, session: session, expands: false)
+                                    participantButton(speaker, session: session, colorIndex: speakerIndices[speaker.id], expands: false)
                                 }
                             }
                         }.scrollIndicators(.hidden).accessibilityIdentifier("transcript.speakers")
@@ -649,7 +651,7 @@ struct MobileMeetingRoot: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), alignment: .leading)], alignment: .leading,
                                   spacing: theme.metrics.spacing.sm) {
                             ForEach(session.activeSpeakers) { speaker in
-                                participantButton(speaker, session: session, expands: true)
+                                participantButton(speaker, session: session, colorIndex: speakerIndices[speaker.id], expands: true)
                             }
                         }.accessibilityIdentifier("transcript.speakers")
                     }
@@ -675,13 +677,15 @@ struct MobileMeetingRoot: View {
             }
     }
 
-    private func participantButton(_ speaker: MeetingSessionSpeaker, session: MeetingSession, expands: Bool) -> some View {
+    private func participantButton(_ speaker: MeetingSessionSpeaker, session: MeetingSession, colorIndex: Int?, expands: Bool) -> some View {
         HStack(spacing: theme.metrics.spacing.xs) {
             Button {
                 edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
             } label: {
                 Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language), systemImage: "person.crop.circle")
                     .font(theme.typography.captionStrong)
+                    .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: colorIndex,
+                        theme: theme, colorScheme: colorScheme))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
@@ -711,6 +715,10 @@ struct MobileMeetingRoot: View {
     private func transcriptParagraph(_ paragraph: MeetingTranscriptExporter.DisplayParagraph, session: MeetingSession,
                                      names: [SessionSpeakerID: String]) -> some View {
         let segment = paragraph.firstSegment
+        // The reading projection can bridge an unresolved first fragment to its owner.
+        // Style that same readable identity without changing the stored attribution.
+        let participantIndex = MeetingTranscriptExporter.speakerPresentation(
+            for: paragraph, in: session, speakerNames: names).participantIndex
         let isAudioExpanded = paragraph.segments.contains { $0.id == playback.activeSegmentID }
         return VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
             HStack(alignment: .top, spacing: theme.metrics.spacing.sm) {
@@ -720,7 +728,9 @@ struct MobileMeetingRoot: View {
                 if let label = MeetingTranscriptExporter.captionLabel(for: paragraph, in: session,
                     speakerNames: names, language: PichiLocalization.language) {
                     Text(label)
-                        .font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
+                        .font(theme.typography.captionStrong)
+                        .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: participantIndex,
+                            theme: theme, colorScheme: colorScheme))
                         .padding(.top, theme.metrics.spacing.sm)
                 }
                 Spacer(minLength: 0)

@@ -400,12 +400,13 @@ struct MeetingResultCanvas: View {
     }
 
     private func chipTint(for speaker: MeetingSessionSpeaker) -> Color? {
-        speaker.isLocalUser ? self.theme.palette.accent : self.speakerTints[speaker.id]
+        self.speakerTints[speaker.id]
     }
 
     private var speakerTints: [SessionSpeakerID: Color] {
-        let scheme = self.theme.palette.nativeColorScheme(fallback: self.colorScheme)
-        return MeetingSpeakerPalette.tints(for: self.session.activeSpeakers, isDark: scheme == .dark)
+        MeetingSpeakerPalette.tintIndices(for: self.session.speakers).mapValues { index in
+            MeetingSpeakerPalette.labelColor(forSpeakerIndex: index, theme: self.theme, colorScheme: self.colorScheme)
+        }
     }
 
     private var hasEchoSegments: Bool {
@@ -504,7 +505,6 @@ struct MeetingResultCanvas: View {
                                             self.pendingUnknownSpeakerName = ""
                                         }
                                     },
-                                    isLocalUser: row.speaker?.isLocalUser == true,
                                     reassignTargets: self.session.activeSpeakers.filter { $0.id != row.presentation.participantID },
                                     isQuiescent: self.isQuiescent,
                                     onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) },
@@ -613,7 +613,6 @@ struct MeetingResultCanvas: View {
                     ($0.id, MeetingAssignSpeakersQuoteSource.sampleQuotes(for: $0.id, in: self.session.transcriptSegments))
                 }),
                 tints: self.speakerTints,
-                accentColor: self.theme.palette.accent,
                 focusedSpeakerID: self.assignSpeakersFocus,
                 onSave: self.onAssignSpeakers,
                 onCancel: { self.isShowingAssignSpeakers = false }
@@ -1110,7 +1109,7 @@ private struct MeetingSpeakerChip: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
             .font(self.theme.typography.captionStrong)
-            .foregroundStyle(self.theme.palette.readableText(self.tint))
+            .foregroundStyle(self.tint)
         }
         .buttonStyle(.borderless)
         .meetingHoverFeedback()
@@ -1125,7 +1124,6 @@ private struct MeetingTranscriptSegmentRow: View {
     let showsSpeakerLabel: Bool
     let speakerTint: Color?
     let onRenameSpeakerTapped: (() -> Void)?
-    let isLocalUser: Bool
     let reassignTargets: [MeetingSessionSpeaker]
     let isQuiescent: Bool
     let onReassign: (SessionSpeakerID) -> Void
@@ -1233,8 +1231,7 @@ private struct MeetingTranscriptSegmentRow: View {
     }
 
     private var nameColor: Color {
-        if self.isLocalUser { return self.theme.palette.accentText }
-        return self.speakerTint.map(self.theme.palette.readableText) ?? self.theme.palette.tertiaryText
+        self.speakerTint ?? self.theme.palette.secondaryText
     }
 }
 

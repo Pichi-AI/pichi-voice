@@ -5,6 +5,30 @@ import UIKit
 @testable import PichiVoiceMobile
 
 final class MeetingLiveCaptionPresentationTests: XCTestCase {
+    func testSpeakerColorSlotsSurviveIdentityRefinementAndStorage() throws {
+        let ids = ["01234567-89ab-cdef-0123-456789abc000", "01234567-89ab-cdef-0123-456789abc006"]
+            .map { UUID(uuidString: $0)! }
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic colors",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone")),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1))
+        session.speakers = ids.enumerated().map { index, id in
+            .init(id: id, displayName: "Участник \(index + 1)", diarizationClusterID: nil,
+                trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        }
+        let initial = MeetingSpeakerPalette.tintIndices(for: session.speakers)
+        XCTAssertNotEqual(initial[ids[0]], initial[ids[1]], "Two IDs that collided under hashing must remain distinct")
+        session.speakers = MeetingPCMTranscriptBatch(segments: [], speakers: Array(session.speakers.reversed()))
+            .mergingSpeakers(into: session.speakers)
+        try session.renameSpeaker(id: ids[0], to: "Анна Ёлкина")
+        try session.setLocalUserSpeaker(id: ids[1], speakerNameFormat: "Участник %lld")
+        XCTAssertEqual(MeetingSpeakerPalette.tintIndices(for: session.speakers), initial)
+        session.speakers[0].mergedIntoSpeakerID = ids[1]
+        XCTAssertEqual(session.activeSpeakers.map(\.id), [ids[1]])
+        let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(MeetingSpeakerPalette.tintIndices(for: restored.speakers), initial,
+            "Merged records reserve their slots across Stop and persisted reopen")
+    }
+
     func testBufferedCaptionCoverageDoesNotInventTimingForGrowingIdenticalWords() {
         let coarse = PichiMeetingCaptionRecognition(text: "Same words", endOfUtteranceProbability: nil)
         for count in [48_000, 96_000, 192_000] {
@@ -483,6 +507,48 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    @MainActor
+    func testNativeSpeakerColorLabelsUseReadableParticipantIdentity() async throws {
+        let names = ["Owner", "Анна Ёлкина", "Борис", "Вера", "Георгий", "Дина", "Евгений", "Жанна"]
+        let rows = try names.enumerated().map { index, name in
+            let id = try XCTUnwrap(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012x", index + 1)))
+            return MeetingLiveBubbleComposer.Row(id: id, speaker: .you,
+                text: "Синтетическая реплика \(index + 1). Ёжик обсуждает план. English text.",
+                isPartial: false, showsLabel: true,
+                participant: .init(identity: id.uuidString,
+                    label: .identified(.init(displayName: name, isLocalUser: index == 0,
+                                            usesCustomDisplayName: index != 0)), participantID: id, participantIndex: index),
+                start: Double(index * 4), readingTurnStart: Double(index * 4))
+        }
+        for scheme: ColorScheme in [.light, .dark] {
+            let host = try CaptionNativeHost(rows: rows, scheme: scheme)
+            defer { host.close() }
+            host.model.width = host.window.bounds.width - 48
+            host.model.height = host.window.bounds.height - 160
+            try await settle(host, "Native participant captions must finish layout") {
+                self.scrollViews(in: host.controller.view).contains { $0.contentSize.height > 0 }
+            }
+            let image = capture(host, step: "speaker-colors", scheme: scheme)
+            if let directory = ProcessInfo.processInfo.environment["PICHI_SETUP_STEP_REVIEW_DIRECTORY"] {
+                let revision = ProcessInfo.processInfo.environment["PICHI_TEST_REVISION"] ?? "working-tree"
+                let name = "live-speaker-colors-\(scheme == .dark ? "dark" : "light")-\(revision)-\(UUID().uuidString.prefix(8))"
+                let root = URL(fileURLWithPath: directory)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                let frame = root.appendingPathComponent(name + ".png")
+                let acknowledgement = root.appendingPathComponent(name + ".continue")
+                try XCTUnwrap(image.pngData()).write(to: frame, options: .atomic)
+                try JSONEncoder().encode(["step": name, "revision": revision, "screenshot": frame.path,
+                    "acknowledgement": acknowledgement.path])
+                    .write(to: root.appendingPathComponent("current-step.json"), options: .atomic)
+                let deadline = Date().addingTimeInterval(300)
+                while !FileManager.default.fileExists(atPath: acknowledgement.path), Date() < deadline {
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                XCTAssertTrue(FileManager.default.fileExists(atPath: acknowledgement.path))
+            }
+        }
+    }
+
     func testReadableTurnHeadersShowElapsedTimeWithoutAnonymousRows() async throws {
         let first = MeetingSpeakerPresentation(identity: "first",
             label: .identified(.init(displayName: "Анна", isLocalUser: false)))
