@@ -76,100 +76,110 @@ struct OnboardingAIEnhancementStepView: View {
     private var publicContent: some View {
         let canFinish = !self.isRunning && !self.isRecordingShortcut && !self.contentState.isProcessing
         let hasConfiguredCleanup = DictationAIPostProcessingGate.isOnboardingChoiceConfigured()
-        return VStack(spacing: 24) {
-            Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
-            Spacer()
-            FluidOnboardingCompactAppIconMark()
-            Text(AppBrand.text("AI text cleanup with Fluid Intelligence"))
-                .font(.fluidSystem(size: 30, weight: .semibold, role: .title))
-                .foregroundStyle(self.theme.palette.primaryText)
-                .multilineTextAlignment(.center)
-            Text("AI cleanup is optional. Dictation already works with your selected speech model.")
-                .font(.fluidSystem(size: 17, weight: .medium))
-                .foregroundStyle(self.theme.palette.primaryText)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 660)
-            Text("Connect Ollama or LM Studio in AI Providers to process text locally. Meeting summaries have their own local AI settings.")
-                .font(.fluidSystem(size: 15))
-                .foregroundStyle(self.theme.palette.secondaryText)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 660)
-            if hasConfiguredCleanup {
-                Text("A text provider is already configured. This step keeps your settings and does not contact another service.")
-                    .font(.fluidSystem(size: 14))
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 660)
-            }
-            Spacer()
-            HStack(spacing: 16) {
-                self.action(id: "public-back", title: "Back", tone: .secondary, width: 132, action: self.onBack)
-                Spacer()
-                if hasConfiguredCleanup {
-                    self.action(id: "public-use-provider", title: "Use configured provider", tone: .primary, width: 238, action: self.onFinishSetup)
-                } else {
-                    self.action(id: "public-skip", title: "Set up later", tone: .primary, width: 210, action: self.onSkip)
+        return GeometryReader { proxy in
+            ZStack {
+                VStack(spacing: 24) {
+                    Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
+                    Spacer()
+                    FluidOnboardingCompactAppIconMark()
+                    Text(AppBrand.text("AI text cleanup with Fluid Intelligence"))
+                        .font(.fluidSystem(size: 30, weight: .semibold, role: .title))
+                        .foregroundStyle(self.theme.palette.primaryText)
+                        .multilineTextAlignment(.center)
+                    Text("AI cleanup is optional. Dictation already works with your selected speech model.")
+                        .font(.fluidSystem(size: 17, weight: .medium))
+                        .foregroundStyle(self.theme.palette.primaryText)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 660)
+                    Text("Connect Ollama or LM Studio in AI Providers to process text locally. Meeting summaries have their own local AI settings.")
+                        .font(.fluidSystem(size: 15))
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 660)
+                    if hasConfiguredCleanup {
+                        Text("A text provider is already configured. This step keeps your settings and does not contact another service.")
+                            .font(.fluidSystem(size: 14))
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 660)
+                    }
+                    Spacer()
+                    HStack(spacing: 16) {
+                        self.action(id: "public-back", title: "Back", tone: .secondary, width: FluidOnboardingLayout.footerButtonWidth, action: self.onBack)
+                        Spacer()
+                        if hasConfiguredCleanup {
+                            self.action(id: "public-use-provider", title: "Use configured provider", tone: .primary, width: 238, action: self.onFinishSetup)
+                        } else {
+                            self.action(id: "public-skip", title: "Set up later", tone: .primary, width: 210, action: self.onSkip)
+                        }
+                    }
+                    .disabled(!canFinish)
+                    .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
+                    .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
                 }
+                .padding(.horizontal, 32)
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
-            .disabled(!canFinish)
-            .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
-            .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
         }
-        .padding(.horizontal, 32)
     }
 
     private var privateContent: some View {
-        VStack(spacing: 0) {
-            Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
-            self.mainContent
-            if !self.isReady {
-                self.offerStatus
-                    .padding(.horizontal, 30)
+        GeometryReader { proxy in
+            ZStack {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: FluidOnboardingCompactProgress.height + 28)
+                    self.mainContent
+                    if !self.isReady {
+                        self.offerStatus
+                            .padding(.horizontal, 30)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    HStack(alignment: .center, spacing: 20) {
+                        self.action(id: "back", title: "Back", tone: .secondary, width: FluidOnboardingLayout.footerButtonWidth) {
+                            if self.isReady && self.showPractice {
+                                self.showPractice = false
+                            } else {
+                                self.setup.leavePage()
+                                self.onBack()
+                            }
+                        }
+                        .keyboardShortcut(.cancelAction)
+                        Spacer()
+                        if self.isReady && self.showPractice {
+                            Button("Skip practice", action: self.onFinishSetup)
+                                .buttonStyle(.plain)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .disabled(!self.canNavigate)
+                            self.action(id: "practice-next", title: self.practice.isLast ? "Finish setup" : "Next example", tone: .primary, width: 180, isEnabled: self.practice.result != nil) {
+                                guard self.canNavigate, self.practice.result != nil else { return }
+                                if self.practice.isLast {
+                                    self.onFinishSetup()
+                                } else {
+                                    self.practice.advance(isBusy: !self.canNavigate)
+                                }
+                            }
+                        } else if self.isReady && !self.isShowingIntroduction {
+                            if !self.reduceMotion {
+                                self.action(id: "intro-replay", title: "Replay", tone: .secondary, width: FluidOnboardingLayout.footerButtonWidth) {
+                                    self.setup.introductionFinished = false
+                                    self.introductionPlaybackID = UUID()
+                                }
+                            }
+                            self.action(id: "intro-continue", title: "Continue", tone: .primary, width: 160) {
+                                self.setup.introductionFinished = true
+                                self.showPractice = true
+                            }
+                        } else if !self.isReady {
+                            self.offerNavigation
+                        }
+                    }
+                    .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
+                    .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
+                    .padding(.top, 12)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            HStack(alignment: .center, spacing: 20) {
-                self.action(id: "back", title: "Back", tone: .secondary, width: 132) {
-                    if self.isReady && self.showPractice {
-                        self.showPractice = false
-                    } else {
-                        self.setup.leavePage()
-                        self.onBack()
-                    }
                 }
-                .keyboardShortcut(.cancelAction)
-                Spacer()
-                if self.isReady && self.showPractice {
-                    Button("Skip practice", action: self.onFinishSetup)
-                        .buttonStyle(.plain)
-                        .foregroundStyle(self.theme.palette.secondaryText)
-                        .disabled(!self.canNavigate)
-                    self.action(id: "practice-next", title: self.practice.isLast ? "Finish setup" : "Next example", tone: .primary, width: 180, isEnabled: self.practice.result != nil) {
-                        guard self.canNavigate, self.practice.result != nil else { return }
-                        if self.practice.isLast {
-                            self.onFinishSetup()
-                        } else {
-                            self.practice.advance(isBusy: !self.canNavigate)
-                        }
-                    }
-                } else if self.isReady && !self.isShowingIntroduction {
-                    if !self.reduceMotion {
-                        self.action(id: "intro-replay", title: "Replay", tone: .secondary, width: 132) {
-                            self.setup.introductionFinished = false
-                            self.introductionPlaybackID = UUID()
-                        }
-                    }
-                    self.action(id: "intro-continue", title: "Continue", tone: .primary, width: 160) {
-                        self.setup.introductionFinished = true
-                        self.showPractice = true
-                    }
-                } else if !self.isReady {
-                    self.offerNavigation
-                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
-            .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
-            .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
-            .padding(.top, 12)
-            .fixedSize(horizontal: false, vertical: true)
         }
         .overlay {
             if !self.isReady {
@@ -298,7 +308,7 @@ struct OnboardingAIEnhancementStepView: View {
                 .keyboardShortcut(.defaultAction)
                 .transition(.opacity)
             } else {
-                Color.clear.frame(width: 210, height: 48)
+                Color.clear.frame(width: 210, height: FluidOnboardingLayout.footerButtonHeight)
                     .accessibilityHidden(true)
             }
         }
@@ -476,9 +486,12 @@ struct OnboardingAIEnhancementStepView: View {
         if #available(macOS 26, *), !self.reduceTransparency {
             Button(action: action) {
                 Text(PichiLocalization.text(title))
-                    .font(.fluidSystem(size: 16, weight: .semibold))
+                    .font(.fluidSystem(size: FluidOnboardingLayout.footerButtonFontSize, weight: .semibold))
                     .foregroundStyle(actionEnabled && tone == .primary ? self.theme.palette.accentForeground : self.theme.palette.primaryText)
-                    .frame(width: width - 32, height: 40)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    // Large native glass adds 14 pt at the sides and 6 pt above and below.
+                    .frame(width: width - 28, height: FluidOnboardingLayout.footerButtonHeight - 12)
             }
             .fluidGlassAction(prominent: actionEnabled && tone == .primary)
             .font(.fluidSystem(size: 17, weight: .semibold))
@@ -491,8 +504,8 @@ struct OnboardingAIEnhancementStepView: View {
                 systemImage: nil,
                 tone: tone,
                 width: width,
-                height: 48,
-                fontSize: 16,
+                height: FluidOnboardingLayout.footerButtonHeight,
+                fontSize: FluidOnboardingLayout.footerButtonFontSize,
                 isEnabled: actionEnabled
             ), action: action)
         }
