@@ -62,7 +62,6 @@ struct MeetingAssignSpeakersSheet: View {
     let onCancel: () -> Void
 
     @Environment(\.theme) private var theme
-    @Environment(\.colorScheme) private var colorScheme
     @State private var drafts: [SessionSpeakerID: String]
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -163,8 +162,7 @@ struct MeetingAssignSpeakersSheet: View {
 
     @ViewBuilder
     private func row(for speaker: MeetingSessionSpeaker) -> some View {
-        let tint = self.tints[speaker.id] ?? MeetingSpeakerPalette.labelColor(
-            for: speaker.id, theme: self.theme, colorScheme: self.colorScheme)
+        let tint = self.tints[speaker.id] ?? self.theme.palette.secondaryText
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Circle()

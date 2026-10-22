@@ -404,9 +404,9 @@ struct MeetingResultCanvas: View {
     }
 
     private var speakerTints: [SessionSpeakerID: Color] {
-        Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map { speaker in
-            (speaker.id, MeetingSpeakerPalette.labelColor(for: speaker.id, theme: self.theme, colorScheme: self.colorScheme))
-        })
+        MeetingSpeakerPalette.tintIndices(for: self.session.speakers).mapValues { index in
+            MeetingSpeakerPalette.labelColor(forSpeakerIndex: index, theme: self.theme, colorScheme: self.colorScheme)
+        }
     }
 
     private var hasEchoSegments: Bool {

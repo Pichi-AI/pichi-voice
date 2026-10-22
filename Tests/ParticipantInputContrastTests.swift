@@ -21,6 +21,8 @@ struct MeetingSessionSpeaker: Identifiable {
     let id: SessionSpeakerID
     var displayName: String
     var isLocalUser: Bool
+    var mergedIntoSpeakerID: SessionSpeakerID? = nil
+    var generatedParticipantNumber: Int? = nil
 }
 struct MeetingTranscriptSegment {
     enum Status { case final, partial }
