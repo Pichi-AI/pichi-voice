@@ -132,6 +132,32 @@ final class MobileSetupUITests: XCTestCase {
         replay.tap()
         XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 10))
         capture("replay-01-welcome")
+        // A quick second tap must not act on the page that is still arriving.
+        app.buttons["onboarding.next"].doubleTap()
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.1"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["onboarding.step.2"].firstMatch.waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["onboarding.cancel"].exists, "The second tap must not start model preparation")
+        capture("replay-02-one-page-per-double-tap")
+        app.terminate()
+    }
+
+    /// Only the hero scales to a phone; the highlights below or beside it keep their reading size.
+    func testWelcomeHighlightsKeepReadingSizeOnPhone() throws {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("Phone layout") }
+        let app = XCUIApplication()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light",
+                               "-MobileSetupVersion", "0", "-MobileSetupStep", "0"]
+        app.launch()
+        for (orientation, name) in [(UIDeviceOrientation.portrait, "portrait"), (.landscapeLeft, "landscape")] {
+            XCUIDevice.shared.orientation = orientation
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 15))
+            let highlight = app.staticTexts["Текст встречи во время разговора"]
+            XCTAssertTrue(highlight.waitForExistence(timeout: 5))
+            XCTAssertGreaterThanOrEqual(highlight.frame.height, 18, "The highlights must not shrink with the hero")
+            XCTAssertTrue(app.buttons["onboarding.next"].isHittable)
+            capture("welcome-phone-\(name)")
+        }
+        XCUIDevice.shared.orientation = .portrait
         app.terminate()
     }
 

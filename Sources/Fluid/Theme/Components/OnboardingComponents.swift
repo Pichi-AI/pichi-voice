@@ -209,7 +209,7 @@ struct FluidOnboardingLight: View {
 
     var body: some View {
         let isDark = self.colorScheme == .dark
-        let accent = FluidOnboardingLandingColors.blue
+        let accent = FluidOnboardingLandingColors.blue(for: self.theme)
         let isStill = self.reduceMotion || !self.breathes
         ZStack {
             self.theme.palette.windowBackground
@@ -327,6 +327,7 @@ struct FluidOnboardingCompactProgress: View {
 }
 
 struct FluidOnboardingCompactAppIconMark: View {
+    @Environment(\.theme) private var theme
     static let standardSize: CGFloat = 76
     let size: CGFloat
 
@@ -340,7 +341,7 @@ struct FluidOnboardingCompactAppIconMark: View {
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
             .frame(width: self.size, height: self.size)
-            .shadow(color: FluidOnboardingLandingColors.blue.opacity(0.45), radius: 24, x: 0, y: 0)
+            .shadow(color: FluidOnboardingLandingColors.blue(for: self.theme).opacity(0.45), radius: 24, x: 0, y: 0)
             .shadow(color: Color.black.opacity(0.42), radius: 14, x: 0, y: 9)
             .accessibilityHidden(true)
     }
@@ -561,13 +562,14 @@ private final class LandingPrimaryNSButton: NSButton {
 #endif
 
 private struct FluidOnboardingAppIconMark: View {
+    @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isBreathing = false
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(FluidOnboardingLandingColors.blue.opacity(self.isBreathing ? 0.36 : 0.28))
+                .fill(FluidOnboardingLandingColors.blue(for: self.theme).opacity(self.isBreathing ? 0.36 : 0.28))
                 .blur(radius: 42)
                 .frame(width: 188, height: 188)
                 .offset(y: -16)
@@ -582,7 +584,7 @@ private struct FluidOnboardingAppIconMark: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 116, height: 116)
                 .shadow(color: Color.black.opacity(0.56), radius: 20, x: 0, y: 15)
-                .shadow(color: FluidOnboardingLandingColors.blue.opacity(0.58), radius: 36, x: 0, y: 0)
+                .shadow(color: FluidOnboardingLandingColors.blue(for: self.theme).opacity(0.58), radius: 36, x: 0, y: 0)
         }
         .onAppear { FluidOnboardingMotion.breathe(self.$isBreathing, isStill: self.reduceMotion) }
         .id(self.reduceMotion)
@@ -592,15 +594,18 @@ private struct FluidOnboardingAppIconMark: View {
 }
 
 private struct FluidOnboardingPortalGlow: View {
+    @Environment(\.theme) private var theme
+
     var body: some View {
+        let glow = FluidOnboardingLandingColors.blue(for: self.theme)
         ZStack {
             Ellipse()
                 .fill(
                     RadialGradient(
                         colors: [
                             Color.white.opacity(0.74),
-                            FluidOnboardingLandingColors.blue.opacity(0.64),
-                            FluidOnboardingLandingColors.blue.opacity(0.05),
+                            glow.opacity(0.64),
+                            glow.opacity(0.05),
                             .clear,
                         ],
                         center: .center,
@@ -612,33 +617,34 @@ private struct FluidOnboardingPortalGlow: View {
                 .frame(width: 230, height: 25)
 
             Ellipse()
-                .stroke(FluidOnboardingLandingColors.blue.opacity(0.42), lineWidth: 3)
+                .stroke(glow.opacity(0.42), lineWidth: 3)
                 .blur(radius: 1.4)
                 .frame(width: 326, height: 35)
 
             Ellipse()
-                .stroke(FluidOnboardingLandingColors.blue.opacity(0.24), lineWidth: 1.4)
+                .stroke(glow.opacity(0.24), lineWidth: 1.4)
                 .frame(width: 260, height: 22)
         }
     }
 }
 
 enum FluidOnboardingLandingColors {
+    /// The brand accent for the theme's own variant, so glows follow a light or dark switch at once.
+    static func blue(for theme: AppTheme) -> Color {
+        Color(hex: theme.variant == .dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? FluidBrandColors.blue
+    }
+
+    #if os(macOS)
     private static var dark: Bool {
-        #if os(macOS)
-        let systemIsDark = NSApplication.shared.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        #else
-        // The scene keeps the system style; the app's explicit preference is applied below.
-        let systemIsDark = UIApplication.shared.connectedScenes.lazy
-            .compactMap { ($0 as? UIWindowScene)?.traitCollection.userInterfaceStyle }.first == .dark
-        #endif
-        return SettingsStore.shared.themePreference == .dark || (SettingsStore.shared.themePreference == .system && systemIsDark)
+        SettingsStore.shared.themePreference == .dark || (SettingsStore.shared.themePreference == .system
+            && NSApplication.shared.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
     }
     static var blue: Color { Color(hex: self.dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? FluidBrandColors.blue }
     static var foreground: Color {
         let accent = self.dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight
         return BrandPalette.luminance(accent) > 0.179 ? .black : .white
     }
+    #endif
 }
 
 private struct OnboardingSelectableSurfaceModifier: ViewModifier {
@@ -729,7 +735,28 @@ private struct OnboardingSecondaryButtonModifier: ViewModifier {
     }
 }
 
+/// The desktop step card: a faint ink fill and hairline, with an accent edge and glow when selected.
+private struct OnboardingStepCardModifier: ViewModifier {
+    @Environment(\.theme) private var theme
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        content
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(shape.fill(self.theme.palette.primaryText.opacity(self.isSelected ? 0.075 : 0.04)))
+            .overlay(shape.stroke(self.isSelected ? self.theme.palette.accent.opacity(0.92) : self.theme.palette.primaryText.opacity(0.10),
+                                  lineWidth: self.isSelected ? 1.4 : 1))
+            .shadow(color: self.theme.palette.accent.opacity(self.isSelected ? 0.18 : 0), radius: 18)
+    }
+}
+
 extension View {
+    func fluidOnboardingStepCard(isSelected: Bool = false) -> some View {
+        self.modifier(OnboardingStepCardModifier(isSelected: isSelected))
+    }
+
     func fluidOnboardingSelectableSurface(
         isSelected: Bool,
         cornerRadius: CGFloat? = nil,
