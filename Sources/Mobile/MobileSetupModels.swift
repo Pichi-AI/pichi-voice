@@ -5,17 +5,32 @@ extension SettingsStore {
     private static let mobileSetupVersionKey = "MobileSetupVersion"
     private static let mobileSetupStepKey = "MobileSetupStep"
     private static let mobileSetupModelKey = "MobileSetupSelectedModel"
+    private static let mobileSetupReplayKey = "MobileSetupReplay"
     private static let mobileBehaviorVersionKey = "MobileMeetingBehaviorVersion"
     private static let privacyRequestedKey = "MeetingPIIRedactionRequested"
 
     var mobileSetupCompleted: Bool {
         get { defaults.integer(forKey: Self.mobileSetupVersionKey) >= 1 }
-        set { objectWillChange.send(); defaults.set(newValue ? 1 : 0, forKey: Self.mobileSetupVersionKey) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue ? 1 : 0, forKey: Self.mobileSetupVersionKey)
+            if newValue { defaults.removeObject(forKey: Self.mobileSetupReplayKey) }
+        }
     }
     var mobileSetupStep: Int {
         get { min(6, max(0, defaults.integer(forKey: Self.mobileSetupStepKey))) }
         set { objectWillChange.send(); defaults.set(min(6, max(0, newValue)), forKey: Self.mobileSetupStepKey) }
     }
+    /// Replay starts setup at its first page with the current model preselected. Meetings, models,
+    /// privacy, location and the voice profile stay as they are.
+    func resetMobileSetupProgress() {
+        mobileSetupSelectedModel = nil
+        defaults.set(true, forKey: Self.mobileSetupReplayKey)
+        mobileSetupStep = 0
+        mobileSetupCompleted = false
+    }
+    /// A replayed setup only revisits choices, so skipping a page keeps what the user set before.
+    var isReplayingMobileSetup: Bool { defaults.bool(forKey: Self.mobileSetupReplayKey) }
     var mobileSetupSelectedModel: SpeechModel? {
         get { defaults.string(forKey: Self.mobileSetupModelKey).flatMap(SpeechModel.init(rawValue:)) }
         set { defaults.set(newValue?.rawValue, forKey: Self.mobileSetupModelKey) }

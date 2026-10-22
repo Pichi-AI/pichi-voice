@@ -64,6 +64,8 @@ git diff --name-only --diff-filter=U
 bash scripts/dev/check.sh
 bash scripts/dev/macos.sh build
 bash scripts/dev/macos.sh test
+# Shared sources such as OnboardingComponents.swift also compile for iOS.
+bash scripts/dev/mobile.sh build-for-testing
 # Commit the pending merge, push the task branch to origin, and open a PR.
 ```
 

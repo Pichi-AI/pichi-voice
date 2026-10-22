@@ -13,6 +13,9 @@ struct MobileSettingsRoot: View {
     let microphones: [MeetingMicrophoneIdentity]
     @ObservedObject var required: MobileRequiredResources
     @ObservedObject var privacyActivation: MobilePrivacyActivation
+    /// Setup replaces the meeting interface, so it is offered only while no meeting, export or
+    /// model operation is running.
+    let canReplaySetup: Bool
     let reportError: (Error) -> Void
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
@@ -33,6 +36,19 @@ struct MobileSettingsRoot: View {
                 }.accessibilityIdentifier("settings.privacy")
             } footer: {
                 Text(PichiLocalization.text("Audio recordings and transcripts are stored on this device."))
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            }
+            Section {
+                Button {
+                    guard canReplaySetup else { return }
+                    settings.resetMobileSetupProgress()
+                } label: {
+                    Label(PichiLocalization.text("Replay onboarding"), systemImage: "arrow.counterclockwise")
+                }
+                .disabled(!canReplaySetup)
+                .accessibilityIdentifier("settings.replaySetup")
+            } footer: {
+                Text(PichiLocalization.text("Your meetings, models and voice profile are kept."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
         }.listStyle(.insetGrouped).accessibilityIdentifier("settings.root")

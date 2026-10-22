@@ -148,6 +148,9 @@ Sources/Fluid/Theme/AppTheme.swift
 Sources/Fluid/Theme/Components/FluidDropdown.swift
 Sources/Fluid/Theme/Components/FluidGlassControls.swift
 Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift
+Sources/Fluid/Theme/Components/OnboardingComponents.swift
+Sources/Fluid/Theme/Components/OnboardingFittedContent.swift
+Sources/Fluid/Theme/Components/OnboardingStepCard.swift
 Sources/Fluid/Theme/FluidTypography.swift
 Sources/Fluid/Theme/NativeButtonStyles.swift
 Sources/Fluid/Theme/ThemeEnvironment.swift

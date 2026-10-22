@@ -27,6 +27,24 @@ final class MobileSetupTransactionTests: XCTestCase {
         XCTAssertTrue(value.mobileSetupCompleted)
     }
 
+    func testReplayReturnsToTheFirstPageAndKeepsChoices() throws {
+        let value = try settings()
+        value.migrateMobileSetup()
+        value.mobileSetupSelectedModel = .whisperTiny
+        value.meetingLocationEnabled = true
+        value.mobileSetupStep = 6
+        value.mobileSetupCompleted = true
+        XCTAssertFalse(value.isReplayingMobileSetup)
+        value.resetMobileSetupProgress()
+        XCTAssertFalse(value.mobileSetupCompleted)
+        XCTAssertEqual(value.mobileSetupStep, 0)
+        XCTAssertNil(value.mobileSetupSelectedModel, "Replay preselects the current model, not the first setup's choice")
+        XCTAssertTrue(value.isReplayingMobileSetup)
+        XCTAssertTrue(value.meetingLocationEnabled)
+        value.mobileSetupCompleted = true
+        XCTAssertFalse(value.isReplayingMobileSetup)
+    }
+
     func testCleanInstallAndInterruptedSetupKeepPrivacyOffAndResumeSelection() throws {
         let value = try settings()
         value.migrateMobileSetup()
