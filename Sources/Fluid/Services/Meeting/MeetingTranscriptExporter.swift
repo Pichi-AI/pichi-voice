@@ -857,7 +857,7 @@ nonisolated enum MeetingTranscriptExporter {
         var containsLegacyBridge = false
         var projectedSpeakerID: SessionSpeakerID?
         for segment in segments {
-            guard segment.hasReadableContent || typographyAnchors[segment.id] != nil else { continue }
+            guard segment.hasReadableContent || typographyAnchors[segment.id] != nil || readingOwners[segment.id] != nil else { continue }
             let startsParagraph = members.last.map { previous in
                 let bothUnknown = previous.speakerID == nil && segment.speakerID == nil
                     && readingOwners[previous.id] == nil && readingOwners[segment.id] == nil
