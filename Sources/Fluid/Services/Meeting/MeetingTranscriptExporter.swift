@@ -56,9 +56,11 @@ nonisolated enum MeetingTranscriptExporter {
     ) -> MeetingSpeakerPresentation {
         let names = speakerNames ?? Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
         let label = self.speakerLabelValue(for: segment, in: session, speakerNames: names)
+        let participantID = self.readingParticipantID(segment.speakerID, label: label, in: session)
         return MeetingSpeakerPresentation(
             identity: self.paragraphIdentity(for: segment, legacySpeakerID: nil, in: session, speakerNames: names),
-            label: label, participantID: self.readingParticipantID(segment.speakerID, label: label, in: session))
+            label: label, participantID: participantID,
+            participantIndex: participantID.flatMap { id in session.speakers.firstIndex { $0.id == id } })
     }
 
     /// A displayed paragraph can begin with an unresolved fragment or a merged alias.
@@ -72,9 +74,11 @@ nonisolated enum MeetingTranscriptExporter {
         let label = projected.flatMap { self.speakerName($0, in: session, speakerNames: speakerNames) }
             .map(MeetingSpeakerPresentation.Label.estimated)
             ?? self.speakerLabelValue(for: first, in: session, speakerNames: speakerNames)
+        let participantID = self.readingParticipantID(projected ?? first.speakerID, label: label, in: session)
         return MeetingSpeakerPresentation(
             identity: self.paragraphIdentity(for: first, legacySpeakerID: projected, in: session, speakerNames: speakerNames),
-            label: label, participantID: self.readingParticipantID(projected ?? first.speakerID, label: label, in: session))
+            label: label, participantID: participantID,
+            participantIndex: participantID.flatMap { id in session.speakers.firstIndex { $0.id == id } })
     }
 
     /// One contextual reading pass per session or bounded live batch. Original members remain

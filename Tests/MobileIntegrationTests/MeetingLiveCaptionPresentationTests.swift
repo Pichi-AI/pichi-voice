@@ -5,6 +5,30 @@ import UIKit
 @testable import PichiVoiceMobile
 
 final class MeetingLiveCaptionPresentationTests: XCTestCase {
+    func testSpeakerColorSlotsSurviveIdentityRefinementAndStorage() throws {
+        let ids = ["01234567-89ab-cdef-0123-456789abc000", "01234567-89ab-cdef-0123-456789abc006"]
+            .map { UUID(uuidString: $0)! }
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic colors",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone")),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1))
+        session.speakers = ids.enumerated().map { index, id in
+            .init(id: id, displayName: "Участник \(index + 1)", diarizationClusterID: nil,
+                trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        }
+        let initial = MeetingSpeakerPalette.tintIndices(for: session.speakers)
+        XCTAssertNotEqual(initial[ids[0]], initial[ids[1]], "Two IDs that collided under hashing must remain distinct")
+        session.speakers = MeetingPCMTranscriptBatch(segments: [], speakers: Array(session.speakers.reversed()))
+            .mergingSpeakers(into: session.speakers)
+        try session.renameSpeaker(id: ids[0], to: "Анна Ёлкина")
+        try session.setLocalUserSpeaker(id: ids[1], speakerNameFormat: "Участник %lld")
+        XCTAssertEqual(MeetingSpeakerPalette.tintIndices(for: session.speakers), initial)
+        session.speakers[0].mergedIntoSpeakerID = ids[1]
+        XCTAssertEqual(session.activeSpeakers.map(\.id), [ids[1]])
+        let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(MeetingSpeakerPalette.tintIndices(for: restored.speakers), initial,
+            "Merged records reserve their slots across Stop and persisted reopen")
+    }
+
     @MainActor
     func testNativeSpeakerColorLabelsUseReadableParticipantIdentity() async throws {
         let names = ["Owner", "Анна Ёлкина", "Борис", "Вера", "Георгий", "Дина", "Евгений", "Жанна"]
@@ -15,7 +39,7 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
                 isPartial: false, showsLabel: true,
                 participant: .init(identity: id.uuidString,
                     label: .identified(.init(displayName: name, isLocalUser: index == 0,
-                                            usesCustomDisplayName: index != 0)), participantID: id),
+                                            usesCustomDisplayName: index != 0)), participantID: id, participantIndex: index),
                 start: Double(index * 4), readingTurnStart: Double(index * 4))
         }
         for scheme: ColorScheme in [.light, .dark] {

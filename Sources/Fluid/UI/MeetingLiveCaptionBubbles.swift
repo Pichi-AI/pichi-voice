@@ -1002,7 +1002,7 @@ private struct MeetingLiveParagraphRow: View, Equatable {
             if self.paragraph.showsLabel, let label = self.paragraph.captionLabel {
                 Text(label)
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(MeetingSpeakerPalette.labelColor(for: self.paragraph.participant?.participantID,
+                    .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: self.paragraph.participant?.participantIndex,
                         theme: self.theme, colorScheme: self.colorScheme))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1068,7 +1068,7 @@ struct MeetingLiveBubbleRow: View, Equatable {
             if self.row.showsLabel, let label = self.sourceLabel {
                 Text(label)
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(MeetingSpeakerPalette.labelColor(for: self.row.participant?.participantID,
+                    .foregroundStyle(MeetingSpeakerPalette.labelColor(forSpeakerIndex: self.row.participant?.participantIndex,
                         theme: self.theme, colorScheme: self.colorScheme))
                     .fixedSize(horizontal: false, vertical: true)
             }

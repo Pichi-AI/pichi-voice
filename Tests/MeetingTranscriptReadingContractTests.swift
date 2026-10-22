@@ -114,11 +114,13 @@ extension MeetingSessionStoreCheckpointTests {
                 for: reading[0], in: session, speakerNames: names)
             check(paragraphPresentation == labels[prefix.id],
                   "Mobile paragraph styling and the desktop/live map resolve the same reading participant")
+            check(paragraphPresentation.participantIndex == 0 && paragraphPresentation.markingEstimated().participantIndex == 0,
+                  "Reading labels retain the participant's canonical admission slot")
             var merged = session
             merged.speakers[0].mergedIntoSpeakerID = b
             let mergedParagraph = MeetingTranscriptExporter.speakerPresentation(
                 for: reading[0], in: merged, speakerNames: names)
-            check(mergedParagraph.participantID == b,
+            check(mergedParagraph.participantID == b && mergedParagraph.participantIndex == 1,
                   "A projected alias uses its active participant's color without recoloring other identities")
             check(MeetingTranscriptExporter.text(for: session) == "[00:00] Имя Ёё: Я ещё Начало.",
                   "Text export and the saved reading view share the incoming participant and complete phrase")

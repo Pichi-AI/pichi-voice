@@ -51,6 +51,7 @@ final class MobileNavigationUITests: XCTestCase {
         app = XCUIApplication()
         if !productionDownload { app.launchArguments += ["-PichiInterfaceLanguage", "en"] }
         if name.contains("testSpeakerColorsNativeSmoke") {
+            app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
             app.launchArguments += ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
                 "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO",
                 "-MeetingSpeakerProcessingMode", "afterRecording"]
