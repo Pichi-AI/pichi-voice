@@ -172,7 +172,7 @@ extension MeetingSessionStoreCheckpointTests {
             var row = session.transcriptSegments[0]
             row.id = UUID(); row.sourceTrackID = UUID()
             row.start = .init(value: Int64(index), timescale: 1); row.end = row.start
-            row.text = ""
+            row.text = "x"
             return row
         }
         try rejects(invalid, .limitExceeded, "The portable segment cap applies to exported readable turns")
