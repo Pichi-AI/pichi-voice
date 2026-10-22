@@ -236,7 +236,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private enum TranscriptCorrection {
         case editText(segmentID: MeetingTranscriptSegmentID, previousText: String, previousOriginalText: String?,
-                      previousUserTextEdited: Bool?, previousRevision: Int)
+                      previousUserTextEdited: Bool?, previousPrivacyReplacement: Bool?, previousRevision: Int)
         case rename(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?, previousCustomDisplayName: Bool?)
         case reassign([SpeakerAssignmentCorrection])
         case localUserRole([(speakerID: SessionSpeakerID, previousIsLocalUser: Bool,
@@ -1320,6 +1320,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 previousText: previous.text,
                 previousOriginalText: previous.originalText,
                 previousUserTextEdited: previous.isUserTextEdited,
+                previousPrivacyReplacement: previous.containsPrivacyReplacement,
                 previousRevision: previous.revision
             )
             guard trimmed != previous.text else { return inverse }
@@ -1793,11 +1794,12 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// False when the inverse's target no longer exists; caller must not save or re-push.
     private static func applyInverse(_ correction: TranscriptCorrection, to session: inout MeetingSession) -> Bool {
         switch correction {
-        case let .editText(segmentID, previousText, previousOriginalText, previousUserTextEdited, previousRevision):
+        case let .editText(segmentID, previousText, previousOriginalText, previousUserTextEdited, previousPrivacyReplacement, previousRevision):
             guard let index = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }) else { return false }
             session.transcriptSegments[index].text = previousText
             session.transcriptSegments[index].originalText = previousOriginalText
             session.transcriptSegments[index].isUserTextEdited = previousUserTextEdited
+            session.transcriptSegments[index].containsPrivacyReplacement = previousPrivacyReplacement
             session.transcriptSegments[index].revision = previousRevision
             return true
         case let .rename(speakerID, previousName, previousGeneratedNumber, previousCustomDisplayName):

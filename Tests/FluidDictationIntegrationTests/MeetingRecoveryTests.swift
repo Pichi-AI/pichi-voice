@@ -4499,6 +4499,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let edited = try await coordinator.editTranscriptText(sessionID: session.id, segmentID: segmentID,
             text: "New synthetic-secret speech", expectedRevision: asserted.transcriptSegments[0].revision)
         XCTAssertEqual(edited.transcriptSegments[0].text, "New [PRIVATE] speech")
+        XCTAssertEqual(edited.transcriptSegments[0].containsPrivacyReplacement, true)
         XCTAssertEqual(edited.speakers, asserted.speakers,
                        "Privacy publication preserves the already saved meeting-local participant assertion")
         let textUndone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
@@ -4757,6 +4758,8 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(correctedDisk?.transcriptSegments, corrected.transcriptSegments)
         let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
         XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
+        XCTAssertNil(undone.transcriptSegments[0].containsPrivacyReplacement,
+                     "A mask introduced by the edit cannot become evidence for the original wording")
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
     }
 
@@ -5369,6 +5372,32 @@ final class MeetingRecoveryTests: XCTestCase {
         let persisted = try await store.load(id: session.id)
         XCTAssertEqual(persisted?.transcriptSegments, session.transcriptSegments)
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
+    func testTranscriptCorrectionUndoRestoresEveryPrivacyReplacementState() async throws {
+        for priorReplacement: Bool? in [nil, false, true] {
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let store = MeetingSessionStore(rootDirectory: dir)
+            let fixture = self.makeCorrectionSession(state: .completed)
+            var session = fixture.session
+            session.piiRedactionEnabled = true
+            session.transcriptSegments[0].containsPrivacyReplacement = priorReplacement
+            try await store.create(session)
+            let redactor = ColdCorrectionRedactor()
+            let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                processing: StubProcessingController(), audioArbiter: StubArbiter(), redactorProvider: { redactor })
+            let edited = try await coordinator.editTranscriptText(sessionID: session.id, segmentID: fixture.segmentID,
+                text: "New synthetic-secret speech", expectedRevision: session.transcriptSegments[0].revision)
+            XCTAssertEqual(edited.transcriptSegments[0].containsPrivacyReplacement, true)
+            XCTAssertEqual(edited.transcriptSegments[0].text, "New [PRIVATE] speech")
+            let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+            XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
+            XCTAssertEqual(undone.transcriptSegments[0].containsPrivacyReplacement, priorReplacement)
+            let persisted = try await store.load(id: session.id)
+            XCTAssertEqual(persisted?.transcriptSegments, session.transcriptSegments)
+            XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+        }
     }
 
     func testColdTranscriptCorrectionFailureCancellationAndIdentityChangesAreAtomic() async throws {
