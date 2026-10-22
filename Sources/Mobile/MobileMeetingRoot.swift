@@ -1077,7 +1077,8 @@ private struct MeetingSpeakerAssignmentSheet: View {
     private func participantList(for segments: [MeetingTranscriptSegment]) -> some View {
         List {
             Section {
-                ForEach(draft.session.readableSpeakers) { speaker in
+                // Corrections can restore an active identity with no readable fragments yet.
+                ForEach(draft.session.activeSpeakers) { speaker in
                     Button {
                         assign(segments.map(\.id), speaker.id)
                     } label: {
