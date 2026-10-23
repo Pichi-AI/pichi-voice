@@ -82,12 +82,12 @@ struct DesktopAccountView: View {
         } else if self.account.state == .signingIn {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 ProgressView().controlSize(.small)
-                Text(PichiLocalization.text("account.state.signingIn", defaultValue: "Complete sign-in in your browser."))
+                Text(PichiLocalization.text("account.state.signingIn", defaultValue: "Signing in"))
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
         } else {
-            Text(PichiLocalization.text("account.optional", defaultValue: "Sign-in is optional. You can keep using this device as a guest."))
+            Text(PichiLocalization.text("account.guest.explanation", defaultValue: "Sign-in is optional. You can record and export without an account."))
                 .font(self.theme.typography.body)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -100,7 +100,7 @@ struct DesktopAccountView: View {
                 .font(self.theme.typography.bodySmallStrong)
                 .foregroundStyle(self.theme.palette.primaryText)
             if snapshot.organizations.allSatisfy({ $0.workspaces.isEmpty }) {
-                Text(PichiLocalization.text("account.workspace.none", defaultValue: "No workspaces are available for this account."))
+                Text(PichiLocalization.text("account.workspace.empty", defaultValue: "No workspaces are available for this account. You can continue recording on this device."))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -163,12 +163,12 @@ struct DesktopAccountView: View {
                 .disabled(self.isWorking || !self.account.isSignInAvailable)
                 .accessibilityIdentifier("account.sign-in")
                 if !self.account.isSignInAvailable && !self.isWorking {
-                    Text(PichiLocalization.text("account.state.unavailable", defaultValue: "Sign-in is currently unavailable. You can continue as a guest."))
+                    Text(PichiLocalization.text("account.unavailable", defaultValue: "Sign-in is not available yet. You can continue using this device."))
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                     if self.account.presentationError != nil {
-                        Button(PichiLocalization.text("account.action.retrySignOut", defaultValue: "Retry sign-out")) {
+                        Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out")) {
                             self.perform(.signOut, generation: generation)
                         }
                         .accessibilityIdentifier("account.retry-sign-out")
@@ -254,32 +254,42 @@ struct DesktopAccountView: View {
 private enum DesktopAccountCopy {
     static func error(_ error: AccountError) -> String {
         switch error {
-        case .unconfigured, .invalidConfiguration:
-            PichiLocalization.text("account.error.configuration", defaultValue: "Sign-in is unavailable for this installation.")
+        case .unconfigured:
+            PichiLocalization.text("account.error.unconfigured", defaultValue: "Sign-in is not configured for this app. You can continue using this device.")
+        case .invalidConfiguration:
+            PichiLocalization.text("account.error.invalidConfiguration", defaultValue: "Sign-in is unavailable in this app configuration.")
         case .isolationRequired:
-            PichiLocalization.text("account.state.unavailable", defaultValue: "Sign-in is currently unavailable. You can continue as a guest.")
+            PichiLocalization.text("account.error.isolationRequired", defaultValue: "Sign-in is not available yet. You can continue using this device.")
         case .busy:
-            PichiLocalization.text("account.error.busy", defaultValue: "An account action is still finishing. Please wait.")
+            PichiLocalization.text("account.error.busy", defaultValue: "An account operation is still finishing. Try again shortly.")
         case .cancelled:
-            PichiLocalization.text("account.error.cancelled", defaultValue: "Sign-in was cancelled.")
-        case .invalidCallback, .invalidState, .invalidToken, .invalidAccount, .invalidResponse:
-            PichiLocalization.text("account.error.verification", defaultValue: "Sign-in could not be verified. Try again.")
+            PichiLocalization.text("account.error.cancelled", defaultValue: "Sign-in was cancelled. You can continue as guest.")
+        case .invalidCallback:
+            PichiLocalization.text("account.error.invalidCallback", defaultValue: "Sign-in could not be verified. Please try again.")
+        case .invalidState:
+            PichiLocalization.text("account.error.invalidState", defaultValue: "Sign-in could not be verified. Please try again.")
+        case .invalidToken:
+            PichiLocalization.text("account.error.invalidToken", defaultValue: "Your account could not be verified. Please sign in again.")
+        case .invalidAccount:
+            PichiLocalization.text("account.error.invalidAccount", defaultValue: "Your account could not be verified. Please sign in again.")
+        case .invalidResponse:
+            PichiLocalization.text("account.error.invalidResponse", defaultValue: "The account service returned an invalid response. Please try again.")
         case .credentialsUnavailable:
-            PichiLocalization.text("account.error.credentials", defaultValue: "Account access could not be saved or cleared. Try signing out again.")
+            PichiLocalization.text("account.error.credentialsUnavailable", defaultValue: "Account cleanup could not finish. Retry sign-out before signing in again.")
         case .networkUnavailable:
-            PichiLocalization.text("account.error.network", defaultValue: "Unable to connect. Try again when you are online.")
+            PichiLocalization.text("account.error.networkUnavailable", defaultValue: "The account service could not be reached. Check your connection and try again.")
         case .reauthenticationRequired:
-            PichiLocalization.text("account.error.reauthentication", defaultValue: "Sign in again to continue using your account.")
+            PichiLocalization.text("account.error.reauthenticationRequired", defaultValue: "Please sign in again to reconnect your account.")
         case .permissionDenied:
-            PichiLocalization.text("account.error.permission", defaultValue: "Your account no longer has access. Sign in again to review available workspaces.")
+            PichiLocalization.text("account.error.permissionDenied", defaultValue: "Your account does not have access to this workspace.")
         case .workspaceUnavailable:
-            PichiLocalization.text("account.error.workspace", defaultValue: "This workspace is no longer available. Choose another workspace.")
+            PichiLocalization.text("account.error.workspaceUnavailable", defaultValue: "This workspace is no longer available. Choose another workspace.")
         case .staleOperation:
-            PichiLocalization.text("account.error.stale", defaultValue: "The account changed. Try the action again.")
+            PichiLocalization.text("account.error.staleOperation", defaultValue: "Your account changed. Please try again from the current account.")
         case .revocationUnavailable:
-            PichiLocalization.text("account.error.revocation", defaultValue: "You are signed out on this device. The server could not confirm revocation.")
+            PichiLocalization.text("account.error.revocationUnavailable", defaultValue: "Signed out on this device. The server could not confirm revocation of this device's session.")
         case .previousAccountReturned:
-            PichiLocalization.text("account.error.previousAccountReturned", defaultValue: "The browser returned the previous account. Switch account again and choose a different account.")
+            PichiLocalization.text("account.error.previousAccountReturned", defaultValue: "The same account was returned. Try switching again and choose a different account.")
         }
     }
 }

@@ -179,7 +179,7 @@ struct OnboardingFlowView: View {
             case .meetingLocation:
                 return "Meeting location"
             case .account:
-                return PichiLocalization.text("account.onboarding.title", defaultValue: "Sign in or continue as guest")
+                return PichiLocalization.text("account.onboarding.title", defaultValue: "Optional account")
             }
         }
 
@@ -200,7 +200,7 @@ struct OnboardingFlowView: View {
             case .meetingLocation:
                 return "Optional: Add the meeting address using your location."
             case .account:
-                return PichiLocalization.text("account.optional", defaultValue: "Sign-in is optional. You can keep using this device as a guest.")
+                return PichiLocalization.text("account.guest.explanation", defaultValue: "Sign-in is optional. You can record and export without an account.")
             }
         }
     }
@@ -2478,7 +2478,7 @@ private extension OnboardingFlowView {
                 OnboardingFittedContent(width: 760) {
                     VStack(spacing: self.theme.metrics.spacing.lg) {
                         FluidOnboardingCompactAppIconMark()
-                        Text(PichiLocalization.text("account.onboarding.title", defaultValue: "Sign in or continue as guest"))
+                        Text(PichiLocalization.text("account.onboarding.title", defaultValue: "Optional account"))
                             .font(self.theme.typography.title)
                             .foregroundStyle(self.theme.palette.primaryText)
                             .multilineTextAlignment(.center)
