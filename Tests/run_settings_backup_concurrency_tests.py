@@ -313,7 +313,7 @@ MEMBERS
         PrivateProfileStorage.conceal(generation: UUID())
         release.signal()
         let heldAck = await heldOperation.value
-        expect(!heldAck && held.persistedProviders.allSatisfy { $0.apiKey.isEmpty },
+        expect(!heldAck && held.persistedProviders == providers.map { $0.redactingAPIKey() },
                "conceal during joined persistence rejects late acknowledgment while retaining durable cleanup")
         PrivateProfileStorage.select(selectedProfile)
         let settingsSnapshot = legacyStore.makeBackupPayload()
