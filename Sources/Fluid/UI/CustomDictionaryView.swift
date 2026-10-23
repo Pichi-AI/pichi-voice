@@ -2339,7 +2339,7 @@ struct CustomDictionaryView: View {
         await self.continueAutomaticTrainingIfNeeded()
     }
 
-    private func applyTrainingSample(_ transcript: String, pronunciationGeneration: UUID) {
+    private func applyTrainingSample(_ transcript: String, pronunciationGeneration: String) {
         self.isTrainingProcessing = false
         guard !CustomDictionaryTrainingMerge.isOversizedResponse(transcript, intendedReplacement: self.normalizedTrainingReplacement) else {
             self.isAutomaticTrainingEnabled = false

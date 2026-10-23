@@ -55,7 +55,7 @@ enum PrivateProfileStorage {
 struct PronunciationEnrollmentCapture: Equatable, Sendable { var modelKey = "test" }
 enum DictionaryMatcherExperiment {
     static var sharedFeaturesEnabled = true
-    static var generation = UUID()
+    static var generation = UUID().uuidString
 }
 struct VoiceTrainingAliasFilter {
     struct Result {
@@ -143,7 +143,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             PrivateProfileStorage.acceptsNewWork = true
             SettingsStore.shared.customDictionaryEntries = entries
             DictionaryMatcherExperiment.sharedFeaturesEnabled = true
-            DictionaryMatcherExperiment.generation = UUID()
+            DictionaryMatcherExperiment.generation = UUID().uuidString
             VoiceTrainingAliasFilter.response = nil
             return SaveHarness()
         }
@@ -336,7 +336,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             await PronunciationDictionaryStore.shared.configure(gate: gate)
             let save = Task { await view.addTrainedReplacement() }
             try await waitForGate(gate)
-            DictionaryMatcherExperiment.generation = UUID()
+            DictionaryMatcherExperiment.generation = UUID().uuidString
             await gate.release(); await save.value
             let profiles = await PronunciationDictionaryStore.shared.writes
             check(profiles.isEmpty && view.writes == 0 && SettingsStore.shared.customDictionaryEntries == original, "Stale pronunciation generation must not persist")
