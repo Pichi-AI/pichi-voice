@@ -3939,7 +3939,7 @@ struct ContentView: View {
     }
 
     private func handleSpokenSendPartialTranscription(_ text: String) {
-        guard self.settings.spokenSendEnabled else { return }
+        guard self.privateOutputOperations.isCurrent, self.settings.spokenSendEnabled else { return }
         let isDictationMode = self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode
         let isEligible = isDictationMode &&
             self.cancelledOutputLifecycleID != self.overlayLifecycleID &&

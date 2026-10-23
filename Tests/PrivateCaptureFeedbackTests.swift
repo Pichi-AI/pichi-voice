@@ -97,6 +97,126 @@
         await active.privateOutputOperations.retireAndJoin()
         await concealed.privateOutputOperations.retireAndJoin()
         await fresh.privateOutputOperations.retireAndJoin()
+        try await checkMenuFeedback(profileA: profileA, profileB: profileB)
         print("Private capture feedback: \(checks) actual-buffer and callback checks passed")
     }
+
+    @MainActor private static func drainMenuQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    @MainActor private static func checkMenuFeedback(profileA: PrivateProfileSnapshot, profileB: PrivateProfileSnapshot) async throws {
+        PrivateProfileStorage.select(profileA)
+        let manager = MenuBarFeedbackProbe(), asrA = ASRService(), coordinatorA = MeetingSessionCoordinator()
+        manager.configure(asrService: asrA)
+        manager.configure(meetingCoordinator: coordinatorA)
+        await drainMenuQueue()
+        NotchOverlayManager.shared.events.removeAll()
+        asrA.partialTranscription = "valid menu A preview"
+        coordinatorA.activeSession = .init(capturedApplication: .init(displayName: "private A app"), startedAt: Date(timeIntervalSince1970: 100))
+        coordinatorA.state = .recording(UUID())
+        await drainMenuQueue()
+        check(NotchOverlayManager.shared.events.last?.text == "valid menu A preview", "Current-owner menu preview still publishes")
+        check(manager.meetingMenuPresentation.sourceName == "private A app" && manager.meetingMenuPresentation.startedAt != nil,
+              "Current-owner meeting metadata reaches its menu")
+
+        // Actual Combine receive(on:) queues are still pending while A is concealed and B selected.
+        NotchOverlayManager.shared.events.removeAll()
+        asrA.partialTranscription = "SECRET queued menu A preview"
+        coordinatorA.activeSession = .init(capturedApplication: .init(displayName: "SECRET queued A app"), startedAt: Date(timeIntervalSince1970: 200))
+        manager.meetingStartError = "SECRET A setup error"
+        manager.isProcessingActive = true; manager.overlayVisible = true
+        NotchContentState.shared.text = "SECRET A notch text"
+        PrivateProfileStorage.conceal(generation: UUID())
+        NotificationCenter.default.post(name: PrivateProfileService.willConceal, object: nil)
+        check(manager.meetingMenuPresentation.activity == .recording && manager.meetingMenuPresentation.sourceName == nil
+              && manager.meetingMenuPresentation.startedAt == nil && manager.meetingMenuPresentation.attentionStatus == nil
+              && manager.meetingStartError == nil,
+              "Synchronous conceal removes private cached menu payload while preserving generic recording activity")
+        check(manager.meetingStatusMenuItem?.title.isEmpty == true && manager.meetingStatusMenuItem?.toolTip == nil,
+              "Conceal clears cached private menu item titles and tooltips before any later refresh")
+        check(!manager.isProcessingActive && !manager.overlayVisible && NotchContentState.shared.text.isEmpty && manager.pendingCancellations > 0,
+              "Menu conceal retires its pending presentation and private notch payload synchronously")
+        check(coordinatorA.stops == 0 && manager.stopMeetingRecordingHandler != nil,
+              "Conceal does not stop the recorder or discard its Stop route")
+        PrivateProfileStorage.select(profileB)
+        await drainMenuQueue()
+        check(NotchOverlayManager.shared.events.isEmpty && manager.meetingMenuPresentation.sourceName == nil,
+              "Queued A menu preview and meeting metadata cannot publish under readable B")
+        manager.stopMeetingRecording()
+        await drainMenuQueue()
+        check(coordinatorA.stops == 1, "The generic concealed recording item still invokes its original coordinator Stop")
+
+        let asrB = ASRService(), coordinatorB = MeetingSessionCoordinator()
+        manager.configure(asrService: asrB); manager.configure(meetingCoordinator: coordinatorB)
+        coordinatorB.activeSession = .init(capturedApplication: .init(displayName: "B app"), startedAt: Date(timeIntervalSince1970: 300))
+        coordinatorB.state = .recording(UUID())
+        asrB.partialTranscription = "valid menu B preview"
+        await drainMenuQueue()
+        check(manager.meetingMenuPresentation.sourceName == "B app" && NotchOverlayManager.shared.events.last?.text == "valid menu B preview",
+              "Newly configured B sources retain normal preview and meeting presentation")
+        let bEvents = NotchOverlayManager.shared.events.count
+        asrA.partialTranscription = "SECRET retired ASR A preview"
+        coordinatorA.activeSession = .init(capturedApplication: .init(displayName: "SECRET retired coordinator"), startedAt: Date())
+        await drainMenuQueue()
+        check(manager.meetingMenuPresentation.sourceName == "B app" && NotchOverlayManager.shared.events.count == bEvents,
+              "Retired source objects cannot borrow B's emission-time profile snapshot")
+
+        // Actual start/error completion waits for an operation that ignores cancellation.
+        PrivateProfileStorage.select(profileA)
+        let starting = MenuBarFeedbackProbe(), gate = MenuStartGate()
+        let pendingStart = Task { await starting.startMeetingRecordingInBackground {
+            await gate.hold()
+            throw MenuStartError.failed("SECRET held A error")
+        } }
+        await gate.waitUntilEntered()
+        check(starting.meetingStartRequested, "Original start owns its duplicate-click guard while awaiting admission")
+        PrivateProfileStorage.conceal(generation: UUID())
+        NotificationCenter.default.post(name: PrivateProfileService.willConceal, object: nil)
+        PrivateProfileStorage.select(profileB)
+        starting.meetingStartRequested = true
+        let bUpdates = starting.menuUpdates, announcements = AccessibilityNotification.announcements.count
+        gate.open()
+        await pendingStart.value
+        check(starting.meetingStartError == nil && starting.meetingStartRequested && starting.menuUpdates == bUpdates
+              && AccessibilityNotification.announcements.count == announcements,
+              "Late A start error and defer cannot replace B's menu, announcement or request ownership")
+        starting.meetingStartRequested = false
+        await starting.startMeetingRecordingInBackground { throw MenuStartError.failed("valid B error") }
+        check(starting.meetingStartError == "valid B error" && !starting.meetingStartRequested,
+              "Current B start failures remain reviewable and release their own request guard")
+        check(AccessibilityNotification.announcements.last?.contains("valid B error") == true,
+              "Current B start errors retain their accessibility announcement")
+
+        PrivateProfileStorage.select(profileA)
+        let queuedStart = MenuBarFeedbackProbe()
+        let starts = AppServices.shared.starts
+        queuedStart.startMeetingRecording()
+        PrivateProfileStorage.conceal(generation: UUID())
+        NotificationCenter.default.post(name: PrivateProfileService.willConceal, object: nil)
+        PrivateProfileStorage.select(profileB)
+        await drainMenuQueue()
+        check(AppServices.shared.starts == starts, "A queued A menu Start does not admit capture under B")
+        queuedStart.startMeetingRecording()
+        await drainMenuQueue()
+        check(AppServices.shared.starts == starts + 1, "A fresh B menu Start remains usable")
+        PrivateProfileStorage.conceal(generation: UUID())
+        NotificationCenter.default.post(name: PrivateProfileService.willConceal, object: nil)
+        await drainMenuQueue()
+        check(!queuedStart.canStartMeetingRecording, "A concealed menu cannot admit a new recording")
+    }
+}
+
+@MainActor private final class MenuStartGate {
+    private var entered = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    func hold() async { entered = true; await withCheckedContinuation { waiter = $0 } }
+    func waitUntilEntered() async { while !entered { await Task.yield() } }
+    func open() { waiter?.resume(); waiter = nil }
+}
+private enum MenuStartError: LocalizedError {
+    case failed(String)
+    var errorDescription: String? { switch self { case let .failed(message): return message } }
 }
