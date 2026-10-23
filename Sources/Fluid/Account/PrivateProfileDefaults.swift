@@ -37,6 +37,16 @@ nonisolated final class PrivateProfileDefaults: UserDefaults, @unchecked Sendabl
         return bound
     }
 
+    /// File import is admitted while visible, but may finish after logout conceals its
+    /// original profile. This capability has one fixed key and no hidden read operation.
+    func admittedFileHistoryWrite() throws -> PrivateProfileFileHistoryWrite {
+        let profile = self.profile
+        guard self.readable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
+        let destination = profile.isGuest ? self.guestDefaults : self.suite(profile)
+        guard self.readable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
+        return PrivateProfileFileHistoryWrite(profile: profile, destination: destination)
+    }
+
     var selectedProfile: PrivateProfileSnapshot { self.profile }
 
     private var profile: PrivateProfileSnapshot { self.fixedProfile ?? PrivateProfileStorage.current }
@@ -111,4 +121,24 @@ nonisolated final class PrivateProfileDefaults: UserDefaults, @unchecked Sendabl
         guard self.readable(profile) else { return false }
         return (profile.isGuest ? self.guestDefaults : self.suite(profile)).synchronize()
     }
+}
+
+/// A concrete write-only file-history capability, not a general preferences bypass.
+nonisolated final class PrivateProfileFileHistoryWrite: @unchecked Sendable {
+    let profile: PrivateProfileSnapshot
+    private let destination: UserDefaults
+    private let lock = NSLock()
+    private var active = true
+    fileprivate init(profile: PrivateProfileSnapshot, destination: UserDefaults) {
+        self.profile = profile; self.destination = destination
+    }
+    func save(_ data: Data) throws {
+        try self.lock.withLock {
+            let current = PrivateProfileStorage.current
+            guard self.active, current.id == self.profile.id, current.generation == self.profile.generation else { throw CancellationError() }
+            self.destination.set(data, forKey: "FileTranscriptionHistoryEntries")
+            guard self.destination.synchronize() else { throw AccountError.isolationRequired }
+        }
+    }
+    func finish() { self.lock.withLock { self.active = false } }
 }
