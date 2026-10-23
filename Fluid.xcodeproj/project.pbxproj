@@ -482,6 +482,7 @@
 		6C21B387644E4A79A2D75D6D /* MeetingAgentLocalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF7F1D652B24F68848E7820 /* MeetingAgentLocalizationTests.swift */; };
 		A13F57000000000000000002 /* WaveformSimulationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13F57000000000000000001 /* WaveformSimulationTests.swift */; };
 		F111E0000000000000000002 /* FillerWordDefaultsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F111E0000000000000000001 /* FillerWordDefaultsTests.swift */; };
+		F111E0000000000000000004 /* LocalAPISettingsToggleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F111E0000000000000000003 /* LocalAPISettingsToggleTests.swift */; };
 		70D2A2BBCF1C4EE5A4182AAE /* MobileRegisteredModelInferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA4382B668441DE9211C10F /* MobileRegisteredModelInferenceTests.swift */; };
 		A51A30000000000000000002 /* GigaAMModelStoreDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51A30000000000000000001 /* GigaAMModelStoreDownloadTests.swift */; };
 		A51A20000000000000000002 /* S1MiniProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51A20000000000000000001 /* S1MiniProviderTests.swift */; };
@@ -705,6 +706,7 @@
 		44D46AD8666E5D7383612324 /* Mobile build Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift */ = { isa = PBXBuildFile; fileRef = DC1EAFFC55D4C188F5D7675C; };
 		A13F57000000000000000001 /* WaveformSimulationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformSimulationTests.swift; sourceTree = "<group>"; };
 		F111E0000000000000000001 /* FillerWordDefaultsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FillerWordDefaultsTests.swift; sourceTree = "<group>"; };
+		F111E0000000000000000003 /* LocalAPISettingsToggleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAPISettingsToggleTests.swift; sourceTree = "<group>"; };
 		DBA4382B668441DE9211C10F /* MobileRegisteredModelInferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRegisteredModelInferenceTests.swift; sourceTree = "<group>"; };
 		A51A30000000000000000001 /* GigaAMModelStoreDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaAMModelStoreDownloadTests.swift; sourceTree = "<group>"; };
 		A51A20000000000000000001 /* S1MiniProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = S1MiniProviderTests.swift; sourceTree = "<group>"; };
@@ -1002,6 +1004,7 @@
 				D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */,
 				4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */,
 				F111E0000000000000000001 /* FillerWordDefaultsTests.swift */,
+				F111E0000000000000000003 /* LocalAPISettingsToggleTests.swift */,
 				A13F57000000000000000001 /* WaveformSimulationTests.swift */,
 				91C92FF93D3D21E0FD4D93EE /* UpdateRollbackBackupTests.swift */,
 				F12B5FA911AD928DAFD058FB /* UpdateInstallationPipelineTests.swift */,
@@ -1440,6 +1443,7 @@
 				D1C7A7100000000000000002 /* UpdatePromptIntegrationTests.swift in Sources */,
 				75454216C2DD7BBBB1D76D42 /* SettingsBackupRoundTripTests.swift in Sources */,
 				F111E0000000000000000002 /* FillerWordDefaultsTests.swift in Sources */,
+				F111E0000000000000000004 /* LocalAPISettingsToggleTests.swift in Sources */,
 				A13F57000000000000000002 /* WaveformSimulationTests.swift in Sources */,
 				24AFD1DFC6BFC9DB5BC6329B /* UpdateRollbackBackupTests.swift in Sources */,
 				563881F82B15C86EDB50E198 /* UpdateInstallationPipelineTests.swift in Sources */,
