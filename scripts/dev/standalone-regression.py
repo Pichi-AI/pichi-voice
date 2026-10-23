@@ -239,7 +239,7 @@ class Probe:
 
 # Registration is explicit: a new probe needs a reviewed interpreter/UI classification.
 SHELL_PROBES = (
-    "account_session", "analytics_config", "analytics_private_profile", "app_search_private_profile", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
+    "account_session", "admitted_history_writes", "analytics_config", "analytics_private_profile", "app_search_private_profile", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
     "command_archive_search", "command_cancellation", "command_markdown",
     "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
