@@ -79,9 +79,11 @@ final nonisolated class FileLogger: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "file.logger.queue", qos: .utility)
     private let fileManager = FileManager.default
-    private let logDirectory: URL
-    private let logFileURL: URL
-    private let backupLogURL: URL
+    private var profile: PrivateProfileSnapshot
+    private var acceptsWrites = true
+    private var logDirectory: URL
+    private var logFileURL: URL
+    private var backupLogURL: URL
     private let maxLogFileSize: UInt64 = 1 * 1024 * 1024 // 1 MB limit per log file
     private let maxLogFileAge: TimeInterval = 72 * 60 * 60 // Rotate every 72 hours
     private static var crashFileDescriptor: Int32 = -1
@@ -94,6 +96,9 @@ final nonisolated class FileLogger: @unchecked Sendable {
     private static let sigUnknownLine = Array("[CRASH] Fatal signal UNKNOWN\n".utf8)
 
     private init() {
+        let profile = PrivateProfileStorage.current
+        self.profile = profile
+        self.acceptsWrites = profile.isReadable
         #if FLUID_ASR_BASELINE
         // Baseline runs log to an isolated per-process temp root, never user Library.
         let baseDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
@@ -101,11 +106,18 @@ final nonisolated class FileLogger: @unchecked Sendable {
         #else
         let baseDirectory = self.fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
         #endif
+        #if FLUID_ASR_BASELINE
         self.logDirectory = AppBrand.logsDirectory(in: baseDirectory, storageNamespace: AppBrand.storageNamespace)
+        #else
+        self.logDirectory = profile.isGuest
+            ? AppBrand.logsDirectory(in: baseDirectory, storageNamespace: AppBrand.storageNamespace)
+            : profile.directory("Logs")
+        #endif
         self.logFileURL = self.logDirectory.appendingPathComponent("diagnostics.log", isDirectory: false)
         self.backupLogURL = self.logDirectory.appendingPathComponent("diagnostics.log.1", isDirectory: false)
 
         self.queue.sync {
+            guard self.acceptsWrites else { return }
             self.createLogDirectoryIfNeeded()
             self.rotateIfNeeded(force: false)
             self.prepareCrashLogging()
@@ -114,21 +126,73 @@ final nonisolated class FileLogger: @unchecked Sendable {
         self.installCrashHandlersIfNeeded()
     }
 
-    func append(line: String) {
+    func append(line: String, profile: PrivateProfileSnapshot = PrivateProfileStorage.current) {
+        guard profile.isReadable else { return }
         self.queue.async { [weak self] in
             guard let self = self else { return }
+            guard self.accepts(profile) else { return }
             self.appendUnlocked(line: line)
         }
     }
 
     func appendSync(line: String) {
+        let profile = PrivateProfileStorage.current
         self.queue.sync {
+            guard self.accepts(profile) else { return }
             self.appendUnlocked(line: line)
         }
     }
 
     func currentLogFileURL() -> URL {
-        return self.logFileURL
+        let profile = PrivateProfileStorage.current
+        return self.queue.sync {
+            self.accepts(profile) ? self.logFileURL
+                : profile.directory("Unavailable-" + profile.generation.uuidString).appendingPathComponent("diagnostics.log")
+        }
+    }
+
+    private func accepts(_ profile: PrivateProfileSnapshot) -> Bool {
+        self.acceptsWrites && profile.isReadable && profile.id == self.profile.id
+            && profile.generation == self.profile.generation
+    }
+
+    /// Call after joining DebugLogger. Old admitted writes finish in their original file;
+    /// no queued line can be redirected when the descriptor is rebound.
+    func suspendForProfileTransition() async {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                self.acceptsWrites = false
+                let descriptor = Self.crashFileDescriptor
+                Self.crashFileDescriptor = -1
+                if descriptor >= 0 { close(descriptor) }
+                continuation.resume()
+            }
+        }
+    }
+
+    func activateProfile(_ profile: PrivateProfileSnapshot) async {
+        await withCheckedContinuation { continuation in
+            self.queue.async {
+                self.profile = profile
+                #if !FLUID_ASR_BASELINE
+                let library = self.fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first
+                    ?? URL(fileURLWithPath: NSTemporaryDirectory())
+                self.logDirectory = profile.isGuest
+                    ? AppBrand.logsDirectory(in: library, storageNamespace: AppBrand.storageNamespace)
+                    : profile.directory("Logs")
+                self.logFileURL = self.logDirectory.appendingPathComponent("diagnostics.log")
+                self.backupLogURL = self.logDirectory.appendingPathComponent("diagnostics.log.1")
+                #endif
+                self.acceptsWrites = profile.isReadable
+                if profile.isReadable {
+                    self.createLogDirectoryIfNeeded()
+                    self.rotateIfNeeded(force: false)
+                    self.prepareCrashLogging()
+                    self.appendRunMetadata()
+                }
+                continuation.resume()
+            }
+        }
     }
 
     // MARK: - Private helpers
@@ -205,8 +269,9 @@ final nonisolated class FileLogger: @unchecked Sendable {
 
     private func prepareCrashLogging() {
         if Self.crashFileDescriptor >= 0 {
-            close(Self.crashFileDescriptor)
+            let descriptor = Self.crashFileDescriptor
             Self.crashFileDescriptor = -1
+            close(descriptor)
         }
         Self.crashFileDescriptor = open(self.logFileURL.path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR)
     }
@@ -215,12 +280,11 @@ final nonisolated class FileLogger: @unchecked Sendable {
         guard !Self.crashHandlersInstalled else { return }
         Self.crashHandlersInstalled = true
 
-        NSSetUncaughtExceptionHandler { exception in
-            let line = "[CRASH] Uncaught exception \(exception.name.rawValue): \(exception.reason ?? "Unknown reason")"
-            FileLogger.writeCrashLineDirect(line)
-            if !exception.callStackSymbols.isEmpty {
-                FileLogger.writeCrashLineDirect("[CRASH] Stack: \(exception.callStackSymbols.joined(separator: " | "))")
-            }
+        // A crash callback has no immutable request/profile admission. Its descriptor can
+        // change concurrently, so only fixed metadata belongs on this direct crash path.
+        // Exception reasons, names and stack symbols may contain another profile's data.
+        NSSetUncaughtExceptionHandler { _ in
+            FileLogger.writeCrashLineDirect("[CRASH] Uncaught Objective-C exception (details omitted)")
         }
 
         signal(SIGABRT, fileLoggerSignalHandler)

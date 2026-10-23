@@ -22,6 +22,8 @@ xcrun swiftc -O -parse-as-library \
     Tests/Support/StandaloneBrandPackageStore.swift \
     Sources/Fluid/Branding/BrandDistribution.swift \
     "$task_test_dir/HistorySearchRecord.swift" \
+    Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileDefaults.swift \
     Sources/Fluid/Persistence/TranscriptionHistoryDatabase.swift \
     Sources/Fluid/Persistence/TranscriptionHistoryStore.swift \
     Tests/HistoryPersistenceBoundaryTests.swift \

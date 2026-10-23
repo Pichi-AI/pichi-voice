@@ -3,7 +3,7 @@ import Foundation
 /// Local opt-in. Both switches default off in a fresh installation.
 nonisolated enum DictionaryPronunciationExperiment {
     static var enabled: Bool { DictionaryMatcherExperiment.sharedFeaturesEnabled }
-    static var captureEnabled: Bool { enabled && UserDefaults.standard.bool(forKey: "DictionaryPronunciationDebugCapture") }
+    static var captureEnabled: Bool { enabled && PrivateProfileDefaults.shared.bool(forKey: "DictionaryPronunciationDebugCapture") }
 
     /// Only the outer quiet edges are removed. Internal pauses and low-energy consonants remain.
     static func trimmedRange(_ samples: [Float], within range: Range<Int>? = nil) -> Range<Int>? {
@@ -66,10 +66,27 @@ extension PronunciationDictionaryProfile {
 
 /// Bounded, local-only evidence. Off means no new PCM, embeddings or reports are written.
 actor DictionaryPronunciationDebugArchive {
-    static let shared = DictionaryPronunciationDebugArchive()
-    private let directory: URL?
+    private static let profiles = PrivateProfileStoreCache<DictionaryPronunciationDebugArchive>()
+    static var shared: DictionaryPronunciationDebugArchive {
+        profiles.value { profile in DictionaryPronunciationDebugArchive(directory: profile.directory("DictionaryDebug"), profile: profile) }
+    }
+    private let directory: URL
+    private let profile: PrivateProfileSnapshot
+    private let defaults: UserDefaults
 
-    init(directory: URL? = nil) { self.directory = directory }
+    init(directory: URL? = nil, profile: PrivateProfileSnapshot = PrivateProfileStorage.current) {
+        self.profile = profile
+        self.directory = directory ?? profile.directory("DictionaryDebug")
+        self.defaults = PrivateProfileDefaults.bound(to: profile)
+    }
+    /// Actor barrier after learning admission is closed by the composition owner.
+    func join() {}
+    private var captureEnabled: Bool {
+        let current = PrivateProfileStorage.current
+        return current.isReadable && current.id == self.profile.id && current.generation == self.profile.generation
+            && self.defaults.bool(forKey: "DictionarySharedFeatureMatcherEnabled")
+            && self.defaults.bool(forKey: "DictionaryPronunciationDebugCapture")
+    }
     struct Score: Codable, Sendable {
         let word: String
         let start: Double
@@ -102,11 +119,10 @@ actor DictionaryPronunciationDebugArchive {
         inspection: DictionaryAudioInspection? = nil,
         trainingCapture: PronunciationEnrollmentCapture? = nil
     ) {
-        guard !Task.isCancelled, DictionaryPronunciationExperiment.captureEnabled, !samples.isEmpty,
+        guard !Task.isCancelled, self.captureEnabled, !samples.isEmpty,
               samples.count <= 16_000 * 120 else { return }
         do {
-            let root = try self.directory ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-                .appendingPathComponent("\(AppBrand.storageNamespace)/DictionaryDebug", isDirectory: true)
+            let root = self.directory
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let encoder = PropertyListEncoder()
             encoder.outputFormat = .binary
@@ -121,7 +137,7 @@ actor DictionaryPronunciationDebugArchive {
                 inspection: inspection,
                 trainingCapture: trainingCapture
             ))
-            guard !Task.isCancelled, DictionaryPronunciationExperiment.captureEnabled else { return }
+            guard !Task.isCancelled, self.captureEnabled else { return }
             try data.write(to: root.appendingPathComponent("\(UUID().uuidString).plist"), options: .atomic)
             let files = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey])
                 .filter { $0.pathExtension == "plist" }

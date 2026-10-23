@@ -1070,11 +1070,24 @@ protocol MeetingLocationResolving: AnyObject {
     func locate(startedAt: Date, languages: [PichiInterfaceLanguage]) async -> MeetingLocation?
 }
 
+/// Durable local ownership schema. This is persisted source metadata, not an account manager.
+/// Optional identity fields distinguish legacy guest data from a verified account admission.
+nonisolated struct MeetingProfileOwnership: Codable, Equatable, Sendable {
+    let profileID: String
+    let issuer: String?
+    let subject: String?
+    let internalUserID: String?
+    let organizationID: String?
+    let workspaceID: String?
+}
+
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int
     var id: MeetingSessionID
+    /// Nil only for legacy unowned guest history. Cloud consent is a separate N5 policy.
+    var profileOwnership: MeetingProfileOwnership? = nil
     var title: String
     /// Present only for automatically named recordings; cleared when the user renames one.
     var defaultTitleBase: String? = nil

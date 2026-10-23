@@ -271,6 +271,7 @@ final class ModelRepository {
     ///   - temperatureSupport: Receives per-model `temperature` support when the listing includes it
     /// - Returns: Array of model IDs sorted alphabetically
     func fetchModels(for providerID: String, baseURL: String, apiKey: String?, session: URLSession? = nil, connectionOptions: [String: String] = [:], temperatureSupport: ModelTemperatureSupport = .shared) async throws -> [String] {
+        let temperatureSupport = temperatureSupport.boundForOperation()
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs()
         }

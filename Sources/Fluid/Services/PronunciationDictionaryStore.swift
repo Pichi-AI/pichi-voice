@@ -1,6 +1,6 @@
 import Foundation
 
-struct PronunciationEnrollmentCapture: Codable, Equatable, Sendable {
+nonisolated struct PronunciationEnrollmentCapture: Codable, Equatable, Sendable {
     let values: [Float]
     let sourceFrameCount: Int
     let modelKey: String
@@ -23,7 +23,7 @@ struct PronunciationEnrollmentCapture: Codable, Equatable, Sendable {
     }
 }
 
-struct PronunciationDictionaryProfile: Codable, Equatable, Identifiable, Sendable {
+nonisolated struct PronunciationDictionaryProfile: Codable, Equatable, Identifiable, Sendable {
     let dictionaryEntryID: UUID
     var label: String
     let modelKey: String
@@ -42,7 +42,7 @@ struct PronunciationDictionaryProfile: Codable, Equatable, Identifiable, Sendabl
     var id: String { "\(self.dictionaryEntryID.uuidString):\(self.modelKey)" }
 }
 
-enum PronunciationDictionaryStoreError: LocalizedError, Equatable {
+nonisolated enum PronunciationDictionaryStoreError: LocalizedError, Equatable {
     case inconsistentEnrollment
     case staleEvidence
     case outdatedModelRevision
@@ -60,7 +60,11 @@ enum PronunciationDictionaryStoreError: LocalizedError, Equatable {
 }
 
 actor PronunciationDictionaryStore {
-    static let shared = PronunciationDictionaryStore()
+    private static let cache = PrivateProfileStoreCache<PronunciationDictionaryStore>()
+    static var shared: PronunciationDictionaryStore {
+        cache.value { profile in PronunciationDictionaryStore(
+            fileURL: profile.rootDirectory.appendingPathComponent("pronunciation-dictionary-v1.json"), profile: profile) }
+    }
 
     private struct Document: Codable {
         let version: Int
@@ -72,29 +76,41 @@ actor PronunciationDictionaryStore {
     private var revisions: [UUID: UUID] = [:]
     private var replacementGeneration = UUID()
 
+    private let profile: PrivateProfileSnapshot?
+    private var retired = false
+    private var canAccess: Bool { !self.retired && self.profile.map(PrivateProfileStorage.isReadable) != false }
+
     init(fileManager: FileManager = .default) {
-        let baseURL = fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
-            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent("Library/Application Support")
-        let appURL = baseURL.appendingPathComponent(
-            AppBrand.storageNamespace,
-            isDirectory: true
-        )
-        self.fileURL = appURL.appendingPathComponent("pronunciation-dictionary-v1.json")
+        let profile = PrivateProfileStorage.current
+        self.profile = profile
+        self.fileURL = profile.rootDirectory.appendingPathComponent("pronunciation-dictionary-v1.json")
     }
 
-    init(fileURL: URL) {
+    init(fileURL: URL, profile: PrivateProfileSnapshot? = nil) {
         self.fileURL = fileURL
+        self.profile = profile
+    }
+
+    /// Actor serialization joins synchronous disk operations before retirement returns.
+    func prepareForProfileTransition() {
+        self.retired = true
+        self.document = nil
+        self.revisions.removeAll()
+        self.replacementGeneration = UUID()
+    }
+
+    private func requireAccess() throws {
+        guard self.canAccess else { throw PronunciationDictionaryStoreError.staleEvidence }
     }
 
     func allProfiles() -> [PronunciationDictionaryProfile] {
+        guard self.canAccess else { return [] }
         self.loadIfNeeded()
         return self.document?.profiles ?? []
     }
 
     func profiles(modelKey: String) -> [PronunciationDictionaryProfile] {
+        guard self.canAccess else { return [] }
         self.loadIfNeeded()
         return self.document?.profiles.filter { $0.modelKey == modelKey } ?? []
     }
@@ -103,6 +119,7 @@ actor PronunciationDictionaryStore {
         dictionaryEntryID: UUID,
         modelKey: String
     ) -> Int {
+        guard self.canAccess else { return 0 }
         self.loadIfNeeded()
         return self.document?.profiles.first {
             $0.dictionaryEntryID == dictionaryEntryID && $0.modelKey == modelKey
@@ -117,6 +134,7 @@ actor PronunciationDictionaryStore {
         automaticMatchingEnabled: Bool = false,
         canPersist: @Sendable () -> Bool = { true }
     ) throws {
+        try self.requireAccess()
         guard canPersist() else { throw CancellationError() }
         guard let first = enrollments.first, !first.values.isEmpty else { return }
         guard enrollments.allSatisfy({ $0.modelKey == modelKey && $0.values.count == first.values.count }) else {
@@ -208,6 +226,7 @@ actor PronunciationDictionaryStore {
 
     /// Validated focal audio for legacy and new automatically learned references.
     func originalAudioSamples(for capture: PronunciationEnrollmentCapture, entryID: UUID) throws -> [Float] {
+        try self.requireAccess()
         guard let id = capture.originalAudioID else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
         let url = self.audioURL(id)
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
@@ -231,6 +250,7 @@ actor PronunciationDictionaryStore {
 
     /// Reads only the selected example. Legacy profiles explicitly have no evidence.
     func inspection(for id: UUID) throws -> DictionaryAudioInspection {
+        try self.requireAccess()
         let url = self.inspectionURL(id)
         let attributes = try url.resourceValues(forKeys: [.fileSizeKey])
         guard let size = attributes.fileSize, size <= 24_000_000 else {
@@ -248,6 +268,7 @@ actor PronunciationDictionaryStore {
 
     /// Updates only this word's matching level; preserves recordings and text rules.
     func setMatchThreshold(_ threshold: Float, dictionaryEntryID: UUID) throws {
+        try self.requireAccess()
         guard threshold.isFinite, (0.4...0.95).contains(threshold) else {
             throw PronunciationDictionaryStoreError.inconsistentEnrollment
         }
@@ -263,6 +284,7 @@ actor PronunciationDictionaryStore {
     }
 
     func replaceAllProfiles(_ profiles: [PronunciationDictionaryProfile]) throws {
+        try self.requireAccess()
         guard profiles.allSatisfy({ profile in
             profile.hiddenSize > 0 &&
                 !profile.enrollments.isEmpty &&
@@ -300,6 +322,7 @@ actor PronunciationDictionaryStore {
     }
 
     func delete(dictionaryEntryID: UUID) throws {
+        try self.requireAccess()
         self.revisions[dictionaryEntryID] = UUID()
         self.loadIfNeeded()
         var profiles = self.document?.profiles ?? []
@@ -341,6 +364,7 @@ actor PronunciationDictionaryStore {
         expectedRevision: Revision,
         canPersist: @Sendable () -> Bool = { true }
     ) throws -> Bool {
+        try self.requireAccess()
         guard canPersist() else { throw CancellationError() }
         guard self.revision(for: entryID) == expectedRevision else {
             throw PronunciationDictionaryStoreError.staleEvidence
@@ -419,6 +443,7 @@ actor PronunciationDictionaryStore {
     }
 
     func removeOriginalAudio(evidenceID: UUID) throws {
+        try self.requireAccess()
         self.loadIfNeeded()
         var profiles = self.document?.profiles ?? []
         for index in profiles.indices {
@@ -457,6 +482,7 @@ actor PronunciationDictionaryStore {
     }
 
     private func loadIfNeeded() {
+        guard self.canAccess else { return }
         guard self.document == nil else { return }
         guard let data = try? Data(contentsOf: self.fileURL),
               let decoded = try? JSONDecoder().decode(
@@ -509,6 +535,7 @@ actor PronunciationDictionaryStore {
     }
 
     private func persist(_ updated: Document) throws {
+        try self.requireAccess()
         try FileManager.default.createDirectory(
             at: self.fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true

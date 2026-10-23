@@ -50,6 +50,17 @@ import Foundation
         scoped.record("later-hypothesis", text: "must-not-leak")
         let scopedData = try String(contentsOf: scoped.fileURL, encoding: .utf8)
         try require(scoped.status.closed && !scopedData.contains("must-not-leak"), "first-meeting-only")
+        let originalProfile = PrivateProfileStorage.current
+        let owned = MeetingTimelineTrace(directory: root.appendingPathComponent("pinned-profile"))
+        owned.record("original-profile", text: "synthetic-original-owner")
+        PrivateProfileStorage.conceal(generation: UUID())
+        owned.record("concealed-profile", text: "must-not-enter-owner-trace")
+        await owned.finishForProfileTransition()
+        try require(owned.status.closed && owned.status.accepted == 1, "profile-transition-joins-original-owner")
+        let ownedText = try String(contentsOf: owned.fileURL, encoding: .utf8)
+        try require(ownedText.contains("synthetic-original-owner") && !ownedText.contains("must-not-enter-owner-trace"),
+            "concealed-profile-cannot-retarget-trace")
+        PrivateProfileStorage.select(originalProfile)
         try await protectedPublication(root: root.appendingPathComponent("accepted-preview"))
         print("MeetingTimelineTrace: default-disabled/private-format/event-byte-queue-limits/accepted-protected-preview passed")
     }

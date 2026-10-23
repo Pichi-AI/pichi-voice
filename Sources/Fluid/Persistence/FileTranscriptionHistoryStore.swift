@@ -158,9 +158,17 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
 
 @MainActor
 final class FileTranscriptionHistoryStore: ObservableObject {
-    static let shared = FileTranscriptionHistoryStore()
+    static var shared: FileTranscriptionHistoryStore {
+        PrivateProfileObjectCache.value(key: "FileTranscriptionHistoryStore") {
+            let profile = PrivateProfileStorage.current
+            return FileTranscriptionHistoryStore(defaults: PrivateProfileDefaults.bound(to: profile), profile: profile)
+        }
+    }
 
     private let defaults: UserDefaults
+    private let profile: PrivateProfileSnapshot?
+    private var retired = false
+    private var canAccess: Bool { !self.retired && self.profile.map(PrivateProfileStorage.isReadable) != false }
     private let maxEntries = 50
 
     private enum Keys {
@@ -170,20 +178,30 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     @Published private(set) var entries: [FileTranscriptionEntry] = []
     @Published var selectedEntryID: UUID?
 
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    init(defaults: UserDefaults? = nil, profile: PrivateProfileSnapshot? = nil) {
+        let selected = profile ?? (defaults == nil ? PrivateProfileStorage.current : nil)
+        self.profile = selected
+        self.defaults = defaults ?? PrivateProfileDefaults.bound(to: selected!)
         self.loadEntries()
+    }
+
+    func prepareForProfileTransition() {
+        self.retired = true
+        self.entries = []
+        self.selectedEntryID = nil
     }
 
     // MARK: - Public Methods
 
     var selectedEntry: FileTranscriptionEntry? {
+        guard self.canAccess else { return nil }
         guard let id = selectedEntryID else { return nil }
         return self.entries.first(where: { $0.id == id })
     }
 
     /// Add a completed file transcription to history (call after successful transcribeFile).
     func addEntry(_ result: TranscriptionResult) {
+        guard self.canAccess else { return }
         guard !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let entry = FileTranscriptionEntry(from: result)
@@ -203,6 +221,7 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     }
 
     func renameEntry(id: UUID, to title: String) {
+        guard self.canAccess else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let index = self.entries.firstIndex(where: { $0.id == id }),
@@ -214,6 +233,7 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     }
 
     func deleteEntry(id: UUID) {
+        guard self.canAccess else { return }
         self.entries.removeAll { $0.id == id }
         if self.selectedEntryID == id {
             self.selectedEntryID = self.entries.first?.id
@@ -222,6 +242,7 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     }
 
     func clearAll() {
+        guard self.canAccess else { return }
         self.entries.removeAll()
         self.selectedEntryID = nil
         self.saveEntries()
@@ -231,6 +252,7 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     // MARK: - Persistence
 
     private func loadEntries() {
+        guard self.canAccess else { return }
         // Skip an entry this build cannot read instead of emptying the history;
         // the next save would persist an empty list.
         guard let data = self.defaults.data(forKey: Keys.fileTranscriptionHistory),
@@ -249,6 +271,7 @@ final class FileTranscriptionHistoryStore: ObservableObject {
     }
 
     private func saveEntries() {
+        guard self.canAccess else { return }
         if let encoded = try? JSONEncoder().encode(self.entries) {
             self.defaults.set(encoded, forKey: Keys.fileTranscriptionHistory)
         }

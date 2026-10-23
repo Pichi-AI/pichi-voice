@@ -105,7 +105,7 @@ struct MeetingOwnerVoiceSettingsContent: View {
 }
 
 @MainActor
-final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
+final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTransitionParticipant {
     enum Phase: Equatable { case idle, preparing, recording, checking, ready, saving }
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var hasProfile = false
@@ -130,6 +130,7 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
         // The factory keeps lease/cancellation regressions from opening audio hardware.
         // Production still constructs the existing capture only after model admission.
         self.makeCapture = makeCapture
+        PrivateProfileService.shared.register(self)
     }
 
     func refresh() async {
@@ -205,6 +206,12 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
     func cancel() {
         self.operation?.cancel()
         if self.operation == nil { self.discardDraft() }
+    }
+
+    func prepareForPrivateProfileTransition() async throws {
+        let task = operation; task?.cancel()
+        await task?.value
+        operation = nil; discardDraft(); hasProfile = false; seconds = 0
     }
 
     func discardDraft() { self.draft = nil; self.phase = .idle; self.error = nil }

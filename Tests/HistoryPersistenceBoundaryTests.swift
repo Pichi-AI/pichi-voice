@@ -14,6 +14,7 @@ struct DictationAudioMetadata: Codable, Equatable, Sendable {
 
 final class DictationAudioHistoryStore {
     static let shared = DictationAudioHistoryStore()
+    static func scoped(to profile: PrivateProfileSnapshot) -> DictationAudioHistoryStore { self.shared }
     @discardableResult func deleteAudio(fileName: String) -> Int64 { 0 }
     func deleteAllAudioFiles() {}
     func audioUsageBytes() -> Int64 { 0 }

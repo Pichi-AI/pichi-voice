@@ -128,10 +128,18 @@ struct ChatSession: Codable, Identifiable, Equatable {
 
 @MainActor
 final class ChatHistoryStore: ObservableObject {
-    static let shared = ChatHistoryStore()
+    static var shared: ChatHistoryStore {
+        PrivateProfileObjectCache.value(key: "ChatHistoryStore") {
+            let profile = PrivateProfileStorage.current
+            return ChatHistoryStore(defaults: PrivateProfileDefaults.bound(to: profile), profile: profile)
+        }
+    }
     static let maxArchivedChats = 30
 
     private let defaults: UserDefaults
+    private let profile: PrivateProfileSnapshot?
+    private var retired = false
+    private var canAccess: Bool { !self.retired && self.profile.map(PrivateProfileStorage.isReadable) != false }
     private let maxChats = 30
 
     private enum Keys {
@@ -142,8 +150,10 @@ final class ChatHistoryStore: ObservableObject {
     @Published private(set) var sessions: [ChatSession] = []
     @Published var currentChatID: String?
 
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    init(defaults: UserDefaults? = nil, profile: PrivateProfileSnapshot? = nil) {
+        let selected = profile ?? (defaults == nil ? PrivateProfileStorage.current : nil)
+        self.profile = selected
+        self.defaults = defaults ?? PrivateProfileDefaults.bound(to: selected!)
         self.loadSessions()
 
         // Archived sessions remain saved, but cannot become the active conversation on launch.
@@ -153,16 +163,24 @@ final class ChatHistoryStore: ObservableObject {
         }
     }
 
+    func prepareForProfileTransition() {
+        self.retired = true
+        self.sessions = []
+        self.currentChatID = nil
+    }
+
     // MARK: - Public Methods
 
     /// Get the current active chat session
     var currentSession: ChatSession? {
+        guard self.canAccess else { return nil }
         guard let id = currentChatID else { return nil }
         return self.sessions.first(where: { $0.id == id && !$0.isArchived })
     }
 
     /// Get recent chats for dropdown (excluding current, sorted by updatedAt)
     func getRecentChats(excludingCurrent: Bool = true) -> [ChatSession] {
+        guard self.canAccess else { return [] }
         var result = self.sessions.filter { !$0.isArchived }.sorted { $0.updatedAt > $1.updatedAt }
         if excludingCurrent, let currentID = currentChatID {
             result = result.filter { $0.id != currentID }
@@ -173,6 +191,7 @@ final class ChatHistoryStore: ObservableObject {
     /// Create a new chat and set it as current
     @discardableResult
     func createNewChat() -> ChatSession {
+        guard self.canAccess else { return ChatSession() }
         let newChat = ChatSession()
         self.sessions.insert(newChat, at: 0)
         self.currentChatID = newChat.id
@@ -186,6 +205,7 @@ final class ChatHistoryStore: ObservableObject {
 
     /// Save/update a chat session
     func saveChat(_ session: ChatSession) {
+        guard self.canAccess else { return }
         if session.isArchived,
            !self.sessions.contains(where: { $0.id == session.id && $0.isArchived }),
            self.sessions.filter(\.isArchived).count >= Self.maxArchivedChats
@@ -208,6 +228,7 @@ final class ChatHistoryStore: ObservableObject {
 
     /// Update current chat with messages
     func updateCurrentChat(messages: [ChatMessage]) {
+        guard self.canAccess else { return }
         guard let id = currentChatID,
               let index = sessions.firstIndex(where: { $0.id == id }) else { return }
 
@@ -222,6 +243,7 @@ final class ChatHistoryStore: ObservableObject {
 
     /// Rename only metadata; preserve selection, messages, archive state and ordering.
     func renameChat(id: String, to title: String) {
+        guard self.canAccess else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let index = self.sessions.firstIndex(where: { $0.id == id }),
@@ -235,6 +257,7 @@ final class ChatHistoryStore: ObservableObject {
 
     /// Load a chat by ID and set as current
     func loadChat(id: String) -> ChatSession? {
+        guard self.canAccess else { return nil }
         guard let session = sessions.first(where: { $0.id == id && !$0.isArchived }) else { return nil }
         self.currentChatID = id
         self.saveCurrentChatID()
@@ -249,6 +272,7 @@ final class ChatHistoryStore: ObservableObject {
     /// Archives never expire implicitly; at capacity, restore one before archiving another.
     @discardableResult
     func archiveChat(id: String) -> Bool {
+        guard self.canAccess else { return false }
         guard let index = self.sessions.firstIndex(where: { $0.id == id && !$0.isArchived }),
               self.sessions.filter(\.isArchived).count < Self.maxArchivedChats else { return false }
         self.sessions[index].isArchived = true
@@ -264,6 +288,7 @@ final class ChatHistoryStore: ObservableObject {
     /// Restoring preserves conversation dates and does not change the selected session.
     @discardableResult
     func restoreChat(id: String) -> Bool {
+        guard self.canAccess else { return false }
         guard let index = self.sessions.firstIndex(where: { $0.id == id && $0.isArchived }) else { return false }
         self.sessions[index].isArchived = false
         let updatedAt = self.sessions[index].updatedAt
@@ -275,6 +300,7 @@ final class ChatHistoryStore: ObservableObject {
 
     /// Delete a chat by ID
     func deleteChat(id: String) {
+        guard self.canAccess else { return }
         guard self.sessions.contains(where: { $0.id == id }) else { return }
         self.sessions.removeAll { $0.id == id }
 
@@ -288,12 +314,14 @@ final class ChatHistoryStore: ObservableObject {
 
     /// Delete current chat and switch to next
     func deleteCurrentChat() {
+        guard self.canAccess else { return }
         guard let id = currentChatID else { return }
         self.deleteChat(id: id)
     }
 
     /// Clear current chat (delete messages but keep session)
     func clearCurrentChat() {
+        guard self.canAccess else { return }
         guard let id = currentChatID,
               let index = sessions.firstIndex(where: { $0.id == id }) else { return }
 
@@ -308,6 +336,7 @@ final class ChatHistoryStore: ObservableObject {
     // MARK: - Private Methods
 
     private func loadSessions() {
+        guard self.canAccess else { return }
         // Skip a chat this build cannot read instead of emptying the list;
         // the launch save in init would persist an empty list.
         guard let data = defaults.data(forKey: Keys.chatSessions),
@@ -329,6 +358,7 @@ final class ChatHistoryStore: ObservableObject {
     }
 
     private func saveSessions() {
+        guard self.canAccess else { return }
         if let encoded = try? JSONEncoder().encode(sessions) {
             self.defaults.set(encoded, forKey: Keys.chatSessions)
         }
@@ -337,6 +367,7 @@ final class ChatHistoryStore: ObservableObject {
     }
 
     private func saveCurrentChatID() {
+        guard self.canAccess else { return }
         self.defaults.set(self.currentChatID, forKey: Keys.currentChatID)
     }
 

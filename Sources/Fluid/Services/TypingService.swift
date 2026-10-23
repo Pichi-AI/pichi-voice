@@ -86,7 +86,7 @@ final class TypingService {
     private nonisolated static var isLoggingEnabled: Bool {
         guard DebugLogger.diagnosticsEnabled else { return false }
         if let env = ProcessInfo.processInfo.environment["FLUID_TYPING_LOGS"], env == "1" { return true }
-        return UserDefaults.standard.bool(forKey: "enableTypingLogs")
+        return PrivateProfileDefaults.shared.bool(forKey: "enableTypingLogs")
     }
 
     private nonisolated func log(_ message: @autoclosure () -> String) {

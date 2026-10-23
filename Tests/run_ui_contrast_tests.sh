@@ -737,6 +737,7 @@ bundle = Path(sys.argv[1]).parent / 'OverlayCaptionFixture.app/Contents'
 }))
 PY
 
+python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift"
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Branding/AppBrand.swift \
@@ -766,7 +767,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/ProductionNativeInputPresentations.swift" \
     "$task_test_dir/ToolbarPageLayout.swift" \
     Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift \
-    Sources/Fluid/Theme/Components/WindowSizingComponents.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift -o "$task_test_dir/tests"
+    Sources/Fluid/Theme/Components/WindowSizingComponents.swift "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift -o "$task_test_dir/tests"
 # Keep the existing full-suite executable and its bundle context unchanged.
 # The focused caption pass uses the same binary with real compiled resources.
 case " $* " in

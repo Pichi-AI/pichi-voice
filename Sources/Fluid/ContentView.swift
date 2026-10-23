@@ -4012,12 +4012,16 @@ struct ContentView: View {
         else {
             return
         }
-        let saveGeneration = TranscriptionHistoryStore.shared.audioSaveGeneration
+        guard PrivateProfileStorage.acceptsNewWork else { return }
+        let historyStore = TranscriptionHistoryStore.shared
+        let audioStore = DictationAudioHistoryStore.shared
+        let saveGeneration = historyStore.audioSaveGeneration
+        let workID = UUID()
 
-        Task.detached(priority: .utility) {
+        let task = Task.detached(priority: .utility) {
             let result: (metadata: DictationAudioMetadata?, error: String?) = {
                 do {
-                    let metadata = try DictationAudioHistoryStore.shared.save(
+                    let metadata = try audioStore.save(
                         snapshot: snapshot,
                         entryID: entryID,
                         timestamp: timestamp,
@@ -4031,7 +4035,7 @@ struct ContentView: View {
 
             await MainActor.run {
                 if let metadata = result.metadata {
-                    TranscriptionHistoryStore.shared.attachAudio(
+                    historyStore.attachAudio(
                         metadata,
                         to: entryID,
                         expectedSaveGeneration: saveGeneration
@@ -4041,9 +4045,11 @@ struct ContentView: View {
                 }
             }
             if let metadata = result.metadata {
-                DictationAudioHistoryStore.shared.completePendingSave(fileName: metadata.fileName)
+                audioStore.completePendingSave(fileName: metadata.fileName)
             }
+            await PrivateProfileService.shared.finishPrivateWrite(id: workID)
         }
+        PrivateProfileService.shared.retainPrivateWrite(task, id: workID)
     }
 
     private var isOnboardingVoicePlaygroundStepActive: Bool {
