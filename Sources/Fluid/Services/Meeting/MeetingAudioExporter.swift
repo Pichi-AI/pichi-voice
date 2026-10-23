@@ -17,11 +17,13 @@ nonisolated enum MeetingAudioExporter {
         of session: MeetingSession, from sourceDirectory: URL, into destinationFolder: URL,
         copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
     ) async throws -> URL {
+        try Task.checkCancellation()
         guard session.retention.audioDeletedAt == nil, session.hasFinalizedAudio else {
             throw CocoaError(.fileNoSuchFile)
         }
         // The session and URLs are immutable snapshots; no view state crosses to the worker.
-        return try await Task.detached(priority: .utility) {
+        let worker = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
             let accessing = destinationFolder.startAccessingSecurityScopedResource()
             defer { if accessing { destinationFolder.stopAccessingSecurityScopedResource() } }
             // Preserve the old serial export semantics when users request another export
@@ -29,7 +31,14 @@ nonisolated enum MeetingAudioExporter {
             return try Self.audioExportLock.withLock {
                 try Self.stageExport(of: session, from: sourceDirectory, into: destinationFolder, copyItem: copyItem)
             }
-        }.value
+        }
+        // copyItem is synchronous and may not be interruptible. Cancellation reaches
+        // the concrete worker, but the caller still joins its retirement and cleanup.
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 
     private static func stageExport(
@@ -38,6 +47,7 @@ nonisolated enum MeetingAudioExporter {
         into destinationFolder: URL,
         copyItem: (URL, URL) throws -> Void
     ) throws -> URL {
+        try Task.checkCancellation()
         let fileManager = FileManager.default
         let baseName = Self.sanitizedExportName(session.displayTitle)
         let name = Self.uniqueExportName(baseName, in: destinationFolder, fileManager: fileManager)
@@ -47,6 +57,7 @@ nonisolated enum MeetingAudioExporter {
         do {
             for track in session.audioTracks {
                 for chunk in track.chunks where chunk.finalizationState == .finalized && chunk.byteCount > 0 {
+                    try Task.checkCancellation()
                     let sourceURL = chunk.fileURL(relativeTo: sourceDirectory).standardizedFileURL
                     let root = sourceDirectory.standardizedFileURL.resolvingSymlinksInPath().path + "/"
                     guard sourceURL.resolvingSymlinksInPath().path.hasPrefix(root) else {
@@ -55,14 +66,22 @@ nonisolated enum MeetingAudioExporter {
                     let ext = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension
                     let fileName = "\(track.kind.rawValue)-\(String(format: "%03d", chunk.sequence)).\(ext)"
                     try copyItem(sourceURL, stagingDirectory.appendingPathComponent(fileName, isDirectory: false))
+                    try Task.checkCancellation()
                 }
             }
+            try Task.checkCancellation()
             var destinationName = name
+            // Publication commits when moveItem successfully returns. Cancellation
+            // checks cannot be atomic with a filesystem move: a request racing that
+            // move may still commit. Keep committed output and return its URL; never
+            // delete a user's published export because cancellation arrived late.
             do {
                 try fileManager.moveItem(at: stagingDirectory, to: destinationFolder.appendingPathComponent(destinationName, isDirectory: true))
             } catch CocoaError.fileWriteFileExists {
                 // Destination appeared between the uniqueness check and the move; retry once with a fresh name.
+                try Task.checkCancellation()
                 destinationName = Self.uniqueExportName(baseName, in: destinationFolder, fileManager: fileManager)
+                try Task.checkCancellation()
                 try fileManager.moveItem(at: stagingDirectory, to: destinationFolder.appendingPathComponent(destinationName, isDirectory: true))
             }
             return destinationFolder.appendingPathComponent(destinationName, isDirectory: true)
