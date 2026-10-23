@@ -2313,6 +2313,70 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
+    func testCtrlOptionShiftCCancelInvokesApplicationCallbackWithoutDictationStop() async throws {
+        let settings = SettingsStore.shared
+        let previousCancel = settings.cancelRecordingHotkeyShortcut
+        let previousMeeting = settings.meetingRecordingHotkeyShortcut
+        defer {
+            settings.cancelRecordingHotkeyShortcut = previousCancel
+            settings.meetingRecordingHotkeyShortcut = previousMeeting
+        }
+        SettingsStore.shared.cancelRecordingHotkeyShortcut = HotkeyShortcut(keyCode: 8, modifierFlags: [.control, .option, .shift])
+        SettingsStore.shared.meetingRecordingHotkeyShortcut = nil
+        let asr = ASRService()
+        asr.isRunning = true
+        defer { asr.isRunning = false }
+        var cancellations = 0
+        var starts = 0
+        var stops = 0
+        let manager = self.makePrimaryReleaseTestManager(asr: asr, onStart: { starts += 1 }, onStop: { stops += 1 })
+        manager.updatePrimaryShortcuts([HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .option, .shift])])
+        manager.setCancelCallback { cancellations += 1; return .cancelled }
+
+        let event = try self.primaryReleaseTestEvent(type: .keyDown, keyCode: 8, modifiers: [.maskControl, .maskAlternate, .maskShift])
+        XCTAssertNil(manager.handleKeyEvent(type: .keyDown, event: event))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(cancellations, 1)
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(stops, 0)
+        XCTAssertTrue(asr.isRunning, "The application callback owns cancellation; the shortcut must not enter the normal dictation stop path")
+    }
+
+    @MainActor
+    func testCtrlOptionShiftCCancelRejectsNeighboringModifiersAndUnrelatedKey() async throws {
+        let settings = SettingsStore.shared
+        let previousCancel = settings.cancelRecordingHotkeyShortcut
+        let previousMeeting = settings.meetingRecordingHotkeyShortcut
+        defer {
+            settings.cancelRecordingHotkeyShortcut = previousCancel
+            settings.meetingRecordingHotkeyShortcut = previousMeeting
+        }
+        SettingsStore.shared.cancelRecordingHotkeyShortcut = HotkeyShortcut(keyCode: 8, modifierFlags: [.control, .option, .shift])
+        SettingsStore.shared.meetingRecordingHotkeyShortcut = nil
+        let asr = ASRService()
+        asr.isRunning = true
+        defer { asr.isRunning = false }
+        var cancellations = 0
+        let manager = self.makePrimaryReleaseTestManager(asr: asr, onStart: {})
+        manager.setCancelCallback { cancellations += 1; return .cancelled }
+        let exact: CGEventFlags = [.maskControl, .maskAlternate, .maskShift]
+        for flags in [exact.subtracting(.maskControl), exact.subtracting(.maskAlternate), exact.subtracting(.maskShift), exact.union(.maskCommand), exact.union(.maskSecondaryFn), []] {
+            let event = try self.primaryReleaseTestEvent(type: .keyDown, keyCode: 8, modifiers: flags)
+            let result = manager.handleKeyEvent(type: .keyDown, event: event)
+            withExtendedLifetime(event) { XCTAssertNotNil(result, "A neighboring chord must remain unconsumed") }
+        }
+        let unrelated = try self.primaryReleaseTestEvent(type: .keyDown, keyCode: 9, modifiers: exact)
+        let unrelatedResult = manager.handleKeyEvent(type: .keyDown, event: unrelated)
+        withExtendedLifetime(unrelated) { XCTAssertNotNil(unrelatedResult) }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(cancellations, 0)
+        XCTAssertTrue(asr.isRunning)
+        XCTAssertNil(try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, keyCode: 8, modifiers: exact)))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(cancellations, 1, "Rejected neighboring chords must not strand the next genuine cancellation")
+    }
+
+    @MainActor
     func testCancelCallbackOwnsAudioBeforeDiscardFallback() async throws {
         let asr = ASRService()
         asr.isRunning = true

@@ -38,6 +38,57 @@ enum ClipboardService {
 
 /// Event-bound metadata only: no clipboard text, URLs, data payloads, or polling.
 enum ClipboardAudit {
+    #if DEBUG
+    private nonisolated static let tracedKeyCodes = ClipboardAudit.shortcutTraceKeyCodes(environment: ProcessInfo.processInfo.environment)
+    #endif
+
+    /// Explicit, bounded debug opt-in. Reject the whole selection if any physical
+    /// key code is invalid or more than two entries were supplied.
+    nonisolated static func shortcutTraceKeyCodes(environment: [String: String]) -> Set<Int64> {
+        #if DEBUG
+        guard let selection = environment["PICHI_SHORTCUT_TRACE_KEY_CODES"] else { return [] }
+        let entries = selection.split(separator: ",", omittingEmptySubsequences: false)
+        guard (1...2).contains(entries.count) else { return [] }
+        var codes = Set<Int64>()
+        for entry in entries {
+            let value = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, value.utf8.allSatisfy({ (48...57).contains($0) }),
+                  let code = Int64(value), (0...127).contains(code) else { return [] }
+            codes.insert(code)
+        }
+        return codes
+        #else
+        return []
+        #endif
+    }
+
+    nonisolated static func shortcutTraceMetadata(
+        type: CGEventType,
+        event: CGEvent,
+        environment: [String: String]
+    ) -> String? {
+        self.shortcutTraceMetadata(type: type, event: event, keyCodes: self.shortcutTraceKeyCodes(environment: environment))
+    }
+
+    private nonisolated static func shortcutTraceMetadata(type: CGEventType, event: CGEvent, keyCodes: Set<Int64>) -> String? {
+        guard type == .keyDown || type == .keyUp,
+              keyCodes.contains(event.getIntegerValueField(.keyboardEventKeycode)) else { return nil }
+        return "eventType=\(type.rawValue) keyCode=\(event.getIntegerValueField(.keyboardEventKeycode)) flags=\(event.flags.rawValue) sourcePID=\(event.getIntegerValueField(.eventSourceUnixProcessID)) targetPID=\(event.getIntegerValueField(.eventTargetUnixProcessID)) userData=\(event.getIntegerValueField(.eventSourceUserData)) eventTimestamp=\(event.timestamp)"
+    }
+
+    nonisolated static func recordShortcutTrace(type: CGEventType, event: CGEvent, cancelResult: String? = nil) {
+        #if DEBUG
+        guard DebugLogger.diagnosticsEnabled,
+              let metadata = self.shortcutTraceMetadata(type: type, event: event, keyCodes: self.tracedKeyCodes) else { return }
+        let phase = cancelResult.map { "cancel_result result=\($0)" } ?? "received"
+        DebugLogger.shared.benchmark(
+            "SHORTCUT_TRACE",
+            message: "observerPID=\(ProcessInfo.processInfo.processIdentifier) phase=\(phase) \(metadata)",
+            source: "ClipboardAudit"
+        )
+        #endif
+    }
+
     /// Physical ANSI C/X/V candidates only; do not collect ordinary typing.
     /// Raw key codes avoid doing keyboard-layout queries in the event tap.
     nonisolated static func shortcutMetadata(type: CGEventType, event: CGEvent) -> String? {

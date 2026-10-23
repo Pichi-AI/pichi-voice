@@ -118,6 +118,63 @@ final class TypingServiceTransientPasteboardTests: XCTestCase {
         XCTAssertNil(ClipboardAudit.shortcutMetadata(type: .keyDown, event: event))
     }
 
+    func testShortcutTraceRejectsAbsentMalformedOrUnboundedOptIn() {
+        XCTAssertTrue(ClipboardAudit.shortcutTraceKeyCodes(environment: [:]).isEmpty)
+        for selection in ["", " ", "2,8,9", "2,8,8", "2,", ",8", "2,,8", "2,eight", "-1", "+8", "128", "65535", "0x8"] {
+            XCTAssertTrue(
+                ClipboardAudit.shortcutTraceKeyCodes(environment: ["PICHI_SHORTCUT_TRACE_KEY_CODES": selection]).isEmpty,
+                "Invalid opt-in must not enable event collection: \(selection)"
+            )
+        }
+    }
+
+    func testShortcutTraceOptInIsDebugOnlyAndLimitedToSelectedKeys() throws {
+        let environment = ["PICHI_SHORTCUT_TRACE_KEY_CODES": " 2, 8 "]
+        let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 8, keyDown: true))
+        event.flags = [.maskControl, .maskAlternate, .maskShift]
+        XCTAssertNil(ClipboardAudit.shortcutTraceMetadata(type: .keyDown, event: event, environment: [:]))
+        #if DEBUG
+        XCTAssertEqual(ClipboardAudit.shortcutTraceKeyCodes(environment: environment), [2, 8])
+        XCTAssertNotNil(ClipboardAudit.shortcutTraceMetadata(type: .keyDown, event: event, environment: environment))
+        event.setIntegerValueField(.keyboardEventKeycode, value: 2)
+        XCTAssertNotNil(ClipboardAudit.shortcutTraceMetadata(type: .keyUp, event: event, environment: environment))
+        #else
+        XCTAssertTrue(ClipboardAudit.shortcutTraceKeyCodes(environment: environment).isEmpty)
+        XCTAssertNil(ClipboardAudit.shortcutTraceMetadata(type: .keyDown, event: event, environment: environment))
+        #endif
+        event.setIntegerValueField(.keyboardEventKeycode, value: 9)
+        XCTAssertNil(ClipboardAudit.shortcutTraceMetadata(type: .keyDown, event: event, environment: environment))
+        event.setIntegerValueField(.keyboardEventKeycode, value: 8)
+        XCTAssertNil(ClipboardAudit.shortcutTraceMetadata(type: .flagsChanged, event: event, environment: environment))
+        XCTAssertNil(ClipboardAudit.shortcutTraceMetadata(type: .leftMouseDown, event: event, environment: environment))
+    }
+
+    func testShortcutTraceContainsOnlyMetadataAndDoesNotMutateEventOrClipboardAuditPolicy() throws {
+        let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 8, keyDown: true))
+        event.flags = [.maskControl, .maskAlternate, .maskShift]
+        event.timestamp = 123456789
+        event.setIntegerValueField(.eventSourceUserData, value: 789)
+        let privateText = "private transcript must stay outside diagnostics"
+        event.keyboardSetUnicodeString(stringLength: privateText.utf16.count, unicodeString: Array(privateText.utf16))
+        let flags = event.flags
+        let timestamp = event.timestamp
+        let sourcePID = event.getIntegerValueField(.eventSourceUnixProcessID)
+        let targetPID = event.getIntegerValueField(.eventTargetUnixProcessID)
+        let environment = ["PICHI_SHORTCUT_TRACE_KEY_CODES": "8"]
+        let metadata = ClipboardAudit.shortcutTraceMetadata(type: .keyDown, event: event, environment: environment)
+        #if DEBUG
+        XCTAssertEqual(metadata, "eventType=10 keyCode=8 flags=917504 sourcePID=\(sourcePID) targetPID=\(targetPID) userData=789 eventTimestamp=123456789")
+        XCTAssertFalse(try XCTUnwrap(metadata).contains(privateText))
+        #else
+        XCTAssertNil(metadata)
+        #endif
+        XCTAssertEqual(event.flags, flags)
+        XCTAssertEqual(event.timestamp, timestamp)
+        XCTAssertEqual(event.getIntegerValueField(.keyboardEventKeycode), 8)
+        XCTAssertEqual(event.getIntegerValueField(.eventSourceUserData), 789)
+        XCTAssertNil(ClipboardAudit.shortcutMetadata(type: .keyDown, event: event), "The default audit must still exclude non-Command input")
+    }
+
     func testRecoveryActivationDoesNotRaiseAllWindowsOfTargetApp() {
         // Issue #748: recovery must NOT raise every window of the target app.
         let options = TypingService.recoveryActivationOptions

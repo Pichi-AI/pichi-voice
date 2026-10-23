@@ -752,6 +752,7 @@ final class GlobalHotkeyManager: NSObject {
             eventsOfInterest: Self.keyboardEventMask(),
             callback: { proxy, type, event, refcon -> Unmanaged<CGEvent>? in
                 guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
+                ClipboardAudit.recordShortcutTrace(type: type, event: event)
                 ClipboardAudit.recordShortcut(type: type, event: event)
                 if GlobalHotkeyManager.isSynthesizedTypingEvent(event) {
                     return Unmanaged.passUnretained(event)
@@ -1304,6 +1305,7 @@ final class GlobalHotkeyManager: NSObject {
             // The application owns cancellation output; fallback managers only discard capture.
             if SettingsStore.shared.cancelRecordingHotkeyShortcut?.matches(keyCode: keyCode, modifiers: eventModifiers) == true {
                 let result = self.cancelCallback?() ?? .unhandled
+                ClipboardAudit.recordShortcutTrace(type: type, event: event, cancelResult: String(describing: result))
                 // Closing a suggestion must preserve the held shortcut and capture.
                 if result == .dismissedOverlay {
                     self.markOtherInputDuringModifierOnly()
