@@ -87,7 +87,15 @@ nonisolated enum PrivateProfileStorage {
     static let acceptsNewWork = true
     static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool { true }
 }
+@MainActor protocol PrivateProfileTransitionParticipant: AnyObject {
+    func prepareForPrivateProfileTransition() async throws
+}
+@MainActor final class PrivateProfileService {
+    static let shared = PrivateProfileService()
+    func register(_ participant: any PrivateProfileTransitionParticipant) {}
+}
 '''
+fixture+=read('Sources/Fluid/Account/PrivateProfileOperationOwner.swift').replace('import Foundation\n','')+'\n'
 failure_card=block(read('Sources/Fluid/Views/DeliveryFailureOverlay.swift'),'    enum Kind: Equatable {')
 fixture+='@MainActor final class DeliveryFailureOverlayController {\n'+failure_card+'\n}\n'
 fixture+=(repo/'Tests/Support/TypingNativeTransportFixture.swift').read_text()+'\n'+clipboard_doubles+'\n@MainActor '+coord_body+'\n'
@@ -121,6 +129,7 @@ start=content.index(marker)
 call=content[start:content.index('\n                )',start)+len('\n                )')]
 assert 'requiredFocusTarget: stopSnapshot?.focusTarget' in call
 fixture+='''@MainActor final class StopDeliveryCaller {
+    struct Output { var isVisible = true }
     let asr=ASRService(); var cancelledOutputLifecycleID: UInt64?; var overlayLifecycleID: UInt64=1
     func deliver(_ finalOutputPlan: DictationLiteralOutputPlan, snapshot stopSnapshot: DictationStopSnapshot?) async -> TextDeliveryResult {
         let typingTarget=(pid: stopSnapshot?.target?.pid, shouldRestoreOriginalFocus: true)
@@ -128,6 +137,7 @@ fixture+='''@MainActor final class StopDeliveryCaller {
         let toggleStopRequestedAt: TimeInterval?=nil
         let shouldCopyToClipboard=false
         let expectedOverlayLifecycleID=self.overlayLifecycleID
+        let privateOutput: Output? = .init()
         let deliveryResult: TextDeliveryResult
 '''+call+'\n        return deliveryResult\n    }\n}\n'
 caller_methods=[]
@@ -141,6 +151,14 @@ history_methods=[]
 for production_name,fixture_name in [('applyHistoryTextOutput','historyProjection'),('reprocessDictationText','reprocessProjection')]:
     history_source=read('Sources/Fluid/ContentView.swift',args.conditional_reference) if args.conditional_reference else content
     function=block(history_source,'    private func '+production_name+'(')
+    validity=''
+    if '    private func '+production_name+'Bound(' in history_source:
+        assert 'privateOutputOperations.perform {' in function and 'self.'+production_name+'Bound(' in function
+        function=block(history_source,'    private func '+production_name+'Bound(')
+        validity_line='        let isOutputValid: @MainActor () -> Bool = { self.privateOutputOperations.isCurrent && !Task.isCancelled }'
+        assert function.count(validity_line)==1
+        assert function.index(validity_line) < function.index('        guard isOutputValid() else { return }') < function.index('        if shouldTypeExternally {')
+        validity=validity_line+'\n        guard isOutputValid() else { return }\n'
     assert function.count('let targetContext = TypingService.captureRecordingTargetContext()')==1
     segment=block(function,'        if shouldTypeExternally {')
     # The first closing brace ends the if body. Include the actual clipboard else branch too.
@@ -149,12 +167,13 @@ for production_name,fixture_name in [('applyHistoryTextOutput','historyProjectio
         end=function.index('\n        }',end)+len('\n        }')
     segment=function[function.index('        if shouldTypeExternally {'):end]
     assert 'requiredFocusTarget: focusTarget' in segment
-    history_methods.append('func '+fixture_name+'(_ outputPlan:DictationLiteralOutputPlan,targetContext:TypingService.RecordingTargetContext?) async { let finalText=outputPlan.plainText; let shouldTypeExternally=targetContext != nil\n'+segment+'\n}')
+    history_methods.append('func '+fixture_name+'(_ outputPlan:DictationLiteralOutputPlan,targetContext:TypingService.RecordingTargetContext?) async { let finalText=outputPlan.plainText; let shouldTypeExternally=targetContext != nil\n'+validity+segment+'\n}')
 if args.mutation=='restored_forwarding':
     caller_methods=[value.replace('                requiredFocusTarget: focusTarget,\n','') for value in caller_methods]
     history_methods=[value.replace(',\n                requiredFocusTarget: focusTarget','') for value in history_methods]
 fixture+='''@MainActor final class AutomaticDeliveryCaller {
     let asr=ASRService(); let rewriteModeService=AutomaticRewriteDouble(); let menuBarManager=AutomaticMenuDouble()
+    let privateOutputOperations = PrivateProfileOperationOwner()
     var overlayLifecycleID:UInt64=1; var cancelledOutputLifecycleID:UInt64?; var failures:[TextDeliveryFailure]=[]; var failedTranscript=""; var hides=0
     func appBench(_ text:String) {}
     func showTextDeliveryFailure(_ failure:TextDeliveryFailure,transcript:String) { failures.append(failure); failedTranscript=transcript }
@@ -168,6 +187,9 @@ for marker in ('    @Published var rewrittenText: String = ""','    @Published p
     assert rewrite_current.count(marker)==1,marker
     rewrite_fields.append(marker.replace('@Published ','').replace('private(set) ',''))
 rewrite_method=block(rewrite_current,'    func acceptRewrite(')
+if '    private func acceptRewriteBound(' in rewrite_current:
+    assert 'privateOperations.perform {' in rewrite_method and 'self.acceptRewriteBound(' in rewrite_method
+    rewrite_method+='\n'+block(rewrite_current,'    private func acceptRewriteBound(')
 rewrite_cancel=block(rewrite_current,'    private final nonisolated class AcceptanceCancellation: @unchecked Sendable {')
 if args.mutation=='ambient_cancel':
     rewrite_method=mutate(rewrite_method,'{ !cancellation.isCancelled && isOutputValid() }','{ !Task.isCancelled && isOutputValid() }')
@@ -180,7 +202,7 @@ if args.rewrite_reference:
         return await self.legacyAcceptRewrite(text)
     }
 '''
-fixture+='@MainActor final class RewriteModeService {\n'+'\n'.join(rewrite_fields)+'\n'+rewrite_cancel+'\n'+rewrite_method+'\n    func appendDiagnosticLog(_ text: String) {}\n}\n'
+fixture+='@MainActor final class RewriteModeService { let privateOperations = PrivateProfileOperationOwner()\n'+'\n'.join(rewrite_fields)+'\n'+rewrite_cancel+'\n'+rewrite_method+'\n    func appendDiagnosticLog(_ text: String) {}\n}\n'
 activity=read('Sources/Fluid/Services/Meeting/MeetingSummaryController.swift')
 activity_methods='\n'.join(block(activity,marker) for marker in ('    func beginProcessing()','    func endProcessing(','    static func presentBusyError()'))
 fixture+='@MainActor final class MeetingSummaryActivityCoordinator { static let shared=MeetingSummaryActivityCoordinator(); var processing: Set<UUID>=[]; var optionalProcessing: [UUID: @MainActor () async -> Void]=[:]; var isProcessing=false; var summary: UUID?\n'+activity_methods+'\n}\n'
@@ -205,7 +227,10 @@ if not args.rewrite_reference:
     for name,value in callbacks.items():
         body=value[value.index('{')+1:value.rindex('}')]
         wrappers.append('func '+name+'() {'+body+'}')
-    fixture+='@MainActor final class RewriteAcceptViewAction { let service: RewriteModeService; let asr=AppServices.shared.asr; var onClose: (() -> Void)?; init(service:RewriteModeService) { self.service=service }\n'+'\n'.join(fields+wrappers)+'\n'+owner+'\n}\n'
+    profile_visibility=[line for line in view.splitlines() if line.startswith('    private var isProfileVisible:')]
+    assert len(profile_visibility)==1
+    profile_fields='    private let profile = PrivateProfileStorage.current\n'+profile_visibility[0]
+    fixture+='@MainActor final class RewriteAcceptViewAction { let service: RewriteModeService; let asr=AppServices.shared.asr; var onClose: (() -> Void)?; init(service:RewriteModeService) { self.service=service }\n'+profile_fields+'\n'+'\n'.join(fields+wrappers)+'\n'+owner+'\n}\n'
 fixture+=(repo/'Tests/TypingFocusIdentityRegression.swift').read_text()
 fixture+='\n'+(repo/'Tests/Support/ClipboardTargetBackupFixtureTests.swift').read_text()
 localization=read('Sources/Fluid/Localization/PichiLocalization.swift')
