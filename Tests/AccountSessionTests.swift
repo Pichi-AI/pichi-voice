@@ -164,6 +164,7 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         await joinedFailedAdmissionTest(configuration)
         try restorationMarkerTest()
         try await ambiguousRefreshRestartTest(configuration)
+        await shutdownDuringRestorationTest(configuration)
         try await workspaceRefreshOwnershipTest(configuration)
         let failedCredentials = MemoryCredentials(); await failedCredentials.rejectSaves()
         let failedBrowser = FakeBrowser(), failedTransport = FakeTransport(), failedLifecycle = Lifecycle()
@@ -283,6 +284,20 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         expect(restart.context == nil && restart.state == .signedOut, "fresh service does not replay ambiguous grant")
         expect(await transport.refreshes == 1, "potentially consumed refresh token never replayed")
         await service.logout()
+    }
+    @MainActor static func shutdownDuringRestorationTest(_ configuration: AccountConfiguration) async {
+        let credentials = MemoryCredentials(), policy = AccountRestorationPolicy()
+        let initial = AccountSessionService(configuration: configuration, browser: FakeBrowser(), transport: FakeTransport(), credentials: credentials, lifecycle: Lifecycle(), restoration: policy)
+        await initial.signIn(); await initial.shutdown()
+        let transport = FakeTransport(); await transport.holdRefresh()
+        let restored = AccountSessionService(configuration: configuration, browser: FakeBrowser(), transport: transport, credentials: credentials, lifecycle: Lifecycle(), restoration: policy)
+        let restore = Task { await restored.restore() }
+        await until { await transport.isRefreshWaiting }
+        let shutdown = Task { await restored.shutdown() }
+        await Task.yield(); await transport.releaseRefresh()
+        await shutdown.value; await restore.value
+        expect(await credentials.load()?.refreshToken == "rotated-refresh", "termination preserves restoration rotation")
+        expect(policy.isAllowed, "joined restoration remains restartable")
     }
     @MainActor static func workspaceRefreshOwnershipTest(_ configuration: AccountConfiguration) async throws {
         // Exercise both scheduler resumptions repeatedly using production task ownership.

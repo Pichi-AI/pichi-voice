@@ -17,6 +17,7 @@ import Foundation
     private var grant: AccountGrant?
     private var operation: Task<Void, Error>?
     private var operationID: UUID?
+    private var operationIsRestoring = false
     private var refreshTask: Task<AccountGrant, Error>?
     private var refreshID: UUID?
     private var logoutTask: Task<Void, Never>?
@@ -132,9 +133,9 @@ import Foundation
                 throw error
             }
         }
-        operation = task; operationID = id
+        operation = task; operationID = id; operationIsRestoring = true
         _ = try? await task.value
-        if operationID == id { operation = nil; operationID = nil }
+        if operationID == id { operation = nil; operationID = nil; operationIsRestoring = false }
     }
 
     func cancelSignIn() async {
@@ -269,7 +270,10 @@ import Foundation
     func shutdown() async {
         if let logoutTask { await logoutTask.value }
         boundaryInProgress = true
-        browser.cancel(); operation?.cancel()
+        browser.cancel()
+        // Restore can also own a rotating refresh. Join it through persistence just like
+        // refreshTask; canceling it after a verified response could lose the replacement.
+        if !operationIsRestoring { operation?.cancel() }
         // A verified refresh response must finish persisting its rotation before termination.
         // Network time is bounded by the owned HTTP session. No new requests are admitted.
         _ = try? await operation?.value; _ = try? await refreshTask?.value
