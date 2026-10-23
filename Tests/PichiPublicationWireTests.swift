@@ -163,6 +163,70 @@ extension PichiPublicationConsentTests {
             }
             try rejects(.invalidRequest, "Unsafe recovered source fails before transport: " + mutation) { _ = try upload(json(changed)) }
         }
+        // W2 PR1649 ac2b6c35 source-validation parity. These checks retain exact
+        // payload bytes and do not change the independent retry-policy cases below.
+        for blank in ["", " \n\t", "\u{00A0}", "\u{FEFF}"] {
+            var changed = sourceObject
+            var speakers = changed["speakers"] as! [[String: Any]]
+            speakers[0]["displayName"] = blank
+            changed["speakers"] = speakers
+            try rejects(.invalidRequest, "Blank speaker names fail before transport") { _ = try upload(json(changed)) }
+        }
+        var changed = sourceObject
+        var speakers = changed["speakers"] as! [[String: Any]]
+        speakers[1]["isLocalUser"] = true
+        changed["speakers"] = speakers
+        try rejects(.invalidRequest, "At most one speaker may be marked as the local user") { _ = try upload(json(changed)) }
+        speakers[0]["isLocalUser"] = false
+        speakers[1]["isLocalUser"] = false
+        // U+0085 is content under ECMAScript trim, while U+FEFF above is whitespace.
+        speakers[0]["displayName"] = "\u{0085}"
+        changed["speakers"] = speakers
+        let noLocalUserBytes = try json(changed)
+        check(try upload(noLocalUserBytes).unsignedRequest.httpBody?.range(of: noLocalUserBytes) != nil,
+              "Zero local-user markers and nonblank names preserve their exact bytes")
+        changed = sourceObject
+        var segments = changed["segments"] as! [[String: Any]]
+        segments.swapAt(0, 1)
+        changed["segments"] = segments
+        try rejects(.invalidRequest, "Segment starts must be nondecreasing") { _ = try upload(json(changed)) }
+        segments = sourceObject["segments"] as! [[String: Any]]
+        segments[1]["startSeconds"] = 0
+        segments[2]["endSeconds"] = sourceObject["durationSeconds"]
+        changed["segments"] = segments
+        let equalStartBytes = try json(changed)
+        check(try upload(equalStartBytes).unsignedRequest.httpBody?.range(of: equalStartBytes) != nil,
+              "Equal starts, overlapping turns and an end at the exact duration remain valid")
+        segments[2]["endSeconds"] = (sourceObject["durationSeconds"] as! Double) + 0.001
+        changed["segments"] = segments
+        try rejects(.invalidRequest, "Every segment ends within the transcript duration") { _ = try upload(json(changed)) }
+
+        let firstSpeakerID = (sourceObject["speakers"] as! [[String: Any]])[0]["id"] as! String
+        for attributed in [true, false] {
+            changed = sourceObject
+            speakers = changed["speakers"] as! [[String: Any]]
+            speakers[0]["displayName"] = String(repeating: "\u{1F600}", count: 100)
+            changed["speakers"] = speakers
+            let segmentCount = attributed ? 1_000 : 2_500
+            let text = String(repeating: "\u{1F600}", count: attributed ? 9 : 18)
+            segments = (0..<segmentCount).map { index in
+                var segment: [String: Any] = [
+                    "id": String(format: "00000000-0000-4000-8000-%012d", index + 1_000),
+                    "startSeconds": 0, "endSeconds": 1, "text": text]
+                if attributed { segment["speakerID"] = firstSpeakerID }
+                return segment
+            }
+            changed["segments"] = segments
+            let atLimitBytes = try json(changed)
+            let request = try upload(atLimitBytes, assessment: .init(participantID: nil, criteriaIDs: []))
+            check(request.unsignedRequest.httpBody?.range(of: atLimitBytes) != nil,
+                  "The exact 250000 rendered UTF-16 limit includes speaker labels or the 32-unit unknown label")
+            segments[segmentCount - 1]["text"] = text + "x"
+            changed["segments"] = segments
+            try rejects(.invalidRequest, "Repeated labels cannot amplify rendering beyond 250000 units") {
+                _ = try upload(json(changed), assessment: .init(participantID: nil, criteriaIDs: []))
+            }
+        }
         let bearer = "synthetic-access-token-not-a-real-credential"
         let authorized = try post.authorized(using: .init(context: context, accessToken: bearer))
         check(authorized.value(forHTTPHeaderField: "Authorization") == "Bearer " + bearer
