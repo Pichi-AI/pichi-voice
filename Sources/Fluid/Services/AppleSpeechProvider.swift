@@ -211,7 +211,7 @@ final class AppleSpeechProvider: TranscriptionProvider {
 // MARK: - Legacy recognition ownership
 
 /// The system does not retain a recognition delegate. Keep it, the input request and
-/// the task alive until didFinishSuccessfully, including cancellation and startup races.
+/// the task alive until a finish or cancellation callback, including startup races.
 final nonisolated class AppleSpeechRecognitionOperation: NSObject, SFSpeechRecognitionTaskDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -266,6 +266,14 @@ final nonisolated class AppleSpeechRecognitionOperation: NSObject, SFSpeechRecog
 
     func speechRecognitionTask(_ task: SFSpeechRecognitionTask, didFinishSuccessfully successfully: Bool) {
         self.lock.withLock { self.terminal = true }
+        self.deliverTerminalIfReady()
+    }
+
+    func speechRecognitionTaskWasCancelled(_ task: SFSpeechRecognitionTask) {
+        self.lock.withLock {
+            self.cancelled = true
+            self.terminal = true
+        }
         self.deliverTerminalIfReady()
     }
 

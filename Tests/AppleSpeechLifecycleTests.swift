@@ -44,6 +44,7 @@ final class BufferConverter {
 nonisolated protocol SFSpeechRecognitionTaskDelegate: AnyObject {
     func speechRecognitionTask(_ task: SFSpeechRecognitionTask, didFinishRecognition result: SFSpeechRecognitionResult)
     func speechRecognitionTask(_ task: SFSpeechRecognitionTask, didFinishSuccessfully successfully: Bool)
+    func speechRecognitionTaskWasCancelled(_ task: SFSpeechRecognitionTask)
 }
 final nonisolated class SFSpeechRecognitionResult: @unchecked Sendable {
     struct Transcription { let formattedString: String }
@@ -76,6 +77,7 @@ final nonisolated class RecognitionDriver: @unchecked Sendable {
     }
     func final(_ text: String) { self.delegate?.speechRecognitionTask(self.task!, didFinishRecognition: SFSpeechRecognitionResult(text)) }
     func complete(_ success: Bool = true) { self.delegate?.speechRecognitionTask(self.task!, didFinishSuccessfully: success) }
+    func cancelOnly() { self.delegate?.speechRecognitionTaskWasCancelled(self.task!) }
 }
 final nonisolated class SFSpeechRecognizer: @unchecked Sendable {
     nonisolated(unsafe) static var driver = RecognitionDriver()
@@ -189,23 +191,25 @@ final nonisolated class SpeechAnalyzer: @unchecked Sendable {
             let ending = Task { await provider.endAdmittedTranscription(leaseID: lease); ended.set() }
             await driver.cancelled.wait(); await self.allowTasks()
             self.check(!ended.value, "Admission end waits for its own cancellation completion")
-            driver.complete(false)
+            driver.cancelOnly()
             do { _ = try await work.value; preconditionFailure("Retired recognition published") }
             catch is CancellationError { self.assertions += 1 }
             await ending.value
+            driver.cancelOnly(); driver.final("late after cancellation-only completion"); driver.complete(false)
+            self.check(ended.value, "Cancellation-only completion tolerates duplicate and reordered late callbacks")
         }
         // Cancellation before the synchronous SDK creation call returns its handle.
         do {
             let driver = RecognitionDriver(); SFSpeechRecognizer.driver = driver
             let operation = AppleSpeechRecognitionOperation(request: SFSpeechAudioBufferRecognitionRequest())
-            driver.onCreation = { operation.cancel() }
+            driver.onCreation = { operation.cancel(); driver.cancelOnly() }
             let work = Task { await operation.recognize(using: SFSpeechRecognizer(locale: Locale(identifier: "ru-RU"))!) }
             await driver.started.wait(); await driver.cancelled.wait()
-            driver.final("ignored before assignment"); driver.complete(false)
             do { _ = try await work.value.get(); preconditionFailure("Startup cancellation published") }
             catch is CancellationError { self.assertions += 1 }
+            driver.cancelOnly(); driver.final("ignored after early cancellation"); driver.complete(false)
             operation.finishJoining(); await operation.waitUntilFinished()
-            self.check(true, "A late-installed handle is cancelled and joined")
+            self.check(true, "A late-installed handle is cancelled and joined after cancellation-only completion")
         }
         // Synchronous completion can arrive before the task handle is installed.
         do {
