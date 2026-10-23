@@ -45,6 +45,11 @@ nonisolated enum PrivateProfileStorage {
         return current.isReadable && current.id == profileID
     }
 
+    static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool {
+        let current = self.current
+        return current.isReadable && current.id == profile.id && current.generation == profile.generation
+    }
+
     static func proposed(context: AccountContext?, generation: UUID,
                          legacyRootDirectory: URL? = nil) throws -> PrivateProfileSnapshot {
         let legacy = legacyRootDirectory ?? current.legacyRootDirectory

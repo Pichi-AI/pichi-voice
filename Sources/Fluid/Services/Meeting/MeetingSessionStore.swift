@@ -25,8 +25,6 @@ private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
 }
 
 actor MeetingSessionStore: MeetingSessionStoring {
-    static let shared = MeetingSessionStore()
-
     private struct SessionIndex: Codable {
         static let currentSchemaVersion = 1
 
