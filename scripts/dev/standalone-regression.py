@@ -239,7 +239,7 @@ class Probe:
 
 # Registration is explicit: a new probe needs a reviewed interpreter/UI classification.
 SHELL_PROBES = (
-    "account_session", "admitted_history_writes", "admitted_pronunciation_read", "analytics_config", "analytics_private_profile", "app_search_private_profile", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
+    "account_session", "admitted_history_writes", "admitted_pronunciation_read", "analytics_config", "analytics_private_profile", "app_search_private_profile", "apple_speech_lifecycle", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
     "command_archive_search", "command_cancellation", "command_markdown",
     "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
@@ -253,9 +253,9 @@ SHELL_PROBES = (
     "stats_snapshot", "terminal_service_lifecycle", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
-    "diarization_repeatability", "dictionary_training_save", "dictation_capture_admission", "fluid_audio_capture_options", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
+    "diarization_repeatability", "dictionary_training_save", "dictation_capture_admission", "fluid_audio_capture_options", "gigaam_artifact_ownership", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
     "meeting_speaker_attribution",
-    "settings_backup_concurrency",
+    "private_panel_concealment", "settings_backup_concurrency",
 )
 PROBES = tuple(sorted(
     [Probe(f"Tests/run_{name}_tests.sh", "sh") for name in SHELL_PROBES]

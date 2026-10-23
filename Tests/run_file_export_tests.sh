@@ -33,7 +33,7 @@ format_type = section(view, '    nonisolated enum ExportFormat:', '    private v
 document = section(view, 'nonisolated struct TranscriptionDocument:', '// MARK: - Preview')
 exporter = section(view, '        .fileExporter(', '        .onReceive(self.fileHistoryStore.entriesPublisher)')
 Path(sys.argv[1]).write_text('import Foundation\nimport SwiftUI\nimport UniformTypeIdentifiers\n'
-    + speaker_types + result + declaration(history, 'nonisolated struct FileTranscriptionEntry:')
+    + speaker_types + result + declaration(history, 'nonisolated struct FileTranscriptionEntry:') + '\n'
     + '@MainActor final class FileTranscriptionService {\n' + exports + '\n}\n'
     + 'struct FileTranscriptionView {\n' + format_type + '\n}\n'
     + document
