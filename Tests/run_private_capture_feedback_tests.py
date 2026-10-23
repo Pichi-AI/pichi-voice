@@ -25,6 +25,7 @@ def main():
                         help="Negative control that removes one source-owner fence from the projected body")
     parser.add_argument("--unguarded-menu", choices=["preview", "meeting", "conceal", "start-error", "queued-start"],
                         help="Negative control that removes one menu source-owner or conceal fence")
+    parser.add_argument("--unguarded-discovery", action="store_true", help="Negative control for the actual held discovery/start path")
     args = parser.parse_args()
     source_path = "Sources/Fluid/ContentView.swift"
     content = (subprocess.check_output(["git", "show", f"{args.baseline_ref}:{source_path}"], cwd=ROOT, text=True)
@@ -46,6 +47,10 @@ def main():
         assert len(parts) == 4, "Exactly three queued callback fences are projected"
         callbacks = fence.join(parts[:index + 1]) + "guard " + fence.join(parts[index + 1:])
     menu = (ROOT / "Sources/Fluid/Services/MenuBarManager.swift").read_text()
+    service = (ROOT / "Sources/Fluid/Services/AppServices+MeetingMenuBar.swift").read_text()
+    service_start = declaration(service, "    func startMeetingRecordingFromMenuBar()")
+    if args.unguarded_discovery:
+        service_start = service_start.replace("guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }", "")
     coordinator = (ROOT / "Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift").read_text()
     partial_start = menu.index("        asrService.$partialTranscription")
     partial_end = menu.index("            .store(in: &self.cancellables)", partial_start) + len("            .store(in: &self.cancellables)")
@@ -137,15 +142,59 @@ struct MeetingSession {
     @Published var activeSession: MeetingSession?
     @Published var latestCompletedSession: MeetingSession?
     var stops = 0
+    var starts = 0
+    var configurationOwners: [String] = []
     func stopAndTranscribe() async throws { stops += 1 }
+    func startRecording(configuration: MeetingCaptureConfiguration) async throws {
+        starts += 1; configurationOwners.append(configuration.owner)
+    }
 }
 @MainActor final class ASRService {
     @Published var partialTranscription = ""
 }
 @MainActor final class AppServices {
     static let shared = AppServices()
-    var starts = 0
-    func startMeetingRecordingFromMenuBar() async throws { starts += 1 }
+    let meetingSessionCoordinator = MeetingSessionCoordinator()
+    var meetingAutomaticTarget: MeetingAutoDetector.ResolvedTarget?
+    var starts: Int { meetingSessionCoordinator.starts }
+    static func menuBarMeetingConfiguration(defaults: MeetingRecordingDefaults, target: MeetingAutoDetector.ResolvedTarget?,
+        microphones: MeetingMicrophoneCatalogSnapshot, applications: [MeetingApplicationIdentity], preferredInputUID: String?) throws -> MeetingCaptureConfiguration {
+        MeetingCaptureConfiguration(owner: defaults.owner)
+    }
+''' + service_start + r'''
+}
+enum MeetingCaptureMode { case onlineCall, inRoom }
+enum MeetingApplicationAudioScope { case selectedApplication, systemAudio }
+struct MeetingRecordingDefaults {
+    var mode: MeetingCaptureMode = .onlineCall
+    var effectiveApplicationAudioScope: MeetingApplicationAudioScope = .selectedApplication
+    var usesAutomaticApplication = false
+    var owner = "synthetic"
+}
+struct MeetingCaptureConfiguration { let owner: String }
+struct MeetingMicrophoneCatalogSnapshot {}
+struct MeetingApplicationIdentity {}
+enum MeetingAutoDetector { struct ResolvedTarget: Equatable { let bundleIdentifier: String } }
+enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String) }
+@MainActor final class SettingsStore {
+    static let shared = SettingsStore()
+    var meetingRecordingDefaults = MeetingRecordingDefaults()
+    var preferredInputDeviceUID: String?
+}
+@MainActor enum MeetingCaptureSourceCatalog {
+    static var microphoneGate: MenuStartGate?
+    static var applicationGate: MenuStartGate?
+    static var microphoneReads = 0, applicationReads = 0
+    static func microphoneSnapshot() async -> MeetingMicrophoneCatalogSnapshot {
+        microphoneReads += 1
+        await microphoneGate?.hold()
+        return .init()
+    }
+    static func availableApplications() async throws -> [MeetingApplicationIdentity] {
+        applicationReads += 1
+        await applicationGate?.hold()
+        return []
+    }
 }
 @MainActor enum NotchContentState {
     static let shared = State()
@@ -210,7 +259,8 @@ struct MeetingSession {
             subprocess.run([str(executable)], cwd=ROOT, check=True, timeout=20)
     if not args.baseline_ref:
         subprocess.run(["xcrun", "swiftc", "-frontend", "-parse", source_path,
-                        "Sources/Fluid/Services/MenuBarManager.swift"], cwd=ROOT, check=True)
+                        "Sources/Fluid/Services/MenuBarManager.swift",
+                        "Sources/Fluid/Services/AppServices+MeetingMenuBar.swift"], cwd=ROOT, check=True)
     print("Private capture feedback and menu: 4 source-guard checks passed; actual-buffer, callback and selector regression passed in both isolation modes")
 
 

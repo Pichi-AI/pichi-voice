@@ -3,6 +3,8 @@ import Foundation
 extension AppServices {
     /// Starts the same coordinator used by FluidMeet without posting a navigation request.
     func startMeetingRecordingFromMenuBar() async throws {
+        let profile = PrivateProfileStorage.current
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
         let defaults = SettingsStore.shared.meetingRecordingDefaults
         let target = defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .selectedApplication && defaults.usesAutomaticApplication ? self.meetingAutomaticTarget : nil
         if defaults.mode == .onlineCall, defaults.effectiveApplicationAudioScope == .selectedApplication, defaults.usesAutomaticApplication, target == nil {
@@ -10,8 +12,11 @@ extension AppServices {
         }
         let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
         let microphones = await MeetingCaptureSourceCatalog.microphoneSnapshot()
+        try Task.checkCancellation()
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
         let applications = try await defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .selectedApplication ? MeetingCaptureSourceCatalog.availableApplications() : []
         try Task.checkCancellation()
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
         // Never capture a replacement app when detection changed during source discovery.
         if let target, target != self.meetingAutomaticTarget {
             throw MeetingCaptureError.applicationUnavailable(target.bundleIdentifier)
@@ -23,6 +28,7 @@ extension AppServices {
             applications: applications,
             preferredInputUID: preferredInputUID
         )
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
         _ = try await self.meetingSessionCoordinator.startRecording(configuration: configuration)
     }
 

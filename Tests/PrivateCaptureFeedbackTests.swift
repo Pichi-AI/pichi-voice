@@ -98,6 +98,7 @@
         await concealed.privateOutputOperations.retireAndJoin()
         await fresh.privateOutputOperations.retireAndJoin()
         try await checkMenuFeedback(profileA: profileA, profileB: profileB)
+        try await checkDiscoveryAdmission(profileA: profileA, profileB: profileB)
         print("Private capture feedback: \(checks) actual-buffer and callback checks passed")
     }
 
@@ -207,9 +208,39 @@
         await drainMenuQueue()
         check(!queuedStart.canStartMeetingRecording, "A concealed menu cannot admit a new recording")
     }
+
+    @MainActor private static func checkDiscoveryAdmission(profileA: PrivateProfileSnapshot, profileB: PrivateProfileSnapshot) async throws {
+        for holdMicrophone in [true, false] {
+            PrivateProfileStorage.select(profileA)
+            SettingsStore.shared.meetingRecordingDefaults.owner = "A"
+            let service = AppServices(), gate = MenuStartGate()
+            MeetingCaptureSourceCatalog.microphoneGate = holdMicrophone ? gate : nil
+            MeetingCaptureSourceCatalog.applicationGate = holdMicrophone ? nil : gate
+            let discovery = Task { try await service.startMeetingRecordingFromMenuBar() }
+            await gate.waitUntilEntered()
+            PrivateProfileStorage.conceal(generation: UUID())
+            PrivateProfileStorage.select(profileB)
+            SettingsStore.shared.meetingRecordingDefaults.owner = "B"
+            gate.open()
+            do { try await discovery.value; check(false, "A held discovery must reject capture admission under B") }
+            catch { check(error is CancellationError, "A held discovery rejects changed-profile admission with cancellation") }
+            check(service.starts == 0 && service.meetingSessionCoordinator.configurationOwners.isEmpty,
+                  "Neither held microphone nor application discovery can start A's settings under B")
+            MeetingCaptureSourceCatalog.microphoneGate = nil
+            MeetingCaptureSourceCatalog.applicationGate = nil
+            try await service.startMeetingRecordingFromMenuBar()
+            check(service.starts == 1 && service.meetingSessionCoordinator.configurationOwners == ["B"],
+                  "Fresh B discovery still reaches the existing coordinator with B's captured settings")
+        }
+        PrivateProfileStorage.conceal(generation: UUID())
+        let reads = MeetingCaptureSourceCatalog.microphoneReads
+        do { try await AppServices().startMeetingRecordingFromMenuBar(); check(false, "Hidden sources cannot begin discovery") }
+        catch { check(error is CancellationError && MeetingCaptureSourceCatalog.microphoneReads == reads,
+                      "The shared service refuses concealed discovery before reading any capture sources") }
+    }
 }
 
-@MainActor private final class MenuStartGate {
+@MainActor final class MenuStartGate {
     private var entered = false
     private var waiter: CheckedContinuation<Void, Never>?
     func hold() async { entered = true; await withCheckedContinuation { waiter = $0 } }
