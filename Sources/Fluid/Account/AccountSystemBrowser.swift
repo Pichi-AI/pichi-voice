@@ -46,7 +46,12 @@ import UIKit
                 session = operation
                 if !operation.start() { finish(.failure(AccountError.invalidState)) }
             }
-        } onCancel: { Task { @MainActor [weak self] in self?.cancel() } }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, self.sessionID == id else { return }
+                self.cancel()
+            }
+        }
     }
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { anchor! }
     func cancel() { session?.cancel(); finish(.failure(AccountError.cancelled)) }
