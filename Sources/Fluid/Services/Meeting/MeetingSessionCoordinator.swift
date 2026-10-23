@@ -615,6 +615,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard recordingRedactor != nil else { throw MeetingPrivacyPublicationError.redactorUnavailable }
         }
         let lease = try await self.audioArbiter.acquireMeetingCapture()
+        let recordingSessionID = UUID()
         let recordingModelID: String
         let recordingBackendID: MeetingBackendID
         let recordingASRConfiguration: MeetingFinalProcessingConfiguration
@@ -663,10 +664,11 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
             try self.validateFrozenRecordingConfiguration(recordingASRConfiguration)
-            recordingProfileOwnership = try await self.store.captureOwnership()
+            recordingProfileOwnership = try await self.store.captureOwnership(for: recordingSessionID)
             guard self.startReservation == reservation, self.terminationTask == nil,
                   !Task.isCancelled else { throw CancellationError() }
         } catch {
+            await self.store.cancelCaptureAdmission(for: recordingSessionID)
             await self.audioArbiter.release(lease)
             throw error
         }
@@ -683,7 +685,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.state = .idle
         }
         let timebase = Self.makeTimebase()
-        var session = MeetingSession(configuration: publicationConfiguration, timebase: timebase)
+        var session = MeetingSession(id: recordingSessionID, configuration: publicationConfiguration, timebase: timebase)
         session.profileOwnership = recordingProfileOwnership
         session.recordingBackendID = recordingBackendID.rawValue
         session.recordingASRArtifactFingerprint = recordingASRConfiguration.asrArtifactFingerprint

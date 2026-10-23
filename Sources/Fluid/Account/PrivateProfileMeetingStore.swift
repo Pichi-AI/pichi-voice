@@ -20,24 +20,54 @@ nonisolated struct MeetingPrivateProfileAdmission: Sendable {
     var ownership: MeetingProfileOwnership { .init(profile: profile) }
 }
 
+/// N5's local policy observer. These callbacks must remain bounded local operations, without
+/// network/model work. Delivery failures must never prevent a local recording from being saved.
+nonisolated protocol PrivateProfileRecordingObserver: Sendable {
+    func captureAdmitted(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
+    func sourceDidPersist(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
+    func captureAdmissionCancelled(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
+}
+
+extension PrivateProfileRecordingObserver {
+    nonisolated func captureAdmissionCancelled(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async {}
+}
+
 /// One adapter for existing callers. Reads follow the visible profile; admitted capture writes
 /// retain their original immutable root even when logout conceals that profile.
 actor PrivateProfileMeetingStore: MeetingSessionStoring {
     static let shared = PrivateProfileMeetingStore()
     private var stores: [String: MeetingSessionStore] = [:]
     private var admissions: [MeetingSessionID: MeetingPrivateProfileAdmission] = [:]
+    private var recordingObserver: (any PrivateProfileRecordingObserver)?
+
+    func installRecordingObserver(_ observer: any PrivateProfileRecordingObserver) throws {
+        guard recordingObserver == nil else { throw AccountError.busy }
+        recordingObserver = observer
+    }
 
     func admission() throws -> MeetingPrivateProfileAdmission {
         let profile = PrivateProfileStorage.current
-        guard profile.isReadable else { throw AccountError.busy }
+        guard profile.isReadable, PrivateProfileStorage.acceptsNewWork else { throw AccountError.busy }
         return .init(profile: profile)
     }
 
-    func captureOwnership() async throws -> MeetingProfileOwnership? { try admission().ownership }
+    func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership? {
+        guard admissions[id] == nil else { throw AccountError.busy }
+        let captured = try admission()
+        admissions[id] = captured
+        await recordingObserver?.captureAdmitted(id: id, admission: captured)
+        return captured.ownership
+    }
+
+    func cancelCaptureAdmission(for id: MeetingSessionID) async {
+        guard let admitted = admissions[id],
+              (try? await store(for: admitted.profile).load(id: id)) == nil else { return }
+        admissions.removeValue(forKey: id)
+        await recordingObserver?.captureAdmissionCancelled(id: id, admission: admitted)
+    }
 
     func create(_ source: MeetingSession) async throws {
-        let admitted = try admission()
-        guard admissions[source.id] == nil else { throw MeetingSessionStoreError.sessionAlreadyExists }
+        let admitted = try admissions[source.id] ?? admission()
         var session = source
         if let owner = session.profileOwnership, !owner.matches(admitted.profile) { throw AccountError.staleOperation }
         session.profileOwnership = admitted.ownership
@@ -62,6 +92,9 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
         // Older guest manifests gain only an explicit guest marker, never the next login's owner.
         session.profileOwnership = .init(profile: profile)
         try await store(for: profile).save(session)
+        if session.state == .completed, let admitted = admissions[session.id] {
+            await recordingObserver?.sourceDidPersist(id: session.id, admission: admitted)
+        }
     }
 
     func load(id: MeetingSessionID) async throws -> MeetingSession? {
@@ -142,12 +175,13 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     }
     private func readableProfile() throws -> PrivateProfileSnapshot {
         let profile = PrivateProfileStorage.current
-        guard profile.isReadable else { throw AccountError.busy }
+        guard profile.isReadable, PrivateProfileStorage.acceptsNewWork else { throw AccountError.busy }
         return profile
     }
     private func checkReadable(_ expected: PrivateProfileSnapshot) throws {
         let current = PrivateProfileStorage.current
-        guard current.isReadable, current.id == expected.id, current.generation == expected.generation
+        guard current.isReadable, PrivateProfileStorage.acceptsNewWork,
+              current.id == expected.id, current.generation == expected.generation
         else { throw AccountError.staleOperation }
     }
     private func permits(_ session: MeetingSession, in profile: PrivateProfileSnapshot) -> Bool {

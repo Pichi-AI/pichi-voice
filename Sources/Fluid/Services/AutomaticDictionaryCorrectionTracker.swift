@@ -172,7 +172,9 @@ final class AutomaticDictionarySuggestionPolicy {
 
 @MainActor
 final class AutomaticDictionaryCorrectionTracker {
-    static let shared = AutomaticDictionaryCorrectionTracker()
+    static var shared: AutomaticDictionaryCorrectionTracker {
+        PrivateProfileObjectCache.value(key: "AutomaticDictionaryCorrectionTracker") { AutomaticDictionaryCorrectionTracker() }
+    }
 
     private struct InsertionSeed {
         let element: AXUIElement
@@ -215,12 +217,14 @@ final class AutomaticDictionaryCorrectionTracker {
     private var debounceTask: Task<Void, Never>?
     private var evidencePreparationTask: Task<Void, Never>?
     private var suggestionGeneration = UUID()
+    private let profile = PrivateProfileStorage.current
 
     private init() {}
 
     func beginObservingInsertion(
         _ insertedText: String, targetPID: pid_t?, learningRecording: DictionaryLearningRecording? = nil
     ) {
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
         self.cancel()
         guard SettingsStore.shared.automaticDictionaryLearningEnabled || DictionaryMatcherExperiment.collectNegatives,
               !insertedText.isEmpty
@@ -261,6 +265,12 @@ final class AutomaticDictionaryCorrectionTracker {
         self.removeObserver()
         self.session = nil
         DictionaryCorrectionOverlayController.shared.hide()
+    }
+
+    func prepareForPrivateProfileTransition() async {
+        let tasks = [evidencePreparationTask, verificationTask, timeoutTask, debounceTask]
+        cancel()
+        for task in tasks { await task?.value }
     }
 
     func handleObservedValueChange() {

@@ -41,7 +41,7 @@ extension MeetingSessionStoreCheckpointTests {
         check(aHistory.isEmpty, "First account login cannot claim or list legacy guest history")
         var aSession = legacy
         aSession.title = "Synthetic account A"
-        aSession.profileOwnership = try await store.captureOwnership()
+        aSession.profileOwnership = try await store.captureOwnership(for: id)
         let aAdmission = try await store.admission()
         try await store.create(aSession)
         let savedA = try await store.load(id: id)!
@@ -65,7 +65,7 @@ extension MeetingSessionStoreCheckpointTests {
         check(try await store.load(id: id) == nil, "B cannot read A or guest by a known UUID")
         var bSession = legacy
         bSession.title = "Synthetic account B"
-        bSession.profileOwnership = try await store.captureOwnership()
+        bSession.profileOwnership = try await store.captureOwnership(for: id)
         try await store.create(bSession)
         do { try await store.save(savedA); check(false, "An old A snapshot cannot overwrite B's same-UUID session") }
         catch { check(true, "Stale explicit owner is rejected") }

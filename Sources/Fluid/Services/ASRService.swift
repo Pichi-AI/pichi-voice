@@ -640,6 +640,9 @@ final class ASRService: ObservableObject {
     }
 
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+        guard PrivateProfileStorage.acceptsNewWork || activity == .settingsRestore else {
+            throw ASRActivityError.settingsRestoreUnavailable
+        }
         guard let activeActivityLease = self.activeActivityLease else {
             DictionaryAudioLearningService.shared.cancelForRecording()
             let lease = ASRActivityLease(id: UUID(), activity: activity)

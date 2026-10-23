@@ -26,6 +26,7 @@ nonisolated enum PrivateProfileStorage {
     private final class State: @unchecked Sendable {
         let lock = NSLock()
         var value: PrivateProfileSnapshot
+        var acceptsNewWork = true
         var resets: [@Sendable () -> Void] = []
         init() {
             let root = AppBrand.applicationSupportDirectory
@@ -38,6 +39,15 @@ nonisolated enum PrivateProfileStorage {
     static var current: PrivateProfileSnapshot {
         state.lock.lock(); defer { state.lock.unlock() }
         return state.value
+    }
+
+    static var acceptsNewWork: Bool {
+        state.lock.lock(); defer { state.lock.unlock() }
+        return state.acceptsNewWork && state.value.isReadable
+    }
+
+    static func closeAdmission() {
+        state.lock.lock(); state.acceptsNewWork = false; state.lock.unlock()
     }
 
     static func isReadable(_ profileID: String) -> Bool {
@@ -73,14 +83,17 @@ nonisolated enum PrivateProfileStorage {
 
     /// Composition-owned lifecycle calls this only after joined transition preparation.
     static func select(_ snapshot: PrivateProfileSnapshot) {
-        state.lock.lock(); state.value = snapshot; state.lock.unlock()
+        state.lock.lock(); state.value = snapshot; state.acceptsNewWork = snapshot.isReadable; state.lock.unlock()
     }
 
     /// Reject new private reads immediately while an old recording keeps its admitted writer.
     static func conceal(generation: UUID) {
         state.lock.lock()
         let old = state.value
-        state.value = .init(id: old.id, context: old.context, generation: generation,
+        state.acceptsNewWork = false
+        // Keep the source generation until selection commits, so cleanup retry reaches the
+        // exact old cached stores instead of manufacturing fresh instances over unsaved data.
+        state.value = .init(id: old.id, context: old.context, generation: old.generation,
             rootDirectory: old.rootDirectory, legacyRootDirectory: old.legacyRootDirectory, isReadable: false)
         state.lock.unlock()
     }
@@ -130,8 +143,9 @@ nonisolated final class PrivateProfileStoreCache<Value: Sendable>: @unchecked Se
     func value(for profile: PrivateProfileSnapshot = PrivateProfileStorage.current,
                create: (PrivateProfileSnapshot) -> Value) -> Value {
         lock.lock(); defer { lock.unlock() }
-        if let value = values[profile.id] { return value }
-        let value = create(profile); values[profile.id] = value; return value
+        let key = profile.id + ":" + profile.generation.uuidString
+        if let value = values[key] { return value }
+        let value = create(profile); values[key] = value; return value
     }
     func removeAll() { lock.lock(); values.removeAll(); lock.unlock() }
 }
@@ -140,7 +154,8 @@ nonisolated final class PrivateProfileStoreCache<Value: Sendable>: @unchecked Se
 @MainActor enum PrivateProfileObjectCache {
     private static var values: [String: Any] = [:]
     static func value<Value>(key: String, create: () -> Value) -> Value {
-        let scopedKey = PrivateProfileStorage.current.id + ":" + key
+        let profile = PrivateProfileStorage.current
+        let scopedKey = profile.id + ":" + profile.generation.uuidString + ":" + key
         if let value = values[scopedKey] as? Value { return value }
         let value = create(); values[scopedKey] = value; return value
     }

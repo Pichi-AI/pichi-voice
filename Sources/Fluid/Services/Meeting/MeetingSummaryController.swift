@@ -120,6 +120,11 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
 
 @MainActor
 final class MeetingSummaryController: ObservableObject, PrivateProfileTransitionParticipant {
+    private let privateProfile = PrivateProfileStorage.current
+    private var profileRefreshOperation: Task<Void, Never>?
+    private var profileRefreshID: UUID?
+
+    init() { PrivateProfileService.shared.register(self) }
     @Published private(set) var installed = false
     @Published private(set) var checking = true
     @Published private(set) var downloading = false
@@ -167,6 +172,19 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
     }
 
     func refresh(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String = "") async {
+        guard PrivateProfileStorage.isReadable(privateProfile) else { return }
+        let prior = profileRefreshOperation
+        prior?.cancel(); await prior?.value
+        let id = UUID()
+        let task = Task { await self.refreshBound(session: session, kind: kind, customPrompt: customPrompt) }
+        profileRefreshOperation = task
+        profileRefreshID = id
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        if profileRefreshID == id { profileRefreshOperation = nil; profileRefreshID = nil }
+    }
+
+    private func refreshBound(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String) async {
+        guard PrivateProfileStorage.isReadable(privateProfile), !Task.isCancelled else { return }
         guard !self.busy else { return }
         let generation = UUID()
         self.generation = generation
@@ -246,6 +264,7 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
     }
 
     func summarize(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingSummaryRoute, customPrompt: String = "") {
+        guard PrivateProfileStorage.isReadable(privateProfile) else { return }
         guard !self.busy, !self.checking,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
@@ -383,8 +402,12 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
 
     func prepareForPrivateProfileTransition() async throws {
         generation = UUID()
+        profileRefreshID = nil
+        let refresh = profileRefreshOperation; refresh?.cancel()
         let task = operation; task?.cancel()
+        await refresh?.value
         await task?.value
+        profileRefreshOperation = nil
         operation = nil; output = ""; outputProvenance = ""; error = nil; checking = false
     }
 }

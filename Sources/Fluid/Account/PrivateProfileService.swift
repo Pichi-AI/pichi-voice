@@ -16,6 +16,7 @@ import Foundation
     private var isBusy: @MainActor () -> Bool = { true }
     private var prepareSources: @MainActor () async throws -> Void = {}
     private var activateSources: @MainActor (PrivateProfileSnapshot) async throws -> Void = { _ in }
+    private var pendingWrites: [UUID: Task<Void, Never>] = [:]
     private struct WeakParticipant { weak var value: (any PrivateProfileTransitionParticipant)? }
     private var participants: [WeakParticipant] = []
 
@@ -38,6 +39,14 @@ import Foundation
         participants.append(.init(value: participant))
     }
 
+    func retainPrivateWrite(_ task: Task<Void, Never>, id: UUID) { pendingWrites[id] = task }
+    func finishPrivateWrite(id: UUID) { pendingWrites.removeValue(forKey: id) }
+    private func joinPrivateWrites() async {
+        while !pendingWrites.isEmpty {
+            for task in Array(pendingWrites.values) { await task.value }
+        }
+    }
+
     /// UI can refuse an explicit switch before asking N1 to mutate account/workspace state.
     /// N1's follow-up preflight hook can call this same check, without another account manager.
     func requireTransitionAdmission() throws {
@@ -46,13 +55,16 @@ import Foundation
 
     func transition(from: AccountContext?, to: AccountContext?, generation: UUID) async throws {
         guard installed, !isTransitioning else { throw AccountError.busy }
+        if to != nil { try Task.checkCancellation() }
         if isBusy() {
             if to == nil {
                 // Offline logout still clears N1's credentials. Keep the old admitted writer,
                 // hide every private projection and require cleanup retry after capture drains.
-                PrivateProfileStorage.conceal(generation: generation)
+                PrivateProfileStorage.closeAdmission()
                 isPrivateDataVisible = false; projectionRevision = UUID()
-                try PrivateProfileStorage.persistAccessMarker(PrivateProfileStorage.current)
+                try persistHiddenMarker(generation: generation)
+                PrivateProfileStorage.conceal(generation: generation)
+                await joinPrivateWrites()
                 for participant in participants.compactMap(\.value) {
                     try await participant.prepareForPrivateProfileTransition()
                 }
@@ -61,21 +73,28 @@ import Foundation
         }
         let next = try PrivateProfileStorage.proposed(context: to, generation: generation)
         isTransitioning = true; isPrivateDataVisible = false; projectionRevision = UUID()
-        PrivateProfileStorage.conceal(generation: generation)
+        PrivateProfileStorage.closeAdmission()
         do {
-            try PrivateProfileStorage.persistAccessMarker(PrivateProfileStorage.current)
+            try persistHiddenMarker(generation: generation)
+            PrivateProfileStorage.conceal(generation: generation)
+            await joinPrivateWrites()
             for participant in participants.compactMap(\.value) {
                 try await participant.prepareForPrivateProfileTransition()
             }
             try await prepareSources()
             guard !isBusy() else { throw AccountError.busy }
+            PrivateProfileStorage.conceal(generation: generation)
             await PrivateProfileMeetingStore.shared.finishProfileTransition()
             PrivateProfileStorage.clearStoreCaches()
             PrivateProfileObjectCache.removeAll()
+            if to != nil { try Task.checkCancellation() }
             try Self.prepareDirectory(next.rootDirectory)
             PrivateProfileStorage.select(next)
+            PrivateProfileStorage.closeAdmission()
             try await activateSources(next)
+            if to != nil { try Task.checkCancellation() }
             try PrivateProfileStorage.persistAccessMarker(next)
+            PrivateProfileStorage.select(next)
             isPrivateDataVisible = true; projectionRevision = UUID(); isTransitioning = false
         } catch {
             // No fallback to another account. Failed cleanup leaves private reads concealed
@@ -85,6 +104,13 @@ import Foundation
             try? PrivateProfileStorage.persistAccessMarker(PrivateProfileStorage.current)
             throw error
         }
+    }
+
+    private func persistHiddenMarker(generation: UUID) throws {
+        let profile = PrivateProfileStorage.current
+        try PrivateProfileStorage.persistAccessMarker(.init(id: profile.id, context: profile.context,
+            generation: generation, rootDirectory: profile.rootDirectory,
+            legacyRootDirectory: profile.legacyRootDirectory, isReadable: false))
     }
 
     private static func prepareDirectory(_ url: URL) throws {

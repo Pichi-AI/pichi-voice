@@ -35,11 +35,11 @@ final class RewriteModeService: ObservableObject {
         if ProcessInfo.processInfo.environment["FLUID_REWRITE_DIAGNOSTICS"] == "1" {
             return true
         }
-        return UserDefaults.standard.bool(forKey: "RewriteModeDiagnosticsEnabled")
+        return PrivateProfileDefaults.shared.bool(forKey: "RewriteModeDiagnosticsEnabled")
     }
 
     private var shouldTracePromptProcessing: Bool {
-        if let explicit = UserDefaults.standard.object(forKey: "RewriteModePromptTraceEnabled") as? Bool {
+        if let explicit = PrivateProfileDefaults.shared.object(forKey: "RewriteModePromptTraceEnabled") as? Bool {
             return explicit
         }
         // Default OFF to avoid logging prompt/context content in normal usage.

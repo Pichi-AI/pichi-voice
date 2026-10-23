@@ -28,7 +28,12 @@ import Foundation
             return UserDefaults(suiteName: suite)!
         }
         defer {
-            for suite in suites { UserDefaults.standard.removePersistentDomain(forName: suite) }
+            for suite in suites {
+                let defaults = UserDefaults(suiteName: suite)!
+                defaults.removePersistentDomain(forName: suite)
+                precondition(defaults.synchronize(), "Synthetic preference cleanup must reach disk")
+                precondition(defaults.persistentDomain(forName: suite)?.isEmpty != false)
+            }
             PrivateProfileStorage.select(original)
             PrivateProfileStorage.clearStoreCaches()
             PrivateProfileObjectCache.removeAll()
