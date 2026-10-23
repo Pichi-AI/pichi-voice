@@ -579,7 +579,7 @@ struct ContentView: View {
                 if let output = self.privateCaptureOutput, self.privateOutputOperations.isCurrent {
                     Task {
                         guard self.privateCaptureOutput?.id == output.id, output.isVisible else { return }
-                        await self.stopCaptureWithoutOutput()
+                        await self.stopCaptureWithoutOutputTask()?.value
                     }
                 }
                 self.cancelPrewarmDictationIfNeeded()
@@ -712,7 +712,7 @@ struct ContentView: View {
 
             if self.activeRecordingMode == .promptMode {
                 if self.asr.isRunning {
-                    Task { await self.stopCaptureWithoutOutput() }
+                    _ = self.stopCaptureWithoutOutputTask()
                 }
                 self.cancelPrewarmDictationIfNeeded()
                 self.clearActiveRecordingMode()
@@ -732,7 +732,7 @@ struct ContentView: View {
 
             if self.activeRecordingMode == .command {
                 if self.asr.isRunning {
-                    Task { await self.stopCaptureWithoutOutput() }
+                    _ = self.stopCaptureWithoutOutputTask()
                 }
                 self.cancelPrewarmDictationIfNeeded()
                 self.clearActiveRecordingMode()
@@ -752,7 +752,7 @@ struct ContentView: View {
 
             if self.activeRecordingMode == .edit {
                 if self.asr.isRunning {
-                    Task { await self.stopCaptureWithoutOutput() }
+                    _ = self.stopCaptureWithoutOutputTask()
                 }
                 self.cancelPrewarmDictationIfNeeded()
                 self.clearActiveRecordingMode()
@@ -3056,8 +3056,6 @@ struct ContentView: View {
         let privateOutput = self.privateCaptureOutput
         self.processingDictationLifecycleID = outputLifecycleID
         defer {
-            if let privateStopID { PrivateProfileService.shared.clearCaptureStopHandler(id: privateStopID) }
-            if self.privateCaptureStopID == privateStopID { self.privateCaptureStopID = nil }
             if self.processingDictationLifecycleID == outputLifecycleID {
                 self.processingDictationLifecycleID = nil
             }
@@ -3072,8 +3070,13 @@ struct ContentView: View {
         await DebugLogger.$pipelineID.withValue(pipelineID) {
             await self.processStoppedTranscription(route: route, pipelineID: pipelineID, toggleStopRequestedAt: toggleStopRequestedAt, privateOutput: privateOutput)
         }
+        // A busy summary may refuse processing before ASR stops. Keep the capture's local
+        // output permit and Stop callback until the actual recording has joined.
+        guard !self.asr.isRunningOrStarting else { return }
         await privateOutput?.finish()
         if self.privateCaptureOutput?.id == privateStopID { self.privateCaptureOutput = nil }
+        if self.privateCaptureStopID == privateStopID { self.privateCaptureStopID = nil }
+        if let privateStopID { PrivateProfileService.shared.clearCaptureStopHandler(id: privateStopID) }
     }
 
     // Keep the ordered dictation delivery path intact during integration.
@@ -4295,7 +4298,7 @@ struct ContentView: View {
         // Keep hotkey/recording state deterministic before applying output text.
         if self.asr.isRunning {
             DebugLogger.shared.info("Actions: stopping active recording before history action output", source: "ContentView")
-            await self.stopCaptureWithoutOutput()
+            await self.stopCaptureWithoutOutputTask()?.value
             guard isOutputValid() else { return }
             self.cancelPrewarmDictationIfNeeded()
         }
@@ -4385,7 +4388,7 @@ struct ContentView: View {
         // to behave like a stop instead of start).
         if self.asr.isRunning {
             DebugLogger.shared.info("Actions: stopping active recording before reprocess", source: "ContentView")
-            await self.stopCaptureWithoutOutput()
+            await self.stopCaptureWithoutOutputTask()?.value
             guard isOutputValid() else { return }
             self.cancelPrewarmDictationIfNeeded()
         }
@@ -4836,11 +4839,15 @@ struct ContentView: View {
         if let id { PrivateProfileService.shared.clearCaptureStopHandler(id: id) }
     }
 
-    private func stopCaptureWithoutOutput() async {
-        let output = self.privateCaptureOutput
-        let id = self.privateCaptureStopID
-        await self.asr.stopWithoutTranscription()
-        await self.finishCancelledCaptureOutput(output, id: id)
+    private func stopCaptureWithoutOutputTask() -> Task<Void, Never>? {
+        guard let output = self.privateCaptureOutput, let id = self.privateCaptureStopID,
+              output.id == id, output.isVisible else { return nil }
+        return Task { @MainActor in
+            guard self.privateCaptureStopID == id, self.privateCaptureOutput?.id == id,
+                  output.isVisible else { return }
+            await self.asr.stopWithoutTranscription()
+            await self.finishCancelledCaptureOutput(output, id: id)
+        }
     }
 
     private func presentExclusiveActivityBlockIfNeeded() -> Bool {
@@ -5325,8 +5332,9 @@ struct ContentView: View {
                 }
             } else {
                 let isOnboardingTryout = self.isOnboardingVoicePlaygroundStepActive
+                let stopTask = self.stopCaptureWithoutOutputTask()
                 Task {
-                    await self.stopCaptureWithoutOutput()
+                    await stopTask?.value
                     if isOnboardingTryout {
                         AnalyticsService.shared.recordOnboardingTryoutAttemptResult(outcome: .cancelled)
                     }
