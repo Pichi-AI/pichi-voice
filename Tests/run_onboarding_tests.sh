@@ -17,3 +17,10 @@ run_case OnboardingPolishPracticeTests Sources/Fluid/Services/OnboardingPolishPr
 run_case OnboardingDictationOutputPolicyTests Sources/Fluid/Services/OnboardingDictationOutputPolicy.swift
 run_case PrivateAIHardwareRecommendationTests Sources/Fluid/Services/PrivateAIHardwareRecommendation.swift
 run_case DesktopOnboardingNavigationTests Sources/Fluid/UI/DesktopOnboardingNavigation.swift
+xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
+    -module-cache-path "$task_test_dir/AccountModuleCache" \
+    Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
+    Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
+    Sources/Fluid/Account/*.swift Sources/Fluid/UI/DesktopAccountGuestContinuation.swift \
+    Tests/DesktopAccountGuestContinuationTests.swift -o "$task_test_dir/DesktopAccountGuestContinuationTests"
+"$task_test_dir/DesktopAccountGuestContinuationTests"

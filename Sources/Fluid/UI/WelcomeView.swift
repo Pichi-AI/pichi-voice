@@ -2337,19 +2337,19 @@ struct OnboardingFlowView: View {
 
     private func finishAccountStep() {
         guard !self.isAccountBusy else { return }
-        if self.accountSession.state == .reauthenticationRequired {
-            // "Continue as guest" is an explicit guest transition, including after a failed restore.
+        if self.accountSession.state != .signedIn {
+            // Also join a restore that still projects signedOut and retry any failed cleanup.
             self.isLeavingAccountAsGuest = true
             Task { @MainActor in
-                await self.accountSession.logout()
+                let generation = await DesktopAccountGuestContinuation.prepare(using: self.accountSession)
                 self.isLeavingAccountAsGuest = false
-                guard self.step == .account, self.accountSession.state == .signedOut,
-                      self.accountSession.context == nil,
-                      self.accountSession.presentationError == nil || self.accountSession.presentationError == .revocationUnavailable else { return }
+                guard self.step == .account, let generation,
+                      DesktopAccountGuestContinuation.isCurrent(generation, using: self.accountSession) else { return }
                 self.completeAccountStep(outcome: .skipped)
             }
         } else {
-            self.completeAccountStep(outcome: self.accountSession.state == .signedIn ? .completed : .skipped)
+            guard let context = self.accountSession.context, self.accountSession.isCurrent(context) else { return }
+            self.completeAccountStep(outcome: .completed)
         }
     }
 
@@ -2484,6 +2484,7 @@ private extension OnboardingFlowView {
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                         DesktopAccountView(account: self.accountSession, onActivityChanged: { self.isAccountActionInProgress = $0 })
+                            .disabled(self.isLeavingAccountAsGuest)
                             .padding(self.theme.metrics.spacing.lg)
                             .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg))
                             .frame(maxWidth: 560)
