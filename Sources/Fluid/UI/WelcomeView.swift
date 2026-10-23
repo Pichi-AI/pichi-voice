@@ -61,6 +61,7 @@ struct OnboardingFlowView: View {
     }
 
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var accountSession = AppServices.shared.accountSession
     @ObservedObject private var installations = SpeechModelInstallationSnapshot.shared
     @StateObject private var aiSetup = OnboardingAISetupController.live
 
@@ -105,6 +106,8 @@ struct OnboardingFlowView: View {
     @State private var languageSearchText = ""
     @FocusState private var isLanguageSearchFocused: Bool
     @State private var hasPlayedLandingWelcomeSound = false
+    @State private var isAccountActionInProgress = false
+    @State private var isLeavingAccountAsGuest = false
     @State private var landingGlowCenter = UnitPoint(x: 0.5, y: 0.18)
     @State private var lastLandingGlowLocation = CGPoint(x: -1000, y: -1000)
     private let landingGlowMovementThreshold: CGFloat = 24
@@ -144,6 +147,7 @@ struct OnboardingFlowView: View {
         case playground = 4
         case aiEnhancement = 5
         case meetingLocation = 6
+        case account = 7
 
         var analyticsStep: AnalyticsOnboardingStep {
             switch self {
@@ -154,6 +158,7 @@ struct OnboardingFlowView: View {
             case .playground: .playground
             case .aiEnhancement: .aiEnhancement
             case .meetingLocation: .meetingLocation
+            case .account: .account
             }
         }
 
@@ -173,6 +178,8 @@ struct OnboardingFlowView: View {
                 return AppBrand.text("Try FluidVoice")
             case .meetingLocation:
                 return "Meeting location"
+            case .account:
+                return PichiLocalization.text("account.onboarding.title", defaultValue: "Optional account")
             }
         }
 
@@ -192,20 +199,30 @@ struct OnboardingFlowView: View {
                 return "Use your dictation shortcut once before finishing setup."
             case .meetingLocation:
                 return "Optional: Add the meeting address using your location."
+            case .account:
+                return PichiLocalization.text("account.guest.explanation", defaultValue: "Sign-in is optional. You can record and export without an account.")
             }
         }
     }
 
     private var step: Step {
-        Step(rawValue: self.currentStep) ?? .voiceModel
+        Step(rawValue: DesktopOnboardingNavigation.resolvedStep(self.currentStep, includesAccount: self.includesAccountStep)) ?? .voiceModel
+    }
+
+    private var includesAccountStep: Bool {
+        self.accountSession.configuration != nil
+    }
+
+    private var isAccountBusy: Bool {
+        self.isAccountActionInProgress || self.isLeavingAccountAsGuest || self.accountSession.state == .signingIn
     }
 
     private var progressValue: Double {
-        Double(self.step.rawValue) / Double(Step.allCases.count - 1)
+        DesktopOnboardingNavigation.progress(at: self.step.rawValue, includesAccount: self.includesAccountStep, includesCurrent: false)
     }
 
     private var compactProgressValue: Double {
-        Double(self.step.rawValue + 1) / Double(Step.allCases.count)
+        DesktopOnboardingNavigation.progress(at: self.step.rawValue, includesAccount: self.includesAccountStep, includesCurrent: true)
     }
 
     private var popularOnboardingLanguages: [VoiceEngineLanguage] {
@@ -347,6 +364,8 @@ struct OnboardingFlowView: View {
             return self.isPlaygroundReady && !self.asr.isRunning && !self.isRecordingAnyShortcut
         case .meetingLocation:
             return true
+        case .account:
+            return !self.isAccountBusy
         }
     }
 
@@ -357,7 +376,10 @@ struct OnboardingFlowView: View {
         case .language:
             return "Continue"
         case .meetingLocation:
-            return "Finish Setup"
+            return self.includesAccountStep ? "Continue" : "Finish Setup"
+        case .account:
+            return self.accountSession.state == .signedIn ? PichiLocalization.text("Finish Setup")
+                : PichiLocalization.text("account.action.guest", defaultValue: "Continue as guest")
         default:
             return "Continue"
         }
@@ -527,6 +549,8 @@ struct OnboardingFlowView: View {
             self.playgroundStep
         case .meetingLocation:
             self.meetingLocationStep
+        case .account:
+            self.accountStep
         }
     }
 
@@ -892,7 +916,7 @@ struct OnboardingFlowView: View {
         canSkip: Bool = false,
         skipAction: (() -> Void)? = nil
     ) -> some View {
-        let canNavigateBack = !self.isModelPreparationInProgress && !self.asr.isRunning && !self.isRecordingAnyShortcut
+        let canNavigateBack = !self.isModelPreparationInProgress && !self.asr.isRunning && !self.isRecordingAnyShortcut && !self.isAccountBusy
 
         return HStack {
             self.cinematicFooterButton(
@@ -2265,14 +2289,15 @@ struct OnboardingFlowView: View {
     private func goBack() {
         self.activeShortcutRecordingTarget = nil
         self.shortcutRecordingMessage = nil
-        self.currentStep = max(0, self.currentStep - 1)
+        guard !self.isAccountBusy else { return }
+        self.currentStep = DesktopOnboardingNavigation.previous(before: self.currentStep, includesAccount: self.includesAccountStep)
     }
 
     private func goNext(outcome: AnalyticsOnboardingOutcome = .continued) {
         self.completeCurrentStep(outcome: outcome)
         self.activeShortcutRecordingTarget = nil
         self.shortcutRecordingMessage = nil
-        self.currentStep = min(Step.allCases.count - 1, self.currentStep + 1)
+        self.currentStep = DesktopOnboardingNavigation.next(after: self.currentStep, includesAccount: self.includesAccountStep)
     }
 
     private func handlePrimaryAction() {
@@ -2288,11 +2313,19 @@ struct OnboardingFlowView: View {
             self.finishLocationStep(outcome: .completed)
             return
         }
+        if self.step == .account {
+            self.finishAccountStep()
+            return
+        }
         if self.step == .aiEnhancement, !self.isAIReady { return }
         self.goNext()
     }
 
     private func finishLocationStep(outcome: AnalyticsOnboardingOutcome) {
+        if self.includesAccountStep {
+            self.goNext(outcome: outcome)
+            return
+        }
         let origin = self.settings.analyticsOnboardingOrigin
         self.finishOnboardingAtGettingStarted()
         self.completeCurrentStep(
@@ -2300,6 +2333,30 @@ struct OnboardingFlowView: View {
             origin: origin,
             completesFlow: self.settings.onboardingCompleted
         )
+    }
+
+    private func finishAccountStep() {
+        guard !self.isAccountBusy else { return }
+        if self.accountSession.state != .signedIn {
+            // Also join a restore that still projects signedOut and retry any failed cleanup.
+            self.isLeavingAccountAsGuest = true
+            Task { @MainActor in
+                let generation = await DesktopAccountGuestContinuation.prepare(using: self.accountSession)
+                self.isLeavingAccountAsGuest = false
+                guard self.step == .account, let generation,
+                      DesktopAccountGuestContinuation.isCurrent(generation, using: self.accountSession) else { return }
+                self.completeAccountStep(outcome: .skipped)
+            }
+        } else {
+            guard let context = self.accountSession.context, self.accountSession.isCurrent(context) else { return }
+            self.completeAccountStep(outcome: .completed)
+        }
+    }
+
+    private func completeAccountStep(outcome: AnalyticsOnboardingOutcome) {
+        let origin = self.settings.analyticsOnboardingOrigin
+        self.finishOnboardingAtGettingStarted()
+        self.completeCurrentStep(outcome: outcome, origin: origin, completesFlow: self.settings.onboardingCompleted)
     }
 
     private func completeCurrentStep(
@@ -2398,7 +2455,7 @@ private extension OnboardingFlowView {
                 }
 
                 self.cinematicFooter(
-                    continueTitle: "Finish Setup",
+                    continueTitle: self.primaryButtonTitle,
                     canContinue: self.canContinue,
                     continueAction: self.handlePrimaryAction,
                     skipTitle: "Not now",
@@ -2412,6 +2469,39 @@ private extension OnboardingFlowView {
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .accessibilityIdentifier("onboarding.meeting-location")
+    }
+
+    var accountStep: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                Color.clear.frame(height: FluidOnboardingLayout.progressReservedHeight)
+                OnboardingFittedContent(width: 760) {
+                    VStack(spacing: self.theme.metrics.spacing.lg) {
+                        FluidOnboardingCompactAppIconMark()
+                        Text(PichiLocalization.text("account.onboarding.title", defaultValue: "Optional account"))
+                            .font(self.theme.typography.title)
+                            .foregroundStyle(self.theme.palette.primaryText)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        DesktopAccountView(account: self.accountSession, publication: self.appServices.cloudPublication,
+                                           onActivityChanged: { self.isAccountActionInProgress = $0 })
+                            .disabled(self.isLeavingAccountAsGuest)
+                            .padding(self.theme.metrics.spacing.lg)
+                            .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg))
+                            .frame(maxWidth: 560)
+                    }
+                    .padding(.horizontal, self.theme.metrics.spacing.xxl)
+                    .padding(.vertical, self.theme.metrics.spacing.xl)
+                }
+                self.cinematicFooter(
+                    continueTitle: self.primaryButtonTitle,
+                    canContinue: self.canContinue,
+                    continueAction: self.handlePrimaryAction
+                )
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .accessibilityIdentifier("onboarding.account")
     }
 
 

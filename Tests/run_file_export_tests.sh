@@ -37,9 +37,12 @@ Path(sys.argv[1]).write_text('import Foundation\nimport SwiftUI\nimport UniformT
     + '@MainActor final class FileTranscriptionService {\n' + exports + '\n}\n'
     + 'struct FileTranscriptionView {\n' + format_type + '\n}\n'
     + document
+    + '@MainActor final class ExporterProbeProjection: ObservableObject {\n'
+    + '    @Published var showingExportDialog = false\n'
+    + '    @Published var exportDocument: TranscriptionDocument?\n'
+    + '    var isCurrent: Bool { true }\n}\n'
     + 'struct ExporterContractProbe: View {\n'
-    + '    @State private var showingExportDialog = false\n'
-    + '    @State private var exportDocument: TranscriptionDocument?\n'
+    + '    @StateObject private var privateProjection = ExporterProbeProjection()\n'
     + '    var body: some View { EmptyView()\n' + exporter + '\n    }\n}\n')
 PY
 xcrun swiftc -parse-as-library -swift-version 6 -module-cache-path "$task_test_dir/ModuleCache" \

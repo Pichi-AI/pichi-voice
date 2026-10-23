@@ -221,6 +221,12 @@ struct SettingsView: View {
             searchScrollRequest: self.searchScrollRequest
         ) {
             VStack(spacing: 16) {
+                if self.selectedSection == .general, self.appServices.accountSession.configuration != nil {
+                    ThemedCard(style: .standard) {
+                        DesktopAccountView(account: self.appServices.accountSession,
+                                           publication: self.appServices.cloudPublication)
+                    }
+                }
                 // App Settings Card
                 ThemedCard(style: .standard) {
                     VStack(alignment: .leading, spacing: 14) {

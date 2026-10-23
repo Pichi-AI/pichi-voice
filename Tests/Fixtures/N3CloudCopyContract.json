@@ -1,0 +1,16 @@
+{
+  "sourceCommit": "5d9cc80d8cd7ebe1414c78859a73b3168ccd821b",
+  "sourcePath": "Sources/Fluid/Localization/Localizable.xcstrings",
+  "sourceSHA256": "ef9ca56ba47da77103e87a895003b781c9349705a761fe0012d7eb22f4802ef7",
+  "scope": "Only the two canonical N3 entries explicitly approved through coordinator; test resource, not an application catalog delta.",
+  "strings": {
+    "cloud.status.retryScheduled": {
+      "en": "Retry at %@",
+      "ru": "Повторная попытка: %@"
+    },
+    "cloud.availability.ready": {
+      "en": "Cloud sync is ready.",
+      "ru": "Синхронизация с облаком готова."
+    }
+  }
+}
