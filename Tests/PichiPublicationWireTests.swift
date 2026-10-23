@@ -318,6 +318,7 @@ extension PichiPublicationConsentTests {
         _ = await (shutdownA, shutdownB)
         do { _ = try await http.perform(authorized); check(false, "Closed executor cannot reopen") }
         catch let error as PichiPublicationNetworkFailure { check(error == .shutdown, "Joined shutdown closes executor admission") }
+        checks += try await checkAssessmentOptions(fixtures: fixtures.deletingLastPathComponent().appendingPathComponent("PichiAssessmentOptionsV1"))
         return checks
     }
 }
