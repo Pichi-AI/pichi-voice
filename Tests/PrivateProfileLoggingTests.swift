@@ -16,6 +16,9 @@ import Foundation
         let logger = FileLogger.shared
         let oldURL = logger.currentLogFileURL()
         logger.appendSync(line: "synthetic-preserved-guest")
+        let exceptionHandler = NSGetUncaughtExceptionHandler()
+        try require(exceptionHandler != nil, "metadata-only-crash-handler-installed")
+        exceptionHandler?(NSException(name: .genericException, reason: "synthetic-private-exception-details", userInfo: nil))
         let gate = DispatchSemaphore(value: 0)
         DebugLogger.shared.logLazy { gate.wait(); return "synthetic-admitted-guest" }
         PrivateProfileStorage.conceal(generation: UUID())
@@ -26,6 +29,7 @@ import Foundation
         let first = try String(contentsOf: oldURL, encoding: .utf8)
         try require(first.contains("synthetic-preserved-guest") && first.contains("synthetic-admitted-guest"), "guest-queue-joined")
         try require(!first.contains("synthetic-concealed-denied"), "concealed-admission-denied")
+        try require(first.contains("details omitted") && !first.contains("synthetic-private-exception-details"), "crash-callback-never-emits-private-details")
         let context = AccountContext(identity: .init(issuer: "https://issuer.invalid", subject: "synthetic-a", internalUserID: "a"),
             organizationID: "org", workspaceID: "workspace", generation: UUID())
         let account = try PrivateProfileStorage.proposed(context: context, generation: UUID(), legacyRootDirectory: root)

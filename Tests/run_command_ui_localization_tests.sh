@@ -82,7 +82,10 @@ PY
 
 xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
     --output-directory "$task_bundle_dir/Contents/Resources" --language en --language ru
+python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift"
 xcrun swiftc -default-isolation MainActor -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
+    "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Tests/Support/StandaloneGuestProfileDefaults.swift \
     "$task_test_dir/CommandMessageModel.swift" "$task_test_dir/ChatModels.swift" \
     "$task_test_dir/CommandSessionProjection.swift" "$task_test_dir/ThemeEnvironment.swift" \
     Sources/Fluid/Localization/PichiLocalization.swift \

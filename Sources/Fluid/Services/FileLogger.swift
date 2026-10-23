@@ -280,12 +280,11 @@ final nonisolated class FileLogger: @unchecked Sendable {
         guard !Self.crashHandlersInstalled else { return }
         Self.crashHandlersInstalled = true
 
-        NSSetUncaughtExceptionHandler { exception in
-            let line = "[CRASH] Uncaught exception \(exception.name.rawValue): \(exception.reason ?? "Unknown reason")"
-            FileLogger.writeCrashLineDirect(line)
-            if !exception.callStackSymbols.isEmpty {
-                FileLogger.writeCrashLineDirect("[CRASH] Stack: \(exception.callStackSymbols.joined(separator: " | "))")
-            }
+        // A crash callback has no immutable request/profile admission. Its descriptor can
+        // change concurrently, so only fixed metadata belongs on this direct crash path.
+        // Exception reasons, names and stack symbols may contain another profile's data.
+        NSSetUncaughtExceptionHandler { _ in
+            FileLogger.writeCrashLineDirect("[CRASH] Uncaught Objective-C exception (details omitted)")
         }
 
         signal(SIGABRT, fileLoggerSignalHandler)
