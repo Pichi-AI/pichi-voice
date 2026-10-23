@@ -12,6 +12,7 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
     var updatesEnabled: Bool = false
     var expectedSigningTeam: String?
     var feedbackEndpoint: String?
+    var account: AccountConfiguration?
 
     static let unconfigured = BrandDistribution(formatVersion: 1)
 
@@ -38,6 +39,7 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
                 throw BrandProfile.ValidationError.invalid("Distribution asset names are invalid.")
             }
         }
+        try self.account?.validate()
         if let feedbackEndpoint { try BrandProfile.validateHTTPS(feedbackEndpoint) }
         if let expectedSigningTeam {
             guard expectedSigningTeam.range(of: "^[A-Z0-9]{10}$", options: .regularExpression) != nil else {
@@ -67,5 +69,33 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
         // Mobile updates belong to the signed App Store distribution.
         return false
         #endif
+    }
+}
+
+// Account trust is part of the signed distribution, never the portable appearance package.
+extension BrandDistribution {
+    nonisolated struct AccountConfiguration: Codable, Equatable, Sendable {
+        let issuer: URL
+        let apiBaseURL: URL
+        let clientID: String
+        let apiAudience: String
+        let bundleIdentifier: String
+
+        var redirectURI: URL { URL(string: bundleIdentifier + ":/oauth/callback")! }
+
+        func validate() throws {
+            for url in [issuer, apiBaseURL] {
+                try BrandProfile.validateHTTPS(url.absoluteString)
+                guard url.query == nil, url.fragment == nil, !url.path.contains(".."),
+                      !url.absoluteString.hasSuffix("/") else {
+                    throw BrandProfile.ValidationError.invalid("Invalid account endpoint.")
+                }
+            }
+            guard bundleIdentifier.range(of: "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*){2,}$", options: .regularExpression) != nil,
+                  bundleIdentifier.count <= 200,
+                  [clientID, apiAudience].allSatisfy({ !$0.isEmpty && $0.count <= 200 && $0.rangeOfCharacter(from: .controlCharacters) == nil }) else {
+                throw BrandProfile.ValidationError.invalid("Invalid account client configuration.")
+            }
+        }
     }
 }
