@@ -73,6 +73,8 @@ struct SettingsBackupPayload: Codable, Equatable {
     let showHistoryPerformanceMetrics: Bool?
     // Optional so backups created before the silence filter still decode.
     let skipSilentRecordingsEnabled: Bool?
+    // Optional so backups created before the Local API toggle still decode.
+    let localAPIEnabled: Bool?
     let enableAIStreaming: Bool
     let copyTranscriptionToClipboard: Bool
     let textInsertionMode: SettingsStore.TextInsertionMode

@@ -2016,6 +2016,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var localAPIEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.localAPIEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.localAPIEnabled)
+        }
+    }
+
     /// Set when the user copied the skill instructions for an agent FluidVoice cannot see (Cursor,
     /// Gemini and others). It keeps meetings shared after the Claude Code and Codex skills are removed,
     /// until the user stops it.
@@ -3515,6 +3523,7 @@ final class SettingsStore: ObservableObject {
             returnDictationToStartingField: self.returnDictationToStartingField,
             showHistoryPerformanceMetrics: self.showHistoryPerformanceMetrics,
             skipSilentRecordingsEnabled: self.skipSilentRecordingsEnabled,
+            localAPIEnabled: self.localAPIEnabled,
             enableAIStreaming: self.enableAIStreaming,
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
             textInsertionMode: self.textInsertionMode,
@@ -3682,6 +3691,9 @@ final class SettingsStore: ObservableObject {
         }
         if let skipSilentRecordingsEnabled = payload.skipSilentRecordingsEnabled {
             self.skipSilentRecordingsEnabled = skipSilentRecordingsEnabled
+        }
+        if let localAPIEnabled = payload.localAPIEnabled {
+            self.localAPIEnabled = localAPIEnabled
         }
         self.enableAIStreaming = payload.enableAIStreaming
         self.copyTranscriptionToClipboard = payload.copyTranscriptionToClipboard
