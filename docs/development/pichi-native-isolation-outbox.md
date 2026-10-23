@@ -1,8 +1,10 @@
-# Native account isolation and protected publication
+# Native private-profile isolation and outbox handoff
 
-Status: N2 inventory and interface proposal. Runtime integration is waiting for the coordinator-approved frozen N1 account implementation and W2 transport fixture. This document does not enable sign-in or cloud publication.
+Status: N2 private-profile isolation inventory. Runtime integration is waiting for the coordinator-approved frozen N1 account implementation. N5 (SSO 8) now owns consent, durable outbox, transport and status; the publication proposal below is handed off to that session. This document does not enable sign-in or cloud publication.
 
-Inputs: native baseline `59e5079066406ff2f2ecdec8c1c2395eaf69e052`, delivery plan and contract v1 at `85943ce799bc287097004f72feea7e318d443b97`. Contract changes must go through the coordinator. Source references below describe the native baseline.
+Inputs: native baseline `59e5079066406ff2f2ecdec8c1c2395eaf69e052`, revised delivery plan and contract v1 at `f3ea4b15160b92c095d9d83036e6a66e3be81c34`. The original complete inventory is preserved in commit `1c299fb894c65e163adbe2d1915b169c56588518`, with review corrections in `c27b970002fd78d1709e7e63bbbb418a64a79e49`. Contract changes must go through the coordinator. Source references below describe the native baseline.
+
+N2 owns only complete guest/account private-data isolation, preservation and joined profile transitions. Account UI readiness depends on N2. Cloud readiness is a separate N5 gate. N2 will not add a consent store, queue, retry worker, network transport or cloud-status runtime.
 
 ## Existing meeting boundary
 
@@ -52,7 +54,7 @@ There are 15 direct `MeetingSessionStore.shared` references in eight production 
 | `Sources/Fluid/Services/AppServices.swift:155` | Retains active summary controllers | Cancel and join former-profile summaries; remove retained source/document projections |
 | `Sources/FVServe/main.swift:35` | Standalone helper directly resolves legacy root, global sharing consent and custom prompt | Use an authorized profile boundary or fail closed in account mode; this path bypasses the application store injection |
 
-Auth failure and logout must not stop local capture or erase meetings. If recording remains active across logout, it continues writing only to its frozen profile. Its transcript and controls must not be exposed as the next account's recording. Presentation needs an explicit policy/handoff from N1/N3/N4; clearing the storage list alone is insufficient.
+For the first increment, reject explicit account/workspace switches while capture admission, capture or finalization is active. Keep the admitted recording's local owner until its operation finishes, then permit the selected account/workspace transition. Token expiry and refresh failure only change authentication state; they must not stop recording or erase meetings. Logout must still clear credentials offline through N1 and hide account-private projections while preserving the admitted local recording and its frozen writes. Its exact joined handoff must be bound to N1's frozen hooks, not silently treated as an ordinary switch veto. N1 owns account selection and calls the N2 transition gate before mutating its selected context. Clearing the storage list alone is insufficient.
 
 ## Private profile inventory
 
@@ -74,7 +76,7 @@ The profile inventory includes raw text, prompts, audio evidence, credentials an
 | `Sources/Fluid/Persistence/SettingsStore.swift:17` | Shared store accepts defaults; provider/dictionary/prompt caches | Separate private preferences from an explicit device-setting allowlist |
 | `Sources/Fluid/Persistence/SettingsStoreKeys.swift:184` | `DictationPromptProfiles`, `AppPromptBindings`, `CustomDictationPrompt`, prompt overrides, `SavedProviders` | Private profile scope; imported prompts and destinations cannot become another account's defaults |
 | `Sources/Fluid/Persistence/SettingsStore.swift:44` | Fixed `KeychainService.shared` despite injected defaults | Defaults injection alone cannot isolate provider credentials |
-| `Sources/Fluid/Persistence/KeychainService.swift:55` | Cached provider-key aggregate under `<bundle>.provider-api-keys` / `providerApiKeys` | Separate N1 auth credentials; keep existing provider keys guest-private unless explicit device-wide policy is approved |
+| `Sources/Fluid/Persistence/KeychainService.swift:55` | Cached provider-key aggregate under `<bundle>.provider-api-keys` / `providerApiKeys` | Separate N1 auth credentials; existing provider keys stay guest-private without automatic account copying |
 | `Sources/Fluid/Persistence/SettingsStore+PromptRouting.swift:14` | Direct `.standard` reads/writes | Route through the selected profile's injected defaults |
 | `Sources/Fluid/Persistence/SettingsStore+CommandMode.swift:10` | Direct `.standard` reads/writes | Same profile boundary |
 | `Sources/Fluid/Services/ASRService.swift:7703` | Static compiled private dictionary patterns | Invalidate cached patterns at profile change using the existing invalidation hook at line 7777 |
@@ -95,12 +97,71 @@ The profile inventory includes raw text, prompts, audio evidence, credentials an
 | `Sources/Fluid/Services/AppSearch/AppSearchService.swift:288` | Global history/settings/vocabulary reads, visible results | Rebind all sources together and clear old results via `stop()` at line 149 |
 | `Sources/Fluid/Services/LocalAPI/HistoryAPIController.swift:34` | Shared raw/processed text and app/window metadata | Freeze authorized request profile; reject stale awaited completion |
 | `Sources/Fluid/Services/LocalAPI/DictionaryAPIController.swift:125` | Shared replacement dictionary; custom vocabulary at line 166 | Profile-specific reads/writes with the same request boundary |
+| `Sources/Fluid/Services/ModelTemperatureSupport.swift:10` | `ModelTemperatureSupportByEndpointV2`; stored keys contain endpoint/model strings | Use existing defaults injection; these are private provider caches, not public catalog metadata |
+| `Sources/Fluid/Analytics/AnalyticsIdentityStore.swift:7` | Standard defaults install ID and first-open timestamp | Exclude from initial shared preference allowlist; avoid inheriting guest analytics identity/consent into account profiles |
+| `Sources/Fluid/Analytics/AnalyticsService.swift:553` | `<namespace>/Analytics/analytics-v2.sqlite3` and retained flush/database state | Profile-bound queue/database and joined flush lifecycle; preserve old local evidence |
+| `Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift:66` | Optional cache `MeetingTimelineTrace/*.private.jsonl` includes transcript/word payloads | Freeze private diagnostic root per admitted attempt and join writer before transition |
+| `Sources/Fluid/Services/FileLogger.swift:104` | Private diagnostic log and rotated backup, serial writes plus crash descriptor | Profile-specific log export/root and joined supported writer/descriptor handoff; preserve legacy guest logs |
 
 No dedicated reversible PII recovery-map store was found. `Sources/Fluid/Services/Privacy/PichiTranscriptPrivacyService.swift:115` explicitly defines results without recovery maps. Public model artifacts remain under their existing shared resource ownership; they are not copied or deleted on account switch.
 
 Existing injection points cover most filesystem/defaults stores. Extend the missing constructors and direct bypasses only where necessary. A second hierarchy of profile-specific inference engines, resource stores or pipelines is unnecessary.
 
-## Shared sync/status proposal for N3 and N4
+### Private preference bypasses and device allowlist
+
+All unclassified user-authored text, endpoints, imported paths, prompts, dictionaries, sharing/privacy/diagnostic consents, discovered model lists and verification fingerprints remain private. Existing settings migrations run against that profile's defaults only. Recreating desktop settings also runs login-item refresh, so this device operation must stay in its existing installation-owned boundary rather than becoming an account migration side effect.
+
+| Additional bypass | Required treatment |
+| --- | --- |
+| `Sources/Fluid/Persistence/SettingsStore+FluidIntelligenceInvitation.swift:6` | Route private invitation/usage state through injected defaults, including explicit standard-defaults argument at line 20 |
+| `Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel+ProviderSetup.swift:29` | Scope added provider IDs and clear cached provider/credential/prompt drafts on transition |
+| `Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel.swift:184` | Replace persistent selections and discovered/verified connection state; current credential observer alone is insufficient |
+| `Sources/Fluid/UI/AISettingsView+AdvancedSettings.swift:1697` | Remove global provider-selection fallback |
+| `Sources/Fluid/Services/DictionaryExperimentalMatcher.swift:6` | Profile-specific flags/generation; cancel and join learning before exposing a different source |
+| `Sources/Fluid/UI/DictionaryMatcherExperimentSettings.swift:5` | Give dictionary AppStorage consumers the private defaults suite; also wizard, inspection, correction overlay and custom dictionary views |
+| `Sources/Fluid/UI/MeetingSummaryView.swift:22` | Scope summary workflow AppStorage and source/configuration caches |
+| `Sources/Fluid/Services/LocalAPI/LocalAPIModels.swift:12` | Local API enablement is private permission; never inherit guest enablement into an account |
+| `Sources/Fluid/Services/S1MiniIntegrationProvider.swift:50` | Private selected model and imported path use profile defaults; validated public installed artifact files remain shared |
+| `Sources/Fluid/Services/PrivateAIProvider.swift:452` | Remove global private backend-preference lookup |
+| `Sources/Fluid/Services/OnboardingAISetupController+Live.swift:39` | Scope private setup choices and join an admitted public-artifact operation before transition |
+| `Sources/Fluid/Services/TypingService.swift:89` | Scope text-sensitive diagnostic consent; admitted writes retain their original log owner |
+| `Sources/Fluid/Services/RewriteModeService.swift:38` | Scope diagnostics/prompt-trace consent and retained private prompt context |
+| `Sources/Fluid/Persistence/SettingsStoreSpeechModels.swift:942` | Imported artifact directories and arbitrary local paths remain private; do not copy them as public model metadata |
+| `Sources/Mobile/MobileSetupModels.swift:5` | Preserve existing guest setup/privacy choices without inheriting them into the next account |
+
+Proposed initial shared device preference allowlist, pending concrete implementation review:
+
+- Presentation: `PichiInterfaceLanguage`, `AppleLanguages`, `ThemePreference`, `AccentColorOption`.
+- OS installation behavior: `ShowInDock`, `IntendedDockVisibility`, `ShowMainWindowAtLoginLaunch`, `LaunchAtStartup`, `LaunchAtStartupCompatibilityFallback`.
+- Updater state: `AutoUpdateCheckEnabled`, `ShowUpdatePopups`, `UpdatePopupPreferenceRevision`, `BetaReleasesEnabled`, `UpdateChannelPreferenceRevision`, `LastUpdateCheckDate`, `UpdatePromptSnoozedUntil`, `SnoozedUpdateVersion`.
+- Physical routing: `PreferredInputDeviceUID`, `PreferredOutputDeviceUID`, `MicrophonePriority`, `SuppressedMicrophoneUIDs`, `MicrophoneSelectionMode`, `AppOnlyMicrophoneSelectionMigrationVersion`. These values contain device identifiers and are shared only as an explicit device-routing policy.
+
+Overlay geometry and imported visual-brand preferences are not blanket-authorized by a generic cosmetic category. Their exact keys/root need review before entering the allowlist. Packaged appearance and trusted distribution identity remain installation resources. Analytics identity/consent, Local API enablement, private model paths, provider caches and all transcript/history state are excluded.
+
+## Profile source and transition boundary
+
+N1 remains the only account manager. After the approved N1 freeze, N2 will publish a small concrete API using N1's verified immutable context and operation generation. The profile boundary must provide:
+
+- An immutable current-profile source set for meeting storage, private preferences, provider credentials, OwnerVoice, dictionaries, histories and derived indexes. Existing store URL/defaults injection remains the implementation boundary.
+- A transition admission check that rejects active capture admission/capture/finalization, backup/restore or other unjoined private-data operations. The old profile stays current if admission fails.
+- Joined transition preparation that closes private operation admission, drains admitted writes, cancels and joins private readers/training/summary/export tasks, closes search/database handles and clears every retained presentation projection.
+- Atomic selection of the new private source set only after old-profile work has joined. A failed transition preserves the prior source set and its data rather than partially switching stores.
+- An owner-bound persisted meeting source for N5, reloaded from the terminal durable snapshot under the original immutable profile/context. N5 owns consent capture and export eligibility; it must not infer or reassign profile ownership.
+- A readiness result for N3/N4 that separates safe local account use from N5 cloud readiness. Missing trusted configuration retains the existing guest behavior.
+
+The runtime types and exact hook signatures wait for N1's approved implementation. No duplicate account/context types are introduced in this preparatory document.
+
+N1 announced source freeze `f6b0e48a` while actual target builds were still in progress. Read-only inspection found that `AccountSessionService.selectWorkspace` changes the generation and persists the new grant before calling `AccountSessionLifecycle.transition`. A busy-recording rejection there invokes failed-admission cleanup and signs out. Proposed dependency correction: provide an account/profile transition admission hook before mutating generation or credentials, so refusal preserves the prior selected account/workspace. This is a proposal for coordinator/N1 review, not a local account-core variant. Logout remains a distinct credential-clearing operation that must preserve an admitted local recording even offline.
+
+### Guest preservation and explicitly shared resources
+
+Legacy private files, preferences and provider credentials remain guest-private. Account profiles begin with empty private namespaces, not copied guest dictionaries, prompts, destinations, audio, histories or credentials. Preserve legacy data in place or independently verify any required copies before atomically recording a guest migration; do not delete originals merely because an index was written.
+
+Public installed model artifacts may retain their current resource owners and shared paths. Shared device preferences require an explicit key allowlist reviewed against their actual consumers. Do not reuse the full standard defaults domain, all provider settings or arbitrary model/API configuration as shared account state.
+
+## Outbox handoff to N5
+
+The following service/state-machine proposal is historical input for N5. It does not describe N2 implementation ownership or a frozen Swift API. N5 must bind the N1/N2 frozen interfaces before production runtime and publish its own shared status API for N3/N4.
 
 The concrete Swift API will bind the approved N1 identity/context/generation types rather than defining a duplicate account model. Proposed single shared service: `PichiCloudPublicationService`, observable on the main actor, with durable work on an actor. Platform views consume a sanitized snapshot and never receive credentials.
 
@@ -133,27 +194,32 @@ Proposed record statuses distinguish `localOnly`, `withheld(reason)`, `queued`, 
 
 ## Required dependency handoffs
 
-- N1 frozen commit and concrete verified identity/context/generation types; selected-workspace observation; owner-bound API credential operation; joined pre-switch/logout hooks; a safe admission snapshot that cannot change across an await; composition/Xcode ownership release.
-- W2 frozen fixture/base and exact request/receipt/error codes for POST imports, GET status and PATCH assessment; accepted-but-response-lost fixture; approved local test endpoint/credential ownership if live integration is admitted.
-- N3/N4 lifecycle policy for hiding former-profile active capture and clearing view-local selections, drafts, share files and summary projections without terminating recording.
-- Coordinator review of this interface proposal before dependent UI binds to it.
-- Coordinator classification of inference provider credentials and user-authored model/API configuration. The safe proposed default is guest-private legacy values plus empty account-private namespaces, with no automatic copy into the first signed-in account. Public model files and explicitly allowlisted device preferences remain shared.
+- N1 frozen commit and concrete verified identity/context/generation types; selected-workspace observation; joined pre-switch/logout hooks; a safe admission snapshot that cannot change across an await; composition/Xcode ownership release. Offline logout must clear credentials and projections while preserving an admitted recording's frozen local owner; account/workspace switch admission may be blocked while that operation remains active.
+- N3/N4 consume the shared transition gate and clear view-local selections, drafts, share files and summary projections as part of the joined transition. Explicit account/workspace switching remains blocked during active capture/finalization; token expiry does not terminate recording. Logout follows N1's credential-clearing contract rather than becoming a generic switch veto.
+- Coordinator review of the concrete N2 profile-source/transition API after N1 freeze, before dependent UI or N5 binds to it.
+- Revised P0 classifies legacy inference provider credentials and private dictionaries as guest-private with no automatic copying. Only explicitly allowlisted public-model/device settings remain shared.
+- N5 separately owns the W2 frozen fixture/base, request/receipt/error codes, accepted-but-response-lost fixture and live transport admission. These are no longer N2 prerequisites.
 
-## Verification plan and current evidence
+## N2 verification and N5 handoff cases
 
 Use the existing production-code standalone probes and native integration targets, with synthetic transcript fixtures. No model download or real recording is required.
 
 | Case | Required result |
 | --- | --- |
 | Legacy guest, sign in A, logout, sign in B | Guest bytes preserved; no history/profile/key exposure and no automatic enqueue |
-| A opt-in, record, logout while offline, B | A item remains A-owned; B default consent false; no delivery to B |
-| Opt-in after old completed records | Old records remain local-only |
-| Restart before send / after server acceptance with lost response | Durable same payload/key; same authorized receipt; no second history source |
-| Logout during admitted transfer | Transfer cancelled and joined; late response cannot mutate B or retarget source |
-| Missing/redaction/incomplete/unknown-completeness/oversize source | Visible stable withholding reason; no transport |
-| Corrupt envelope, digest mismatch or foreign owner | Fail closed and preserve evidence; no transport |
-| 401/403/409/422/429/5xx and network failure | Correct durable pause/failure/backoff; no unbounded validation retry |
-| Needs participant / criteria | Acceptance visible separately; authorized resolution with no employee guess |
+| N2: account/workspace switch during capture admission/capture/finalization | Transition rejected, old profile remains selected, capture completes normally |
+| N2: offline logout during capture | Credentials and private projections clear; recording continues with frozen owner, no data exposure or retarget into guest/B |
+| N2: token expiry during recording | Authentication status changes, recording and local source ownership remain unchanged |
+| N2: backup/restore and private learning across transition | No retarget; admitted work drains or cancels/joins before source replacement |
+| N2: A and B dictionaries/OwnerVoice/provider credentials/search/history | Every read/write and retained projection uses the authorized private source set |
+| N5: A opt-in, record, logout while offline, B | A item remains A-owned; B default consent false; no delivery to B |
+| N5: opt-in after old completed records | Old records remain local-only |
+| N5: restart before send / after server acceptance with lost response | Durable same payload/key; same authorized receipt; no second history source |
+| N5: logout during admitted transfer | Transfer cancelled and joined; late response cannot mutate B or retarget source |
+| N5: missing/redaction/incomplete/unknown-completeness/oversize source | Visible stable withholding reason; no transport |
+| N5: corrupt envelope, digest mismatch or foreign owner | Fail closed and preserve evidence; no transport |
+| N5: 401/403/409/422/429/5xx and network failure | Correct durable pause/failure/backoff; no unbounded validation retry |
+| N5: needs participant / criteria | Acceptance visible separately; authorized resolution with no employee guess |
 | Stale history/playback/summary/export/Local API await | Former-profile result cannot be presented after switch |
 
 Baseline probe on the unchanged native revision: `bash Tests/run_meeting_session_store_checkpoint_tests.sh` passed 931 checks using the production persisted codecs, store, reading projection and protected exporter with synthetic data. It compiled with the existing Swift 5-mode `ExportedTranscript: Encodable` isolation warning at exporter line 1028. This is baseline evidence only; it does not validate account isolation, outbox transport, native targets or live server behavior.
@@ -164,4 +230,4 @@ Portable repository checks passed with `bash scripts/dev/check.sh`. Independent 
 
 Extend the existing `Tests/TranscriptSensitiveDictionaryTests.swift:70` isolated-defaults/admitted-redactor probe, `Tests/FluidDictationIntegrationTests/MeetingOwnerVoiceProfileTests.swift:127` temporary-store and stale-draft cases, `Tests/FluidDictationIntegrationTests/DictationE2ETests.swift:3559` injected pronunciation/learning fixture, and `Tests/FluidDictationIntegrationTests/SearchIndexTests.swift:409` isolated writer/defaults/index fixture. No generic test framework is needed.
 
-N2 owns worktree `/Users/sabbah/.codex/worktrees/553d/pichi-voice`, branch `codex/pichi-sso-native-sync-20261022`. No app, UI, simulator, model, physical device, microphone or transport service has been started. The worktree remains active for the named dependency handoffs and implementation.
+N2 owns worktree `/Users/sabbah/.codex/worktrees/553d/pichi-voice`, branch `codex/pichi-sso-native-sync-20261022`. No app, UI, simulator, model, physical device, microphone or transport service has been started. The worktree remains active for the approved N1 freeze, N2 private-profile implementation and its required verification. N5 owns the queue/network implementation in its own worktree.
