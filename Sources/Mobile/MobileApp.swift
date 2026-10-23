@@ -191,7 +191,6 @@ final class AppServices: ObservableObject {
     func shutdownForTermination() async {
         await idlePreparation.shutdown()
         await meetingSessionCoordinator.shutdownForTermination()
-        await recordingActivity?.shutdown()
         await asr.shutdownForTermination()
     }
 

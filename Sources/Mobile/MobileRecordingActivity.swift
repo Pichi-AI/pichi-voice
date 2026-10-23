@@ -5,7 +5,7 @@ import SwiftUI
 import UIKit
 
 /// Recording-to-Live-Activity decisions without ActivityKit, so the start-once, end-on-exit and
-/// stale-cleanup rules are testable without the system activity service.
+/// stale-date rules are testable without the system activity service.
 nonisolated struct MobileRecordingActivityPlan: Equatable, Sendable {
     nonisolated struct Recording: Equatable, Sendable {
         let sessionID: MeetingSessionID
@@ -17,6 +17,14 @@ nonisolated struct MobileRecordingActivityPlan: Equatable, Sendable {
         case start(Recording)
         case end(MeetingSessionID)
     }
+
+    /// A crash or memory kill ends the process without ending its activity, and nothing can update
+    /// it again. The system then marks it stale within this interval, and the extension stops
+    /// claiming a live recording instead of running the timer for the system's eight-hour limit.
+    static let staleInterval: TimeInterval = 300
+    /// While recording, the app runs in the background audio mode and moves the stale date forward
+    /// this often, so one delayed or missed refresh still keeps a live recording fresh.
+    static let refreshInterval: TimeInterval = 120
 
     /// The recording this process asked the system to show, whether or not the request was granted.
     /// A refused or unavailable request is therefore not retried for the same session.
@@ -34,6 +42,10 @@ nonisolated struct MobileRecordingActivityPlan: Equatable, Sendable {
         }
     }
 
+    static func staleDate(refreshedAt date: Date) -> Date {
+        date.addingTimeInterval(self.staleInterval)
+    }
+
     mutating func update(_ desired: Recording?) -> [Action] {
         guard desired?.sessionID != self.sessionID else { return [] }
         var actions = self.sessionID.map { [Action.end($0)] } ?? []
@@ -41,16 +53,12 @@ nonisolated struct MobileRecordingActivityPlan: Equatable, Sendable {
         if let desired { actions.append(.start(desired)) }
         return actions
     }
-
-    /// An activity this process did not request belongs to an earlier process, whose recording
-    /// cannot still be running.
-    static func staleActivityIDs(existing: [String], owned: String?) -> [String] {
-        existing.filter { $0 != owned }
-    }
 }
 
 /// Owns at most one recording Live Activity for this process and is the only ActivityKit caller.
 /// AppServices feeds it coordinator state; the coordinator and processing pipeline stay unaware of it.
+/// The process exits through `willTerminate` or, without notice, leaves a stale activity that the
+/// next launch ends.
 @MainActor
 final class MobileRecordingActivityOwner {
     typealias Attributes = MobileRecordingActivityAttributes
@@ -58,16 +66,16 @@ final class MobileRecordingActivityOwner {
     private let settings: SettingsStore
     private var plan = MobileRecordingActivityPlan()
     private var activity: Activity<Attributes>?
+    private var refresh: Task<Void, Never>?
     private var pendingEnd: Task<Void, Never>?
     private var observation: AnyCancellable?
     private var terminationObserver: NSObjectProtocol?
 
     init(settings: SettingsStore? = nil) {
         self.settings = settings ?? SettingsStore.shared
-        // Read before this process can request its own activity, so only earlier ones are ended.
-        let existing = Activity<Attributes>.activities
-        let stale = Set(MobileRecordingActivityPlan.staleActivityIDs(existing: existing.map(\.id), owned: nil))
-        self.enqueueEnd(existing.filter { stale.contains($0.id) })
+        // Every activity present before this process requests one belongs to an earlier process,
+        // whose recording cannot still be running.
+        self.enqueueEnd(Activity<Attributes>.activities)
         self.terminationObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willTerminateNotification, object: nil, queue: .main
         ) { _ in Self.endAllBeforeExit() }
@@ -92,43 +100,67 @@ final class MobileRecordingActivityOwner {
         }
     }
 
-    /// Joined cleanup for an orderly shutdown.
-    func shutdown() async {
-        self.observation = nil
-        self.apply(nil)
-        await self.pendingEnd?.value
-    }
-
     #if DEBUG
     /// Review only: the production request path with a synthetic session and no microphone.
-    func showReviewSample(elapsed: TimeInterval = 754) {
+    /// `PICHI_UI_LIVE_ACTIVITY_REVIEW_ELAPSED` sets the elapsed seconds, and
+    /// `PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE=1` requests an already stale activity without refreshes.
+    func showReviewSample() {
+        let environment = ProcessInfo.processInfo.environment
+        let elapsed = environment["PICHI_UI_LIVE_ACTIVITY_REVIEW_ELAPSED"].flatMap(TimeInterval.init) ?? 754
+        let sample = MobileRecordingActivityPlan.Recording(sessionID: UUID(),
+            startedAt: Date().addingTimeInterval(-elapsed), mode: .inRoom)
         self.observation = nil
-        self.apply(.init(sessionID: UUID(), startedAt: Date().addingTimeInterval(-elapsed), mode: .inRoom))
+        for action in self.plan.update(sample) {
+            guard case let .start(recording) = action else { continue }
+            self.start(recording, staleDate: environment["PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE"] == "1"
+                ? Date().addingTimeInterval(-1) : nil)
+        }
     }
     #endif
 
-    private func start(_ recording: MobileRecordingActivityPlan.Recording) {
+    /// A nil stale date starts a live activity whose stale date the refresh keeps ahead.
+    private func start(_ recording: MobileRecordingActivityPlan.Recording, staleDate: Date? = nil) {
         // Live Activities are optional: iPad, a disabled setting or a refusal never affect recording.
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let state = Attributes.ContentState(startedAt: recording.startedAt)
         do {
-            self.activity = try Activity.request(attributes: self.presentation(for: recording),
-                content: ActivityContent(state: .init(startedAt: recording.startedAt), staleDate: nil), pushType: nil)
+            let activity = try Activity.request(attributes: self.presentation(for: recording),
+                content: ActivityContent(state: state, staleDate: staleDate ?? MobileRecordingActivityPlan.staleDate(refreshedAt: Date())),
+                pushType: nil)
+            self.activity = activity
+            if staleDate == nil { self.keepFresh(activity, state: state) }
         } catch {
             DebugLogger.shared.warning("Recording Live Activity was not started: \(error)", source: "LiveActivity")
+        }
+    }
+
+    private func keepFresh(_ activity: Activity<Attributes>, state: Attributes.ContentState) {
+        self.refresh = Task { [weak self] in
+            while true {
+                do { try await Task.sleep(for: .seconds(MobileRecordingActivityPlan.refreshInterval)) } catch { return }
+                guard let self, self.activity?.id == activity.id else { return }
+                await activity.update(ActivityContent(state: state,
+                    staleDate: MobileRecordingActivityPlan.staleDate(refreshedAt: Date())))
+            }
         }
     }
 
     private func end(_ sessionID: MeetingSessionID) {
         guard let activity = self.activity, activity.attributes.sessionID == sessionID else { return }
         self.activity = nil
-        self.enqueueEnd([activity])
+        let refresh = self.refresh
+        refresh?.cancel()
+        self.refresh = nil
+        self.enqueueEnd([activity], after: refresh)
     }
 
-    private func enqueueEnd(_ activities: [Activity<Attributes>]) {
+    /// Ends run in order, after any refresh update already in flight for the same activity.
+    private func enqueueEnd(_ activities: [Activity<Attributes>], after refresh: Task<Void, Never>? = nil) {
         guard !activities.isEmpty else { return }
         let previous = self.pendingEnd
         self.pendingEnd = Task {
             await previous?.value
+            await refresh?.value
             // A recording indicator must not outlive the recording on the Lock Screen.
             for activity in activities { await activity.end(nil, dismissalPolicy: .immediate) }
         }
@@ -156,7 +188,8 @@ final class MobileRecordingActivityOwner {
         return Attributes(
             sessionID: recording.sessionID,
             productName: AppBrand.meetingName,
-            recordingLabel: PichiLocalization.text("Recording"),
+            liveStatus: PichiLocalization.text("Meeting recording in progress"),
+            interruptedStatus: PichiLocalization.text("Meeting recording was interrupted"),
             meetingKind: recording.mode == .inRoom ? PichiLocalization.text("In-room meeting") : PichiLocalization.text("Online call"),
             accentLight: self.swatch(light),
             accentDark: self.swatch(dark),

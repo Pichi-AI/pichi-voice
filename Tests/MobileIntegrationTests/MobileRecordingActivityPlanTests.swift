@@ -78,9 +78,16 @@ final class MobileRecordingActivityPlanTests: XCTestCase {
         XCTAssertEqual(plan.sessionID, second.id)
     }
 
-    func testActivitiesFromAnEarlierProcessAreStale() {
-        XCTAssertEqual(MobileRecordingActivityPlan.staleActivityIDs(existing: ["earlier", "older"], owned: nil), ["earlier", "older"])
-        XCTAssertEqual(MobileRecordingActivityPlan.staleActivityIDs(existing: ["earlier", "current"], owned: "current"), ["earlier"])
-        XCTAssertEqual(MobileRecordingActivityPlan.staleActivityIDs(existing: [], owned: "current"), [])
+    func testRefreshKeepsALiveRecordingAheadOfItsStaleDate() {
+        let refreshedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let staleDate = MobileRecordingActivityPlan.staleDate(refreshedAt: refreshedAt)
+        // A process that stops refreshing loses the live presentation within minutes, not hours.
+        XCTAssertEqual(staleDate.timeIntervalSince(refreshedAt), 300)
+        XCTAssertLessThan(MobileRecordingActivityPlan.staleInterval, 8 * 60 * 60)
+        // The next refresh, and even the one after a missed refresh, lands before the stale date.
+        let interval = MobileRecordingActivityPlan.refreshInterval
+        XCTAssertGreaterThan(interval, 0)
+        XCTAssertLessThan(refreshedAt.addingTimeInterval(2 * interval), staleDate)
+        XCTAssertGreaterThan(MobileRecordingActivityPlan.staleDate(refreshedAt: refreshedAt.addingTimeInterval(interval)), staleDate)
     }
 }

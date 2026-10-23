@@ -27,7 +27,11 @@ nonisolated struct MobileRecordingActivityAttributes: ActivityAttributes, Sendab
 
     var sessionID: UUID
     var productName: String
-    var recordingLabel: String
+    /// Shown while the app keeps the activity fresh.
+    var liveStatus: String
+    /// Shown once the system marks the activity stale: the process stopped refreshing it, so the
+    /// recording cannot still be live.
+    var interruptedStatus: String
     var meetingKind: String
     var accentLight: Swatch
     var accentDark: Swatch
