@@ -268,7 +268,9 @@ struct MobileMeetingRoot: View {
         .onChange(of: destination) { _, _ in playback.stop(); presentationLoader.cancel(); participantEdit = nil }
         .onChange(of: historyPath) { _, _ in playback.stop(); presentationLoader.cancel(); participantEdit = nil }
         .onDisappear {
-            privatePresentation.invalidate()
+            // A PDF full-screen cover can temporarily hide its presenting root.
+            // Retire pending work without dismissing a valid same-profile payload.
+            privatePresentation.retirePendingWork()
             updateRecordingScreenAwake(isVisible: false)
         }
         .onChange(of: settings.meetingAudioRetentionPolicy) { _, _ in
@@ -1095,6 +1097,7 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
     let publications: MobilePrivatePublicationTasks
     var presentationPickerAdmission: MobilePrivatePublicationTasks.Admission?
     private var cleanupTask: Task<Void, Never>?
+    private var clearAfterJoin = false
     private var observers = Set<AnyCancellable>()
 
     init(profiles: PrivateProfileService = .shared) {
@@ -1123,13 +1126,20 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
     }
 
     func invalidate() {
-        publications.cancel(); presentationLoader.cancel()
+        clearAfterJoin = true
         clear()
+        retirePendingWork()
+    }
+
+    func retirePendingWork() {
+        publications.cancel(); presentationLoader.cancel()
+        copiedSessionID = nil
         guard cleanupTask == nil else { return }
         cleanupTask = Task { @MainActor in
             await self.publications.cancelAndJoin()
             await self.presentationLoader.waitUntilFinished()
-            self.clear()
+            if self.clearAfterJoin { self.clear() }
+            self.clearAfterJoin = false
             self.cleanupTask = nil
             self.publications.resume()
         }
