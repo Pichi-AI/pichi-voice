@@ -3708,12 +3708,15 @@ struct ContentView: View {
     private func makeAIProcessingFeedback(
         lifecycleID: UInt64
     ) -> (statusTask: Task<Void, Never>, streamPreview: DictationAIStreamPreviewBuffer) {
+        // Queued preview/status work keeps the source owner that admitted it.
+        let privateOperations = self.privateOutputOperations
         // Fast local cleanup should finish before transient SwiftUI work can queue
         // ahead of its result. Slow providers still receive visible status feedback.
         let statusTask = scheduleDeferredMainActorOperation(
             afterNanoseconds: Self.aiProcessingStatusDelayNanoseconds
         ) {
-            guard self.overlayLifecycleID == lifecycleID, self.cancelledOutputLifecycleID != lifecycleID else {
+            guard privateOperations.isCurrent,
+                  self.overlayLifecycleID == lifecycleID, self.cancelledOutputLifecycleID != lifecycleID else {
                 self.appBench("processing_ui_skipped status=Refining reason=stale_lifecycle")
                 return
             }
@@ -3724,7 +3727,8 @@ struct ContentView: View {
             self.appBench("processing_ui_requested status=Refining trigger=delayed_status")
         }
         let streamPreview = DictationAIStreamPreviewBuffer { text in
-            guard self.overlayLifecycleID == lifecycleID, self.cancelledOutputLifecycleID != lifecycleID else { return }
+            guard privateOperations.isCurrent,
+                  self.overlayLifecycleID == lifecycleID, self.cancelledOutputLifecycleID != lifecycleID else { return }
             NotchOverlayManager.shared.updateTranscriptionText(text)
         }
         return (statusTask, streamPreview)
@@ -3733,6 +3737,8 @@ struct ContentView: View {
     private func prepareOverlayForASRStop(
         shouldHideOverlayOnStop: Bool, lifecycleID: UInt64
     ) -> (didRequestHide: Bool, onFinalTranscriptionStarted: (@MainActor () -> Void)?) {
+        let privateOperations = self.privateOutputOperations
+        guard privateOperations.isCurrent else { return (true, nil) }
         if shouldHideOverlayOnStop {
             DebugLogger.shared.debug("Hiding dictation overlay at stop path", source: "ContentView")
             self.hideOverlayAsync(reason: "stop_path")
@@ -3753,7 +3759,8 @@ struct ContentView: View {
         self.menuBarManager.reserveProcessingOverlay()
         self.appBench("processing_ui_reserved trigger=warm_final_asr")
         let onFinalTranscriptionStarted: @MainActor () -> Void = {
-            guard self.overlayLifecycleID == lifecycleID, self.cancelledOutputLifecycleID != lifecycleID else { return }
+            guard privateOperations.isCurrent,
+                  self.overlayLifecycleID == lifecycleID, self.cancelledOutputLifecycleID != lifecycleID else { return }
             self.menuBarManager.flushDeferredStoppedRecordingState()
             self.appBench("processing_ui_request status=Transcribing trigger=final_executor")
             self.menuBarManager.setProcessing(true)
