@@ -14,6 +14,8 @@ private actor MemoryCredentials: AccountCredentialStoring {
     func setClearFailure(_ value: Bool) { failClear = value }
 }
 private actor FakeTransport: AccountTransporting {
+    var blockAuthorization = false
+    var authorizationGate: CheckedContinuation<Void, Never>?
     var refreshes = 0
     var refreshFailure: AccountError?
     var refreshExpiry = Date().addingTimeInterval(3600)
@@ -25,8 +27,9 @@ private actor FakeTransport: AccountTransporting {
     var exchangeGate: CheckedContinuation<Void, Never>?
     var initialExpiry = Date().addingTimeInterval(-1)
     var snapshot = fixtureSnapshot()
-    func authorizationURL(state: String, nonce: String, challenge: String) -> URL {
-        URL(string: "https://identity.example/auth?state=\(state)&nonce=\(nonce)&code_challenge=\(challenge)")!
+    func authorizationURL(state: String, nonce: String, challenge: String) async -> URL {
+        if blockAuthorization { await withCheckedContinuation { authorizationGate = $0 } }
+        return URL(string: "https://identity.example/auth?state=\(state)&nonce=\(nonce)&code_challenge=\(challenge)")!
     }
     func exchange(code: String, verifier: String, nonce: String) async -> AccountTokenResponse {
         if blockExchange { await withCheckedContinuation { exchangeGate = $0 } }
@@ -41,6 +44,9 @@ private actor FakeTransport: AccountTransporting {
     func account(accessToken: String) throws -> AccountSnapshot { if failAccount { throw AccountError.networkUnavailable }; return snapshot }
     func setAccountFailure(_ value: Bool) { failAccount = value }
     func revoke(refreshToken: String) { revocations.append(refreshToken) }
+    var isAuthorizationWaiting: Bool { authorizationGate != nil }
+    func holdAuthorization() { blockAuthorization = true }
+    func releaseAuthorization() { blockAuthorization = false; authorizationGate?.resume(); authorizationGate = nil }
     func holdRefresh() { blockRefresh = true }
     func setRefreshExpiry(_ value: Date) { refreshExpiry = value }
     func setRefreshFailure(_ value: AccountError?) { refreshFailure = value }
@@ -72,10 +78,16 @@ private actor FixtureHTTP: AccountHTTPRequesting {
 @MainActor private final class FakeBrowser: AccountBrowserAuthenticating {
     var wrongState = false
     var requests = 0
+    var explicitRequests: [Bool] = []
+    var authorizationURLs: [URL] = []
     func authenticate(url: URL, callbackScheme: String) async throws -> URL {
-        requests += 1
+        requests += 1; authorizationURLs.append(url)
         let state = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!.first { $0.name == "state" }!.value!
         return URL(string: callbackScheme + ":/oauth/callback?code=synthetic-code&state=" + (wrongState ? "wrong" : state))!
+    }
+    func authenticate(url: URL, callbackScheme: String, requiresExplicitIdentity: Bool) async throws -> URL {
+        explicitRequests.append(requiresExplicitIdentity)
+        return try await authenticate(url: url, callbackScheme: callbackScheme)
     }
     func cancel() {}
 }
@@ -165,6 +177,8 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         try restorationMarkerTest()
         try await ambiguousRefreshRestartTest(configuration)
         await shutdownDuringRestorationTest(configuration)
+        await operationKindAfterLogoutTest(configuration)
+        await browserPolicyAndSwitchTest(configuration)
         try await workspaceRefreshOwnershipTest(configuration)
         let failedCredentials = MemoryCredentials(); await failedCredentials.rejectSaves()
         let failedBrowser = FakeBrowser(), failedTransport = FakeTransport(), failedLifecycle = Lifecycle()
@@ -298,6 +312,46 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         await shutdown.value; await restore.value
         expect(await credentials.load()?.refreshToken == "rotated-refresh", "termination preserves restoration rotation")
         expect(policy.isAllowed, "joined restoration remains restartable")
+    }
+    @MainActor static func operationKindAfterLogoutTest(_ configuration: AccountConfiguration) async {
+        let transport = FakeTransport(), credentials = MemoryCredentials(), browser = FakeBrowser()
+        let seeded = AccountSessionService(configuration: configuration, browser: FakeBrowser(), transport: FakeTransport(), credentials: credentials, lifecycle: Lifecycle())
+        await seeded.signIn(); await seeded.shutdown()
+        let service = AccountSessionService(configuration: configuration, browser: browser, transport: transport, credentials: credentials, lifecycle: Lifecycle())
+        await transport.holdRefresh()
+        let restore = Task { await service.restore() }
+        await until { await transport.isRefreshWaiting }
+        let prior = service.generation
+        let logout = Task { await service.logout() }
+        await until { service.generation != prior }
+        await transport.releaseRefresh(); await logout.value; await restore.value
+        await transport.holdAuthorization()
+        let signIn = Task { await service.signIn() }
+        await until { await transport.isAuthorizationWaiting }
+        let shutdown = Task { await service.shutdown() }
+        await Task.yield(); await transport.releaseAuthorization()
+        await shutdown.value; await signIn.value
+        expect(browser.requests == 0, "old restoration kind cannot open browser after shutdown")
+        expect(await credentials.load() == nil, "cancelled post-logout admission persists no grant")
+    }
+    @MainActor static func browserPolicyAndSwitchTest(_ configuration: AccountConfiguration) async {
+        expect(AccountBrowserSessionPolicy.sharedDevice.prefersEphemeralSession(requiresExplicitIdentity: false), "shared-device default ephemeral")
+        expect(!AccountBrowserSessionPolicy.personalDevice.prefersEphemeralSession(requiresExplicitIdentity: false), "personal composition permits browser reuse")
+        expect(AccountBrowserSessionPolicy.personalDevice.prefersEphemeralSession(requiresExplicitIdentity: true), "explicit switch requests ephemeral browser")
+        let credentials = MemoryCredentials(), browser = FakeBrowser(), transport = FakeTransport()
+        let service = AccountSessionService(configuration: configuration, browser: browser, transport: transport, credentials: credentials, lifecycle: Lifecycle())
+        await service.signIn(); await service.switchPerson()
+        expect(browser.explicitRequests == [false, true], "switch-person intent reaches browser")
+        let query = URLComponents(url: browser.authorizationURLs.last!, resolvingAgainstBaseURL: false)!.queryItems!
+        expect(query.filter { $0.name == "prompt" }.map(\.value) == ["login"], "switch has exactly one forced-login prompt")
+        expect(query.contains { $0.name == "state" } && query.contains { $0.name == "nonce" } && query.contains { $0.name == "code_challenge" }, "switch preserves authorization attempt")
+        expect(service.state == .signedOut && service.presentationError == .previousAccountReturned, "prior identity cannot silently reappear during person switch")
+        expect(await credentials.load() == nil, "refused previous identity keeps guest credentials empty")
+        await service.signIn(); await credentials.setClearFailure(true)
+        let requestCount = browser.requests
+        await service.switchPerson()
+        expect(browser.requests == requestCount && !service.isSignInAvailable, "cleanup failure blocks switch-person browser")
+        await credentials.setClearFailure(false); await service.logout()
     }
     @MainActor static func workspaceRefreshOwnershipTest(_ configuration: AccountConfiguration) async throws {
         // Exercise both scheduler resumptions repeatedly using production task ownership.

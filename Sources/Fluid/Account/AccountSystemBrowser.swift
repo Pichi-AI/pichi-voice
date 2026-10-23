@@ -6,15 +6,22 @@ import AppKit
 import UIKit
 #endif
 
-/// The system authentication browser owns cookies. Ephemeral sessions prevent accidental use of
-/// a previous person's browser session. No embedded web view or global corporate logout.
+/// The system browser owns cookies. Shared devices default to ephemeral sessions. Trusted
+/// personal-device composition can reuse the browser session; explicit switching requests a fresh one.
 @MainActor final class AccountSystemBrowser: NSObject, AccountBrowserAuthenticating, ASWebAuthenticationPresentationContextProviding {
+    private let policy: AccountBrowserSessionPolicy
     private var session: ASWebAuthenticationSession?
     private var continuation: CheckedContinuation<URL, Error>?
     private var sessionID = UUID()
     private var anchor: ASPresentationAnchor?
 
+    init(policy: AccountBrowserSessionPolicy = .sharedDevice) { self.policy = policy; super.init() }
+
     func authenticate(url: URL, callbackScheme: String) async throws -> URL {
+        try await authenticate(url: url, callbackScheme: callbackScheme, requiresExplicitIdentity: false)
+    }
+    func authenticate(url: URL, callbackScheme: String, requiresExplicitIdentity: Bool) async throws -> URL {
+        let ephemeral = policy.prefersEphemeralSession(requiresExplicitIdentity: requiresExplicitIdentity)
         guard session == nil else { throw AccountError.busy }
         #if os(macOS)
         anchor = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow
@@ -35,7 +42,7 @@ import UIKit
                     }
                 }
                 operation.presentationContextProvider = self
-                operation.prefersEphemeralWebBrowserSession = true
+                operation.prefersEphemeralWebBrowserSession = ephemeral
                 session = operation
                 if !operation.start() { finish(.failure(AccountError.invalidState)) }
             }
