@@ -102,18 +102,20 @@ final class MobileRecordingActivityOwner {
 
     #if DEBUG
     /// Review only: the production request path with a synthetic session and no microphone.
-    /// `PICHI_UI_LIVE_ACTIVITY_REVIEW_ELAPSED` sets the elapsed seconds, and
-    /// `PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE=1` requests an already stale activity without refreshes.
+    /// `PICHI_UI_LIVE_ACTIVITY_REVIEW_ELAPSED` sets the elapsed seconds.
+    /// `PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE_AFTER` stops refreshes and lets the shown activity become
+    /// stale after that many seconds, as after a crash; the system does not present an activity that
+    /// is already stale when requested.
     func showReviewSample() {
         let environment = ProcessInfo.processInfo.environment
         let elapsed = environment["PICHI_UI_LIVE_ACTIVITY_REVIEW_ELAPSED"].flatMap(TimeInterval.init) ?? 754
+        let staleAfter = environment["PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE_AFTER"].flatMap(TimeInterval.init)
         let sample = MobileRecordingActivityPlan.Recording(sessionID: UUID(),
             startedAt: Date().addingTimeInterval(-elapsed), mode: .inRoom)
         self.observation = nil
         for action in self.plan.update(sample) {
             guard case let .start(recording) = action else { continue }
-            self.start(recording, staleDate: environment["PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE"] == "1"
-                ? Date().addingTimeInterval(-1) : nil)
+            self.start(recording, staleDate: staleAfter.map { Date().addingTimeInterval($0) })
         }
     }
     #endif

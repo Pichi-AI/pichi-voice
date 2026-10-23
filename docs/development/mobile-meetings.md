@@ -102,7 +102,7 @@ flowchart TB
 - Расширение `PichiVoiceMobileActivity` собирается из `Sources/MobileActivity`. Общий тип `MobileRecordingActivityAttributes` компилируется в приложение через `shared-sources.txt`. Приложение передаёт уже локализованный текст из String Catalog, имя из `AppBrand`, accent для светлой и тёмной темы и дизайн шрифта общих ролей. У расширения нет своего каталога, настроек или brand package; знак берётся из packaged `markAsset`, для импортированного оформления используется символ `waveform`.
 - Без поддержки или при выключенных Live Activities, включая iPad, запись идёт как раньше.
 - Генератор проекта создаёт target расширения, встраивает его в приложение, добавляет `NSSupportsLiveActivities` и берёт версии расширения из `Sources/Mobile/Info.plist`. Bundle ID расширения равен `$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity`. Для собственной подписи менять `PICHI_MOBILE_BUNDLE_IDENTIFIER`, а не `PRODUCT_BUNDLE_IDENTIFIER`: последний из командной строки применяется к обоим targets и ломает проверку встроенного расширения.
-- В DEBUG `PICHI_UI_LIVE_ACTIVITY_REVIEW=1` запускает настоящий запрос activity с синтетической сессией без микрофона и модели. `PICHI_UI_LIVE_ACTIVITY_REVIEW_ELAPSED` задаёт прошедшие секунды, `PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE=1` запрашивает уже устаревшую activity без обновлений.
+- В DEBUG `PICHI_UI_LIVE_ACTIVITY_REVIEW=1` запускает настоящий запрос activity с синтетической сессией без микрофона и модели. `PICHI_UI_LIVE_ACTIVITY_REVIEW_ELAPSED` задаёт прошедшие секунды, `PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE_AFTER` отключает обновления, и показанная activity устаревает через заданное число секунд, как после crash. Уже устаревшую при запросе activity система не показывает.
 
 ## Аудио до появления текста
 
