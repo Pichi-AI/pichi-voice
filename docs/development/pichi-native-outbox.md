@@ -1,12 +1,16 @@
 # Native protected publication outbox
 
-Status: N5 source-admission implementation and dependency handoff. Account/profile runtime
-wiring and transport remain gated on frozen N1/N2 APIs and the verified W2 wire fixture.
+Status: N5 source-admission and scoped-consent implementation with dependency handoff.
+Account/profile runtime wiring and transport remain gated on final N1/N2 APIs and the verified W2 wire fixture.
 This document does not enable cloud publication or sign-in.
 
 Inputs: native baseline `59e5079066406ff2f2ecdec8c1c2395eaf69e052`, contract and delivery
 plan at `f3ea4b15160b92c095d9d83036e6a66e3be81c34`, N2 inventory at
 `1c299fb894c65e163adbe2d1915b169c56588518`. N2's inventory is a proposal, not a runtime API.
+N1 source API `f6b0e48a0a8af5aa82926d61bb0e5d3a639c3d46` is merged as an explicit source
+dependency. The coordinator released its domain types for development, with a known
+refresh/workspace task-retirement race assigned to N1. The corrected N1 revision and final
+native/runtime gates remain pending. No duplicate account or token manager is introduced.
 
 ## Implemented source gate
 
@@ -41,6 +45,48 @@ usable for partial sources. Cloud withholding does not change a local recording 
 An absent end time would make duration depend on the current clock. A localized default
 title, later edit or rename can also change a new export's bytes. The outbox must keep the
 first admitted bytes rather than rerunning the exporter on retry.
+
+## Implemented scoped consent store
+
+`PichiPublicationConsentStore` is an actor with `automaticPublicationEnabled(for:)` and
+`setAutomaticPublicationEnabled(_:for:)`. Both consume the existing N1 `AccountContext`.
+Its constructor requires an injected directory and optional trusted `AccountConfiguration`.
+N2 must supply a dedicated existing private directory; this actor never creates or selects a
+profile, installs a lifecycle participant, reads a default path or enumerates recordings.
+
+Consent is keyed by N1's issuer/subject/internal user ID, organization/workspace and the
+entire trusted account configuration, including API, client, audience and bundle identity.
+The filename is a SHA-256 of sorted encoded scope data. The record repeats the exact scope
+and supported schema. A process-local generation is deliberately excluded from durable keys.
+The same verified owner/workspace can recover its setting after relaunch, while another
+account, workspace or distribution starts off.
+
+Missing trusted configuration, no selected workspace, missing root or absent record reads as
+off. Invalid existing storage or corrupt consent throws a stable
+`PichiPublicationConsentFailure`; callers must show unavailable consent and keep automatic
+publication off. A failed read is never permission to publish. Writes preserve corrupt
+evidence instead of silently replacing it. There is no in-memory consent cache.
+
+The shared operation must authorize the frozen N1 context before using this storage API.
+This value store itself does not establish a current grant or recording-time admission.
+It does not mutate any previous capture policy or automatically enqueue historical sources.
+
+Records are capped at 16,384 bytes, scope encodings at 8,192 bytes and individual remote
+identifiers at 512 UTF-8 bytes. Directory and record opens use no-follow descriptors, private
+permissions and bounded reads. Nonregular, multiply linked and world/group-readable records
+fail closed. Writes use an exclusive 0600 temporary file, file sync, same-directory rename,
+directory sync and exact typed readback. iOS temporary files receive existing file protection
+before text is written. N2 owns the directory's protection and backup policy.
+
+`bash Tests/run_publication_consent_tests.sh` compiles the actual N1 domain/brand types and
+consent actor in Swift 6, with no account service, browser, Keychain, models or network.
+The first run passed 55 synthetic checks for scoped defaults/persistence, replacement,
+cancellation, oversized/truncated/foreign/versioned records, permissions, symlinks, hard
+links, FIFO rejection and interrupted temporary files. Recreating an actor and generation
+simulates storage recovery; this is not a native application relaunch or logout test.
+Both the N1 account probe and N5 consent probe are explicitly registered as Bash without
+UI access in the existing standalone runner. The registry assertions cover 67 probes:
+49 sh, 10 Bash and 8 Python. This includes the account probe added by the N1 dependency.
 
 ## Planned durable state machine
 
@@ -130,7 +176,7 @@ profile manager is supplied by N5.
 
 | Owner | Exact handoff required before dependent implementation |
 | --- | --- |
-| N1 | Commit containing verified immutable identity/context/generation; current workspace observation; owner-bound authorized API operation; joined pre-switch/logout hook; trusted API configuration; composition and Xcode membership handoff |
+| N1 | Source types are available at `f6b0e48`; corrected final commit, native builds, joined-operation gates and composition/Xcode ownership handoff remain required |
 | N2 | Commit containing immutable capture owner/profile binding and recording-time publication admission seam; persisted post-terminal reload; private profile outbox root; joined transition registration; history authorization |
 | W2 | Commit and verified synthetic multipart request, 202 acceptance, identical 200 retry, all six analysis codes, GET/PATCH schema and exact sanitized error codes |
 | W2 | Response-lost replay fixture; original POST replay after assessment PATCH; PATCH concurrency/conflict semantics; authorized participant/criteria discovery or UI path; empty/no-speech source validation; Retry-After behavior |
@@ -150,10 +196,14 @@ native-target build, account-isolation test, model-quality check or live transpo
 
 The source-gate candidate passed 969 checks in that probe. The compiler reported the existing
 Swift 5-mode isolation warning for `ExportedTranscript: Encodable` at exporter line 1028.
+That result belongs to `3c2fd6e4`; the complete compilation input of that probe is unchanged
+by the N1 source merge and consent-store addition. It is reused evidence, not a fresh run
+of the account or consent code. Consent has its separate Swift 6 probe described above.
 
 N5 owns `/Users/sabbah/.codex/worktrees/2448/pichi-voice`, branch
 `codex/pichi-sso-native-outbox-20261022`. Focused compiler outputs belong only under this
 worktree's `.build/meeting-session-store-tests` and are disposable after evidence is saved.
+The separate consent probe owns only `.build/publication-consent-tests`.
 No speech models, UI, simulators, devices, microphone/audio routes or server were started.
 Keep this worktree for the named unfinished dependency integration. Native builds require
 coordinator admission and private DerivedData/SourcePackages.
