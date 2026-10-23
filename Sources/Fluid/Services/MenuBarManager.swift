@@ -169,10 +169,16 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             }
             .store(in: &self.cancellables)
 
-        NotificationCenter.default.addObserver(forName: .fluidPasteNotLanded, object: nil, queue: .main) { [weak self] note in
-            guard let transcript = note.userInfo?["transcript"] as? String else { return }
-            Task { @MainActor [weak self] in self?.showPasteNotLandedFailure(transcript: transcript) }
-        }
+        NotificationCenter.default.publisher(for: .fluidPasteNotLanded)
+            .sink { [weak self] note in
+                guard let transcript = note.userInfo?["transcript"] as? String,
+                      let profile = note.userInfo?["privateProfile"] as? PrivateProfileSnapshot else { return }
+                Task { @MainActor [weak self] in
+                    guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
+                    self?.showPasteNotLandedFailure(transcript: transcript, profile: profile)
+                }
+            }
+            .store(in: &self.cancellables)
 
         // Subscribe to recording state changes
         asrService.$isRunning
@@ -554,8 +560,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     /// A verified non-landing paste re-presents the overlay in its failure
     /// state so the transcript can be copied.
-    func showPasteNotLandedFailure(transcript: String) {
-        guard !self.overlayVisible, !self.isProcessingActive, self.asrService?.isRunning != true else { return }
+    func showPasteNotLandedFailure(transcript: String, profile: PrivateProfileSnapshot) {
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              !self.overlayVisible, !self.isProcessingActive, self.asrService?.isRunning != true else { return }
         DeliveryFailureOverlayController.shared.show(kind: .pasteNotLanded, transcript: transcript)
     }
 

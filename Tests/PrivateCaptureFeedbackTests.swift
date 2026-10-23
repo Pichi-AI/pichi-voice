@@ -99,6 +99,7 @@
         await fresh.privateOutputOperations.retireAndJoin()
         try await checkMenuFeedback(profileA: profileA, profileB: profileB)
         try await checkDiscoveryAdmission(profileA: profileA, profileB: profileB)
+        try await checkPasteVerification(profileA: profileA, profileB: profileB)
         print("Private capture feedback: \(checks) actual-buffer and callback checks passed")
     }
 
@@ -238,6 +239,53 @@
         catch { check(error is CancellationError && MeetingCaptureSourceCatalog.microphoneReads == reads,
                       "The shared service refuses concealed discovery before reading any capture sources") }
     }
+
+    @MainActor private static func checkPasteVerification(profileA: PrivateProfileSnapshot, profileB: PrivateProfileSnapshot) async throws {
+        PrivateProfileStorage.select(profileA)
+        let manager = MenuBarFeedbackProbe(), typing = TypingService()
+        var notifications: [Notification] = []
+        let observer = NotificationCenter.default.publisher(for: .fluidPasteNotLanded).sink { notifications.append($0) }
+        defer { observer.cancel() }
+        let gate = PasteVerificationGate()
+        PasteVerifier.gate = gate
+        let before = PasteVerifier.Snapshot(pid: 123, summary: "SECRET A verifier metadata")
+        let logs = DebugLogger.shared.information.count
+        let held = typing.verifyPasteLanded("SECRET A held paste", before: before, profile: profileA, isOutputValid: { true })!
+        await gate.waitUntilEntered()
+        PrivateProfileStorage.conceal(generation: UUID())
+        PrivateProfileStorage.select(profileB)
+        await gate.open()
+        await held.value
+        await drainMenuQueue()
+        check(notifications.isEmpty && DebugLogger.shared.information.count == logs,
+              "A held paste verifier posts and logs no private A feedback after B becomes readable")
+        check(DeliveryFailureOverlayController.shared.cards.isEmpty, "Held A verification cannot present a failure card under B")
+
+        // A has already posted its local notification, but the real menu handler's Task is queued.
+        PrivateProfileStorage.select(profileA)
+        NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil,
+            userInfo: ["transcript": "SECRET A queued notification", "privateProfile": profileA])
+        check(notifications.count == 1, "The original A notification is delivered synchronously before its queued menu action")
+        PrivateProfileStorage.conceal(generation: UUID())
+        PrivateProfileStorage.select(profileB)
+        await drainMenuQueue()
+        check(DeliveryFailureOverlayController.shared.cards.isEmpty, "A queued paste notification cannot present private A text under B")
+        manager.showPasteNotLandedFailure(transcript: "SECRET A direct stale card", profile: profileA)
+        check(DeliveryFailureOverlayController.shared.cards.isEmpty, "The concrete failure presentation also refuses a stale original profile")
+
+        PasteVerifier.gate = nil
+        let valid = typing.verifyPasteLanded("valid B paste", before: before, profile: profileB, isOutputValid: { true })!
+        await valid.value
+        await drainMenuQueue()
+        check(notifications.last?.userInfo?["privateProfile"] as? PrivateProfileSnapshot == profileB,
+              "Successful verifier feedback carries its exact original profile snapshot locally")
+        check(DeliveryFailureOverlayController.shared.cards.count == 1
+              && DeliveryFailureOverlayController.shared.cards[0].profile == profileB
+              && DeliveryFailureOverlayController.shared.cards[0].text == "valid B paste",
+              "Current B verification preserves the existing failure card behavior")
+        let suppressed = typing.verifyPasteLanded("dismissed B output", before: before, profile: profileB, isOutputValid: { false })
+        check(suppressed == nil, "The original caller's output-validity callback can suppress verification admission")
+    }
 }
 
 @MainActor final class MenuStartGate {
@@ -250,4 +298,20 @@
 private enum MenuStartError: LocalizedError {
     case failed(String)
     var errorDescription: String? { switch self { case let .failed(message): return message } }
+}
+
+actor PasteVerificationGate {
+    private var entered = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+    func hold() async {
+        entered = true
+        for waiter in entryWaiters { waiter.resume() }
+        entryWaiters.removeAll()
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+    func waitUntilEntered() async {
+        if !entered { await withCheckedContinuation { entryWaiters.append($0) } }
+    }
+    func open() { releaseWaiter?.resume(); releaseWaiter = nil }
 }

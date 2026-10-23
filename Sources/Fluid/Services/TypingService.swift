@@ -465,6 +465,11 @@ final class TypingService {
         requiredFocusTarget: CapturedFocusTarget? = nil,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
+        let profile = PrivateProfileStorage.current
+        let callerIsOutputValid = isOutputValid
+        let isOutputValid: @MainActor () -> Bool = {
+            callerIsOutputValid() && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork
+        }
         guard isOutputValid() else { return .cancelled }
         let requestedAt = ProcessInfo.processInfo.systemUptime
         var closeTrace = OverlayCloseTrace("typing.delivery")
@@ -599,7 +604,7 @@ final class TypingService {
         if verifiesLanding, SettingsStore.shared.showPasteCheckAlerts,
            result == .commandPosted, deliveryPath != .direct, let verificationBefore
         {
-            self.verifyPasteLanded(text, before: verificationBefore)
+            self.verifyPasteLanded(text, before: verificationBefore, profile: profile, isOutputValid: isOutputValid)
         }
         // The caller starts correction tracking after completing delivery UI.
         return result
@@ -729,10 +734,14 @@ final class TypingService {
         )
     }
 
-    /// Off-main read-back after a paste. Logs every verdict; only a certain
+    /// Off-main read-back after a paste. Logs readable-owner verdicts; only a certain
     /// `notLanded` reaches the UI.
-    private func verifyPasteLanded(_ text: String, before: PasteVerifier.Snapshot) {
-        Task.detached(priority: .utility) {
+    @MainActor @discardableResult
+    private func verifyPasteLanded(_ text: String, before: PasteVerifier.Snapshot,
+                                   profile: PrivateProfileSnapshot,
+                                   isOutputValid: @escaping @MainActor () -> Bool) -> Task<Void, Never>? {
+        guard isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return nil }
+        return Task.detached(priority: .utility) {
             let startedAt = ProcessInfo.processInfo.systemUptime
             var verdict = await PasteVerifier.verify(before: before, pastedText: text)
             if case .notLanded = verdict, PasteVerifier.userActedAfterPaste(
@@ -742,14 +751,17 @@ final class TypingService {
                 verdict = .unknown(reason: "user_input_after_paste")
             }
             let app = NSRunningApplication(processIdentifier: before.pid)?.bundleIdentifier ?? "pid\(before.pid)"
-            DebugLogger.shared.info(
-                "PASTE_VERIFY \(verdict.logDescription) app=\(app) before[\(before.summary)] " +
-                    "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
-                source: "TypingService"
-            )
-            guard case .notLanded = verdict else { return }
+            let completedVerdict = verdict
             await MainActor.run {
-                NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil, userInfo: ["transcript": text])
+                guard isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
+                DebugLogger.shared.info(
+                    "PASTE_VERIFY \(completedVerdict.logDescription) app=\(app) before[\(before.summary)] " +
+                        "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
+                    source: "TypingService"
+                )
+                guard case .notLanded = completedVerdict else { return }
+                NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil,
+                    userInfo: ["transcript": text, "privateProfile": profile])
             }
         }
     }

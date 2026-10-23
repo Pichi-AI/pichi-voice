@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--unguarded-menu", choices=["preview", "meeting", "conceal", "start-error", "queued-start"],
                         help="Negative control that removes one menu source-owner or conceal fence")
     parser.add_argument("--unguarded-discovery", action="store_true", help="Negative control for the actual held discovery/start path")
+    parser.add_argument("--unguarded-verifier", choices=["post", "presentation"], help="Negative control for retained paste feedback")
     args = parser.parse_args()
     source_path = "Sources/Fluid/ContentView.swift"
     content = (subprocess.check_output(["git", "show", f"{args.baseline_ref}:{source_path}"], cwd=ROOT, text=True)
@@ -64,6 +65,21 @@ def main():
     assert "MainActor.assumeIsolated" in observer and "Task {" not in observer and ".receive(on:" not in observer
     spoken_send = declaration((ROOT / source_path).read_text(), "    private func handleSpokenSendPartialTranscription(")
     assert spoken_send.index("self.privateOutputOperations.isCurrent") < spoken_send.index("self.spokenSendArming.update")
+    typing = (ROOT / "Sources/Fluid/Services/TypingService.swift").read_text()
+    verifier = declaration(typing, "    private func verifyPasteLanded(").replace("private func", "func", 1)
+    paste_observer_start = menu.index("        NotificationCenter.default.publisher(for: .fluidPasteNotLanded)")
+    paste_observer_end = menu.index("        // Subscribe to recording state changes", paste_observer_start)
+    paste_observer = menu[paste_observer_start:paste_observer_end]
+    paste_presentation = declaration(menu, "    func showPasteNotLandedFailure(")
+    delivery_start = typing.index("    func typeOutputPlanInstantly(")
+    delivery = typing[delivery_start:typing.index("    func typeOutputPlanInstantly(", delivery_start + 1)]
+    assert delivery.index("let profile = PrivateProfileStorage.current") < delivery.index("await ")
+    assert "callerIsOutputValid() && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork" in delivery
+    assert "self.verifyPasteLanded(text, before: verificationBefore, profile: profile, isOutputValid: isOutputValid)" in delivery
+    if args.unguarded_verifier == "post":
+        verifier = verifier.replace("                guard isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }", "", 1)
+    elif args.unguarded_verifier == "presentation":
+        paste_presentation = paste_presentation.replace("PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,", "", 1)
     menu_types = "\n".join(declaration(menu, marker).replace("private ", "", 1) for marker in [
         "    private enum MeetingMenuActivity:", "    private struct MeetingMenuPresentation"])
     menu_methods = "\n".join(declaration(menu, marker).replace("@objc private func", "func", 1).replace("private func", "func", 1).replace("private var", "var", 1) for marker in [
@@ -114,8 +130,10 @@ def main():
 }
 @MainActor final class DebugLogger {
     static let shared = DebugLogger()
+    var information: [String] = []
     func debug(_ text: String, source: String) {}
     func error(_ text: String, source: String) {}
+    func info(_ text: String, source: String) { information.append(text) }
 }
 @MainActor final class ContentFeedbackProbe {
     static let aiProcessingStatusDelayNanoseconds: UInt64 = 1_000_000
@@ -151,6 +169,7 @@ struct MeetingSession {
 }
 @MainActor final class ASRService {
     @Published var partialTranscription = ""
+    var isRunning = false
 }
 @MainActor final class AppServices {
     static let shared = AppServices()
@@ -228,13 +247,13 @@ enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavai
     var menuUpdates = 0, iconUpdates = 0, pendingCancellations = 0
     var presentations: [MeetingMenuPresentation] = []
     init() {
-''' + observer + r'''
+''' + observer + "\n" + paste_observer + r'''
     }
     func configure(asrService: ASRService) {
         self.asrService = asrService
 ''' + partial + r'''
     }
-''' + meeting + "\n" + menu_methods + r'''
+''' + meeting + "\n" + menu_methods + "\n" + paste_presentation + r'''
     func cancelPendingProcessingCompletionOperations() { pendingCancellations += 1 }
     func updateMenuBarIcon() { iconUpdates += 1 }
     func updateMenu() { menuUpdates += 1; presentations.append(meetingMenuPresentation) }
@@ -242,6 +261,32 @@ enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavai
     func announceMeetingActivity(_ presentation: MeetingMenuPresentation) {}
     static func interruptionStatus(for session: MeetingSession?) -> String { "interrupted" }
     static func failureStatus(for session: MeetingSession?, failure: MeetingSessionFailure) -> String { failure.message }
+}
+@MainActor final class DeliveryFailureOverlayController {
+    enum Kind { case pasteNotLanded }
+    struct Card { let profile: PrivateProfileSnapshot; let text: String }
+    static let shared = DeliveryFailureOverlayController()
+    var cards: [Card] = []
+    func show(kind: Kind, transcript: String) { cards.append(.init(profile: PrivateProfileStorage.current, text: transcript)) }
+}
+nonisolated final class NSRunningApplication: @unchecked Sendable {
+    let bundleIdentifier: String? = "synthetic.verifier.app"
+    init?(processIdentifier: Int32) {}
+}
+nonisolated enum PasteVerifier {
+    struct Snapshot: Sendable { let pid: Int32; let summary: String }
+    enum Verdict: Sendable { case notLanded, unknown(reason: String); var logDescription: String { "synthetic verdict" } }
+    nonisolated(unsafe) static var gate: PasteVerificationGate?
+    static func verify(before: Snapshot, pastedText: String) async -> Verdict {
+        await gate?.hold()
+        return .notLanded
+    }
+    static func userActedAfterPaste(secondsSinceLastInput: Double, secondsSincePaste: Double) -> Bool { false }
+    static func secondsSinceLastUserInput() -> Double { 10 }
+}
+extension Notification.Name { static let fluidPasteNotLanded = Notification.Name("SyntheticPasteNotLanded") }
+@MainActor final class TypingService {
+''' + verifier + r'''
 }
 ''' + (ROOT / "Tests/PrivateCaptureFeedbackTests.swift").read_text()
     with tempfile.TemporaryDirectory(prefix="pichi-private-capture-feedback-") as directory:
@@ -260,8 +305,9 @@ enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavai
     if not args.baseline_ref:
         subprocess.run(["xcrun", "swiftc", "-frontend", "-parse", source_path,
                         "Sources/Fluid/Services/MenuBarManager.swift",
+                        "Sources/Fluid/Services/TypingService.swift",
                         "Sources/Fluid/Services/AppServices+MeetingMenuBar.swift"], cwd=ROOT, check=True)
-    print("Private capture feedback and menu: 4 source-guard checks passed; actual-buffer, callback and selector regression passed in both isolation modes")
+    print("Private capture feedback and menu: 7 source-guard checks passed; actual-buffer, callback and selector regression passed in both isolation modes")
 
 
 if __name__ == "__main__":

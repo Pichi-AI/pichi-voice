@@ -81,6 +81,13 @@ literal=block(read('Sources/Fluid/Services/ASRService+DictationLiteralFormatting
 assessment=read('Sources/Fluid/Services/DeliveryTargetAssessment.swift').replace('import ApplicationServices\n','')
 analytics=block(read('Sources/Fluid/Analytics/AnalyticsEvent.swift'),'enum AnalyticsInsertionPath: String {')
 fixture='import Foundation\nimport CoreFoundation\n'+clipboard_types+'\n'+literal+'\n'+analytics+'\n'+assessment+'\n'
+fixture+='''nonisolated struct PrivateProfileSnapshot {}
+nonisolated enum PrivateProfileStorage {
+    static var current: PrivateProfileSnapshot { .init() }
+    static let acceptsNewWork = true
+    static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool { true }
+}
+'''
 failure_card=block(read('Sources/Fluid/Views/DeliveryFailureOverlay.swift'),'    enum Kind: Equatable {')
 fixture+='@MainActor final class DeliveryFailureOverlayController {\n'+failure_card+'\n}\n'
 fixture+=(repo/'Tests/Support/TypingNativeTransportFixture.swift').read_text()+'\n'+clipboard_doubles+'\n@MainActor '+coord_body+'\n'
@@ -95,7 +102,7 @@ fixture+='@MainActor final class TypingService {\n'+'\n'.join(declarations+metho
     func bench(_ text: String) {}
     func ghosttyTargetPID(preferredTargetPID: pid_t?) -> pid_t? { nil }
     func recordInsertionLatency(path: AnalyticsInsertionPath, result: TextDeliveryResult, requestedAt: TimeInterval, textReadyAt: TimeInterval?, toggleStopRequestedAt: TimeInterval?, completedAt: TimeInterval = 0) {}
-    func verifyPasteLanded(_ text: String, before: Int) {}
+    func verifyPasteLanded(_ text: String, before: Int, profile: PrivateProfileSnapshot, isOutputValid: @escaping @MainActor () -> Bool) {}
     func waitForPhysicalModifiersToRelease(timeout: TimeInterval) async -> Bool { true }
     func postReturnKey(_ key: SettingsStore.SpokenSendKey, targetPID: pid_t) async -> Bool { syntheticAX.sendCount += 1; return true }
 }\n'''
