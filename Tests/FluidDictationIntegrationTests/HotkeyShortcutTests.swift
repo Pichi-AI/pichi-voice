@@ -11,6 +11,33 @@ import XCTest
 
 // swiftlint:disable:next type_body_length
 final class HotkeyShortcutTests: XCTestCase {
+    @MainActor private var priorCancelShortcutValue: Any?
+    @MainActor private var capturedCancelShortcutValue = false
+
+    @MainActor
+    override func setUp() async throws {
+        try await super.setUp()
+        // Event replay cases assume the default Escape binding, independently of
+        // the test host's saved shortcut. Individual chord cases override it.
+        self.priorCancelShortcutValue = UserDefaults.standard.object(forKey: "CancelRecordingHotkeyShortcut")
+        self.capturedCancelShortcutValue = true
+        SettingsStore.shared.cancelRecordingHotkeyShortcut = HotkeyShortcut(keyCode: 53, modifierFlags: [])
+    }
+
+    @MainActor
+    override func tearDown() async throws {
+        if self.capturedCancelShortcutValue {
+            if let priorCancelShortcutValue = self.priorCancelShortcutValue {
+                UserDefaults.standard.set(priorCancelShortcutValue, forKey: "CancelRecordingHotkeyShortcut")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "CancelRecordingHotkeyShortcut")
+            }
+            self.priorCancelShortcutValue = nil
+            self.capturedCancelShortcutValue = false
+        }
+        try await super.tearDown()
+    }
+
     func testFunctionKeyDisplayNames() {
         let keys: [(Int, String)] = [
             (kVK_F1, "F1"), (kVK_F2, "F2"), (kVK_F3, "F3"), (kVK_F4, "F4"),
