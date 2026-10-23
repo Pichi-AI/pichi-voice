@@ -199,7 +199,7 @@ stateDiagram-v2
     RetryScheduled --> Paused: explicit pause or retry budget exhausted
     Paused --> Queued: explicit eligible owner resume
     Sending --> Conflict: 409
-    Sending --> Withheld: permanent validation or size rejection
+    Sending --> Paused: validation or size rejection needs review
     Accepted --> Accepted: authorized status or assessment reconciliation
 ```
 

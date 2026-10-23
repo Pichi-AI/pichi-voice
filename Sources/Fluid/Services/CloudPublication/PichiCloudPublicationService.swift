@@ -89,17 +89,19 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         guard !self.shutDown, self.cloudToggle == nil else { throw AccountError.busy }
         let (profile, context, store, consent) = try self.currentScope()
         let id = UUID()
+        let recoveringStorage = self.offLatch?.profileID == profile.id && self.offLatch?.failed == true
         if !enabled {
             self.offLatch = (profile.id, false); self.userPaused = true
             self.snapshot = .init(availability: .pausing, cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items)
         }
         let task = Task { @MainActor in
             do {
-                if !enabled { await self.joinOwnedWork(excludingToggle: id) }
+                if !enabled || recoveringStorage { await self.joinOwnedWork(excludingToggle: id) }
                 try self.check(profile, context: context)
                 try await consent.setCloudSyncEnabled(enabled, for: context)
                 try self.check(profile, context: context)
                 if enabled {
+                    if recoveringStorage { try await store.pauseAll(reason: .profileTransition) }
                     if self.offLatch?.profileID == profile.id { self.offLatch = nil }
                     try await self.activateBody(resumeUserPauses: true)
                 } else {
@@ -125,6 +127,8 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private func refreshBody() async throws {
         do { try await self.refreshCurrentScope() }
         catch {
+            if error is PichiPublicationOutboxFailure || error is PichiPublicationConsentFailure,
+               let profile = self.scope { await self.storageFailed(profile: profile) }
             let visible = PrivateProfileStorage.current
             let availability: PichiCloudPublicationAvailability = self.account.configuration == nil ? .unconfigured
                 : !visible.isReadable || self.closing ? .profileUnavailable
@@ -290,13 +294,16 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             // owner's safe remote failure remains visible across restart and login.
             guard (try? self.check(profile, context: request.context)) != nil,
                   !(error is PichiCloudPublicationControlFailure) else { throw error }
+            if error is PichiPublicationOutboxFailure { await self.storageFailed(profile: profile); throw error }
             let remote = error as? PichiPublicationRemoteFailure
             let reason: PichiPublicationPauseReason
             if let remote { reason = remote.action == .boundedRetry ? .transportUnavailable : Self.pauseReason(remote.action) }
             else if let account = error as? AccountError { reason = account == .permissionDenied ? .permissionReview : .authenticationRequired }
             else if error is PichiPublicationNetworkFailure { reason = .transportUnavailable }
             else { reason = .receiptReview }
-            let updated = try await store.pauseReceipt(id: record.sessionID, reason: reason, retryAfter: remote?.retryAfter)
+            let updated: PichiPublicationOutboxRecord
+            do { updated = try await store.pauseReceipt(id: record.sessionID, reason: reason, retryAfter: remote?.retryAfter) }
+            catch { await self.storageFailed(profile: profile); throw error }
             try self.check(profile, context: request.context)
             self.project(record.sessionID, Self.status(updated), profile: profile)
             throw error
@@ -319,6 +326,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 // Missing durable admission always means local-only on later callbacks.
                 // Recording remains authorized and no exception escapes to N2 persistence.
                 self.project(id, .paused(.storageUnavailable), profile: admission.profile)
+                if error is PichiPublicationConsentFailure || (error as? PichiPublicationOutboxFailure).map({ $0 != .capacityExceeded }) == true {
+                    await self.storageFailed(profile: admission.profile)
+                }
             }
         }
     }
@@ -421,10 +431,12 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             self.project(id, Self.status(updated), profile: admission.profile)
         } catch let reason as PichiPublicationWithholdingReason {
             guard (try? self.check(admission.profile, context: context)) != nil else { return }
-            if let record = try? await store.withhold(id: id, reason: reason) { self.project(id, Self.status(record), profile: admission.profile) }
+            do {
+                let record = try await store.withhold(id: id, reason: reason)
+                self.project(id, Self.status(record), profile: admission.profile)
+            } catch { await self.storageFailed(profile: admission.profile) }
         } catch {
-            // Conceal, cancellation or disk failure preserves the waiting record. A fresh
-            // same-owner admission may recover only this known ID after authentication.
+            if error is PichiPublicationOutboxFailure { await self.storageFailed(profile: admission.profile) }
         }
     }
 
@@ -504,7 +516,10 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     // Local notifications never start HTTP. This single resumed worker
                     // checks only its bounded pending IDs; there is no history scan.
                     try await Task.sleep(for: .seconds(5))
-                } catch { return }
+                } catch {
+                    if error is PichiPublicationOutboxFailure || error is PichiPublicationConsentFailure { await self.storageFailed(profile: profile) }
+                    return
+                }
             }
         }
         self.worker = (id, task)
@@ -565,8 +580,21 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 } else { updated = try await store.pause(id: id, reason: .receiptReview) }
                 try self.check(profile, context: context)
                 self.project(id, Self.status(updated), profile: profile)
-            } catch { /* A failed state write retains uncertain durable same-key delivery. */ }
+            } catch { await self.storageFailed(profile: profile) }
         }
+    }
+
+    private func storageFailed(profile: PrivateProfileSnapshot) async {
+        guard !self.shutDown, !self.closing, self.scope == profile,
+              PrivateProfileStorage.isReadable(profile), let context = profile.context,
+              self.account.isCurrent(context) else { return }
+        self.offLatch = (profile.id, true); self.userPaused = true
+        self.snapshot = .init(availability: .storageUnavailable,
+            cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items)
+        self.worker?.task.cancel()
+        let requests = Array(self.requests.values)
+        for request in requests { request.cancel() }
+        for request in requests { _ = await request.result }
     }
 
     private func joinOwnedWork(excludingToggle: UUID? = nil) async {

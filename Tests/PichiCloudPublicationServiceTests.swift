@@ -170,6 +170,27 @@ extension PichiPublicationOutboxTests {
         let afterCancelledRetry = try durable(profileA, id: cancelledSource.id, settled: true)
         check(afterCancelledRetry.operationID == beforeCancel.operationID && afterCancelledRetry.attemptCount == 2,
               "Cancelled delivery can replay in the same retained service without restart")
+        let diskFailureSource = try await capture()
+        let beforeDiskFailure = try durable(profileA, id: diskFailureSource.id, settled: false)
+        await http.holdNextPost()
+        let failingSave = Task { try await service.send(diskFailureSource.id) }
+        try await wait { await http.isHeld() }
+        let outboxRoot = profileA.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1")
+        let unwritable = [outboxRoot.appendingPathComponent("pending"), outboxRoot.appendingPathComponent("settled")]
+        for directory in unwritable { try manager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path) }
+        await http.release(); try await failingSave.value
+        check(service.snapshot.availability == .storageUnavailable && service.snapshot.cloudSyncEnabled,
+              "A failed acceptance/recovery write visibly closes delivery without claiming consent changed")
+        let failedRequestCount = await http.count()
+        do { try await service.reconcile(first.id); check(false, "Disk failure must close current network admission") }
+        catch let error as PichiCloudPublicationControlFailure { check(error == .cloudSyncDisabled, "Storage failure blocks further transport") }
+        check(await http.count() == failedRequestCount, "No request escapes the storage-failure admission latch")
+        for directory in unwritable { try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path) }
+        try await service.setCloudSyncEnabled(true)
+        try await wait { if case .accepted = try await service.status(for: diskFailureSource.id) { return true }; return false }
+        let repaired = try durable(profileA, id: diskFailureSource.id, settled: true)
+        check(repaired.operationID == beforeDiskFailure.operationID && repaired.transcriptBytes == beforeDiskFailure.transcriptBytes,
+              "Explicit recovery after repairing disk joins work and replays the same uncertain operation")
 
         await service.pause()
         let paused = try await capture()
