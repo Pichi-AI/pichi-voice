@@ -108,11 +108,56 @@ extension PichiPublicationOutboxTests {
         let accepted = try durable(profileA, id: first.id, settled: true)
         check(accepted.operationID == firstRecord.operationID && accepted.attemptCount == 2, "Lost-response replay never mints another operation")
         check(await http.identicalPosts(), "HTTP replay reuses exact multipart bytes/key after server acceptance")
+        let patchCount = await http.count(method: "PATCH")
+        let options = try await service.assessmentOptions(for: first.id, limit: 2)
+        check(options.context.accountID == "user-A" && options.context.organizationID == "17" && options.context.workspaceID == "9",
+              "Assessment options are bound to the current authorized account and workspace")
+        check(options.participants.map(\.id) == [participantID] && options.canResolvePending
+              && options.currentAssessment.participantID == nil && options.currentAssessment.criteriaIDs.isEmpty,
+              "Options offer represented participants without inventing an initial assessment")
+        let nextOptions = try await service.assessmentOptions(for: first.id, cursor: options.criteria.pagination.nextCursor, limit: 2)
+        check(options.criteria.data.map(\.id) == ["31", "32"] && nextOptions.criteria.data.map(\.id) == ["33"]
+              && !nextOptions.criteria.pagination.hasMore && nextOptions.criteria.pagination.nextCursor == nil,
+              "Criteria pages are fetched explicitly and retain their opaque cursor")
+        let afterOptions = try durable(profileA, id: first.id, settled: true)
+        let optionsPatchCount = await http.count(method: "PATCH")
+        check(afterOptions.operationID == firstRecord.operationID && afterOptions.transcriptBytes == firstRecord.transcriptBytes
+              && afterOptions.originalAssessment.participantID == nil && optionsPatchCount == patchCount,
+              "Fetching options preserves source identity and never automatically patches")
+        for control in ["OFF", "logout"] {
+            await http.holdNextRequest("OPTIONS")
+            var escaped = false, controlReturned = false
+            let fetching = Task { let page = try await service.assessmentOptions(for: first.id); escaped = true; return page }
+            try await wait { await http.isHeld() }
+            let closing = Task {
+                if control == "OFF" { try await service.setCloudSyncEnabled(false) }
+                else { await account.logout() }
+                controlReturned = true
+            }
+            try await wait { service.snapshot.availability == (control == "OFF" ? .pausing : .profileUnavailable) }
+            check(!controlReturned && !escaped, control + " waits for the held options request and hides stale options")
+            await http.release(); try await closing.value
+            switch await fetching.result {
+            case .success: check(false, "Cancelled options cannot escape after " + control)
+            case .failure: check(!escaped, "Joined " + control + " cancels the complete typed options command")
+            }
+            if control == "OFF" {
+                do { _ = try await service.assessmentOptions(for: first.id); check(false, "OFF must block options transport") }
+                catch let error as PichiCloudPublicationControlFailure { check(error == .cloudSyncDisabled, "OFF blocks paged options through the shared admission gate") }
+                try await service.setCloudSyncEnabled(true)
+            } else {
+                await account.signIn(); try await account.selectWorkspace(organizationID: "17", workspaceID: "9")
+                try await service.activateCurrentProfile()
+            }
+        }
         try await service.resolveAssessment(first.id, participantID: participantID, criteriaIDs: ["31"])
         try await service.reconcile(first.id)
         if case let .accepted(receipt) = try await service.status(for: first.id) {
             check(receipt.analysisState == .queued, "Explicit PATCH and GET update analysis separately from accepted upload")
         } else { check(false, "Accepted source must retain its receipt") }
+        let boundOptions = try await service.assessmentOptions(for: first.id, limit: 2)
+        check(!boundOptions.canResolvePending && boundOptions.currentAssessment.participantID == participantID
+              && boundOptions.currentAssessment.criteriaIDs == ["31"], "Options preserve the effective explicit binding separately from the original POST")
         let afterPatch = try durable(profileA, id: first.id, settled: true)
         check(afterPatch.transcriptBytes == firstRecord.transcriptBytes && afterPatch.sourceSHA256 == firstRecord.sourceSHA256
               && afterPatch.originalAssessment.participantID == nil, "Assessment resolution never rewrites original POST fingerprint")
@@ -148,6 +193,8 @@ extension PichiPublicationOutboxTests {
         catch let error as AccountError { check(error == .busy, "A current receipt request excludes another GET for that record") }
         do { try await service.resolveAssessment(first.id, participantID: participantID, criteriaIDs: ["31"]); check(false, "PATCH must not race a receipt GET") }
         catch let error as AccountError { check(error == .busy, "A current receipt request excludes PATCH for that record") }
+        do { _ = try await service.assessmentOptions(for: first.id); check(false, "Options must not race a receipt GET") }
+        catch let error as AccountError { check(error == .busy, "Options share the same per-record request lease") }
         check(await http.count() == beforeConcurrent, "Rejected concurrent receipt requests never reach transport")
         await http.release(); try await heldStatus.value
 
@@ -286,6 +333,8 @@ extension PichiPublicationOutboxTests {
               && pendingAsB == .localOnly, "B cannot view or resume A's queue and has separate consent")
         do { try await service.send(frozenConsent.id); check(false, "B cannot claim A's known session UUID") }
         catch let error as PichiPublicationOutboxFailure { check(error == .notAdmitted, "Foreign source ID cannot become a B admission") }
+        do { _ = try await service.assessmentOptions(for: first.id); check(false, "B cannot fetch A's assessment options") }
+        catch let error as PichiPublicationOutboxFailure { check(error == .notAdmitted, "Options cannot claim another owner's known meeting ID") }
         check(try Data(contentsOf: guestFile) == guestBytes, "Guest bytes survive A/logout/B unchanged")
         await account.logout(); await identity.selectPerson("A")
         await account.signIn(); try await account.selectWorkspace(organizationID: "17", workspaceID: "9")
@@ -367,6 +416,9 @@ private actor FacadeFixtureHTTP: PichiPublicationHTTPPerforming {
     private var receipts: [String: PichiPublicationReceipt] = [:]
     private var bodiesMatch = true
     private var requests = 0
+    private var requestMethods: [String: Int] = [:]
+    private var participants: [String: [[String: String]]] = [:]
+    private var assessments: [String: PichiPublicationAssessment] = [:]
     private var loseNext = false
     private var heldMethod: String?
     private var gate: CheckedContinuation<Void, Never>?
@@ -375,6 +427,7 @@ private actor FacadeFixtureHTTP: PichiPublicationHTTPPerforming {
     private var failure: (method: String, status: Int, code: String)?
     private var finishStatus = false
     func count() -> Int { requests }
+    func count(method: String) -> Int { requestMethods[method] ?? 0 }
     func identicalPosts() -> Bool { bodiesMatch }
     func loseNextResponse() { loseNext = true }
     func holdNextPost() { heldMethod = "POST" }
@@ -387,7 +440,10 @@ private actor FacadeFixtureHTTP: PichiPublicationHTTPPerforming {
     func perform(_ request: URLRequest) async throws -> PichiPublicationHTTPResponse {
         requests += 1
         let method = request.httpMethod ?? "GET"
-        if let failure, failure.method == method {
+        let isOptions = request.url!.lastPathComponent == "assessment-options"
+        let operation = isOptions ? "OPTIONS" : method
+        requestMethods[operation, default: 0] += 1
+        if let failure, failure.method == operation {
             self.failure = nil
             return .init(status: failure.status, body: try JSONSerialization.data(withJSONObject: ["error": ["code": failure.code, "status": failure.status]]), retryAfter: "0")
         }
@@ -398,28 +454,54 @@ private actor FacadeFixtureHTTP: PichiPublicationHTTPPerforming {
             if let prior = posts[key] { bodiesMatch = bodiesMatch && prior == request.httpBody }
             else {
                 posts[key] = request.httpBody; status = 202
+                let body = String(decoding: request.httpBody!, as: UTF8.self)
+                let start = body.range(of: "Content-Type: application/json\r\n\r\n")!.upperBound
+                let end = body.range(of: "\r\n--pichi-import-", range: start..<body.endIndex)!.lowerBound
+                let source = try JSONSerialization.jsonObject(with: Data(body[start..<end].utf8)) as! [String: Any]
+                let represented = Set((source["segments"] as! [[String: Any]]).compactMap { $0["speakerID"] as? String })
+                participants[key] = (source["speakers"] as! [[String: Any]]).filter { represented.contains($0["id"] as! String) }
+                    .map { ["id": $0["id"] as! String, "displayName": $0["displayName"] as! String] }
                 receipts[key] = .init(schemaVersion: 1, importID: "import-" + key, recordingID: "recording-" + key,
                     uploadState: .accepted, analysisState: .needsParticipant)
             }
         } else {
             let components = request.url!.pathComponents
-            let importID = method == "PATCH" ? components[components.count - 2] : components.last!
+            let importID = method == "PATCH" || isOptions ? components[components.count - 2] : components.last!
             key = String(importID.dropFirst("import-".count))
             if method == "PATCH" {
                 let old = receipts[key]!
                 status = old.analysisState == .needsParticipant ? 202 : 200
                 receipts[key] = .init(schemaVersion: 1, importID: old.importID, recordingID: old.recordingID,
                     uploadState: .accepted, analysisState: .queued)
-            } else if finishStatus {
+                let binding = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                assessments[key] = .init(participantID: UUID(uuidString: binding["participantID"] as! String), criteriaIDs: binding["criteriaIDs"] as! [String])
+            } else if !isOptions, finishStatus {
                 finishStatus = false
                 let old = receipts[key]!
                 receipts[key] = .init(schemaVersion: 1, importID: old.importID, recordingID: old.recordingID,
                     uploadState: .accepted, analysisState: .succeeded)
             }
         }
-        if heldMethod == method { heldMethod = nil; held = true; await withCheckedContinuation { gate = $0 } }
+        if heldMethod == operation { heldMethod = nil; held = true; await withCheckedContinuation { gate = $0 } }
         if method == "POST", loseNext { loseNext = false; throw PichiPublicationNetworkFailure.unavailable }
+        if isOptions {
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            let cursor = query.first { $0.name == "cursor" }?.value
+            let limit = Int(query.first { $0.name == "limit" }!.value!)!
+            let ids = cursor == nil ? ["31", "32"] : ["33"]
+            let receipt = receipts[key]!, binding = assessments[key]
+            let receiptObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt))
+            let response: [String: Any] = ["schemaVersion": 1,
+                "context": ["accountID": "user-A", "organizationID": "17", "workspaceID": "9"],
+                "receipt": receiptObject, "participants": participants[key]!,
+                "criteria": ["data": ids.map { ["id": $0, "name": "Synthetic criterion " + $0] },
+                    "pagination": ["limit": limit, "cursor": cursor as Any? ?? NSNull(),
+                        "next_cursor": cursor == nil && limit == 2 ? "c3ludGhldGljLW5leHQ" : NSNull(), "has_more": cursor == nil && limit == 2]],
+                "currentAssessment": ["participantID": binding?.participantID?.uuidString as Any? ?? NSNull(), "criteriaIDs": binding?.criteriaIDs ?? []],
+                "canResolvePending": [.needsParticipant, .needsCriteria].contains(receipt.analysisState) && binding == nil]
+            return .init(status: 200, body: try JSONSerialization.data(withJSONObject: response), retryAfter: nil)
+        }
         return .init(status: status, body: try JSONEncoder().encode(receipts[key]!), retryAfter: nil)
     }
-    func shutdown() async { closed = true; release(); posts.removeAll(); receipts.removeAll() }
+    func shutdown() async { closed = true; release(); posts.removeAll(); receipts.removeAll(); participants.removeAll(); assessments.removeAll() }
 }

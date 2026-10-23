@@ -42,6 +42,7 @@ No view owns tokens, an HTTP executor, a queue or a separate profile/account man
 | `pause() async` | Join delivery and persist this account/workspace's pause. Future-capture policy stays unchanged. Write failure remains visible and current delivery stays closed. |
 | `resume() async throws` | Explicitly clear the current owner's manual pause when Cloud sync is on. Review/billing/permission/validation pauses and Retry-After deadlines are preserved. |
 | `reconcile(_ id: MeetingSessionID) async throws` | Owner-authorized GET of the existing import ID; update analysis without changing source identity. Blocked while Cloud sync is off. |
+| `assessmentOptions(for id: MeetingSessionID, cursor: String? = nil, limit: Int = 50) async throws -> PichiPublicationAssessmentOptions` | One authorized criteria page and represented source participants for a known accepted meeting. Shares the receipt request lease, consent/grant/profile fences, cancellation joins and durable review handling. No automatic pagination or PATCH. |
 | `resolveAssessment(_ id: MeetingSessionID, participantID: UUID, criteriaIDs: [String]) async throws` | Explicit represented source participant plus nonempty authorized criteria selection. PATCH never changes original POST fingerprint. No employee guess or implicit reanalysis. Blocked while sync is off. |
 | `shutdown() async` | Join commands, callbacks and delivery, pause durable work, then shut down the owned HTTP executor. Does not stop local recording or delete cloud history. |
 
@@ -193,3 +194,50 @@ to `f989116f`; N2 composition, project and mobile-manifest ownership remains unc
 No native target build, simulator/device UI, model/inference, actual recording, real account
 credentials or live HTTPS endpoint was used. The existing Swift 5 exporter isolation warning
 remains. N2 must publish the approved dependency base before the focused stacked draft PR.
+
+## Authorized assessment options
+
+The additive `assessmentOptions(for:cursor:limit:)` operation uses frozen W2 `ac2b6c35`:
+`GET /api/v1/recordings/imports/{importID}/assessment-options` with the frozen current
+organization/workspace, an explicit limit of 1 through 100 and an optional opaque cursor.
+The default limit is 50. It requires the known meeting's retained accepted receipt and exact
+frozen protected source. It cannot discover or claim history.
+
+The concrete `PichiPublicationAssessmentOptions` value contains:
+
+| Field | Swift type / meaning |
+| --- | --- |
+| `schemaVersion` | `Int`, verified as 1 |
+| `context` | `Context(accountID: String, organizationID: String, workspaceID: String)` |
+| `receipt` | `PichiPublicationReceipt`, retaining both known receipt IDs |
+| `participants` | `[Participant]`, each with `id: UUID` and `displayName: String`; exactly the frozen source's represented UUIDs |
+| `criteria` | `Criteria(data: [Criterion], pagination: Pagination)`; each criterion has opaque `id: String` and display `name: String` |
+| `criteria.pagination` | `limit: Int`, `cursor: String?`, `nextCursor: String?`, `hasMore: Bool` |
+| `currentAssessment` | `PichiPublicationAssessment`, separate from the immutable original POST binding |
+| `canResolvePending` | `Bool`; only a pending receipt may report true, and the server remains authoritative |
+
+Use `nextCursor` unchanged for a user-requested next page. Do not decode cursor internals,
+aggregate every page automatically or retain unbounded pages in a sheet. Current assessment
+criteria may belong to another page or may no longer be offered; preserve their IDs without
+treating them as authorization to select new criteria. Display names remain user/server data,
+never employee identities, defaults or localized selection keys.
+
+The response is limited to 65,536 bytes, at most 100 participants and at most the requested
+number of criteria. Context, receipt identity, exact object keys, typed scalar values, source
+participant membership and echoed page metadata are checked before returning a value. W2
+does not specify a separate criterion-name length cap; the whole-response byte limit bounds
+these strings. GET200 is the only successful options status. Safe 400/409 errors retain
+validation/conflict review; 401/403/404 and retry errors use the existing accepted-review path.
+
+N3/N4 clear loaded options, cursors and selection drafts when account/workspace/profile
+projection changes or a sheet closes. The facade owns no cross-profile options cache.
+Only an explicit current user choice invokes `resolveAssessment`; loading options never
+sets a participant, changes the original operation or sends PATCH. Both platforms use this
+shared operation and do not add employee-directory requests or separate request loops.
+
+N3 owns additional suggested catalog keys: `Loading assessment options`, `Load more criteria`,
+`No represented participants`, `No assessment criteria available` and `Assessment options unavailable`.
+Existing receipt review and participant/criteria selection keys remain applicable. N2 retains
+the same eight CloudPublication sources; this addition creates no production source file or
+second composition path. The previously published `9dc4b6d5` remains the stable base handoff
+while the additive options correction is reviewed and verified.
