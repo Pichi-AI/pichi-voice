@@ -2146,8 +2146,11 @@ final class HotkeyShortcutTests: XCTestCase {
             if reset {
                 manager.resetModifierOnlyShortcutTracking(reason: .tapDisabled)
             } else {
-                let result = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, keyCode: 53, modifiers: []))
-                XCTAssertNil(result, "Escape must cancel a pending start even while ASR is still idle")
+                let event = try self.primaryReleaseTestEvent(type: .keyDown, keyCode: 53, modifiers: [])
+                let result = manager.handleKeyEvent(type: .keyDown, event: event)
+                withExtendedLifetime(event) {
+                    XCTAssertNil(result, "Escape must cancel a pending start even while ASR is still idle")
+                }
             }
             gate?.resume()
             for _ in 0..<20 {
@@ -2398,7 +2401,9 @@ final class HotkeyShortcutTests: XCTestCase {
         for _ in 0..<20 { await Task.yield() }
         XCTAssertEqual(cancellations, 0)
         XCTAssertTrue(asr.isRunning)
-        XCTAssertNil(try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, keyCode: 8, modifiers: exact)))
+        let cancelEvent = try self.primaryReleaseTestEvent(type: .keyDown, keyCode: 8, modifiers: exact)
+        let cancelResult = manager.handleKeyEvent(type: .keyDown, event: cancelEvent)
+        withExtendedLifetime(cancelEvent) { XCTAssertNil(cancelResult) }
         for _ in 0..<20 { await Task.yield() }
         XCTAssertEqual(cancellations, 1, "Rejected neighboring chords must not strand the next genuine cancellation")
     }
@@ -2411,8 +2416,9 @@ final class HotkeyShortcutTests: XCTestCase {
         var cancellations = 0
         let manager = self.makePrimaryReleaseTestManager(asr: asr, onStart: {}, isSessionLocked: { true })
         manager.setCancelCallback { cancellations += 1; return .cancelled }
-        let result = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, keyCode: 53, modifiers: []))
-        XCTAssertNil(result)
+        let event = try self.primaryReleaseTestEvent(type: .keyDown, keyCode: 53, modifiers: [])
+        let result = manager.handleKeyEvent(type: .keyDown, event: event)
+        withExtendedLifetime(event) { XCTAssertNil(result) }
         for _ in 0..<20 {
             await Task.yield()
         }
@@ -2466,7 +2472,9 @@ final class HotkeyShortcutTests: XCTestCase {
             return .cancelled
         }
         for _ in 0..<5 {
-            XCTAssertNil(try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, keyCode: 53, modifiers: [])))
+            let event = try self.primaryReleaseTestEvent(type: .keyDown, keyCode: 53, modifiers: [])
+            let result = manager.handleKeyEvent(type: .keyDown, event: event)
+            withExtendedLifetime(event) { XCTAssertNil(result) }
         }
         for _ in 0..<20 {
             await Task.yield()
