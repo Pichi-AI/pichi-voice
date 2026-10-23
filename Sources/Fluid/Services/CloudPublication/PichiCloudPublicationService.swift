@@ -57,6 +57,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private var itemOrder: [MeetingSessionID] = []
     // Only already observed receipts are polled, with a finite per-observation budget.
     private var analysisPolls: [MeetingSessionID: (attempts: Int, notBefore: Date)] = [:]
+    private var storageDrain: (id: UUID, task: Task<Void, Never>)?
 
     init(account: AccountSessionService, meetings: PrivateProfileMeetingStore = .shared,
          profiles: PrivateProfileService? = nil, http: (any PichiPublicationHTTPPerforming)? = nil) {
@@ -128,7 +129,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         do { try await self.refreshCurrentScope() }
         catch {
             if error is PichiPublicationOutboxFailure || error is PichiPublicationConsentFailure,
-               let profile = self.scope { await self.storageFailed(profile: profile, because: error) }
+               let profile = self.scope { self.storageFailed(profile: profile, because: error) }
             let visible = PrivateProfileStorage.current
             let availability: PichiCloudPublicationAvailability = self.account.configuration == nil ? .unconfigured
                 : !visible.isReadable || self.closing ? .profileUnavailable
@@ -294,7 +295,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             // owner's safe remote failure remains visible across restart and login.
             guard (try? self.check(profile, context: request.context)) != nil,
                   !(error is PichiCloudPublicationControlFailure) else { throw error }
-            if error is PichiPublicationOutboxFailure { await self.storageFailed(profile: profile, because: error); throw error }
+            if error is PichiPublicationOutboxFailure { self.storageFailed(profile: profile, because: error); throw error }
             let remote = error as? PichiPublicationRemoteFailure
             let reason: PichiPublicationPauseReason
             if let remote { reason = remote.action == .boundedRetry ? .transportUnavailable : Self.pauseReason(remote.action) }
@@ -303,7 +304,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             else { reason = .receiptReview }
             let updated: PichiPublicationOutboxRecord
             do { updated = try await store.pauseReceipt(id: record.sessionID, reason: reason, retryAfter: remote?.retryAfter) }
-            catch { await self.storageFailed(profile: profile, because: error); throw error }
+            catch { self.storageFailed(profile: profile, because: error); throw error }
             try self.check(profile, context: request.context)
             self.project(record.sessionID, Self.status(updated), profile: profile)
             throw error
@@ -327,7 +328,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 // Recording remains authorized and no exception escapes to N2 persistence.
                 self.project(id, .paused(.storageUnavailable), profile: admission.profile)
                 if error is PichiPublicationConsentFailure || (error as? PichiPublicationOutboxFailure).map({ $0 != .capacityExceeded }) == true {
-                    await self.storageFailed(profile: admission.profile, because: error)
+                    self.storageFailed(profile: admission.profile, because: error)
                 }
             }
         }
@@ -434,9 +435,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             do {
                 let record = try await store.withhold(id: id, reason: reason)
                 self.project(id, Self.status(record), profile: admission.profile)
-            } catch { await self.storageFailed(profile: admission.profile, because: error) }
+            } catch { self.storageFailed(profile: admission.profile, because: error) }
         } catch {
-            if error is PichiPublicationOutboxFailure { await self.storageFailed(profile: admission.profile, because: error) }
+            if error is PichiPublicationOutboxFailure { self.storageFailed(profile: admission.profile, because: error) }
         }
     }
 
@@ -517,7 +518,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     // checks only its bounded pending IDs; there is no history scan.
                     try await Task.sleep(for: .seconds(5))
                 } catch {
-                    if error is PichiPublicationOutboxFailure || error is PichiPublicationConsentFailure { await self.storageFailed(profile: profile, because: error) }
+                    if error is PichiPublicationOutboxFailure || error is PichiPublicationConsentFailure { self.storageFailed(profile: profile, because: error) }
                     return
                 }
             }
@@ -580,11 +581,11 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 } else { updated = try await store.pause(id: id, reason: .receiptReview) }
                 try self.check(profile, context: context)
                 self.project(id, Self.status(updated), profile: profile)
-            } catch { await self.storageFailed(profile: profile, because: error) }
+            } catch { self.storageFailed(profile: profile, because: error) }
         }
     }
 
-    private func storageFailed(profile: PrivateProfileSnapshot, because error: any Error) async {
+    private func storageFailed(profile: PrivateProfileSnapshot, because error: any Error) {
         guard !Task.isCancelled, !(error is CancellationError), !self.shutDown, !self.closing, self.scope == profile,
               PrivateProfileStorage.isReadable(profile), let context = profile.context,
               self.account.isCurrent(context) else { return }
@@ -594,7 +595,13 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         self.worker?.task.cancel()
         let requests = Array(self.requests.values)
         for request in requests { request.cancel() }
-        for request in requests { _ = await request.result }
+        guard self.storageDrain == nil, !requests.isEmpty else { return }
+        let id = UUID()
+        let task = Task { @MainActor in
+            defer { if self.storageDrain?.id == id { self.storageDrain = nil } }
+            for request in requests { _ = await request.result }
+        }
+        self.storageDrain = (id, task)
     }
 
     private func joinOwnedWork(excludingToggle: UUID? = nil) async {
@@ -606,6 +613,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         for command in self.commands.values { command.cancel() }
         if let worker { await worker.task.value }
         if let toggle { _ = await toggle.task.result }
+        if let storageDrain { await storageDrain.task.value }
         while !self.locals.isEmpty || !self.requests.isEmpty || !self.commands.isEmpty {
             let locals = Array(self.locals.values), requests = Array(self.requests.values)
             let commands = Array(self.commands.values)

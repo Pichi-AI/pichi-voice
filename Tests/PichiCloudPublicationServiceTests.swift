@@ -291,13 +291,22 @@ extension PichiPublicationOutboxTests {
         let consentRoot = PrivateProfileStorage.current.rootDirectory.appendingPathComponent("CloudPublication/Consent")
         let consentFile = try manager.contentsOfDirectory(at: consentRoot, includingPropertiesForKeys: nil).first { $0.pathExtension == "json" }!
         let preservedConsent = try Data(contentsOf: consentFile)
+        let heldDuringCapture = try await capture()
+        await http.holdNextPost()
+        let heldSend = Task { try await service.send(heldDuringCapture.id) }
+        try await wait { await http.isHeld() }
         try Data("corrupt synthetic consent".utf8).write(to: consentFile)
         try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: consentFile.path)
-        let failedAdmission = try await capture()
+        var localSaveReturned = false
+        let localSave = Task { let session = try await capture(); localSaveReturned = true; return session }
+        try await wait { localSaveReturned }
+        let failedAdmission = try await localSave.value
+        check(await http.isHeld(), "Consent failure during another upload does not join network from recording callbacks")
         check(try await meetings.load(id: failedAdmission.id) != nil, "Consent persistence/read failure never prevents local recording save")
         check(try await service.status(for: failedAdmission.id) == .paused(.storageUnavailable), "Failed publication admission has a visible safe reason")
         try preservedConsent.write(to: consentFile)
         try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: consentFile.path)
+        await http.release(); _ = await heldSend.result
         check(try await service.status(for: failedAdmission.id) != .queued, "Repairing settings cannot retroactively admit the failed capture")
         await account.logout(); await service.shutdown(); await account.shutdown()
         check(await http.wasShutdown(), "Service shutdown joins and releases its HTTP owner")
