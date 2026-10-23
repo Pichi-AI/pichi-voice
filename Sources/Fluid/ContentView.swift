@@ -2525,11 +2525,15 @@ struct ContentView: View {
             savesAudio: self.settings.saveAudioWithTranscriptionHistory,
             transcriptionModel: self.currentTranscriptionModelInfo().model
         ) else { return false }
-        self.privateCaptureStopID = id
-        self.privateCaptureOutput = output
-        PrivateProfileService.shared.installCaptureStopHandler(id: id) {
+        let installed = PrivateProfileService.shared.installCaptureStopHandler(id: id) {
             await self.stopAndProcessTranscription(route: .historyOnly)
         }
+        guard installed else {
+            Task { await output.finish() }
+            return false
+        }
+        self.privateCaptureStopID = id
+        self.privateCaptureOutput = output
         self.captureRecordingTargetContext()
         self.captureRecordingFormattingContextIfNeeded()
         return true

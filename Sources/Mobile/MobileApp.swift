@@ -168,6 +168,7 @@ final class AppServices: ObservableObject {
             try self.privateProfiles.configure(isBusy: { [weak self] in
                 guard let self else { return true }
                 return !self.meetingSessionCoordinator.isQuiescent || !self.asr.canBeginPrivateProfileTransition
+                    || self.privateProfiles.hasRetainedCaptureStopHandler
             }, prepare: { [weak self] in
                 guard let self else { throw AccountError.isolationRequired }
                 self.requiredPreparationTask?.cancel(); await self.requiredPreparationTask?.value
@@ -239,9 +240,12 @@ final class AppServices: ObservableObject {
         await asr.shutdownForTermination()
     }
 
-    var hasActivePrivateCapture: Bool { meetingSessionCoordinator.isRecording }
+    var hasActivePrivateCapture: Bool {
+        meetingSessionCoordinator.isRecording || privateProfiles.hasRetainedCaptureStopHandler
+    }
     func stopPrivateCaptureAndLogout() async {
         if meetingSessionCoordinator.isRecording { _ = try? await meetingSessionCoordinator.stopAndTranscribe() }
+        else { await privateProfiles.requestCaptureStop() }
         await accountSession.logout()
     }
     func retryPrivateProfileCleanupAndLogout() async { await accountSession.logout() }

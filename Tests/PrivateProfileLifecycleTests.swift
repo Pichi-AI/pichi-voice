@@ -122,7 +122,16 @@ extension MeetingSessionStoreCheckpointTests {
         service.register(first)
         service.register(second)
         let stopID = UUID()
-        service.installCaptureStopHandler(id: stopID) { state.stopRequests += 1 }
+        check(service.installCaptureStopHandler(id: stopID) { state.stopRequests += 1 },
+            "The original capture acquires its Stop ownership")
+        let replacementStopID = UUID()
+        check(!service.installCaptureStopHandler(id: replacementStopID) { state.stopRequests += 100 },
+            "Another view cannot replace an admitted capture's Stop owner")
+        service.clearCaptureStopHandler(id: replacementStopID)
+        await service.requestCaptureStop()
+        check(state.stopRequests == 1 && service.hasRetainedCaptureStopHandler,
+            "Stale cleanup leaves the original capture Stop callback usable")
+        state.stopRequests = 0
         let writeGate = SyntheticProfileGate()
         let workID = UUID()
         let write = Task {

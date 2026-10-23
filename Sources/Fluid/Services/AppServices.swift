@@ -88,6 +88,7 @@ final class AppServices: ObservableObject {
 
     var hasActivePrivateCapture: Bool {
         self._meetingSessionCoordinator?.isRecording == true || self._asr?.isRunning == true
+            || self.privateProfiles.hasRetainedCaptureStopHandler
     }
 
     func stopPrivateCaptureAndLogout() async {

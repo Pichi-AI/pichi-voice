@@ -44,8 +44,11 @@ import Foundation
 
     func retainPrivateWrite(_ task: Task<Void, Never>, id: UUID) { pendingWrites[id] = task }
     func finishPrivateWrite(id: UUID) { pendingWrites.removeValue(forKey: id) }
-    func installCaptureStopHandler(id: UUID, stop: @escaping @MainActor () async -> Void) {
+    @discardableResult
+    func installCaptureStopHandler(id: UUID, stop: @escaping @MainActor () async -> Void) -> Bool {
+        guard captureStopHandler == nil || captureStopHandler?.id == id else { return false }
         captureStopHandler = (id, stop)
+        return true
     }
     func clearCaptureStopHandler(id: UUID) {
         if captureStopHandler?.id == id { captureStopHandler = nil }
