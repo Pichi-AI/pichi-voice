@@ -36,8 +36,30 @@ nonisolated final class DebugLogger: Sendable {
     var fileTranscriptionProvider: any TranscriptionProvider
     private(set) var activeLease: ASRActivityLease?
     private(set) var releases = 0
+    private(set) var begins = 0
+    private(set) var ends = 0
+    private(set) var preparedProviderName: String?
+    var preparationGate: SyntheticFileGate?
+    var releaseGate: SyntheticFileGate?
+    private var admittedProvider: (lease: ASRActivityLease, provider: any TranscriptionProvider)?
     init(provider: any TranscriptionProvider) { fileTranscriptionProvider = provider }
-    func ensureAsrReady() async throws { isAsrReady = true }
+    func ensureAsrReady() async throws {
+        await preparationGate?.hold()
+        preparedProviderName = admittedProvider?.provider.name
+        isAsrReady = true
+    }
+    func beginAdmittedTranscription(lease: ASRActivityLease) throws -> any TranscriptionProvider {
+        precondition(activeLease == lease && admittedProvider == nil)
+        admittedProvider = (lease, fileTranscriptionProvider)
+        begins += 1
+        return fileTranscriptionProvider
+    }
+    func endAdmittedTranscription(lease: ASRActivityLease) async {
+        precondition(admittedProvider?.lease == lease && activeLease == lease)
+        await releaseGate?.hold()
+        admittedProvider = nil
+        ends += 1
+    }
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
         guard activeLease == nil else { throw ASRActivityError.activityInProgress(activity) }
         let lease = ASRActivityLease(id: UUID(), activity: activity)
@@ -45,7 +67,7 @@ nonisolated final class DebugLogger: Sendable {
         return lease
     }
     func releaseExclusiveActivity(_ lease: ASRActivityLease) {
-        precondition(activeLease == lease)
+        precondition(activeLease == lease && admittedProvider == nil)
         activeLease = nil; releases += 1
     }
 }

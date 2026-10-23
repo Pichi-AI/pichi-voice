@@ -56,6 +56,8 @@ import Foundation
         try await heldCompletion(path: "native", partial: false, forceForeign: false, throwsAfterGate: true)
         try await visibleCancellation()
         try await explicitCancellationThenConceal()
+        try await admittedProviderLifetime(holdPreparation: true)
+        try await admittedProviderLifetime(holdPreparation: false)
         try await frozenConfiguration(speaker: false)
         try await frozenConfiguration(speaker: true)
         try await canceledBeforeInference()
@@ -283,6 +285,50 @@ import Foundation
         expect(clear ? reopened.entries.isEmpty : reopened.entries.map(\.text) == ["pending A output"],
             "Clear never resurrects a failed output; valid retry retains original A output")
         try await reopened.prepareForProfileTransition()
+    }
+
+    static func admittedProviderLifetime(holdPreparation: Bool) async throws {
+        let a = try account("provider-lifetime")
+        PrivateProfileStorage.select(a)
+        SettingsStore.shared.fileTranscriptionSpeakerLabelsEnabled = false
+        let original = SyntheticFileProvider("original-provider", native: true)
+        let replacement = SyntheticFileProvider("replacement-provider", native: true)
+        let preparation = SyntheticFileGate(), release = SyntheticFileGate()
+        let asr = ASRService(provider: original)
+        asr.isAsrReady = !holdPreparation
+        asr.preparationGate = holdPreparation ? preparation : nil
+        asr.releaseGate = release
+        let history = try store(a)
+        let service = FileTranscriptionService(asrService: asr, historyStore: history)
+        let url = input("provider-lifetime", frames: 32_000, turns: 1)
+        let work = Task { try await service.transcribeFile(url) }
+        if holdPreparation { await preparation.waitUntilEntered() }
+        else { await release.waitUntilEntered() }
+        expect(asr.begins == 1 && asr.ends == 0, "Provider admission precedes the first preparation await")
+        asr.fileTranscriptionProvider = replacement
+        PrivateProfileStorage.conceal(generation: UUID())
+        let retirement = Task { try await service.prepareForPrivateProfileTransition() }
+        if holdPreparation {
+            await preparation.release()
+            await release.waitUntilEntered()
+            expect(asr.preparedProviderName == original.name, "Cold readiness retains the admitted provider through conceal")
+        }
+        expect(asr.activeLease != nil && asr.releases == 0 && history.admittedWriteCount == 1,
+            "Provider retirement retains both activity and local output ownership until joined")
+        expect(service.result == nil && service.currentFileURL == nil, "Held retirement exposes no private file presentation")
+        await release.release()
+        do { _ = try await work.value; preconditionFailure("Retired provider cannot publish to the caller") }
+        catch is CancellationError { checks += 1 }
+        try await retirement.value
+        expect(asr.ends == 1 && asr.releases == 1 && asr.activeLease == nil,
+            "Provider retirement joins before its exact activity lease releases")
+        expect(replacement.calls == 0 && history.admittedWriteCount == 0,
+            "Retirement neither resolves the replacement provider nor leaks output admission")
+        PrivateProfileStorage.select(a)
+        let saved = try store(a).entries
+        expect(holdPreparation ? saved.isEmpty : saved.count == 1,
+            "Only an already completed original result survives conceal")
+        try await history.prepareForProfileTransition()
     }
 }
 
