@@ -11,7 +11,8 @@ import Foundation
     private let captureDictionaryPronunciation: Bool?
     private var startTask: Task<AudioCaptureStartOutcome, Never>?
     private var stopTask: Task<String, Never>?
-    private var completionTask: Task<Void, Never>?
+    private var completionTask: Task<Bool, Never>?
+    private var preservedConcealedResult = false
     private var stoppedText = ""
     private var stoppedAudio: DictationAudioSnapshot?
     private var acceptedVisibleResult = false
@@ -90,28 +91,28 @@ import Foundation
         return true
     }
 
-    func complete() async {
-        if let completionTask { await completionTask.value; return }
+    @discardableResult func complete() async -> Bool {
+        if let completionTask { return await completionTask.value }
         let task = Task { @MainActor in
-            if !acceptedVisibleResult, !output.isVisible,
-               (!stoppedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || stoppedAudio != nil),
-               let admission = output.admission {
-                let timestamp = Date()
-                output.history.addEntry(timestamp: timestamp, rawText: stoppedText, processedText: stoppedText,
-                    appName: "", windowTitle: "", wasAIProcessed: false, admission: admission)
-                output.saveAudio(stoppedAudio, timestamp: timestamp, model: output.transcriptionModel)
+            if !acceptedVisibleResult, !output.isVisible, !preservedConcealedResult {
+                preservedConcealedResult = true
+                output.preserveLocalResult(text: stoppedText, audio: stoppedAudio)
             }
-            await finish()
+            guard await finish() else { return false }
             stoppedText = ""; stoppedAudio = nil
+            return true
         }
         completionTask = task
-        await task.value
+        let completed = await task.value
+        if !completed { completionTask = nil }
+        return completed
     }
 
-    private func finish() async {
-        await output.finish()
+    @discardableResult private func finish() async -> Bool {
+        guard await output.finish() else { return false }
         isFinished = true
         PrivateProfileService.shared.clearCaptureStopHandler(id: output.id)
+        return true
     }
 }
 #endif

@@ -15,6 +15,7 @@ def between(start, end):
 actual = between("    private struct AdmittedTranscription", "    private var providerResetPending")
 actual += between("    /// Pin the existing provider", "    private let audioCaptureReadinessGate")
 actual += between("    private var transcriptionProvider: TranscriptionProvider", "    private func getGigaAMProvider()")
+actual += between("    func beginStreamingDrainRecovery(sessionID: Int", "\n}\n\n// MARK: - Audio capture pipeline")
 # The generated single source unit permits its tests to inspect the actual private state.
 actual = actual.replace("    private ", "    ")
 combined = template.replace("// ACTUAL_ASR_ADMISSION_SOURCE", actual)
@@ -35,6 +36,8 @@ assert "retainAudio: self.admittedTranscription?.automaticLearning == true" in s
 assert "!PrivateProfileStorage.isReadable(admission.profile)" in stop
 assert "self.finishDictationFinalization(stoppingLease, id: finalizationID)" in stop
 assert "self.admittedTranscription?.retainHistoryAudio == true" in stop
+timeout = stop[stop.index("guard await self.drainActiveStreamingWork"):stop.index('self.benchmarkLog("stop_streaming_wait')]
+assert timeout.index("self.retainAdmittedCaptureAudio(self.audioBuffer.getAll())") < timeout.index("self.beginStreamingDrainRecovery") < timeout.index('return ""')
 recovery = between("    func finishStreamingDrainRecovery(sessionID: Int)", "// MARK: - Audio capture pipeline")
 assert recovery.index("self.recordingBufferHandoffGate.complete(recovery.token)") < recovery.index("self.releaseDictationActivityIfNeeded(recovery.lease)")
 
@@ -44,6 +47,6 @@ with tempfile.TemporaryDirectory(prefix="pichi-dictation-admission-") as directo
     generated.write_text(combined)
     for mode in ([], ["-default-isolation", "MainActor"]):
         executable = directory / ("tests-actor" if mode else "tests-default")
-        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-strict-concurrency=targeted", "-D", "DEBUG", *(["-D", "TEST_MAIN_ACTOR"] if mode else []), *mode, "-module-cache-path", str(directory / "ModuleCache"), str(repo / "Sources/Fluid/Services/ASRActivityLease.swift"), str(generated), "-o", str(executable)], check=True, cwd=repo)
+        subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-strict-concurrency=targeted", "-D", "DEBUG", *(["-D", "TEST_MAIN_ACTOR"] if mode else []), *mode, "-module-cache-path", str(directory / "ModuleCache"), str(repo / "Sources/Fluid/Services/ASRActivityLease.swift"), str(repo / "Sources/Fluid/Services/ThreadSafeAudioBuffer.swift"), str(generated), "-o", str(executable)], check=True, cwd=repo)
         subprocess.run([str(executable)], check=True, cwd=repo)
 print("ASR capture source wiring passed")

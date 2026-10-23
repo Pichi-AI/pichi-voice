@@ -256,14 +256,28 @@ nonisolated struct HistorySearchSelectionRequest: Equatable {
     fileprivate var revoked = false
     fileprivate var entry: TranscriptionHistoryEntry?
     fileprivate var audio: DictationAudioSaveAdmission?
+    fileprivate struct FailedAudioSave {
+        let snapshot: DictationAudioSnapshot
+        let timestamp: Date
+        let model: String?
+        let error: Error
+    }
+    fileprivate var failedAudioSave: FailedAudioSave?
     fileprivate init(history: TranscriptionHistoryStore, write: TranscriptionHistoryWriteAdmission) {
         self.history = history; self.write = write; self.entryID = write.entryID
     }
     func admitAudioSave(timestamp: Date) throws -> DictationAudioSaveAdmission {
         try self.history.admitAudioSave(for: self, timestamp: timestamp)
     }
-    func attachAudio(_ metadata: DictationAudioMetadata, from audio: DictationAudioSaveAdmission) throws {
-        try self.history.attachAudio(metadata, admission: self, from: audio)
+    func attachAudio(_ metadata: DictationAudioMetadata, from audio: DictationAudioSaveAdmission,
+                     audioRecoveryTimestamp: Date? = nil) throws {
+        try self.history.attachAudio(metadata, admission: self, from: audio,
+            audioRecoveryTimestamp: audioRecoveryTimestamp)
+    }
+    func retainFailedAudioSave(_ snapshot: DictationAudioSnapshot, timestamp: Date, model: String?,
+                              from audio: DictationAudioSaveAdmission, error: Error) {
+        self.history.retainFailedAudioSave(snapshot, timestamp: timestamp, model: model,
+            admission: self, from: audio, error: error)
     }
     func finish() async throws { try await self.history.finishRecordingWrite(self) }
     func retryPersistence() async throws { try await self.history.retryRecordingWrite(self) }
@@ -418,18 +432,36 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     fileprivate func attachAudio(_ metadata: DictationAudioMetadata, admission: DictationHistoryWriteAdmission,
-                                 from audio: DictationAudioSaveAdmission) throws {
+                                 from audio: DictationAudioSaveAdmission,
+                                 audioRecoveryTimestamp: Date? = nil) throws {
         guard admission.history === self, admission.audio === audio else { throw CancellationError() }
         defer { audio.complete() }
+        let existing = self.retainedEntries.first(where: { $0.id == admission.entryID }) ?? admission.entry
         guard self.validates(admission, allowFinishing: true), admission.write.saveGeneration == self.audioSaveGeneration,
-              let entry = self.retainedEntries.first(where: { $0.id == admission.entryID }) ?? admission.entry,
+              existing != nil || audioRecoveryTimestamp != nil,
               self.audioStore.claimMetadata(metadata, from: audio, history: admission.write) else {
             audio.discardUnattached()
             throw CancellationError()
         }
+        // An approved recording can have no recognized text. Create its existing history
+        // representation only after claiming the exact reserved WAV, without inventing text.
+        let entry = existing ?? TranscriptionHistoryEntry(id: admission.entryID,
+            timestamp: audioRecoveryTimestamp!, rawText: "", processedText: "", appName: "",
+            windowTitle: "", wasAIProcessed: false)
         let updated = entry.replacingAudio(metadata)
         admission.entry = updated
         self.writeAdmitted(updated, admission: admission)
+    }
+
+    fileprivate func retainFailedAudioSave(_ snapshot: DictationAudioSnapshot, timestamp: Date, model: String?,
+                                           admission: DictationHistoryWriteAdmission,
+                                           from audio: DictationAudioSaveAdmission, error: Error) {
+        guard self.validates(admission, allowFinishing: true), admission.audio === audio,
+              admission.write.saveGeneration == self.audioSaveGeneration else { return }
+        audio.discardUnattached()
+        audio.complete()
+        admission.audio = nil
+        admission.failedAudioSave = .init(snapshot: snapshot, timestamp: timestamp, model: model, error: error)
     }
 
     fileprivate func finishRecordingWrite(_ admission: DictationHistoryWriteAdmission) async throws {
@@ -438,11 +470,15 @@ final class TranscriptionHistoryStore: ObservableObject {
         // Canceled capture may never start its reserved worker. Started workers own their
         // completion through metadata enqueue and must still be joined.
         admission.audio?.abortIfUnstarted()
-        if admission.revoked || admission.entry == nil {
+        if admission.revoked {
             admission.audio?.discardUnattached()
             admission.audio?.complete()
         }
         await admission.audio?.waitUntilCompleted()
+        if let failed = admission.failedAudioSave {
+            admission.finishing = false
+            throw failed.error
+        }
         await self.loadTask?.value
         do { try await self.writer.finish(admission.write) }
         catch {
@@ -468,8 +504,27 @@ final class TranscriptionHistoryStore: ObservableObject {
             try await self.finishRecordingWrite(admission)
             return
         }
-        guard self.validates(admission),
-              let entry = self.retainedEntries.first(where: { $0.id == admission.entryID }) ?? admission.entry else { throw CancellationError() }
+        guard self.validates(admission) else { throw CancellationError() }
+        if let failed = admission.failedAudioSave {
+            let audio = try self.admitAudioSave(for: admission, timestamp: failed.timestamp)
+            do {
+                let metadata = try await Task.detached(priority: .utility) {
+                    try audio.save(snapshot: failed.snapshot, model: failed.model)
+                }.value
+                try self.attachAudio(metadata, admission: admission, from: audio,
+                    audioRecoveryTimestamp: failed.timestamp)
+                admission.failedAudioSave = nil
+            } catch {
+                self.retainFailedAudioSave(failed.snapshot, timestamp: failed.timestamp, model: failed.model,
+                    admission: admission, from: audio, error: error)
+                audio.complete()
+                throw error
+            }
+        }
+        guard let entry = self.retainedEntries.first(where: { $0.id == admission.entryID }) ?? admission.entry else {
+            try await self.finishRecordingWrite(admission)
+            return
+        }
         admission.entry = entry
         self.writeAdmitted(entry, admission: admission)
         try await self.finishRecordingWrite(admission)
@@ -486,9 +541,11 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     private func writeAdmitted(_ entry: TranscriptionHistoryEntry, admission: DictationHistoryWriteAdmission) {
+        // Keep durability state current even while projection is concealed. Retry must
+        // not replace newly attached metadata with an older visible snapshot.
+        if let index = self.retainedEntries.firstIndex(where: { $0.id == entry.id }) { self.retainedEntries[index] = entry }
+        else { self.retainedEntries.insert(entry, at: 0) }
         if self.canAccess {
-            if let index = self.retainedEntries.firstIndex(where: { $0.id == entry.id }) { self.retainedEntries[index] = entry }
-            else { self.retainedEntries.insert(entry, at: 0) }
             self.visibleEntries = self.retainedEntries
             self.refreshTodaySummary()
             if entry.audio != nil { self.scheduleAutomaticAudioPruneToBudget() }
@@ -584,6 +641,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     private func revokeRecordingWrite(for entryID: UUID) {
         guard let admission = self.recordingWrites[entryID] else { return }
         admission.revoked = true
+        admission.failedAudioSave = nil
         self.writer.revoke(admission.write)
         admission.audio?.discardUnattached()
         admission.audio?.complete()
@@ -734,6 +792,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         guard self.hasLoaded else { return 0 }
         self.audioSaveGeneration &+= 1
         for admission in self.recordingWrites.values {
+            admission.failedAudioSave = nil
             admission.audio?.discardUnattached()
             admission.audio?.complete()
         }

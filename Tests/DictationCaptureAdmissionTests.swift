@@ -77,7 +77,30 @@ nonisolated enum AppBrand { static func text(_ value: String) -> String { value 
     var modelProvidersForTesting: [SettingsStore.SpeechModel: TranscriptionProvider] = [:]
     var released: [ASRActivityLease] = []
     var lastCompletedAudioSnapshot: DictationAudioSnapshot?
-    struct Gate { var isRecovering = false }
+    struct Gate {
+        typealias Token = UUID
+        var isRecovering = false
+        mutating func markTimedOut(_ token: Token) { isRecovering = true }
+        mutating func complete(_ token: Token) { isRecovering = false }
+    }
+    typealias RecordingBufferHandoffGate = Gate
+    let audioBuffer = ThreadSafeAudioBuffer()
+    var timedOutStreamingHandoff: (sessionID: Int, token: Gate.Token, lease: ASRActivityLease?)?
+    var benchmarkSessionID = 1
+    struct WorkState { mutating func endSession(_ id: Int) {} }
+    var streamingWorkState = WorkState()
+    struct StreamingTasks { func activeTaskToDrain(sessionID: Int) -> Int? { 1 } }
+    var streamingTaskLifecycle = StreamingTasks()
+    var partialTranscription = ""
+    var previousFullTranscription = ""
+    var isProcessingChunk = false
+    var skipNextChunk = false
+    var resetProviderAfterStreamingRecovery = false
+    var errorMessage = ""
+    static let streamingRecoveryMessage = "synthetic recovery"
+    func presentStreamingRecoveryError() {}
+    func resetTranscriptionProvider() {}
+    func benchmarkLog(_ message: String) {}
     var recordingBufferHandoffGate = Gate()
     func releaseExclusiveActivity(_ lease: ASRActivityLease) {
         guard activeActivityLease == lease else { return }
@@ -145,8 +168,10 @@ actor Gate {
         check(service.admittedTranscription?.skipSilentRecordings == true, "silence choice stays frozen")
         check(service.admittedTranscription?.retainHistoryAudio == true, "conceal cannot discard admitted audio")
         check(service.admittedTranscription?.automaticLearning == false, "hidden default cannot turn original PCM learning on")
+        service.retainAdmittedCaptureAudio([0.125, -0.125])
+        check(service.lastCompletedAudioSnapshot?.samples == [0.125, -0.125], "visible ASR failure retains approved PCM for a later concealed handoff")
         PrivateProfileStorage.readable = false
-        service.retainConcealedCaptureAudio([1, 2, 3])
+        service.retainAdmittedCaptureAudio([1, 2, 3])
         check(service.lastCompletedAudioSnapshot?.samples == [1, 2, 3], "concealed training preserves original audio only under frozen history choices")
         PrivateProfileStorage.readable = true
         check(service.isTranscriptionSelectionCurrent(model: .gigaam, admittedLease: leaseA), "admitted readiness survives concealed defaults")
@@ -198,7 +223,7 @@ actor Gate {
         check(service.admittedTranscription?.retainHistoryAudio == false, "B owns its own output choices")
         service.lastCompletedAudioSnapshot = nil
         PrivateProfileStorage.readable = false
-        service.retainConcealedCaptureAudio([4, 5])
+        service.retainAdmittedCaptureAudio([4, 5])
         check(service.lastCompletedAudioSnapshot == nil, "conceal cannot enable audio when original history choices prohibited it")
         PrivateProfileStorage.readable = true
         check(!service.isTranscriptionSelectionCurrent(model: .gigaam, admittedLease: leaseA), "stale admission cannot pass readiness")
@@ -236,6 +261,46 @@ actor Gate {
         await service.endAdmittedTranscription(lease: fileLease)
         check(service.admittedTranscription == nil && service.activeActivityLease == fileLease, "file caller joins provider end before releasing exclusive lease")
         service.releaseExclusiveActivity(fileLease)
+        let apiLease = ASRActivityLease(id: UUID(), activity: .localAPI)
+        service.activeActivityLease = apiLease
+        settings.selectedSpeechModel = .gigaam
+        _ = try service.beginAdmittedTranscription(lease: apiLease)
+        settings.selectedSpeechModel = .whisper
+        PrivateProfileStorage.readable = false
+        check((service.transcriptionProvider as AnyObject) === a && service.selectedTranscriptionModel == .gigaam,
+            "local API cold preparation owns the same admitted provider and model")
+        await service.endAdmittedTranscription(lease: apiLease)
+        service.releaseExclusiveActivity(apiLease)
+        PrivateProfileStorage.readable = true
+
+        let recoveryService = ASRService(), recoveryProvider = Provider("recovery")
+        recoveryService.modelProvidersForTesting = [.gigaam: recoveryProvider]
+        settings.selectedSpeechModel = .gigaam
+        settings.saveTranscriptionHistory = true; settings.saveAudioWithTranscriptionHistory = true
+        let recoveryLease = ASRActivityLease(id: UUID(), activity: .dictation)
+        recoveryService.activeActivityLease = recoveryLease; recoveryService.dictationActivityLease = recoveryLease
+        try recoveryService.admitDictationTranscription(recoveryLease)
+        recoveryService.audioBuffer.append([0.125, -0.125])
+        // The runner checks this exact handoff precedes the production timeout return.
+        recoveryService.retainAdmittedCaptureAudio(recoveryService.audioBuffer.getAll())
+        let recoveryToken = UUID()
+        recoveryService.beginStreamingDrainRecovery(sessionID: 1, token: recoveryToken)
+        PrivateProfileStorage.readable = false
+        check(recoveryService.lastCompletedAudioSnapshot?.samples == [0.125, -0.125],
+            "timeout hands off approved original PCM before a late conceal")
+        check(recoveryService.activeActivityLease == recoveryLease && recoveryProvider.ends == 0,
+            "timed-out streaming keeps its provider lease until actual completion")
+        recoveryService.finishStreamingDrainRecovery(sessionID: 2)
+        check(recoveryService.audioBuffer.getAll() == [0.125, -0.125], "stale recovery cannot clear the original buffer")
+        recoveryService.finishStreamingDrainRecovery(sessionID: 1)
+        await recoveryService.dictationReleaseTask?.task.value
+        check(recoveryService.audioBuffer.getAll().isEmpty
+            && recoveryService.lastCompletedAudioSnapshot?.samples == [0.125, -0.125],
+            "actual recovery clears only its buffer and preserves the handed-off original snapshot")
+        check(recoveryProvider.ends == 1 && recoveryService.activeActivityLease == nil,
+            "actual streaming recovery joins the original provider before releasing its lease")
+        PrivateProfileStorage.readable = true
+
         let hiddenLease = ASRActivityLease(id: UUID(), activity: .fileTranscription)
         service.activeActivityLease = hiddenLease
         PrivateProfileStorage.acceptsNewWork = false

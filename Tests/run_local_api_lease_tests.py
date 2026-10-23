@@ -158,7 +158,7 @@ lease_source = lease_path.read_text() if lease_path.exists() else source
 executor_path = repo / 'Sources/Fluid/Services/TranscriptionExecutor.swift'
 executor_source = executor_path.read_text() if executor_path.exists() else source
 methods = '\n'.join(declaration(source, 'func', name) for name in (
-    'transcribeSamplesForAPI', 'transcribeSamplesForAPIWithLease', 'transcribeFileForAPI',
+    'transcribeSamplesForAPI', 'transcribeSamplesForAPIWithLease', 'transcribeFileForAPI', 'transcribeFileForAPIWithLease',
 ))
 leases = '\n'.join(declaration(source, 'func', name) for name in (
     'acquireExclusiveActivity', 'releaseExclusiveActivity',
@@ -208,6 +208,9 @@ final class Provider {
     var fileCalls = 0
     var shouldFail = false
     var gate: Gate?
+    var endGate: Gate?
+    var begins = 0
+    var ends = 0
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         finalCalls.append(samples)
         if let gate { await gate.pause() }
@@ -220,11 +223,16 @@ final class Provider {
         return ASRTranscriptionResult(text: "file result", confidence: 0.8)
     }
 }
-enum PrivateProfileStorage { static let acceptsNewWork = true }
+struct PrivateProfileSnapshot { let id: String }
+enum PrivateProfileStorage {
+    static var acceptsNewWork = true
+    static var current = PrivateProfileSnapshot(id: "A")
+    static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool { acceptsNewWork && current.id == profile.id }
+}
 @MainActor final class ASRService {
     var isTerminating = false
     var privateProfileResetInProgress = false
-    struct AdmittedProbe { let lease: ASRActivityLease }
+    struct AdmittedProbe { let lease: ASRActivityLease; let provider: Provider; let profile: PrivateProfileSnapshot }
     var admittedTranscription: AdmittedProbe?
     var activeActivityLease: ASRActivityLease?
     var activeExclusiveActivity: ASRExclusiveActivity?
@@ -236,10 +244,27 @@ enum PrivateProfileStorage { static let acceptsNewWork = true }
     var isLoadingModel = true
     var modelPreparationPhase: String? = "loading"
     var prepareFails = false
+    var prepareGate: Gate?
     var outputCount = 0
     func isMeetingASRClaimBlocking(lease: ASRActivityLease) -> Bool { false }
     func resetTranscriptionProvider() {}
-    func ensureAsrReady() async throws { if prepareFails { throw CancellationError() } }
+    func beginAdmittedTranscription(lease: ASRActivityLease) throws -> Provider {
+        check(activeActivityLease == lease && admittedTranscription == nil, "Exact local API admission is required")
+        let provider = transcriptionProvider
+        provider.begins += 1
+        admittedTranscription = .init(lease: lease, provider: provider, profile: PrivateProfileStorage.current)
+        return provider
+    }
+    func endAdmittedTranscription(lease: ASRActivityLease) async {
+        guard let admission = admittedTranscription, admission.lease == lease else { return }
+        if let gate = admission.provider.endGate { await gate.pause() }
+        admission.provider.ends += 1
+        admittedTranscription = nil
+    }
+    func ensureAsrReady() async throws {
+        if let prepareGate { await prepareGate.pause() }
+        if prepareFails { throw CancellationError() }
+    }
     static func applySpokenPunctuationFormatting(_ text: String) -> String { text }
     static func applyCustomDictionary(_ text: String) -> String { text }
     static func removeFillerWords(_ text: String) -> String { text }
@@ -318,6 +343,44 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
             check(service.transcriptionProvider.finalCalls.first?.count == 16000 && service.activeActivityLease == nil, "Direct samples API still acquires/releases and pads")
             passes += 1
         }
+        for file in [false, true] {
+            for cancel in [false, true] {
+                PrivateProfileStorage.acceptsNewWork = true
+                PrivateProfileStorage.current = .init(id: "A")
+                let service = ASRService(), original = service.transcriptionProvider
+                let prepareGate = Gate(), endGate = Gate()
+                service.prepareGate = prepareGate; original.endGate = endGate
+                LocalAPIAudioDecoder.sampleCount = 32_000
+                let request = Task {
+                    if file { return try await service.transcribeFileForAPI(url).result }
+                    return try await service.transcribeSamplesForAPI([0.125])
+                }
+                while !(await prepareGate.entered) { await Task.yield() }
+                check(original.begins == 1, "Admission precedes cold preparation")
+                let other = Provider(); service.transcriptionProvider = other
+                PrivateProfileStorage.acceptsNewWork = false
+                PrivateProfileStorage.current = .init(id: "B")
+                if cancel { request.cancel() }
+                await prepareGate.release()
+                while !(await endGate.entered) { await Task.yield() }
+                check(service.activeExclusiveActivity == .localAPI && service.admittedTranscription?.provider === original,
+                    "Provider end is joined before the API lease is released")
+                check(other.finalCalls.isEmpty && other.fileCalls == 0 && service.outputCount == 0,
+                    "Conceal cannot retarget provider or publish private dictionary/boost state")
+                if !cancel {
+                    check(original.finalCalls.count + original.fileCalls == 1, "Cold API work uses the admitted provider")
+                }
+                await endGate.release()
+                do {
+                    _ = try await request.value
+                    check(!cancel, "Canceled API must not return a result")
+                } catch { check(cancel, "Only canceled synthetic API should fail") }
+                check(original.ends == 1 && other.ends == 0 && service.activeActivityLease == nil,
+                    "Success and cancellation release exactly the original provider after joining")
+                passes += 1
+            }
+        }
+        PrivateProfileStorage.acceptsNewWork = true
         print("PASS \(passes) API scenarios using production API methods, activity ownership and transcription executor")
     }
 }

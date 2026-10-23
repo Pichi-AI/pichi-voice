@@ -883,10 +883,10 @@ final class ASRService: ObservableObject {
     }
 
     /// Pin the existing provider and its configuration before an admitted consumer suspends.
-    /// File transcription and dictation share this selection and the existing preparation path.
+    /// File transcription, local API and dictation share this selection and the existing preparation path.
     func beginAdmittedTranscription(lease: ASRActivityLease) throws -> TranscriptionProvider {
         guard self.activeActivityLease == lease,
-              lease.activity == .dictation || lease.activity == .fileTranscription else { throw CancellationError() }
+              lease.activity == .dictation || lease.activity == .fileTranscription || lease.activity == .localAPI else { throw CancellationError() }
         if let admission = self.admittedTranscription {
             guard admission.lease == lease else { throw CancellationError() }
             return admission.provider
@@ -952,9 +952,9 @@ final class ASRService: ObservableObject {
         self.dictationReleaseTask = (lease, task)
     }
 
-    private func retainConcealedCaptureAudio(_ samples: [Float]) {
+    private func retainAdmittedCaptureAudio(_ samples: [Float]) {
         guard let admission = self.admittedTranscription, admission.retainHistoryAudio,
-              !PrivateProfileStorage.isReadable(admission.profile), !samples.isEmpty else { return }
+              !samples.isEmpty else { return }
         self.lastCompletedAudioSnapshot = DictationAudioSnapshot(samples: samples, sampleRate: 16_000, channels: 1)
     }
 
@@ -3891,6 +3891,10 @@ final class ASRService: ObservableObject {
         let streamingStopStartedAt = Date().timeIntervalSince1970
         traceStop("streaming_drain_begin")
         guard await self.drainActiveStreamingWork(sessionID: stoppingSessionID) else {
+            // Capture hardware is stopped and its pipeline is finished. Snapshot the approved
+            // original PCM before returning to the retained output owner. Streaming recovery
+            // keeps its buffer until the provider returns, then clears that separate copy.
+            self.retainAdmittedCaptureAudio(self.audioBuffer.getAll())
             self.beginStreamingDrainRecovery(sessionID: stoppingSessionID, token: bufferHandoffToken)
             completedBufferHandoff = true // Recovery owns the PCM handoff until real work ends.
             self.lastStopOutcome = .failed
@@ -3910,7 +3914,7 @@ final class ASRService: ObservableObject {
         var pcm = self.audioBuffer.getAll()
         self.audioBuffer.clear()
         let capturedPCM = pcm
-        self.retainConcealedCaptureAudio(capturedPCM)
+        self.retainAdmittedCaptureAudio(capturedPCM)
         traceStop("buffer_copied")
         let hasRecognizedStreamingPreview = !self.partialTranscription
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4137,7 +4141,7 @@ final class ASRService: ObservableObject {
                 .benchmarkLog(
                     "stop_end result=success totalMs=\(self.elapsedMilliseconds(since: stopStartedAt)) recordingAgeMs=\(self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)) cleanedChars=\(outputText.count)"
                 )
-            self.retainConcealedCaptureAudio(capturedPCM)
+            self.retainAdmittedCaptureAudio(capturedPCM)
             if !isolatedDictionaryCapture,
                self.admittedTranscription?.retainHistoryAudio == true,
                !capturedPCM.isEmpty
@@ -4159,7 +4163,7 @@ final class ASRService: ObservableObject {
                 : .success
             return outputText
         } catch {
-            self.retainConcealedCaptureAudio(capturedPCM)
+            self.retainAdmittedCaptureAudio(capturedPCM)
             self.lastStopOutcome = .failed
             DebugLogger.shared.error("ASR transcription failed: \(error)", source: "ASRService")
             DebugLogger.shared.error("Error details: \(error.localizedDescription)", source: "ASRService")
@@ -4256,10 +4260,22 @@ final class ASRService: ObservableObject {
     func transcribeSamplesForAPI(_ inputSamples: [Float]) async throws -> ASRTranscriptionResult {
         let lease = try self.acquireExclusiveActivity(.localAPI)
         defer { self.releaseExclusiveActivity(lease) }
-        return try await self.transcribeSamplesForAPIWithLease(inputSamples)
+        do {
+            _ = try self.beginAdmittedTranscription(lease: lease)
+            let result = try await self.transcribeSamplesForAPIWithLease(inputSamples)
+            await self.endAdmittedTranscription(lease: lease)
+            return result
+        } catch {
+            await self.endAdmittedTranscription(lease: lease)
+            throw error
+        }
     }
 
     private func transcribeSamplesForAPIWithLease(_ inputSamples: [Float]) async throws -> ASRTranscriptionResult {
+        guard let admission = self.admittedTranscription, admission.lease == self.activeActivityLease else {
+            throw CancellationError()
+        }
+        let provider = admission.provider
         var samples = inputSamples
         guard !samples.isEmpty else {
             return ASRTranscriptionResult(text: "", confidence: 0)
@@ -4271,7 +4287,8 @@ final class ASRService: ObservableObject {
         }
 
         try await self.ensureAsrReady()
-        guard self.transcriptionProvider.isReady else {
+        try Task.checkCancellation()
+        guard provider.isReady else {
             throw NSError(
                 domain: "ASRService",
                 code: -2,
@@ -4279,10 +4296,14 @@ final class ASRService: ObservableObject {
             )
         }
 
-        let result = try await transcriptionExecutor.run { [provider = self.transcriptionProvider] in
+        let result = try await transcriptionExecutor.run { [provider] in
             try await provider.transcribeFinal(samples)
         }
 
+        try Task.checkCancellation()
+        guard PrivateProfileStorage.isReadable(admission.profile), PrivateProfileStorage.acceptsNewWork else {
+            return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
+        }
         if !self.hasCompletedFirstTranscription {
             self.hasCompletedFirstTranscription = true
             self.isLoadingModel = false
@@ -4299,6 +4320,23 @@ final class ASRService: ObservableObject {
     func transcribeFileForAPI(_ fileURL: URL) async throws -> (result: ASRTranscriptionResult, sampleCount: Int) {
         let lease = try self.acquireExclusiveActivity(.localAPI)
         defer { self.releaseExclusiveActivity(lease) }
+        do {
+            _ = try self.beginAdmittedTranscription(lease: lease)
+            let result = try await self.transcribeFileForAPIWithLease(fileURL)
+            await self.endAdmittedTranscription(lease: lease)
+            return result
+        } catch {
+            await self.endAdmittedTranscription(lease: lease)
+            throw error
+        }
+    }
+
+    /// The public entry owns the single joined admission across every file route and return.
+    private func transcribeFileForAPIWithLease(_ fileURL: URL) async throws -> (result: ASRTranscriptionResult, sampleCount: Int) {
+        guard let admission = self.admittedTranscription, admission.lease == self.activeActivityLease else {
+            throw CancellationError()
+        }
+        let provider = admission.provider
         guard FileManager.default.isReadableFile(atPath: fileURL.path) else {
             throw NSError(
                 domain: "ASRService",
@@ -4310,7 +4348,7 @@ final class ASRService: ObservableObject {
         let estimatedSamples = try LocalAPIAudioDecoder.estimatedSampleCount(for: fileURL)
 
         try await self.ensureAsrReady()
-        let provider = self.transcriptionProvider
+        try Task.checkCancellation()
         guard provider.isReady else {
             throw NSError(
                 domain: "ASRService",
@@ -4365,6 +4403,10 @@ final class ASRService: ObservableObject {
                 return (ASRTranscriptionResult(text: "", confidence: 0), sampleCount: 0)
             }
 
+            try Task.checkCancellation()
+            guard PrivateProfileStorage.isReadable(admission.profile), PrivateProfileStorage.acceptsNewWork else {
+                return (ASRTranscriptionResult(text: combinedText, confidence: confidence), sampleCount: estimatedSamples)
+            }
             if !self.hasCompletedFirstTranscription {
                 self.hasCompletedFirstTranscription = true
                 self.isLoadingModel = false
@@ -4385,6 +4427,10 @@ final class ASRService: ObservableObject {
             try await provider.transcribeFile(at: fileURL)
         }
 
+        try Task.checkCancellation()
+        guard PrivateProfileStorage.isReadable(admission.profile), PrivateProfileStorage.acceptsNewWork else {
+            return (ASRTranscriptionResult(text: result.text, confidence: result.confidence), sampleCount: estimatedSamples)
+        }
         if !self.hasCompletedFirstTranscription {
             self.hasCompletedFirstTranscription = true
             self.isLoadingModel = false
