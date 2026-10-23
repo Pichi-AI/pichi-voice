@@ -14,10 +14,11 @@
     @MainActor static func main() async throws {
         let original = PrivateProfileStorage.current
         defer { PrivateProfileStorage.select(original) }
-        let profileA = try PrivateProfileStorage.proposed(context: nil, generation: UUID())
+        let profileA = try PrivateProfileStorage.proposed(context: nil, generation: UUID(),
+            legacyRootDirectory: URL(fileURLWithPath: ProcessInfo.processInfo.environment["PICHI_FEEDBACK_PROFILE_ROOT"]!))
         let identityB = AccountIdentity(issuer: "https://synthetic.invalid", subject: "b", internalUserID: "b")
         let contextB = AccountContext(identity: identityB, organizationID: nil, workspaceID: nil, generation: UUID())
-        let profileB = try PrivateProfileStorage.proposed(context: contextB, generation: UUID())
+        let profileB = try PrivateProfileStorage.proposed(context: contextB, generation: UUID(), legacyRootDirectory: profileA.legacyRootDirectory)
 
         // Real queued publication and all three real callbacks still work for their admitted owner.
         PrivateProfileStorage.select(profileA)
@@ -100,6 +101,7 @@
         try await checkMenuFeedback(profileA: profileA, profileB: profileB)
         try await checkDiscoveryAdmission(profileA: profileA, profileB: profileB)
         try await checkPasteVerification(profileA: profileA, profileB: profileB)
+        try await checkJoinedDiscovery(profileA: profileA, profileB: profileB)
         print("Private capture feedback: \(checks) actual-buffer and callback checks passed")
     }
 
@@ -201,9 +203,14 @@
         PrivateProfileStorage.select(profileB)
         await drainMenuQueue()
         check(AppServices.shared.starts == starts, "A queued A menu Start does not admit capture under B")
+        let freshCapture = MenuStartGate()
+        AppServices.shared.meetingSessionCoordinator.captureGate = freshCapture
         queuedStart.startMeetingRecording()
-        await drainMenuQueue()
+        await freshCapture.waitUntilEntered()
         check(AppServices.shared.starts == starts + 1, "A fresh B menu Start remains usable")
+        freshCapture.open()
+        while queuedStart.meetingStartRequested { await Task.yield() }
+        AppServices.shared.meetingSessionCoordinator.captureGate = nil
         PrivateProfileStorage.conceal(generation: UUID())
         NotificationCenter.default.post(name: PrivateProfileService.willConceal, object: nil)
         await drainMenuQueue()
@@ -286,15 +293,67 @@
         let suppressed = typing.verifyPasteLanded("dismissed B output", before: before, profile: profileB, isOutputValid: { false })
         check(suppressed == nil, "The original caller's output-validity callback can suppress verification admission")
     }
+
+    @MainActor private static func checkJoinedDiscovery(profileA: PrivateProfileSnapshot, profileB: PrivateProfileSnapshot) async throws {
+        let state = DiscoveryTransitionState()
+        let profiles = PrivateProfileService.shared
+        try profiles.configure(isBusy: { state.busy }, prepare: {}, activate: { _ in })
+        for holdMicrophone in [true, false] {
+            PrivateProfileStorage.select(profileA)
+            SettingsStore.shared.meetingRecordingDefaults.owner = "A"
+            let service = AppServices(), gate = MenuStartGate()
+            MeetingCaptureSourceCatalog.microphoneGate = holdMicrophone ? gate : nil
+            MeetingCaptureSourceCatalog.applicationGate = holdMicrophone ? nil : gate
+            let discovery = Task { try await service.startMeetingRecordingFromMenuBar() }
+            await gate.waitUntilEntered()
+            state.finished = false
+            let transition = Task {
+                defer { state.finished = true }
+                try await profiles.transition(from: nil, to: profileB.context, generation: profileB.generation)
+            }
+            while !profiles.isTransitioning && !state.finished { await Task.yield() }
+            for _ in 0..<20 { await Task.yield() }
+            check(!state.finished && profiles.isTransitioning && !PrivateProfileStorage.current.isReadable
+                  && PrivateProfileStorage.current.generation == profileA.generation && service.starts == 0,
+                  "Actual profile transition joins held discovery before committing B or admitting capture")
+            gate.open()
+            do { try await discovery.value; check(false, "Retired discovery cannot produce a capture configuration") }
+            catch { check(error is CancellationError && gate.wasCancelled,
+                          "Actual discovery owner cancellation joins a catalog operation that ignored cancellation") }
+            try await transition.value
+            check(state.finished && PrivateProfileStorage.current.context == profileB.context && service.starts == 0,
+                  "B activates only after original discovery cancellation joins without coordinator capture")
+            MeetingCaptureSourceCatalog.microphoneGate = nil; MeetingCaptureSourceCatalog.applicationGate = nil
+        }
+        SettingsStore.shared.meetingRecordingDefaults.owner = "B"
+        let admitted = AppServices(), captureGate = MenuStartGate()
+        admitted.meetingSessionCoordinator.captureGate = captureGate
+        let capture = Task { try await admitted.startMeetingRecordingFromMenuBar() }
+        await captureGate.waitUntilEntered()
+        state.busy = true
+        do { try await profiles.transition(from: profileB.context, to: nil, generation: UUID()); check(false, "Admitted capture requires busy logout") }
+        catch { check(error as? AccountError == .busy, "Busy logout preserves the coordinator's existing capture admission") }
+        check(!capture.isCancelled && admitted.starts == 1 && admitted.meetingSessionCoordinator.stops == 0
+              && !PrivateProfileStorage.current.isReadable,
+              "Joined discovery ownership does not cancel or stop the subsequently admitted capture on logout")
+        captureGate.open()
+        try await capture.value
+        check(!captureGate.wasCancelled && !admitted.meetingSessionCoordinator.captureWasCancelled,
+              "Coordinator capture runs outside the retired discovery owner and finishes under its original admission")
+        state.busy = false
+        try await profiles.transition(from: nil, to: nil, generation: UUID())
+    }
 }
 
 @MainActor final class MenuStartGate {
     private var entered = false
     private var waiter: CheckedContinuation<Void, Never>?
-    func hold() async { entered = true; await withCheckedContinuation { waiter = $0 } }
+    var wasCancelled = false
+    func hold() async { entered = true; await withCheckedContinuation { waiter = $0 }; wasCancelled = Task.isCancelled }
     func waitUntilEntered() async { while !entered { await Task.yield() } }
     func open() { waiter?.resume(); waiter = nil }
 }
+@MainActor private final class DiscoveryTransitionState { var busy = false; var finished = false }
 private enum MenuStartError: LocalizedError {
     case failed(String)
     var errorDescription: String? { switch self { case let .failed(message): return message } }

@@ -5,29 +5,33 @@ extension AppServices {
     func startMeetingRecordingFromMenuBar() async throws {
         let profile = PrivateProfileStorage.current
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
-        let defaults = SettingsStore.shared.meetingRecordingDefaults
-        let target = defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .selectedApplication && defaults.usesAutomaticApplication ? self.meetingAutomaticTarget : nil
-        if defaults.mode == .onlineCall, defaults.effectiveApplicationAudioScope == .selectedApplication, defaults.usesAutomaticApplication, target == nil {
-            throw MeetingCaptureError.applicationNotSelected
+        let discovery = PrivateProfileOperationOwner(registerForTransitions: true)
+        let configuration = try await discovery.perform {
+            let defaults = SettingsStore.shared.meetingRecordingDefaults
+            let target = defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .selectedApplication && defaults.usesAutomaticApplication ? self.meetingAutomaticTarget : nil
+            if defaults.mode == .onlineCall, defaults.effectiveApplicationAudioScope == .selectedApplication, defaults.usesAutomaticApplication, target == nil {
+                throw MeetingCaptureError.applicationNotSelected
+            }
+            let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
+            let microphones = await MeetingCaptureSourceCatalog.microphoneSnapshot()
+            try Task.checkCancellation()
+            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
+            let applications = try await defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .selectedApplication ? MeetingCaptureSourceCatalog.availableApplications() : []
+            try Task.checkCancellation()
+            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
+            // Never capture a replacement app when detection changed during source discovery.
+            if let target, target != self.meetingAutomaticTarget {
+                throw MeetingCaptureError.applicationUnavailable(target.bundleIdentifier)
+            }
+            return try Self.menuBarMeetingConfiguration(
+                defaults: defaults,
+                target: target,
+                microphones: microphones,
+                applications: applications,
+                preferredInputUID: preferredInputUID
+            )
         }
-        let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
-        let microphones = await MeetingCaptureSourceCatalog.microphoneSnapshot()
-        try Task.checkCancellation()
-        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
-        let applications = try await defaults.mode == .onlineCall && defaults.effectiveApplicationAudioScope == .selectedApplication ? MeetingCaptureSourceCatalog.availableApplications() : []
-        try Task.checkCancellation()
-        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
-        // Never capture a replacement app when detection changed during source discovery.
-        if let target, target != self.meetingAutomaticTarget {
-            throw MeetingCaptureError.applicationUnavailable(target.bundleIdentifier)
-        }
-        let configuration = try Self.menuBarMeetingConfiguration(
-            defaults: defaults,
-            target: target,
-            microphones: microphones,
-            applications: applications,
-            preferredInputUID: preferredInputUID
-        )
+        // Capture admission belongs to the coordinator after discovery work has joined.
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }
         _ = try await self.meetingSessionCoordinator.startRecording(configuration: configuration)
     }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run actual capture presentation callbacks and stream buffer with UI-free doubles."""
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -26,6 +27,7 @@ def main():
     parser.add_argument("--unguarded-menu", choices=["preview", "meeting", "conceal", "start-error", "queued-start"],
                         help="Negative control that removes one menu source-owner or conceal fence")
     parser.add_argument("--unguarded-discovery", action="store_true", help="Negative control for the actual held discovery/start path")
+    parser.add_argument("--unjoined-discovery", action="store_true", help="Negative control for discovery transition registration")
     parser.add_argument("--unguarded-verifier", choices=["post", "presentation"], help="Negative control for retained paste feedback")
     args = parser.parse_args()
     source_path = "Sources/Fluid/ContentView.swift"
@@ -52,6 +54,9 @@ def main():
     service_start = declaration(service, "    func startMeetingRecordingFromMenuBar()")
     if args.unguarded_discovery:
         service_start = service_start.replace("guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { throw CancellationError() }", "")
+        service_start = service_start.replace("PrivateProfileOperationOwner(registerForTransitions: true)", "UnownedDiscoveryDouble()")
+    if args.unjoined_discovery:
+        service_start = service_start.replace("PrivateProfileOperationOwner(registerForTransitions: true)", "PrivateProfileOperationOwner(registerForTransitions: false)")
     coordinator = (ROOT / "Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift").read_text()
     partial_start = menu.index("        asrService.$partialTranscription")
     partial_end = menu.index("            .store(in: &self.cancellables)", partial_start) + len("            .store(in: &self.cancellables)")
@@ -97,13 +102,13 @@ def main():
     elif args.unguarded_menu == "queued-start":
         menu_methods = menu_methods.replace("Task { @MainActor in\n            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }", "Task { @MainActor in", 1)
     generated = "import Foundation\nimport Combine\n" + buffer + "\n@MainActor\n" + schedule + "\n" + r'''
-@MainActor protocol PrivateProfileTransitionParticipant: AnyObject {
-    func prepareForPrivateProfileTransition() async throws
+@MainActor protocol AccountSessionLifecycle: AnyObject {
+    var isAccountIsolationReady: Bool { get }
+    func transition(from: AccountContext?, to: AccountContext?, generation: UUID) async throws
 }
-@MainActor final class PrivateProfileService {
-    static let shared = PrivateProfileService()
-    static let willConceal = Notification.Name("SyntheticPrivateConceal")
-    func register(_ participant: any PrivateProfileTransitionParticipant) {}
+@MainActor final class PrivateProfileMeetingStore {
+    static let shared = PrivateProfileMeetingStore()
+    func finishProfileTransition() async {}
 }
 @MainActor final class MenuBarDouble {
     var flushes = 0, processing = 0, reservations = 0
@@ -162,9 +167,13 @@ struct MeetingSession {
     var stops = 0
     var starts = 0
     var configurationOwners: [String] = []
+    var captureGate: MenuStartGate?
+    var captureWasCancelled = false
     func stopAndTranscribe() async throws { stops += 1 }
     func startRecording(configuration: MeetingCaptureConfiguration) async throws {
         starts += 1; configurationOwners.append(configuration.owner)
+        await captureGate?.hold()
+        captureWasCancelled = Task.isCancelled
     }
 }
 @MainActor final class ASRService {
@@ -190,7 +199,10 @@ struct MeetingRecordingDefaults {
     var usesAutomaticApplication = false
     var owner = "synthetic"
 }
-struct MeetingCaptureConfiguration { let owner: String }
+struct MeetingCaptureConfiguration: Sendable { let owner: String }
+@MainActor final class UnownedDiscoveryDouble {
+    func perform<Value: Sendable>(_ operation: @escaping @MainActor () async throws -> Value) async throws -> Value { try await operation() }
+}
 struct MeetingMicrophoneCatalogSnapshot {}
 struct MeetingApplicationIdentity {}
 enum MeetingAutoDetector { struct ResolvedTarget: Equatable { let bundleIdentifier: String } }
@@ -299,9 +311,11 @@ extension Notification.Name { static let fluidPasteNotLanded = Notification.Name
             subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", *flags,
                             "-module-cache-path", str(temporary / "ModuleCache"),
                             str(temporary / "ProfileTypes.swift"), "Sources/Fluid/Account/PrivateProfileStorage.swift",
-                            "Sources/Fluid/Account/PrivateProfileOperationOwner.swift", str(temporary / "FeedbackTests.swift"),
+                            "Sources/Fluid/Account/PrivateProfileOperationOwner.swift", "Sources/Fluid/Account/PrivateProfileService.swift",
+                            str(temporary / "FeedbackTests.swift"),
                             "-o", str(executable)], cwd=ROOT, check=True)
-            subprocess.run([str(executable)], cwd=ROOT, check=True, timeout=20)
+            subprocess.run([str(executable)], cwd=ROOT, check=True, timeout=20,
+                           env={**os.environ, "PICHI_FEEDBACK_PROFILE_ROOT": str(temporary / ("profiles-" + label))})
     if not args.baseline_ref:
         subprocess.run(["xcrun", "swiftc", "-frontend", "-parse", source_path,
                         "Sources/Fluid/Services/MenuBarManager.swift",
