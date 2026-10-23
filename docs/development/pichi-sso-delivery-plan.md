@@ -108,6 +108,12 @@ Before releasing a delivery dependency, check its allowed paths, source membersh
 
 Each feature PR is independently reviewable and testable in its declared dependency context. It is not necessarily mergeable before its prerequisites. Do not squash unrelated session scopes into an integration feature PR.
 
+## Existing production accounts
+
+The user also requires a gradual future transition of existing production accounts. Follow the [account migration design](pichi-production-account-migration.md): preserve canonical user IDs, current browser sessions, history and application rights; initially federate existing credentials at normal login; enable verified browser conversion by cohort only after full legacy web parity and revocation checks. Password storage transfer is a separate optional stage with monotonic credential authority and rollback barriers.
+
+W1 and I1 own the future application/provider mechanisms within their focused delivery scopes. This design does not add an implementation PR or authorize production changes. Current OIDC sessions select the restricted own-import surface, so the current callback cannot be used unchanged to migrate existing full web accounts. Native bearer restrictions, optional sign-in, guest isolation and separate cloud consent remain unchanged. Neiroplan/Casdoor and panel-admin migration remain outside this delivery.
+
 ## Required verification by owner
 
 | Owner | Required focused checks |
