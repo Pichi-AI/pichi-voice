@@ -15,9 +15,15 @@ import Foundation
     private let restoration: AccountRestorationPolicy
     private var lifecycle: (any AccountSessionLifecycle)?
     private var grant: AccountGrant?
-    private var operation: Task<Void, Error>?
-    private var operationID: UUID?
+    private enum OperationKind { case admission, restoration, workspace }
+    private struct OwnedOperation {
+        let id: UUID
+        let kind: OperationKind
+        let task: Task<Void, Error>
+    }
+    private var ownedOperation: OwnedOperation?
     private var refreshTask: Task<AccountGrant, Error>?
+    private var refreshID: UUID?
     private var logoutTask: Task<Void, Never>?
     private var boundaryInProgress = false
     private var cleanupRequired = false
@@ -38,29 +44,53 @@ import Foundation
 
     /// Composition-only handoff. UI must never manufacture an isolation participant.
     func installLifecycle(_ lifecycle: any AccountSessionLifecycle) throws {
-        guard self.lifecycle == nil, operation == nil, refreshTask == nil, grant == nil, !boundaryInProgress else { throw AccountError.busy }
+        guard self.lifecycle == nil, ownedOperation == nil, refreshTask == nil, grant == nil, !boundaryInProgress else { throw AccountError.busy }
         self.lifecycle = lifecycle
     }
 
     func signIn() async {
-        if state == .reauthenticationRequired { await logout() }
+        let requiresExplicitIdentity = state == .reauthenticationRequired
+        if requiresExplicitIdentity { await logout() }
+        await beginSignIn(requiresExplicitIdentity: requiresExplicitIdentity, excluding: nil)
+    }
+
+    /// Explicit person switch requests a fresh browser interaction and rejects the prior
+    /// verified identity if a federated provider nevertheless returns it without a choice.
+    func switchPerson() async {
+        let previousIdentity = context?.identity ?? grant?.identity
+        await logout()
+        guard !cleanupRequired else { return }
+        await beginSignIn(requiresExplicitIdentity: true, excluding: previousIdentity)
+    }
+
+    private func beginSignIn(requiresExplicitIdentity: Bool, excluding previousIdentity: AccountIdentity?) async {
         guard let configuration else { presentationError = .unconfigured; return }
         guard isSignInAvailable else { presentationError = cleanupRequired ? .credentialsUnavailable : .isolationRequired; return }
-        guard operation == nil, grant == nil else { presentationError = .busy; return }
+        guard ownedOperation == nil, grant == nil else { presentationError = .busy; return }
         presentationError = nil; state = .signingIn; generation = UUID()
         let captured = generation, id = UUID()
         let task = Task { @MainActor in
             do {
                 let attempt = try AccountAuthorizationAttempt(redirectURI: configuration.redirectURI)
-                let url = try await self.transport.authorizationURL(state: attempt.state, nonce: attempt.nonce, challenge: attempt.challenge)
+                var url = try await self.transport.authorizationURL(state: attempt.state, nonce: attempt.nonce, challenge: attempt.challenge)
+                if requiresExplicitIdentity {
+                    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { throw AccountError.invalidConfiguration }
+                    components.queryItems = (components.queryItems ?? []).filter { $0.name != "prompt" }
+                        + [URLQueryItem(name: "prompt", value: "login")]
+                    guard let explicitURL = components.url else { throw AccountError.invalidConfiguration }
+                    url = explicitURL
+                }
                 try self.check(captured)
-                let callback = try await self.browser.authenticate(url: url, callbackScheme: configuration.bundleIdentifier)
+                let callback = try await self.browser.authenticate(url: url, callbackScheme: configuration.bundleIdentifier,
+                    requiresExplicitIdentity: requiresExplicitIdentity)
                 try self.check(captured)
                 let token = try await self.transport.exchange(code: attempt.code(from: callback), verifier: attempt.verifier, nonce: attempt.nonce)
                 self.latestDeviceRefreshToken = token.refreshToken
                 try self.check(captured)
                 let snapshot = try await self.transport.account(accessToken: token.accessToken)
                 try snapshot.validate(issuer: configuration.issuer.absoluteString, subject: token.subject)
+                if let previousIdentity, snapshot.identity.issuer == previousIdentity.issuer,
+                   snapshot.identity.subject == previousIdentity.subject { throw AccountError.previousAccountReturned }
                 try self.check(captured)
                 let next = AccountGrant(identity: snapshot.stableIdentity, accessToken: token.accessToken,
                     refreshToken: token.refreshToken, expiresAt: token.expiresAt, nonce: attempt.nonce)
@@ -77,14 +107,14 @@ import Foundation
                 throw error
             }
         }
-        operation = task; operationID = id
+        ownedOperation = OwnedOperation(id: id, kind: .admission, task: task)
         _ = try? await task.value
-        if operationID == id { operation = nil; operationID = nil }
+        if ownedOperation?.id == id { ownedOperation = nil }
     }
 
     /// Explicit startup operation, only after N2 has installed the safe profile boundary.
     func restore() async {
-        guard let configuration, isSignInAvailable, restoration.isAllowed, operation == nil, grant == nil else { return }
+        guard let configuration, isSignInAvailable, restoration.isAllowed, ownedOperation == nil, grant == nil else { return }
         let captured = generation, id = UUID()
         let task = Task { @MainActor in
             do {
@@ -116,7 +146,10 @@ import Foundation
                 self.grant = next; self.account = snapshot; self.context = nextContext; self.state = .signedIn
             } catch {
                 if self.generation == captured {
-                    if self.sanitized(error) == .credentialsUnavailable { self.cleanupRequired = true; try? self.restoration.inhibit() }
+                    if [.reauthenticationRequired, .invalidToken, .invalidAccount, .credentialsUnavailable].contains(self.sanitized(error)) {
+                        do { try self.restoration.inhibit() } catch { self.cleanupRequired = true }
+                        if self.sanitized(error) == .credentialsUnavailable { self.cleanupRequired = true }
+                    }
                     // There is no exposed account until full validation and profile selection complete.
                     // Keep a successfully rotated grant for an explicit retry, but roll back local profile.
                     do { try await self.lifecycle?.transition(from: nil, to: nil, generation: captured) }
@@ -128,9 +161,9 @@ import Foundation
                 throw error
             }
         }
-        operation = task; operationID = id
+        ownedOperation = OwnedOperation(id: id, kind: .restoration, task: task)
         _ = try? await task.value
-        if operationID == id { operation = nil; operationID = nil }
+        if ownedOperation?.id == id { ownedOperation = nil }
     }
 
     func cancelSignIn() async {
@@ -140,13 +173,16 @@ import Foundation
     }
 
     func selectWorkspace(organizationID: String, workspaceID: String) async throws {
-        guard !boundaryInProgress, !cleanupRequired, operation == nil, state == .signedIn,
+        guard !boundaryInProgress, !cleanupRequired, ownedOperation == nil, state == .signedIn,
               let account, grant != nil, let oldContext = context else { throw AccountError.busy }
         guard account.contains(organizationID: organizationID, workspaceID: workspaceID) else { throw AccountError.workspaceUnavailable }
         let id = UUID()
         let task = Task { @MainActor in
             // Complete an admitted rotation before freezing the replacement workspace grant.
-            if let refresh = self.refreshTask { _ = try await refresh.value }
+            if let refresh = self.refreshTask {
+                _ = try await refresh.value
+                self.refreshTask = nil; self.refreshID = nil
+            }
             try Task.checkCancellation()
             guard var next = self.grant else { throw AccountError.staleOperation }
             self.generation = UUID()
@@ -164,15 +200,15 @@ import Foundation
                 throw error
             }
         }
-        operation = task; operationID = id
+        ownedOperation = OwnedOperation(id: id, kind: .workspace, task: task)
         do { try await task.value }
-        catch { if operationID == id { operation = nil; operationID = nil }; throw error }
-        if operationID == id { operation = nil; operationID = nil }
+        catch { if ownedOperation?.id == id { ownedOperation = nil }; throw error }
+        if ownedOperation?.id == id { ownedOperation = nil }
     }
 
     /// N2 checks this immutable context again before accepting a transfer result.
     func authorizedAccess(for expected: AccountContext) async throws -> AccountAuthorizedAccess {
-        guard !boundaryInProgress, !cleanupRequired, operation == nil, state == .signedIn,
+        guard !boundaryInProgress, !cleanupRequired, ownedOperation == nil, state == .signedIn,
               expected == context, let current = grant else { throw AccountError.staleOperation }
         let needsRefresh = current.expiresAt.timeIntervalSinceNow <= 60 || requiresAccountValidation
         let validated = needsRefresh ? try await refresh(current) : current
@@ -183,7 +219,7 @@ import Foundation
 
     private func refresh(_ current: AccountGrant) async throws -> AccountGrant {
         if let refreshTask { return try await refreshTask.value }
-        let captured = generation
+        let captured = generation, id = UUID()
         let task = Task { @MainActor in
             do {
                 self.requiresAccountValidation = true
@@ -211,14 +247,15 @@ import Foundation
                     self.presentationError = self.sanitized(error)
                     if [.reauthenticationRequired, .invalidToken, .invalidAccount, .permissionDenied, .credentialsUnavailable].contains(self.presentationError!) {
                         self.state = .reauthenticationRequired
+                        do { try self.restoration.inhibit() } catch { self.cleanupRequired = true }
                     }
                 }
                 throw error
             }
         }
-        refreshTask = task
-        do { let result = try await task.value; if generation == captured { refreshTask = nil }; return result }
-        catch { if generation == captured { refreshTask = nil }; throw error }
+        refreshTask = task; refreshID = id
+        do { let result = try await task.value; if refreshID == id { refreshTask = nil; refreshID = nil }; return result }
+        catch { if refreshID == id { refreshTask = nil; refreshID = nil }; throw error }
     }
 
     /// Device logout only. Concurrent callers join the same cleanup. A durable nonsecret marker
@@ -234,11 +271,14 @@ import Foundation
 
     private func performLogout() async {
         let previousContext = context, previousGrant = grant, captured = generation
-        presentationError = nil; cleanupRequired = false
-        do { try restoration.inhibit() } catch { cleanupRequired = true; presentationError = .credentialsUnavailable }
-        browser.cancel(); operation?.cancel(); refreshTask?.cancel()
-        _ = try? await operation?.value; _ = try? await refreshTask?.value
-        operation = nil; operationID = nil; refreshTask = nil
+        presentationError = nil
+        var restorationFailed = false
+        do { try restoration.inhibit() } catch { restorationFailed = true }
+        browser.cancel(); ownedOperation?.task.cancel(); refreshTask?.cancel()
+        _ = try? await ownedOperation?.task.value; _ = try? await refreshTask?.value
+        ownedOperation = nil; refreshTask = nil
+        cleanupRequired = restorationFailed
+        if restorationFailed { presentationError = .credentialsUnavailable }
         let persisted = try? await credentials.load()
         let revokeToken = latestDeviceRefreshToken ?? (persisted ?? previousGrant)?.refreshToken
         grant = nil; context = nil; account = nil; requiresAccountValidation = false
@@ -257,16 +297,22 @@ import Foundation
     /// Termination joins account work and closes only this service's HTTP session. Persisted grant remains.
     func shutdown() async {
         if let logoutTask { await logoutTask.value }
-        boundaryInProgress = true; generation = UUID()
-        browser.cancel(); operation?.cancel(); refreshTask?.cancel()
-        _ = try? await operation?.value; _ = try? await refreshTask?.value
-        operation = nil; operationID = nil; refreshTask = nil
+        boundaryInProgress = true
+        browser.cancel()
+        // Restore can also own a rotating refresh. Join it through persistence just like
+        // refreshTask; canceling it after a verified response could lose the replacement.
+        if ownedOperation?.kind != .restoration { ownedOperation?.task.cancel() }
+        // A verified refresh response must finish persisting its rotation before termination.
+        // Network time is bounded by the owned HTTP session. No new requests are admitted.
+        _ = try? await ownedOperation?.task.value; _ = try? await refreshTask?.value
+        generation = UUID()
+        ownedOperation = nil; refreshTask = nil; refreshID = nil
         try? await lifecycle?.transition(from: context, to: nil, generation: generation)
         await transport.shutdown()
     }
 
     func isCurrent(_ context: AccountContext) -> Bool {
-        !boundaryInProgress && !cleanupRequired && operation == nil && state == .signedIn && self.context == context
+        !boundaryInProgress && !cleanupRequired && ownedOperation == nil && state == .signedIn && self.context == context
     }
 
     private func failedAdmission(_ error: Error, generation captured: UUID) async {

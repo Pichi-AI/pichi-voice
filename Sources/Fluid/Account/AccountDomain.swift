@@ -59,7 +59,7 @@ nonisolated enum AccountError: String, Error, Sendable {
     case unconfigured, isolationRequired, busy, cancelled, invalidCallback, invalidState
     case invalidToken, invalidAccount, invalidConfiguration, invalidResponse
     case credentialsUnavailable, networkUnavailable, reauthenticationRequired, permissionDenied
-    case workspaceUnavailable, staleOperation, revocationUnavailable
+    case workspaceUnavailable, staleOperation, revocationUnavailable, previousAccountReturned
 }
 
 /// Credentials never enter ObservableObject/UI projections, logs or provider API-key storage.
@@ -82,6 +82,7 @@ nonisolated struct AccountTokenResponse: Sendable {
 
 @MainActor protocol AccountBrowserAuthenticating: AnyObject {
     func authenticate(url: URL, callbackScheme: String) async throws -> URL
+    func authenticate(url: URL, callbackScheme: String, requiresExplicitIdentity: Bool) async throws -> URL
     func cancel()
 }
 
@@ -114,3 +115,19 @@ nonisolated struct AccountAuthorizedAccess: Sendable {
 }
 
 extension AccountTransporting { nonisolated func shutdown() async {} }
+
+/// Composition chooses this policy. Appearance imports and account payloads cannot change it.
+nonisolated enum AccountBrowserSessionPolicy: Sendable {
+    case sharedDevice, personalDevice
+    func prefersEphemeralSession(requiresExplicitIdentity: Bool) -> Bool {
+        self == .sharedDevice || requiresExplicitIdentity
+    }
+}
+
+extension AccountBrowserAuthenticating {
+    /// Source-compatible injected adapters receive the already-forced-login URL. Production
+    /// overrides this overload to also freeze its system-browser session policy per attempt.
+    func authenticate(url: URL, callbackScheme: String, requiresExplicitIdentity: Bool) async throws -> URL {
+        try await authenticate(url: url, callbackScheme: callbackScheme)
+    }
+}

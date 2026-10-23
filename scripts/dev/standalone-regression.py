@@ -239,7 +239,7 @@ class Probe:
 
 # Registration is explicit: a new probe needs a reviewed interpreter/UI classification.
 SHELL_PROBES = (
-    "analytics_config", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
+    "account_session", "analytics_config", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
     "command_archive_search", "command_cancellation", "command_markdown",
     "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
@@ -260,8 +260,7 @@ PYTHON_PROBES = (
 PROBES = tuple(sorted(
     [Probe(f"Tests/run_{name}_tests.sh", "sh") for name in SHELL_PROBES]
     + [Probe(f"Tests/run_{name}_tests.py", "python3") for name in PYTHON_PROBES]
-    + [Probe("Tests/run_account_session_tests.sh", "bash"),
-       Probe("Tests/run_clipboard_backup_reproduction.sh", "sh"),
+    + [Probe("Tests/run_clipboard_backup_reproduction.sh", "sh"),
        Probe("Tests/run_meeting_asr_prepared_provider_tests.sh", "bash"),
        Probe("Tests/run_meeting_idle_prepared_resource_tests.sh", "bash"),
        Probe("Tests/run_meeting_privacy_context_tests.sh", "bash"),

@@ -7,10 +7,11 @@ This document does not enable cloud publication or sign-in.
 Inputs: native baseline `59e5079066406ff2f2ecdec8c1c2395eaf69e052`, contract and delivery
 plan at `f3ea4b15160b92c095d9d83036e6a66e3be81c34`, N2 inventory at
 `1c299fb894c65e163adbe2d1915b169c56588518`. N2's inventory is a proposal, not a runtime API.
-N1 source API `f6b0e48a0a8af5aa82926d61bb0e5d3a639c3d46` is merged as an explicit source
-dependency. The coordinator released its domain types for development, with a known
-refresh/workspace task-retirement race assigned to N1. The corrected N1 revision and final
-native/runtime gates remain pending. No duplicate account or token manager is introduced.
+Corrected N1 API `9fc25a13558d4eb241cebdf7ff92d059edb80804` is merged as an explicit source
+dependency, replacing the earlier `f6b0e48` handoff. The coordinator's independent delta
+review resolved the refresh/workspace task-retirement issue without an interface blocker.
+N1's final native/runtime evidence remains its own gate. No duplicate account or token
+manager is introduced, and N5 does not alter N1 account sources.
 
 ## Implemented source gate
 
@@ -84,9 +85,9 @@ The first run passed 55 synthetic checks for scoped defaults/persistence, replac
 cancellation, oversized/truncated/foreign/versioned records, permissions, symlinks, hard
 links, FIFO rejection and interrupted temporary files. Recreating an actor and generation
 simulates storage recovery; this is not a native application relaunch or logout test.
-Both the N1 account probe and N5 consent probe are explicitly registered as Bash without
-UI access in the existing standalone runner. The registry assertions cover 67 probes:
-49 sh, 10 Bash and 8 Python. This includes the account probe added by the N1 dependency.
+N1's corrected account probe declares sh; N5's consent probe declares Bash. Both are
+registered without UI access in the existing standalone runner. The registry assertions
+cover 67 probes: 50 sh, 9 Bash and 8 Python.
 
 ## Planned durable state machine
 
@@ -176,7 +177,7 @@ profile manager is supplied by N5.
 
 | Owner | Exact handoff required before dependent implementation |
 | --- | --- |
-| N1 | Source types are available at `f6b0e48`; corrected final commit, native builds, joined-operation gates and composition/Xcode ownership handoff remain required |
+| N1 | Corrected source types are available at `9fc25a13`; native builds, combined joined-operation gates and composition/Xcode ownership handoff remain required |
 | N2 | Commit containing immutable capture owner/profile binding and recording-time publication admission seam; persisted post-terminal reload; private profile outbox root; joined transition registration; history authorization |
 | W2 | Commit and verified synthetic multipart request, 202 acceptance, identical 200 retry, all six analysis codes, GET/PATCH schema and exact sanitized error codes |
 | W2 | Response-lost replay fixture; original POST replay after assessment PATCH; PATCH concurrency/conflict semantics; authorized participant/criteria discovery or UI path; empty/no-speech source validation; Retry-After behavior |
