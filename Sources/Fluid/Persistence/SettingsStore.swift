@@ -19,11 +19,49 @@ final class SettingsStore: ObservableObject {
     static let automaticWhisperLanguageCode = "auto"
     static let privateAIBackendPreferenceDefaultsKey = "FluidIntelligenceBackendPreference"
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = PrivateProfileDefaults.shared, initializeDesktop: Bool = true) {
         self.defaults = defaults
         #if os(macOS)
-        self.initializeDesktopPreferences()
+        if initializeDesktop { self.initializeDesktopPreferences() }
         #endif
+    }
+
+    static let privateProfileWillChange = Notification.Name("SettingsStore.privateProfileWillChange")
+
+    /// Composition calls before replacing profile sources. Private UI observers
+    /// clear their drafts synchronously; credential workers finish on the old scope.
+    @MainActor
+    static func prepareForPrivateProfileTransition() async {
+        NotificationCenter.default.post(name: self.privateProfileWillChange, object: nil)
+        #if os(macOS)
+        let settings = self.shared
+        settings.privateProfileTransitionPending = true
+        await OnboardingAISetupController.live.prepareForPrivateProfileTransition()
+        await AIEnhancementSettingsViewModel.joinPrivateProfileRequests()
+        await PrivateAISettingsController.joinPrivateProfileTasks()
+        await settings.keychain.retireAndJoin()
+        await CloudTextProviderAuthorization.shared.pauseAndClearForPrivateProfileTransition()
+        settings.providerCredentialCleanupNeedsPersistence = false
+        ASRService.invalidateDictionaryCache()
+        await DictionaryPronunciationDebugArchive.shared.join()
+        #endif
+    }
+
+    @MainActor
+    static func privateProfileDidChange() async {
+        #if os(macOS)
+        self.shared.privateProfileTransitionPending = false
+        OnboardingAISetupController.live.privateProfileDidChange()
+        await CloudTextProviderAuthorization.shared.resumeAfterPrivateProfileTransition()
+        self.shared.initializeDesktopPreferences(refreshDeviceState: false)
+        #endif
+        self.shared.objectWillChange.send()
+    }
+
+    /// View-owned settings cannot retarget a late callback after a profile switch.
+    func boundToCurrentPrivateProfile() -> SettingsStore {
+        guard let scoped = self.defaults as? PrivateProfileDefaults else { return self }
+        return SettingsStore(defaults: PrivateProfileDefaults.bound(to: scoped.selectedProfile), initializeDesktop: false)
     }
 
     #if os(macOS)
@@ -41,14 +79,19 @@ final class SettingsStore: ObservableObject {
     private static let privateAIDenseSegmentByteThreshold = 12
     private static let privateAIDenseBytesPerToken = 2
     private static let forcedOnboardingResetIntroducedAt = Date(timeIntervalSince1970: 1_782_091_732)
-    private let keychain = KeychainService.shared
+    private var keychain: KeychainService {
+        if let scoped = self.defaults as? PrivateProfileDefaults { return KeychainService.bound(to: scoped.selectedProfile) }
+        return KeychainService.shared
+    }
+    private var privateProfileTransitionPending = false
+
     private var providerCredentialCleanupNeedsPersistence = false
     private(set) var launchAtStartupEnabled = false
     private(set) var launchAtStartupErrorMessage: String?
     private(set) var launchAtStartupStatusMessage =
         "FluidVoice reflects the actual macOS login item state. Unsigned or development builds may fail to enable this."
 
-    private func initializeDesktopPreferences() {
+    private func initializeDesktopPreferences(refreshDeviceState: Bool = true) {
         self.migrateTranscriptionStartSoundIfNeeded()
         self.ensureDebugLoggingDefaults()
         self.migrateExplicitDictationPromptsIfNeeded()
@@ -63,7 +106,7 @@ final class SettingsStore: ObservableObject {
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
         Self.migrateTextInsertionModeToReliablePasteIfNeeded(defaults: self.defaults)
         Self.migrateFillerWordDefaultsIfNeeded(defaults: self.defaults)
-        self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
+        if refreshDeviceState { self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false) }
         // Do not dispatch while shared initialization owns its once token. Provider
         // canonicalization may consult ModelRepository/SettingsStore again.
         DispatchQueue.main.async { self.refreshProviderAPIKeys() }
@@ -1615,9 +1658,11 @@ final class SettingsStore: ObservableObject {
     func loadProviderAPIKeysForUserAction() async throws -> [String: String] {
         defer { self.objectWillChange.send() }
         let snapshot = self.providerCredentialMigrationSnapshot()
-        let keys = try await self.keychain.loadForUserAction(migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs) { keys in
+        guard !self.privateProfileTransitionPending, snapshot.isCurrent else { throw CancellationError() }
+        let keys = try await snapshot.keychain.loadForUserAction(migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs) { keys in
             await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: keys)
         }
+        guard snapshot.isCurrent else { throw CancellationError() }
         return keys
     }
 
@@ -1628,12 +1673,14 @@ final class SettingsStore: ObservableObject {
     ) async throws -> [String: String] {
         defer { self.objectWillChange.send() }
         let snapshot = self.providerCredentialMigrationSnapshot()
-        let result = try await self.keychain.saveForUserAction(
+        guard !self.privateProfileTransitionPending, snapshot.isCurrent else { throw CancellationError() }
+        let result = try await snapshot.keychain.saveForUserAction(
             self.sanitizeAPIKeys(values), replacing: self.sanitizeAPIKeys(knownValues),
             removing: providerIDs, migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs
         ) { migratedKeys in
             await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: migratedKeys)
         }
+        guard snapshot.isCurrent else { throw CancellationError() }
         return result.keys
     }
 
@@ -1641,7 +1688,9 @@ final class SettingsStore: ObservableObject {
     /// worker. Authentication prompts are reserved for explicit credential actions.
     func refreshProviderAPIKeys() {
         let snapshot = self.providerCredentialMigrationSnapshot()
-        self.keychain.loadInBackground(migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs) { result in
+        guard !self.privateProfileTransitionPending, snapshot.isCurrent else { return }
+        snapshot.keychain.loadInBackground(migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs) { result in
+            guard snapshot.isCurrent else { return }
             if case let .success(keys) = result {
                 _ = await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: keys)
             }
@@ -2786,11 +2835,11 @@ final class SettingsStore: ObservableObject {
     var onboardingCurrentStep: Int {
         get {
             let raw = self.defaults.integer(forKey: Keys.onboardingCurrentStep)
-            return max(0, min(6, raw))
+            return max(0, min(7, raw))
         }
         set {
             objectWillChange.send()
-            let clamped = max(0, min(6, newValue))
+            let clamped = max(0, min(7, newValue))
             self.defaults.set(clamped, forKey: Keys.onboardingCurrentStep)
         }
     }
@@ -3841,7 +3890,15 @@ final class SettingsStore: ObservableObject {
         self.defaults.removeObject(forKey: Keys.enableTranscriptionSounds)
     }
 
-    private struct ProviderCredentialMigrationSnapshot: Sendable {
+    private struct ProviderCredentialMigrationSnapshot: @unchecked Sendable {
+        let preferences: UserDefaults
+        let keychain: KeychainService
+        let profile: PrivateProfileSnapshot?
+        var isCurrent: Bool {
+            guard let profile else { return true }
+            let current = PrivateProfileStorage.current
+            return current.isReadable && current.id == profile.id && current.generation == profile.generation
+        }
         let legacyDefaults: [String: String]?
         let savedProviderBytes: Data?
         let keys: [String: String]
@@ -3851,8 +3908,10 @@ final class SettingsStore: ObservableObject {
     /// Called on main after init, before dispatch; workers never consult mutable
     /// preferences or ModelRepository while SettingsStore.shared is initializing.
     private func providerCredentialMigrationSnapshot() -> ProviderCredentialMigrationSnapshot {
-        let legacy = self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String]
-        let savedBytes = self.defaults.data(forKey: Keys.savedProviders)
+        let profile = (self.defaults as? PrivateProfileDefaults)?.selectedProfile
+        let preferences = profile.map { PrivateProfileDefaults.bound(to: $0) } ?? self.defaults
+        let legacy = preferences.dictionary(forKey: Keys.providerAPIKeys) as? [String: String]
+        let savedBytes = preferences.data(forKey: Keys.savedProviders)
         var mapping = Dictionary(uniqueKeysWithValues: ModelRepository.builtInProviderIDs.map { ($0, self.canonicalProviderKey(for: $0)) })
         var keys: [String: String] = [:]
         for (id, key) in self.sanitizeAPIKeys(legacy ?? [:]) {
@@ -3870,23 +3929,25 @@ final class SettingsStore: ObservableObject {
                 if !key.isEmpty { keys[canonical] = key }
             }
         }
-        return ProviderCredentialMigrationSnapshot(legacyDefaults: legacy, savedProviderBytes: savedBytes, keys: keys, canonicalProviderIDs: mapping)
+        return ProviderCredentialMigrationSnapshot(preferences: preferences, keychain: profile.map { KeychainService.bound(to: $0) } ?? self.keychain, profile: profile, legacyDefaults: legacy, savedProviderBytes: savedBytes, keys: keys, canonicalProviderIDs: mapping)
     }
 
     @MainActor
     private func acknowledgeProviderCredentialMigration(
         _ snapshot: ProviderCredentialMigrationSnapshot, verifiedKeys: [String: String]
     ) async -> Bool {
+        guard snapshot.isCurrent else { return false }
         guard self.completeProviderCredentialMigration(snapshot, verifiedKeys: verifiedKeys) else { return false }
         guard self.providerCredentialCleanupNeedsPersistence else { return true }
-        let preferences = self.defaults
+        let preferences = snapshot.preferences
         // Unlike ordinary preference edits, this one-time credential cleanup
         // must join pending persistence before a later Keychain mutation commits.
-        guard await self.keychain.confirmLegacyCleanup({ preferences.synchronize() }) else { return false }
+        guard await snapshot.keychain.confirmLegacyCleanup({ preferences.synchronize() }) else { return false }
+        guard snapshot.isCurrent else { return false }
         self.providerCredentialCleanupNeedsPersistence = false
         // Recheck without mutating: a source reintroduced during the wait must
         // remain intact and require a fresh acknowledged migration.
-        return self.providerCredentialSourcesAreClear()
+        return self.providerCredentialSourcesAreClear(preferences: snapshot.preferences)
     }
 
     private func completeProviderCredentialMigration(
@@ -3895,15 +3956,15 @@ final class SettingsStore: ObservableObject {
         // Compare original values so an in-flight migration cannot clear a newer
         // edit. Each source is removed only after its own secret was verified.
         if let legacy = snapshot.legacyDefaults,
-           self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] == legacy,
+           snapshot.preferences.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] == legacy,
            self.sanitizeAPIKeys(legacy).allSatisfy({ verifiedKeys[self.canonicalProviderKey(for: $0.key)] == $0.value })
         {
             if !self.sanitizeAPIKeys(legacy).isEmpty { self.providerCredentialCleanupNeedsPersistence = true }
-            self.defaults.removeObject(forKey: Keys.providerAPIKeys)
-            self.defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
+            snapshot.preferences.removeObject(forKey: Keys.providerAPIKeys)
+            snapshot.preferences.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
         }
         if let bytes = snapshot.savedProviderBytes,
-           self.defaults.data(forKey: Keys.savedProviders) == bytes,
+           snapshot.preferences.data(forKey: Keys.savedProviders) == bytes,
            var providers = try? JSONDecoder().decode([SavedProvider].self, from: bytes)
         {
             var changed = false
@@ -3916,23 +3977,23 @@ final class SettingsStore: ObservableObject {
             }
             if changed, let sanitized = try? JSONEncoder().encode(providers) {
                 self.providerCredentialCleanupNeedsPersistence = true
-                self.defaults.set(sanitized, forKey: Keys.savedProviders)
+                snapshot.preferences.set(sanitized, forKey: Keys.savedProviders)
             }
         }
-        return self.providerCredentialSourcesAreClear()
+        return self.providerCredentialSourcesAreClear(preferences: snapshot.preferences)
     }
 
-    private func providerCredentialSourcesAreClear() -> Bool {
+    private func providerCredentialSourcesAreClear(preferences: UserDefaults) -> Bool {
         // A changed/new plaintext source is not an acknowledgment. Keep the
         // user edit unapplied so a restart cannot resurrect the previous secret.
-        let remainingDefaults = self.sanitizeAPIKeys(self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] ?? [:])
+        let remainingDefaults = self.sanitizeAPIKeys(preferences.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] ?? [:])
         guard remainingDefaults.isEmpty else { return false }
-        if let data = self.defaults.data(forKey: Keys.savedProviders),
+        if let data = preferences.data(forKey: Keys.savedProviders),
            let providers = try? JSONDecoder().decode([SavedProvider].self, from: data)
         {
             return providers.allSatisfy { $0.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         }
-        return self.defaults.data(forKey: Keys.savedProviders) == nil
+        return preferences.data(forKey: Keys.savedProviders) == nil
     }
 
     static func customPromptBody(_ text: String, mode: PromptMode) -> String {

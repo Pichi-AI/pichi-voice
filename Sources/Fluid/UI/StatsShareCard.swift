@@ -209,8 +209,8 @@ struct StatsShareSheet: View {
     let close: () -> Void
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("StatsShareSelectedStats") private var storedSelection = ""
-    @AppStorage("StatsShareShowsActivity") private var showsActivity = true
+    @AppStorage("StatsShareSelectedStats", store: PrivateProfileDefaults.shared) private var storedSelection = ""
+    @AppStorage("StatsShareShowsActivity", store: PrivateProfileDefaults.shared) private var showsActivity = true
     @State private var copied = false
 
     /// Kept in the enum's order so the card layout is stable however chips were tapped.

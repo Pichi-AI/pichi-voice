@@ -654,7 +654,7 @@ extension Notification.Name {
 }
 
 private struct AutomaticDictionaryCorrectionOverlayView: View {
-    @AppStorage("DictionarySharedFeatureMatcherEnabled") private var pronunciationEnabled = false
+    @AppStorage("DictionarySharedFeatureMatcherEnabled", store: PrivateProfileDefaults.shared) private var pronunciationEnabled = false
     @ObservedObject var session: AutomaticDictionaryTrainingSession
     @ObservedObject private var settings = SettingsStore.shared
 

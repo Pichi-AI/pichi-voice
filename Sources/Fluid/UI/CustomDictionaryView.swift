@@ -50,7 +50,7 @@ struct CustomDictionaryView: View {
     @State private var trainingReplacement = ""
     @State private var trainingSaveID: UUID?
     @State private var trainingVariants: [String] = []
-    @AppStorage("DictionarySharedFeatureMatcherEnabled") private var pronunciationEnabled = false
+    @AppStorage("DictionarySharedFeatureMatcherEnabled", store: PrivateProfileDefaults.shared) private var pronunciationEnabled = false
     @State private var pronunciationMatchingEnabled = SettingsStore.shared.pronunciationMatchingEnabled
     @State private var trainingPronunciationEnrollments: [PronunciationEnrollmentCapture] = []
     @State private var trainingSampleCount = 0

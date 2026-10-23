@@ -53,8 +53,9 @@ nonisolated final class PrivateProfileDefaults: UserDefaults, @unchecked Sendabl
         guard self.readable(profile) else { return nil }
         if profile.isGuest { return self.guestDefaults.object(forKey: key) }
         // Do not call suite.object(forKey:), which searches the guest app domain.
-        if let value = self.suite(profile).persistentDomain(forName: self.domain(profile))?[key] { return value }
-        return self.lock.withLock { self.registered[key] }
+        let value = self.suite(profile).persistentDomain(forName: self.domain(profile))?[key]
+            ?? self.lock.withLock { self.registered[key] }
+        return self.readable(profile) ? value : nil
     }
     override func set(_ value: Any?, forKey key: String) {
         if Self.sharedDeviceKeys.contains(key) { self.guestDefaults.set(value, forKey: key); return }

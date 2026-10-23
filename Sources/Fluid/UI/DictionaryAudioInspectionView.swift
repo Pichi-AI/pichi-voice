@@ -56,7 +56,7 @@ struct DictionaryAudioInspectionView: View {
     var loadReference: @Sendable (UUID) async throws -> DictionaryAudioInspection = { try await PronunciationDictionaryStore.shared.inspection(for: $0) }
     var onRecordMore: (() -> Void)? = nil
     @Environment(\.theme) private var theme
-    @AppStorage("DictionaryPronunciationDebugCapture") private var retainTrainingAudio = false
+    @AppStorage("DictionaryPronunciationDebugCapture", store: PrivateProfileDefaults.shared) private var retainTrainingAudio = false
     @StateObject private var playback = DictionaryInspectionPlayback()
     @State private var references: [Int: DictionaryAudioInspection] = [:]
     @State private var referenceCuts: [Int: DictionaryAudioCut] = [:]
