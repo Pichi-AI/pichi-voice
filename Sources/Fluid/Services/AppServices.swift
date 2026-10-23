@@ -26,6 +26,8 @@ final class AppServices: ObservableObject {
     /// Shared singleton instance
     static let shared = AppServices()
 
+    lazy var accountSession: AccountSessionService = .production()
+
     // MARK: - Startup Gate
 
     /// Flag indicating the UI has completed its initial render.
@@ -437,6 +439,7 @@ final class AppServices: ObservableObject {
 
     func shutdownForTermination() async {
         self.isTerminating = true
+        await self.accountSession.shutdown()
         self.privateAIStartupWarmup?.cancel()
         await self.privateAIStartupWarmup?.value
         self.privateAIStartupWarmup = nil

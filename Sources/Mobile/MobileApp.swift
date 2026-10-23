@@ -7,6 +7,7 @@ import UIKit
 @MainActor
 final class AppServices: ObservableObject {
     static let shared = AppServices()
+    let accountSession: AccountSessionService
     let asr: ASRService
     let meetingSessionCoordinator: MeetingSessionCoordinator
     let meetingProcessingPipeline: MeetingProcessingPipeline
@@ -51,6 +52,7 @@ final class AppServices: ObservableObject {
     init(store: (any MeetingSessionStoring)? = nil,
          capture injectedCapture: (any MeetingCaptureControlling)? = nil,
          settings: SettingsStore? = nil,
+         accountSession: AccountSessionService? = nil,
          privacy: PichiTranscriptPrivacyService? = nil,
          privacyRedactor: (any TranscriptTextRedacting)? = nil,
          microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil) {
@@ -60,6 +62,7 @@ final class AppServices: ObservableObject {
             try? MeetingSharePayload.cleanupAbandonedShares()
             Self.didCleanExportStaging = true
         }
+        self.accountSession = accountSession ?? .production()
         let settings = settings ?? SettingsStore.shared
         self.settings = settings
         self.meetingLocation = MeetingLocationService(settings: settings)
@@ -184,6 +187,7 @@ final class AppServices: ObservableObject {
     }
 
     func shutdownForTermination() async {
+        await accountSession.shutdown()
         await idlePreparation.shutdown()
         await meetingSessionCoordinator.shutdownForTermination()
         await asr.shutdownForTermination()
