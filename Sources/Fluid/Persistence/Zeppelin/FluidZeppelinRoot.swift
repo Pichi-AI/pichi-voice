@@ -8,20 +8,22 @@ import ZeppelinEmbed
 /// keeps, so the library's default `derived` durability applies and one that cannot
 /// be read is reset and rebuilt from its source.
 actor FluidZeppelinRoot {
-    static let shared = FluidZeppelinRoot()
+    private static let profiles = PrivateProfileStoreCache<FluidZeppelinRoot>()
+    static var shared: FluidZeppelinRoot { profiles.value { FluidZeppelinRoot(profile: $0) } }
 
     /// Errors that mean the bytes on disk cannot be interpreted. `.io` is absent: a
     /// full disk or a lost volume is not a reason to throw the index away.
     private static let unreadable: Set<ZeppelinError> = [.corrupt, .epochMismatch, .schemaMismatch]
 
     private let root: URL
+    private let profile: PrivateProfileSnapshot?
     private var namespaces: [String: Task<ZeppelinStore, Error>] = [:]
     private var stopped = false
 
-    init(root: URL? = nil) {
-        self.root = root ?? FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("\(AppBrand.storageNamespace)/zeppelin", isDirectory: true)
+    init(root: URL? = nil, profile: PrivateProfileSnapshot? = nil) {
+        let scope = profile ?? (root == nil ? PrivateProfileStorage.current : nil)
+        self.profile = scope
+        self.root = root ?? scope!.directory("zeppelin")
     }
 
     /// Opens a namespace, or returns the handle already open for it.
@@ -30,6 +32,10 @@ actor FluidZeppelinRoot {
     /// cached as a task: concurrent first callers share one open instead of racing.
     func namespace(_ name: String, spec: NamespaceSpec) async throws -> ZeppelinStore {
         guard !self.stopped else { throw CancellationError() }
+        if let profile {
+            let current = PrivateProfileStorage.current
+            guard current.isReadable, current.id == profile.id, current.generation == profile.generation else { throw CancellationError() }
+        }
         if let open = self.namespaces[name] {
             return try await open.value
         }

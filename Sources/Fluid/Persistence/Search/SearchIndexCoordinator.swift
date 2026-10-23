@@ -5,7 +5,9 @@ import Foundation
 /// Each kind retains at most one running snapshot and one replaceable successor.
 @MainActor
 final class SearchIndexCoordinator {
-    static let shared = SearchIndexCoordinator()
+    static var shared: SearchIndexCoordinator {
+        PrivateProfileObjectCache.value(key: "SearchIndexCoordinator") { SearchIndexCoordinator() }
+    }
 
     enum Snapshot {
         case history([TranscriptionHistoryEntry])
@@ -77,6 +79,7 @@ final class SearchIndexCoordinator {
     private var preparing = 0
     private var historyWaiters: [Waiter] = []
     private var historyLoad: Task<Void, Never>?
+    private var debounceTasks: [UUID: Task<Void, Never>] = [:]
     private let preparationTimeout: Duration
     private let reconcile: @Sendable (SearchIndexKind, [SearchIndexRecord]) async throws -> SearchIndex.ReconcileReport
     private let refresh: @MainActor () -> Void
@@ -145,12 +148,15 @@ final class SearchIndexCoordinator {
         state.generation &+= 1
         state.latest = PendingSnapshot(generation: state.generation, snapshot: snapshot)
         state.debounce?.cancel()
+        let debounceID = UUID()
         state.debounce = Task { [weak self] in
+            defer { self?.debounceTasks[debounceID] = nil }
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             guard !Task.isCancelled, let self, !self.stopped else { return }
             state.debounce = nil
             self.startWorker(kind, state: state)
         }
+        self.debounceTasks[debounceID] = state.debounce
     }
 
     /// Flushes the debounce without building records on the caller's actor.
@@ -185,7 +191,8 @@ final class SearchIndexCoordinator {
     func stop() async {
         self.stopped = true
         self.cancellables.removeAll()
-        self.historyLoad?.cancel()
+        let historyLoad = self.historyLoad
+        historyLoad?.cancel()
         self.historyLoad = nil
         for waiter in self.historyWaiters {
             waiter.timeout.cancel()
@@ -193,15 +200,18 @@ final class SearchIndexCoordinator {
         }
         self.historyWaiters.removeAll()
         let workers = self.states.values.compactMap(\.worker)
+        let debounces = Array(self.debounceTasks.values)
+        for debounce in debounces { debounce.cancel() }
         for state in self.states.values {
             state.debounce?.cancel()
             state.debounce = nil
             state.latest = nil
             self.finishWaiters(state, through: .max, result: .failure(CancellationError()))
         }
-        for worker in workers {
-            await worker.value
-        }
+        for debounce in debounces { await debounce.value }
+        if let historyLoad { await historyLoad.value }
+        for worker in workers { await worker.value }
+        self.states.removeAll()
     }
 
     private func state(for kind: SearchIndexKind) -> State {

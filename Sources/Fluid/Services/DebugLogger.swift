@@ -78,8 +78,10 @@ final nonisolated class DebugLogger: @unchecked Sendable {
         guard level != .debug || Self.diagnosticsEnabled else { return }
         let message = message()
         let pipelineID = Self.pipelineID
+        let profile = PrivateProfileStorage.current
+        guard profile.isReadable else { return }
         self.queue.async {
-            self.write(message, level: level, source: source, pipelineID: pipelineID)
+            self.write(message, level: level, source: source, pipelineID: pipelineID, profile: profile)
         }
     }
 
@@ -92,12 +94,21 @@ final nonisolated class DebugLogger: @unchecked Sendable {
     ) {
         guard level != .debug || Self.diagnosticsEnabled else { return }
         let pipelineID = Self.pipelineID
+        let profile = PrivateProfileStorage.current
+        guard profile.isReadable else { return }
         self.queue.async {
-            self.write(message(), level: level, source: source, pipelineID: pipelineID)
+            self.write(message(), level: level, source: source, pipelineID: pipelineID, profile: profile)
         }
     }
 
-    private func write(_ message: String, level: LogLevel, source: String, pipelineID: String?) {
+    /// A queue barrier joins lazy message construction before FileLogger changes its descriptor.
+    func joinForProfileTransition() async {
+        await withCheckedContinuation { continuation in
+            self.queue.async { continuation.resume() }
+        }
+    }
+
+    private func write(_ message: String, level: LogLevel, source: String, pipelineID: String?, profile: PrivateProfileSnapshot) {
         let timestampString = Self.logFormatter.string(from: Date())
         let formattedLine = self.formatLogLine(
             timestamp: timestampString,
@@ -108,7 +119,7 @@ final nonisolated class DebugLogger: @unchecked Sendable {
         )
 
         // Retain ordinary support logs in production; verbose diagnostics are gated before enqueueing.
-        FileLogger.shared.append(line: formattedLine)
+        FileLogger.shared.append(line: formattedLine, profile: profile)
         #if DEBUG || FLUIDVOICE_DIAGNOSTICS
         print(formattedLine)
         #endif
