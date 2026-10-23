@@ -59,6 +59,20 @@ extension MeetingSessionStoreCheckpointTests {
             check(!canceledService.isPrivateDataVisible && !PrivateProfileStorage.current.isReadable,
                 "Cancellation after ignored activation cannot publish a readable account or marker")
         }
+        let blockedRoot = root.appendingPathComponent("blocked-marker")
+        try FileManager.default.createDirectory(at: blockedRoot, withIntermediateDirectories: true)
+        try Data("synthetic obstruction".utf8).write(to: blockedRoot.appendingPathComponent("Profiles"))
+        let blockedGuest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: blockedRoot)
+        PrivateProfileStorage.select(blockedGuest)
+        let failedMarker = PrivateProfileService()
+        try failedMarker.configure(isBusy: { true }, prepare: {}, activate: { _ in })
+        let priorRevision = failedMarker.sourceRevision
+        do { try await failedMarker.transition(from: nil, to: nil, generation: UUID()); check(false, "Marker obstruction must fail cleanup") }
+        catch {
+            check(!PrivateProfileStorage.current.isReadable && !failedMarker.isPrivateDataVisible
+                && failedMarker.sourceRevision == priorRevision,
+                "Failed busy-logout marker cannot leave memory readable or commit another source")
+        }
     }
 }
 

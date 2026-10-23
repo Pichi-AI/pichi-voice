@@ -73,9 +73,9 @@ import Foundation
                 // hide every private projection and require cleanup retry after capture drains.
                 PrivateProfileStorage.closeAdmission()
                 isPrivateDataVisible = false; projectionRevision = UUID()
-                try persistHiddenMarker(generation: generation)
                 PrivateProfileStorage.conceal(generation: generation)
                 NotificationCenter.default.post(name: Self.willConceal, object: nil)
+                try persistHiddenMarker(generation: generation)
                 await joinPrivateWrites()
                 for participant in participants.compactMap(\.value) {
                     try await participant.prepareForPrivateProfileTransition()
@@ -87,9 +87,9 @@ import Foundation
         isTransitioning = true; isPrivateDataVisible = false; projectionRevision = UUID()
         PrivateProfileStorage.closeAdmission()
         do {
-            try persistHiddenMarker(generation: generation)
             PrivateProfileStorage.conceal(generation: generation)
             NotificationCenter.default.post(name: Self.willConceal, object: nil)
+            try persistHiddenMarker(generation: generation)
             await joinPrivateWrites()
             for participant in participants.compactMap(\.value) {
                 try await participant.prepareForPrivateProfileTransition()
