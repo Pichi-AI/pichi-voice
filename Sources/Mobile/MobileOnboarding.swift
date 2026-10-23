@@ -436,9 +436,11 @@ struct MobileAudioPrivacyControls: View {
                 .accessibilityIdentifier("privacy.saveAudio")
             Text(PichiLocalization.text("When disabled, audio is never written to files, including temporary files. Only the transcript is saved."))
                 .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
             if settings.meetingSaveAudio {
                 Text(PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
