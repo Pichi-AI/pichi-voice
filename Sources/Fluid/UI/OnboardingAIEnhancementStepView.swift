@@ -487,7 +487,6 @@ struct OnboardingAIEnhancementStepView: View {
             Button(action: action) {
                 Text(PichiLocalization.text(title))
                     .font(.fluidSystem(size: FluidOnboardingLayout.footerButtonFontSize, weight: .semibold))
-                    .foregroundStyle(actionEnabled && tone == .primary ? self.theme.palette.accentForeground : self.theme.palette.primaryText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
                     // Large native glass adds 14 pt at the sides and 6 pt above and below.
