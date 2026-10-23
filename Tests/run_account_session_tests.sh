@@ -1,5 +1,5 @@
-#!/bin/bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 cd "$(dirname "$0")/.."
 task_test_dir="$PWD/.build/account-session-tests"
 mkdir -p "$task_test_dir"
