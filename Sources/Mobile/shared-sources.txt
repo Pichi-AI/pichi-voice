@@ -125,6 +125,8 @@ Sources/Fluid/Services/Meeting/MeetingSegmentPlayback.swift
 Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift
 Sources/Fluid/Services/Meeting/MeetingSessionPersistenceQueue.swift
 Sources/Fluid/Services/Meeting/MeetingSessionStore.swift
+Sources/Fluid/Services/Meeting/MeetingLocationService.swift
+Sources/Fluid/UI/MeetingLocationSettingsContent.swift
 Sources/Fluid/Services/Meeting/MeetingSignalDomainGate.swift
 Sources/Fluid/Services/Meeting/MeetingSpeechActivityDetector.swift
 Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift
