@@ -30,7 +30,8 @@ struct MobileMeetingRoot: View {
         nonmutating set { privatePresentation.settingsPath = newValue }
     }
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @StateObject private var historySnapshot: MeetingHistorySnapshot
+    @StateObject private var privateSources: MobilePrivateSourceReaders
+    private var historySnapshot: MeetingHistorySnapshot { privateSources.historySnapshot }
     private var sessions: [MeetingSession] { historySnapshot.sessions }
     // The snapshot owns committed sessions; History's own path keeps only pushed identities.
     private var historyPath: [MeetingSessionID] {
@@ -94,7 +95,7 @@ struct MobileMeetingRoot: View {
     }
     private var presentationLoader: MobilePresentationLoader { privatePresentation.presentationLoader }
     @State private var recordingScreenAwakeToken: UUID?
-    @StateObject private var playback = MeetingSegmentPlayback()
+    private var playback: MeetingSegmentPlayback { privateSources.playback }
     // Projection is independent of microphone meters, pending audio, playback progress
     // and other frequent view invalidations. Keep one result for the visible transcript.
     private var transcriptReadingSource: MeetingTranscriptExporter.ReadingInput? {
@@ -115,7 +116,7 @@ struct MobileMeetingRoot: View {
         self.coordinator = coordinator; self.asr = asr; self.store = store
         self.privacy = privacy; self.microphones = microphones
         self.required = required; self.privacyActivation = privacyActivation
-        self._historySnapshot = StateObject(wrappedValue: MeetingHistorySnapshot(load: { try await store.loadAll() }))
+        self._privateSources = StateObject(wrappedValue: MobilePrivateSourceReaders(store: store))
     }
 
     enum Destination: String, CaseIterable, Identifiable {
@@ -258,6 +259,12 @@ struct MobileMeetingRoot: View {
         }
         // The app's UI-ready signal owns the launch sweep; its committed deletions reload History.
         .onChange(of: coordinator.retentionSweepRevision) { _, _ in Task { await refreshHistory() } }
+        // N2 advances this only after successful activation. Replace the two
+        // immutable private readers without replacing capture, UI or awake owners.
+        .onChange(of: privateProfile.sourceRevision) { _, _ in
+            privateSources.replaceAfterActivation()
+            Task { await refreshHistory() }
+        }
         .onChange(of: coordinator.state) { _, state in
             if coordinator.isRecording { playback.stop() }
             updateRecordingScreenAwake()
@@ -539,7 +546,7 @@ struct MobileMeetingRoot: View {
                 Label(PichiLocalization.text("Stop & Transcribe"), systemImage: "stop.fill")
                     .foregroundStyle(theme.palette.accentForeground)
                     .frame(maxWidth: .infinity, minHeight: 48)
-            }.buttonStyle(.borderedProminent).disabled(isBusy || !coordinator.isRecording)
+            }.buttonStyle(.borderedProminent).disabled(isDomainBusy || !coordinator.isRecording)
                 .accessibilityIdentifier("meeting.stop")
                 .padding(.horizontal, 24).padding(.vertical, 12)
                 .background(theme.palette.toolbarBackground)
@@ -940,7 +947,7 @@ struct MobileMeetingRoot: View {
 
     private func run(session: MeetingSession? = nil, requiresVisibleProfile: Bool = true,
                      _ operation: @escaping @MainActor () async throws -> Void) {
-        guard !isBusy else { return }
+        guard (requiresVisibleProfile ? !isBusy : !isDomainBusy) else { return }
         let admission = privatePresentation.publications.admit()
         guard !requiresVisibleProfile || admission != nil else { return }
         if let session, !canPresent(session) { return }
@@ -1060,6 +1067,35 @@ struct MobileMeetingRoot: View {
     }
 }
 
+
+/// Only these readers freeze the selected profile. Their existing N2 participants
+/// have joined before sourceRevision advances; the recording owner stays mounted.
+@MainActor
+private final class MobilePrivateSourceReaders: ObservableObject {
+    @Published private(set) var historySnapshot: MeetingHistorySnapshot
+    @Published private(set) var playback: MeetingSegmentPlayback
+    private let store: any MeetingSessionStoring
+    private var observers = Set<AnyCancellable>()
+
+    init(store: any MeetingSessionStoring) {
+        self.store = store
+        historySnapshot = MeetingHistorySnapshot(load: { try await store.loadAll() })
+        playback = MeetingSegmentPlayback()
+        observeReaders()
+    }
+
+    func replaceAfterActivation() {
+        historySnapshot = MeetingHistorySnapshot(load: { [store] in try await store.loadAll() })
+        playback = MeetingSegmentPlayback()
+        observeReaders()
+    }
+
+    private func observeReaders() {
+        observers.removeAll()
+        historySnapshot.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observers)
+        playback.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observers)
+    }
+}
 
 /// Per-window private UI values and publication jobs. N2 owns profile selection;
 /// this participant only retires transient readers/payloads before replacement.
