@@ -88,8 +88,14 @@ import Foundation
         do {
             PrivateProfileStorage.conceal(generation: generation)
             NotificationCenter.default.post(name: Self.willConceal, object: nil)
-            try await joinConcealedOperations(generation: generation)
-            try await prepareSources()
+            var firstFailure: (any Error)?
+            do { try await joinConcealedOperations(generation: generation) }
+            catch { firstFailure = error }
+            // Concrete source cleanup owns private workers outside the window registry.
+            // Join those too before returning an earlier marker or participant failure.
+            do { try await prepareSources() }
+            catch { if firstFailure == nil { firstFailure = error } }
+            if let firstFailure { throw firstFailure }
             guard !isBusy() else { throw AccountError.busy }
             PrivateProfileStorage.conceal(generation: generation)
             await PrivateProfileMeetingStore.shared.finishProfileTransition()

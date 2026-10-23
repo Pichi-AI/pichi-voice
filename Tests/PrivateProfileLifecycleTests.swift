@@ -81,6 +81,7 @@ extension MeetingSessionStoreCheckpointTests {
             }
         }
         try await checkPrivateProfileCancelledJoins(root: root, context: context, check: check)
+        try await checkPrivateProfileSourceFailure(root: root, context: context, check: check)
     }
 
     @MainActor private static func checkPrivateProfileFailureJoins(root: URL, context: AccountContext,
@@ -100,7 +101,12 @@ extension MeetingSessionStoreCheckpointTests {
         let state = SyntheticProfileState()
         state.busy = busy
         let service = PrivateProfileService()
-        try service.configure(isBusy: { state.busy }, prepare: { state.preparations += 1 },
+        let sourceGate = SyntheticProfileGate()
+        try service.configure(isBusy: { state.busy }, prepare: {
+            state.preparations += 1
+            if state.gateSources { await sourceGate.wait() }
+            if state.failSources { throw AccountError.credentialsUnavailable }
+        },
             activate: { _ in state.activations += 1 })
         let first = SyntheticProfileParticipant {
             state.events.append("first")
@@ -151,6 +157,13 @@ extension MeetingSessionStoreCheckpointTests {
         check(!state.transitionFinished && state.writeFinished && state.events == ["first", "second"],
             "The first throwing participant cannot skip or outlive a later admitted reader join")
         await participantGate.release()
+        if !busy {
+            await sourceGate.waitUntilEntered()
+            check(!state.transitionFinished && state.preparations == 1 && !service.isPrivateDataVisible
+                && !PrivateProfileStorage.current.isReadable && service.sourceRevision == sourceRevision,
+                "Normal cleanup must join held concrete private sources even after marker or participant failure")
+            await sourceGate.release()
+        }
         do { try await transition.value; check(false, "Joined cleanup must preserve its first failure") }
         catch {
             if let expectedMarkerFailure {
@@ -165,18 +178,21 @@ extension MeetingSessionStoreCheckpointTests {
         check(state.events == ["first", "second", "second-joined"] && !service.isTransitioning
             && !service.isPrivateDataVisible && !PrivateProfileStorage.current.isReadable
             && service.hasRetainedCaptureStopHandler
-            && service.sourceRevision == sourceRevision && state.preparations == 0 && state.activations == 0,
-            "Failed joined cleanup cannot prepare, activate, publish or reopen a private source")
+            && service.sourceRevision == sourceRevision && state.preparations == (busy ? 0 : 1)
+            && state.activations == 0,
+            "Failed cleanup joins concrete sources only outside active capture and cannot activate, publish or reopen a source")
         await service.requestCaptureStop()
         check(state.stopRequests == 1, "Failed cleanup retains the original local capture stop owner")
         if blockedMarker { try FileManager.default.removeItem(at: markerDirectory) }
         state.busy = false
         state.failParticipants = false
         state.gateParticipants = false
+        state.failSources = false
+        state.gateSources = false
         try await service.transition(from: nil, to: nil, generation: UUID())
         check(service.isPrivateDataVisible && PrivateProfileStorage.current.isGuest
             && PrivateProfileStorage.acceptsNewWork && service.sourceRevision != sourceRevision
-            && state.preparations == 1 && state.activations == 1 && first.calls == 2 && second.calls == 2,
+            && state.preparations == (busy ? 1 : 2) && state.activations == 1 && first.calls == 2 && second.calls == 2,
             "An explicit retry rejoins the same readers and commits guest only after every failure is resolved")
         await service.requestCaptureStop()
         check(state.stopRequests == 1 && !service.hasRetainedCaptureStopHandler,
@@ -227,6 +243,31 @@ extension MeetingSessionStoreCheckpointTests {
         check(service.isPrivateDataVisible && PrivateProfileStorage.current.isGuest && participant.calls == 2,
             "A canceled transition permits an explicit joined guest cleanup retry")
     }
+
+    @MainActor private static func checkPrivateProfileSourceFailure(root: URL, context: AccountContext,
+        check: (Bool, String) -> Void) async throws {
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(),
+            legacyRootDirectory: root.appendingPathComponent("source-failure"))
+        PrivateProfileStorage.select(guest)
+        let state = SyntheticProfileState()
+        let service = PrivateProfileService()
+        try service.configure(isBusy: { false }, prepare: {
+            state.preparations += 1
+            if state.failSources { throw AccountError.credentialsUnavailable }
+        }, activate: { _ in state.activations += 1 })
+        let sourceRevision = service.sourceRevision
+        do { try await service.transition(from: nil, to: context, generation: UUID()); check(false, "Source failure must reject transition") }
+        catch {
+            check(error as? AccountError == .credentialsUnavailable && state.preparations == 1
+                && state.activations == 0 && !service.isPrivateDataVisible && !PrivateProfileStorage.current.isReadable
+                && service.sourceRevision == sourceRevision,
+                "A concrete source failure remains authoritative when earlier cleanup succeeded")
+        }
+        state.failSources = false
+        try await service.transition(from: nil, to: nil, generation: UUID())
+        check(service.isPrivateDataVisible && PrivateProfileStorage.current.isGuest && state.preparations == 2
+            && state.activations == 1, "A resolved concrete source failure allows explicit joined guest retry")
+    }
 }
 
 @MainActor private final class SyntheticProfileState {
@@ -235,6 +276,8 @@ extension MeetingSessionStoreCheckpointTests {
     var activations = 0
     var failParticipants = true
     var gateParticipants = true
+    var failSources = true
+    var gateSources = true
     var transitionFinished = false
     var writeFinished = false
     var stopRequests = 0
