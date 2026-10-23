@@ -9,6 +9,9 @@ fluid = (repo / "Sources/Fluid/Services/FluidAudioProvider.swift").read_text()
 vocabulary = (repo / "Sources/Fluid/Services/ParakeetVocabularyStore.swift").read_text()
 analyzer = (repo / "Sources/Fluid/Services/AppleSpeechAnalyzerProvider.swift").read_text()
 gigaam = (repo / "Sources/Fluid/Services/PichiGigaAMProvider.swift").read_text()
+experiment = (repo / "Sources/Fluid/Services/DictionaryPronunciationExperiment.swift").read_text()
+references = (repo / "Sources/Fluid/Services/DictionaryPronunciationReferences.swift").read_text()
+negative = (repo / "Sources/Fluid/Services/DictionaryNegativeExamples.swift").read_text()
 
 def between(source, start, end):
     index = source.index(start)
@@ -32,8 +35,11 @@ enhancements = between(fluid, "nonisolated struct FluidAudioProviderEnhancementO
 # The neighboring CTC types below perform no download, loading or inference.
 vocabulary = vocabulary.replace("#if arch(arm64)\nimport FluidAudio\n#endif", "")
 vocabulary = vocabulary.replace("#if arch(arm64)", "").replace("#endif", "")
-projection = enhancements + "\n" + vocabulary
-projection += "\n@MainActor final class FluidAudioProvider {\n" + options + getters + "\n// FLUID_TEST_FIELDS\n}\n"
+evidence_reader = between(negative, "nonisolated final class DictionaryCaptureEvidenceFile", "\nnonisolated struct DictionaryAcousticEvidence")
+experiment_core = between(experiment, "nonisolated enum DictionaryPronunciationExperiment", "\n/// Bounded, local-only evidence")
+references_core = references.replace("#if arch(arm64)", "").replace("import FluidAudio", "").replace("#endif", "")
+projection = enhancements + "\n" + evidence_reader + "\n" + experiment_core + "\n" + references_core + "\n" + vocabulary
+projection += "\n@MainActor final class FluidAudioProvider {\n" + options + getters + "\n" + method(fluid, "    static func preparedEdgeProfiles(") + "\n// FLUID_TEST_FIELDS\n}\n"
 projection = projection.replace("    private ", "    ")
 fields = '''
     let configureWordBoosting: Bool
@@ -58,10 +64,10 @@ analyzer_config += method(analyzer, "    private func selectedSpeechLocale()")
 projection += "\n@MainActor final class AppleSpeechAnalyzerProvider { var preparedLocale: Locale?\n" + analyzer_config.replace("    private ", "    ") + "\n}\n"
 
 gigaam_selection = between(gigaam, "    struct Selection: Sendable", "\n    init(")
-gigaam_selection += method(gigaam, "    var directory: URL")
-gigaam_selection += method(gigaam, "    private var registeredDescriptors:")
-gigaam_selection += method(gigaam, "    func selectedArtifact()")
-gigaam_selection += method(gigaam, "    private static func locate(")
+gigaam_selection += "\n" + method(gigaam, "    var directory: URL")
+gigaam_selection += "\n" + method(gigaam, "    private var registeredDescriptors:")
+gigaam_selection += "\n" + method(gigaam, "    func selectedArtifact()")
+gigaam_selection += "\n" + method(gigaam, "    private static func locate(")
 projection += "\nnonisolated final class PichiGigaAMModelStore {\n" + gigaam_selection.replace("    private ", "    ") + "\n// GIGAAM_STORE_FIELDS\n}\n"
 projection = projection.replace("// GIGAAM_STORE_FIELDS", """
     static let importedModelPreferenceKey = "pichiGigaAMImportedModelID"

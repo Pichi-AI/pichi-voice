@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()
@@ -13,7 +14,12 @@ import Foundation
     var automaticDictionaryLearningEnabled = true
     var selectedAppleSpeechLocale = Locale(identifier: "ru-RU")
 }
-nonisolated struct PrivateProfileSnapshot: Sendable { let rootDirectory: URL }
+nonisolated struct PrivateProfileSnapshot: Sendable {
+    let rootDirectory: URL
+    var legacyRootDirectory: URL { rootDirectory }
+    var isGuest: Bool { true }
+    var id: String { "guest" }
+}
 nonisolated enum PrivateProfileStorage {
     nonisolated(unsafe) static var current = PrivateProfileSnapshot(rootDirectory: URL(fileURLWithPath: "/unused"))
     nonisolated(unsafe) static var readable = true
@@ -31,6 +37,8 @@ nonisolated enum ParakeetSpeechModelCatalog {
         func cacheDirectory(in root: URL) -> URL { root.appendingPathComponent(modelID) }
         func installedArchiveSHA256(at directory: URL) -> String? { nil }
     }
+    static func descriptor(forInstalledPronunciationModelKey key: String) -> Descriptor? { .init(modelID: key) }
+    static func isOutdatedCompactPronunciationModelKey(_ key: String) -> Bool { false }
 }
 @MainActor final class CompactSpeechModelReleaseCatalog {
     static let shared = CompactSpeechModelReleaseCatalog()
@@ -43,12 +51,32 @@ nonisolated enum DictionaryMatcherExperiment {
     nonisolated(unsafe) static var collectNegatives = true
     nonisolated(unsafe) static var compareNegatives = true
 }
-nonisolated enum DictionaryPronunciationExperiment { nonisolated(unsafe) static var captureEnabled = true }
-nonisolated struct PronunciationDictionaryProfile { let automaticMatchingEnabled: Bool? }
-nonisolated struct PronunciationEnrollmentCapture {}
+nonisolated enum PrivateProfileDefaults {
+    static let shared = Defaults()
+    final class Defaults: Sendable { func bool(forKey key: String) -> Bool { true } }
+}
+nonisolated struct PronunciationEnrollmentCapture {
+    var modelKey = "A"
+    var values: [Float] = [1, 0]
+    var sourceFrameCount = 10
+    var inspectionID: UUID? = nil
+    var edgeEmbedding: [Float]? = [1, 0]
+    var edgeFrameCount: Int? = 10
+}
+nonisolated struct PronunciationDictionaryProfile {
+    var automaticMatchingEnabled: Bool? = true
+    var modelKey = "A"
+    var hiddenSize = 2
+    var hasOriginalAudio = false
+    var enrollments = Array(repeating: PronunciationEnrollmentCapture(), count: 3)
+}
+nonisolated struct PronunciationEmbedding { let values: [Float]; let sourceFrameCount: Int }
+nonisolated enum PronunciationEmbeddingMatcher {
+    static func prototype(from embeddings: [PronunciationEmbedding]) -> PronunciationEmbedding? { embeddings.first }
+}
 nonisolated struct DictionaryAudioInspection {}
 nonisolated struct DictionaryMatchFrames {}
-nonisolated enum PronunciationDictionaryStoreError: Error { case staleEvidence }
+nonisolated enum PronunciationDictionaryStoreError: Error { case staleEvidence, inconsistentEnrollment }
 @MainActor final class PronunciationDictionaryStore {
     static let shared = PronunciationDictionaryStore()
     final class CaptureRead {
@@ -145,7 +173,6 @@ actor TestGate {
         DictionaryMatcherExperiment.generation = "B"
         DictionaryMatcherExperiment.collectNegatives = false
         DictionaryMatcherExperiment.compareNegatives = false
-        DictionaryPronunciationExperiment.captureEnabled = false
         PrivateProfileStorage.readable = false
         check(provider.resolvedSpeechModel == .parakeetTDT, "conceal cannot change model")
         check(provider.effectiveExperimentalUnifiedFinalEnabled, "conceal cannot change final mode")
@@ -153,6 +180,13 @@ actor TestGate {
         check(provider.automaticLearningEnabled && provider.sharedFeaturesEnabled, "admitted learning/matcher options remain fixed")
         check(provider.pronunciationGeneration == "A" && provider.collectNegativeExamples && provider.compareNegativeExamples, "admitted matcher generation remains fixed")
         check(provider.captureInspectionEnabled, "admitted capture option remains fixed")
+        let originalProfiles = [PronunciationDictionaryProfile()]
+        check(originalProfiles[0].edgeCalibration == nil, "ordinary hidden calibration remains disabled")
+        let admittedProfiles = FluidAudioProvider.preparedEdgeProfiles(originalProfiles, cache: [:], enabled: provider.sharedFeaturesEnabled)
+        check(admittedProfiles.count == 1, "admitted profile preparation keeps frozen calibration after conceal")
+        let admittedReferences = DictionaryPronunciationReferences.make(profiles: admittedProfiles, compatibleModelKey: "A", pronunciationEnabled: provider.sharedFeaturesEnabled)
+        check(admittedReferences.count == 1 && admittedReferences[0].sampleNumber == 0, "admitted helper chain retains calibrated reference after conceal")
+        check(DictionaryPronunciationReferences.make(profiles: originalProfiles, compatibleModelKey: "A").count == 3, "ordinary helper still follows live policy")
         check(await provider.storedPronunciationProfiles().count == 1, "provider consumes admitted profile metadata")
         check(await provider.negativeRevision() == captured.negatives?.revision, "provider consumes admitted negative revision")
         check(await provider.negativeFrames(entryID: UUID(), profileKey: "A", modelKey: "A").count == 1, "provider consumes admitted negative frames")
@@ -179,6 +213,16 @@ actor TestGate {
         let handle = try FileHandle(forWritingTo: root.appendingPathComponent("parakeet_custom_vocabulary.json"))
         try handle.truncate(atOffset: 0); try handle.write(contentsOf: Data(repeating: 65, count: 1025)); try handle.close()
         do { _ = try vocabulary.loadResolvedConfig(maximumBytes: 1024); preconditionFailure("oversized capture config must reject") } catch { checks += 1 }
+        let vocabularyURL = root.appendingPathComponent("parakeet_custom_vocabulary.json")
+        try FileManager.default.removeItem(at: vocabularyURL)
+        precondition(mkfifo(vocabularyURL.path, 0o600) == 0)
+        do { _ = try vocabulary.loadResolvedConfig(maximumBytes: 1024); preconditionFailure("FIFO must reject without blocking") } catch { checks += 1 }
+        try FileManager.default.removeItem(at: vocabularyURL)
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("pichi-vocabulary-outside-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try Data("{\"terms\":[]}".utf8).write(to: outside)
+        try FileManager.default.createSymbolicLink(at: vocabularyURL, withDestinationURL: outside)
+        do { _ = try vocabulary.loadResolvedConfig(maximumBytes: 1024); preconditionFailure("symlink must not escape original profile") } catch { checks += 1 }
         let analyzer = AppleSpeechAnalyzerProvider(), analyzerLease = UUID()
         try analyzer.beginAdmittedTranscription(leaseID: analyzerLease)
         SettingsStore.shared.selectedAppleSpeechLocale = Locale(identifier: "en-US")

@@ -57,7 +57,11 @@ nonisolated enum DictionaryPronunciationExperiment {
 
 extension PronunciationDictionaryProfile {
     var edgeCalibration: (center: [Float], baseline: Float)? {
-        guard DictionaryPronunciationExperiment.enabled, !self.hasOriginalAudio,
+        self.edgeCalibration(enabled: DictionaryPronunciationExperiment.enabled)
+    }
+
+    func edgeCalibration(enabled: Bool) -> (center: [Float], baseline: Float)? {
+        guard enabled, !self.hasOriginalAudio,
               self.enrollments.allSatisfy({ $0.edgeEmbedding?.count == self.hiddenSize && ($0.edgeFrameCount ?? 0) > 0 })
         else { return nil }
         return DictionaryPronunciationExperiment.calibration(self.enrollments.compactMap(\.edgeEmbedding))

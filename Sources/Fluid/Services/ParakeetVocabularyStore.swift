@@ -206,11 +206,17 @@ import FluidAudio
     func loadResolvedConfig(maximumBytes: Int? = nil) throws -> ResolvedConfig {
         let rawJSON: String
         if let maximumBytes {
-            let handle = try FileHandle(forReadingFrom: self.ensureVocabularyFileExists())
-            defer { try? handle.close() }
-            let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
-            guard data.count <= maximumBytes else { throw StoreError.invalidJSON("Vocabulary file exceeds the capture limit.") }
-            rawJSON = String(decoding: data, as: UTF8.self)
+            try self.requireAccess()
+            let url = self.rootDirectory.appendingPathComponent(self.fileName)
+            if let file = try DictionaryCaptureEvidenceFile(url: url, maximumBytes: maximumBytes, profile: self.profile) {
+                defer { file.close() }
+                rawJSON = try file.read { String(decoding: $0, as: UTF8.self) }
+            } else if let bundled = Bundle.main.url(forResource: "parakeet_custom_vocabulary.default", withExtension: "json"),
+                      let text = try? String(contentsOf: bundled, encoding: .utf8) {
+                rawJSON = try Self.brandedFactoryDefaultJSON(text)
+            } else {
+                rawJSON = Self.defaultTemplateJSON()
+            }
         } else {
             rawJSON = try self.loadRawJSON()
         }

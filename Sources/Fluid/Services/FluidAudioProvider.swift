@@ -1031,7 +1031,7 @@ final class FluidAudioProvider: TranscriptionProvider {
             let captureIsCurrent = shouldCapture && self.sharedFeaturesEnabled
                 && self.pronunciationGeneration == pronunciationGeneration
             var capture = captureIsCurrent ? self.makeEnrollment(result: result, features: features, samples: samples) : nil
-            if capture != nil, DictionaryPronunciationExperiment.enabled,
+            if capture != nil, self.sharedFeaturesEnabled,
                let range = DictionaryPronunciationExperiment.trimmedRange(samples)
             {
                 let embedding = try await self.encodeEdge(Array(samples[range]), manager: manager)
@@ -1285,7 +1285,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         let generation = self.recordingGeneration
         let profiles = Self.preparedEdgeProfiles(await self.pronunciationProfiles(), cache: self.edgeReferenceCache, enabled: self.sharedFeaturesEnabled)
         try self.requireCurrentRecording(generation)
-        let references = DictionaryPronunciationReferences.make(profiles: profiles, compatibleModelKey: self.pronunciationModelKey)
+        let references = DictionaryPronunciationReferences.make(profiles: profiles, compatibleModelKey: self.pronunciationModelKey, pronunciationEnabled: self.sharedFeaturesEnabled)
         let useSharedFeatures = self.sharedFeaturesEnabled
         let pronunciationGeneration = self.pronunciationGeneration
         let admittedSharedFeatures = self.dictationCaptureOptions?.sharedFeatures
@@ -1301,7 +1301,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         let session = try await manager.makeIncrementalSession(
             source: .microphone,
             pronunciationPrototypes: references.map(\.embedding),
-            pronunciationThreshold: profiles.contains { $0.edgeCalibration != nil } ? 0.25 : DictionaryPronunciationDecision.minimumSearchScore(profiles: profiles),
+            pronunciationThreshold: profiles.contains { $0.edgeCalibration(enabled: self.sharedFeaturesEnabled) != nil } ? 0.25 : DictionaryPronunciationDecision.minimumSearchScore(profiles: profiles),
             pronunciationRefiner: refiner,
             pronunciationEnabled: {
                 if let admittedSharedFeatures { return admittedSharedFeatures }
@@ -1320,7 +1320,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         guard self.sharedFeaturesEnabled else { return [] }
         // Repeat only the cheap vector search with the same candidate windows as short dictation.
         let matches = PronunciationEmbeddingMatcher.allMatches(prototypes: references.map(\.embedding), in: chunk.features, threshold: 0.25, windowFrameCounts: references.map { reference in
-            reference.profile.edgeCalibration != nil ? Array(5...32) : PronunciationEmbeddingMatcher.nearbyWindowCounts(around: reference.embedding.sourceFrameCount)
+            reference.profile.edgeCalibration(enabled: self.sharedFeaturesEnabled) != nil ? Array(5...32) : PronunciationEmbeddingMatcher.nearbyWindowCounts(around: reference.embedding.sourceFrameCount)
         }).enumerated().flatMap { index, hits in hits.map { PronunciationWindowMatch(prototypeIndex: index, score: $0.score, frameRange: $0.frameRange) } }
         var evidence: [DictionaryAcousticEvidence] = []
         var accepted: Set<TemporalMatchKey> = []
@@ -1430,13 +1430,13 @@ final class FluidAudioProvider: TranscriptionProvider {
                     textMayBeCorrected
                 )
             }
-            let references = DictionaryPronunciationReferences.make(profiles: profiles, hiddenSize: features.hiddenSize, compatibleModelKey: self.pronunciationModelKey)
+            let references = DictionaryPronunciationReferences.make(profiles: profiles, hiddenSize: features.hiddenSize, compatibleModelKey: self.pronunciationModelKey, pronunciationEnabled: self.sharedFeaturesEnabled)
             let matches = PronunciationEmbeddingMatcher.allMatches(
                 prototypes: references.map(\.embedding),
                 in: features,
-                threshold: references.contains { $0.profile.edgeCalibration != nil } ? 0.25 : DictionaryPronunciationDecision.minimumSearchScore(profiles: profiles),
+                threshold: references.contains { $0.profile.edgeCalibration(enabled: self.sharedFeaturesEnabled) != nil } ? 0.25 : DictionaryPronunciationDecision.minimumSearchScore(profiles: profiles),
                 windowFrameCounts: references.map { reference in
-                    reference.profile.edgeCalibration != nil ? Array(5...32) : PronunciationEmbeddingMatcher.nearbyWindowCounts(around: reference.embedding.sourceFrameCount)
+                    reference.profile.edgeCalibration(enabled: self.sharedFeaturesEnabled) != nil ? Array(5...32) : PronunciationEmbeddingMatcher.nearbyWindowCounts(around: reference.embedding.sourceFrameCount)
                 }
             ).enumerated().flatMap { index, hits in
                 hits.map { PronunciationWindowMatch(prototypeIndex: index, score: $0.score, frameRange: $0.frameRange) }
@@ -1502,7 +1502,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 prepared.enrollments[index].edgeEmbedding = embedding.values
                 prepared.enrollments[index].edgeFrameCount = embedding.sourceFrameCount
             }
-            return prepared.edgeCalibration == nil ? nil : prepared
+            return prepared.edgeCalibration(enabled: enabled) == nil ? nil : prepared
         }
     }
 

@@ -6,6 +6,8 @@ final class DebugLogger {
     func debug(_ message: String, source: String) {}
 }
 
+nonisolated enum PronunciationDictionaryStoreError: Error { case staleEvidence, inconsistentEnrollment }
+
 @main
 struct FactoryBrandVocabularyTests {
     static func main() throws {
