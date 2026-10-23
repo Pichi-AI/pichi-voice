@@ -299,3 +299,4 @@ builds/
 # Local Claude Code settings and worktrees
 .claude/
 !/docs/development/upstream-sync-1.6.12.md
+!/docs/development/onboarding-integration-2026-10-22.md
