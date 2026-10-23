@@ -25,7 +25,7 @@ def declaration(source: str, marker: str) -> str:
 
 
 def credential_probe(source: str, settings_source: str) -> str:
-    """Compile production serialization/redaction with inert unrelated value types."""
+    """Compile actual migration/serialization with memory preferences and injected Keychain."""
     payload = declaration(source, "struct SettingsBackupPayload:")
     redaction = declaration(payload, "    nonisolated func redactingProviderCredentials()")
     saved_provider = declaration(settings_source, "    struct SavedProvider:")
@@ -42,10 +42,22 @@ def credential_probe(source: str, settings_source: str) -> str:
     swift = r'''
 import Foundation
 // Display preferences remain inert, matching the concurrency probe below.
-nonisolated final class UserDefaults: @unchecked Sendable {
+nonisolated class UserDefaults: @unchecked Sendable {
     static let standard = UserDefaults()
     func string(forKey key: String) -> String? { nil }
+    func dictionary(forKey key: String) -> [String: Any]? { nil }
+    func data(forKey key: String) -> Data? { nil }
     func set(_ value: Any?, forKey key: String) { fatalError("Unexpected preference write") }
+    func removeObject(forKey key: String) { fatalError("Unexpected preference removal") }
+    func synchronize() -> Bool { fatalError("Unexpected preference synchronization") }
+}
+// This probe injects ordinary memory preferences. Profile facade routes must
+// never run here; the actual storage snapshot below still checks generation.
+nonisolated final class PrivateProfileDefaults: UserDefaults, @unchecked Sendable {
+    var selectedProfile: PrivateProfileSnapshot { fatalError("Unexpected profile facade read") }
+    static func bound(to profile: PrivateProfileSnapshot) -> UserDefaults {
+        fatalError("Unexpected profile facade binding")
+    }
 }
 SCHEMA
 ERRORS
@@ -59,12 +71,14 @@ struct SettingsBackupPayload: Codable, Equatable {
 }
 // Only persistence dependencies and unrelated nested value types are replaced.
 // SavedProvider, document, redaction and encode/decode bodies are actual source.
-final class MemoryPreferences: @unchecked Sendable {
+final class MemoryPreferences: UserDefaults, @unchecked Sendable {
     private var values: [String: Any]
     private(set) var writes = 0
     private var persisted: [String: Any]
     var synchronizationSucceeds = true
     var reintroduceSourceAfterSynchronization = false
+    var synchronizationStarted: (@Sendable () -> Void)?
+    var synchronizationRelease: DispatchSemaphore?
     private let originalProviderBytes: Data
     init(providerBytes: Data, legacy: [String: String]? = nil) {
         originalProviderBytes = providerBytes
@@ -72,27 +86,37 @@ final class MemoryPreferences: @unchecked Sendable {
         if let legacy { values["ProviderAPIKeys"] = legacy }
         persisted = values
     }
-    func synchronize() -> Bool {
+    override func synchronize() -> Bool {
         precondition(!Thread.isMainThread, "Migration persistence must never wait on main")
+        synchronizationStarted?()
+        if let synchronizationRelease {
+            precondition(synchronizationRelease.wait(timeout: .now() + 5) == .success,
+                         "Synthetic synchronization must be released")
+        }
         guard synchronizationSucceeds else { return false }
         persisted = values
         if reintroduceSourceAfterSynchronization { values["SavedProviders"] = originalProviderBytes }
         return true
     }
     var persistedProviderBytes: Data { persisted["SavedProviders"] as! Data }
-    func data(forKey key: String) -> Data? { values[key] as? Data }
-    func dictionary(forKey key: String) -> [String: Any]? { values[key] as? [String: Any] }
-    func set(_ value: Data, forKey key: String) { writes += 1; values[key] = value }
-    func removeObject(forKey key: String) { writes += 1; values.removeValue(forKey: key) }
-}
-final class MigrationWorkerFixture: @unchecked Sendable {
-    let worker = DispatchQueue(label: "synthetic-migration-worker")
-    CONFIRM_LEGACY_CLEANUP
+    override func data(forKey key: String) -> Data? { values[key] as? Data }
+    override func dictionary(forKey key: String) -> [String: Any]? { values[key] as? [String: Any] }
+    override func set(_ value: Any?, forKey key: String) { writes += 1; values[key] = value }
+    override func removeObject(forKey key: String) { writes += 1; values.removeValue(forKey: key) }
 }
 final class ChangeCounter { func send() {} }
 final class DebugLogger {
     static let shared = DebugLogger()
     func error(_ message: String, source: String) {}
+}
+actor SynchronizationGate {
+    private var entered = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    func didEnter() { entered = true; waiter?.resume(); waiter = nil }
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
 }
 struct ModelRepository {
     static let shared = ModelRepository()
@@ -104,8 +128,14 @@ final class SettingsStore {
     typealias DictationPromptProfile = String
     typealias AppPromptBinding = String
     enum Keys { static let savedProviders = "SavedProviders"; static let providerAPIKeys = "ProviderAPIKeys"; static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers" }
-    private let defaults: MemoryPreferences
-    private let keychain = MigrationWorkerFixture()
+    private let defaults: UserDefaults
+    private var memoryPreferences: MemoryPreferences { defaults as! MemoryPreferences }
+    private let keychain = KeychainService(
+        testingLoad: { fatalError("Unexpected Keychain read") },
+        testingSave: { _ in fatalError("Unexpected Keychain write") },
+        testingLegacyLoad: { fatalError("Unexpected legacy Keychain read") },
+        testingLegacyRemove: { _ in fatalError("Unexpected legacy Keychain removal") }
+    )
     private var providerCredentialCleanupNeedsPersistence = false
     private let objectWillChange = ChangeCounter()
     init(savedProviders: [SavedProvider], legacy: [String: String]? = nil) {
@@ -135,13 +165,32 @@ final class SettingsStore {
     var legacyDefaults: [String: String]? { defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] }
     func exerciseAcknowledgedMigration(verifiedKeys: [String: String], persistenceSucceeds: Bool, reintroduceSource: Bool = false) async -> Bool {
         let snapshot = self.providerCredentialMigrationSnapshot()
-        self.defaults.synchronizationSucceeds = persistenceSucceeds
-        self.defaults.reintroduceSourceAfterSynchronization = reintroduceSource
+        self.memoryPreferences.synchronizationSucceeds = persistenceSucceeds
+        self.memoryPreferences.reintroduceSourceAfterSynchronization = reintroduceSource
         return await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: verifiedKeys)
     }
-    var persistedProviders: [SavedProvider] { try! JSONDecoder().decode([SavedProvider].self, from: self.defaults.persistedProviderBytes) }
+    @MainActor
+    func exerciseProfileAcknowledgment(
+        verifiedKeys: [String: String], beforeAcknowledgment: () -> Void = {},
+        synchronizationStarted: (@Sendable () -> Void)? = nil,
+        synchronizationRelease: DispatchSemaphore? = nil
+    ) async -> Bool {
+        let source = self.providerCredentialMigrationSnapshot()
+        let snapshot = ProviderCredentialMigrationSnapshot(
+            preferences: source.preferences, keychain: source.keychain,
+            profile: PrivateProfileStorage.current, legacyDefaults: source.legacyDefaults,
+            savedProviderBytes: source.savedProviderBytes, keys: source.keys,
+            canonicalProviderIDs: source.canonicalProviderIDs
+        )
+        self.memoryPreferences.synchronizationStarted = synchronizationStarted
+        self.memoryPreferences.synchronizationRelease = synchronizationRelease
+        beforeAcknowledgment()
+        return await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: verifiedKeys)
+    }
+    func joinCredentialWorker() async { await self.keychain.retireAndJoin() }
+    var persistedProviders: [SavedProvider] { try! JSONDecoder().decode([SavedProvider].self, from: self.memoryPreferences.persistedProviderBytes) }
     var sourceBytes: Data { defaults.data(forKey: Keys.savedProviders)! }
-    var preferenceWrites: Int { defaults.writes }
+    var preferenceWrites: Int { memoryPreferences.writes }
     func makeBackupPayload() -> SettingsBackupPayload {
         .init(savedProviders: SETTINGS_EXPORT_ARGUMENT)
     }
@@ -237,6 +286,36 @@ MEMBERS
         let reintroducedAck = await reintroduced.exerciseAcknowledgedMigration(verifiedKeys: verified, persistenceSucceeds: true, reintroduceSource: true)
         expect(!reintroducedAck && reintroduced.savedProviders == providers, "a source reintroduced during persistence remains intact and rejects the credential edit")
         expect(reintroduced.preferenceWrites == 1, "final acknowledgment validation never scrubs a new source without another joined persistence step")
+        let selectedProfile = PrivateProfileStorage.current
+        let hidden = SettingsStore(savedProviders: providers)
+        let hiddenAck = await hidden.exerciseProfileAcknowledgment(verifiedKeys: verified) {
+            PrivateProfileStorage.conceal(generation: UUID())
+        }
+        expect(!hiddenAck && hidden.preferenceWrites == 0 && hidden.savedProviders == providers,
+               "concealed captured profile rejects migration before preference writes")
+        PrivateProfileStorage.select(selectedProfile)
+        let replaced = SettingsStore(savedProviders: providers)
+        let replacedAck = await replaced.exerciseProfileAcknowledgment(verifiedKeys: verified) {
+            PrivateProfileStorage.select(try! PrivateProfileStorage.proposed(context: nil, generation: UUID()))
+        }
+        expect(!replacedAck && replaced.preferenceWrites == 0,
+               "same profile ID with another generation rejects the captured migration")
+        PrivateProfileStorage.select(selectedProfile)
+        let held = SettingsStore(savedProviders: providers)
+        let release = DispatchSemaphore(value: 0)
+        let synchronizationGate = SynchronizationGate()
+        let heldOperation = Task { @MainActor in
+            await held.exerciseProfileAcknowledgment(verifiedKeys: verified,
+                synchronizationStarted: { Task { await synchronizationGate.didEnter() } },
+                synchronizationRelease: release)
+        }
+        await synchronizationGate.waitUntilEntered()
+        PrivateProfileStorage.conceal(generation: UUID())
+        release.signal()
+        let heldAck = await heldOperation.value
+        expect(!heldAck && held.persistedProviders.allSatisfy { $0.apiKey.isEmpty },
+               "conceal during joined persistence rejects late acknowledgment while retaining durable cleanup")
+        PrivateProfileStorage.select(selectedProfile)
         let settingsSnapshot = legacyStore.makeBackupPayload()
         expect(settingsSnapshot.savedProviders == snapshot.settings.savedProviders, "actual settings-export argument redacts saved providers before document construction")
         expect(legacyStore.sourceBytes == preferenceBytes && legacyStore.savedProviders == providers,
@@ -286,7 +365,10 @@ MEMBERS
         do { _ = try service.decode(JSONSerialization.data(withJSONObject: root)); fatalError("Expected unsupported-schema rejection") }
         catch BackupServiceError.unsupportedSchemaVersion(let version) { expect(version.major == 99, "schema rejection retains error classification") }
         expect(original.settings.savedProviders == providers, "all success and failure paths leave original providers unchanged")
-        print("PASS: \(assertions) production serialization/redaction assertions; synthetic data only, no defaults/Keychain/store I/O")
+        for store in [legacyStore, mixedStore, defaultStore, changedStore, persistenceFailure, persisted, reintroduced, hidden, replaced, held] {
+            await store.joinCredentialWorker()
+        }
+        print("PASS: \(assertions) production serialization/redaction/migration assertions; memory preferences and injected Keychain only")
     }
 }
 '''
@@ -301,7 +383,6 @@ MEMBERS
         "MIGRATION_COMPLETION": declaration(settings_source, "    private func completeProviderCredentialMigration("),
         "ACKNOWLEDGE_MIGRATION": declaration(settings_source, "    private func acknowledgeProviderCredentialMigration("),
         "CREDENTIAL_SOURCES_CLEAR": declaration(settings_source, "    private func providerCredentialSourcesAreClear("),
-        "CONFIRM_LEGACY_CLEANUP": declaration(Path("Sources/Fluid/Persistence/KeychainService.swift").read_text(), "    func confirmLegacyCleanup("),
         "SANITIZE_KEYS": declaration(settings_source, "    private func sanitizeAPIKeys("),
         "CANONICAL_PROVIDER_KEY": declaration(settings_source, "    private func canonicalProviderKey("),
         "SETTINGS_EXPORT_ARGUMENT": export_argument,
@@ -882,7 +963,13 @@ func awaitGate(_ gate: Gate) async {
             credentials_path = Path(directory) / "Credentials.swift"
             credentials_binary = Path(directory) / "credentials"
             credentials_path.write_text(credential_probe(source, settings_source))
-            subprocess.run(compile_prefix + [str(credentials_path), "-o", str(credentials_binary)],
+            credential_dependencies = [
+                "-D", "PICHI_CREDENTIAL_TEST_BACKEND_ONLY",
+                str(repo / "Sources/Fluid/Persistence/KeychainService.swift"),
+                str(repo / "Sources/Fluid/Account/AccountDomain.swift"),
+                str(repo / "Sources/Fluid/Account/PrivateProfileStorage.swift"),
+            ]
+            subprocess.run(compile_prefix + credential_dependencies + [str(credentials_path), "-o", str(credentials_binary)],
                            cwd=repo, env=environment, check=True, timeout=60)
             subprocess.run([str(credentials_binary)], env=environment, check=True, timeout=20)
 
