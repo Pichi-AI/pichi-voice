@@ -1,4 +1,17 @@
 # Explicit membership in the universal iOS target. The desktop target retains its existing membership.
+Sources/Fluid/Account/AccountComposition.swift
+Sources/Fluid/Account/AccountDomain.swift
+Sources/Fluid/Account/AccountHTTPTransport.swift
+Sources/Fluid/Account/AccountJWTValidator.swift
+Sources/Fluid/Account/AccountKeychainStore.swift
+Sources/Fluid/Account/AccountPKCE.swift
+Sources/Fluid/Account/AccountSessionService.swift
+Sources/Fluid/Account/AccountSystemBrowser.swift
+Sources/Fluid/Account/PrivateProfileDefaults.swift
+Sources/Fluid/Account/PrivateProfileStorage.swift
+Sources/Fluid/Account/PrivateProfileMeetingStore.swift
+Sources/Fluid/Account/PrivateProfileService.swift
+Sources/Fluid/Account/PrivateProfileAuxiliaryServices.swift
 Sources/Fluid/Branding/AppBrand.swift
 Sources/Fluid/Branding/AppModelPaths.swift
 Sources/Fluid/Branding/BrandDistribution.swift
@@ -112,6 +125,8 @@ Sources/Fluid/Services/Meeting/MeetingSegmentPlayback.swift
 Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift
 Sources/Fluid/Services/Meeting/MeetingSessionPersistenceQueue.swift
 Sources/Fluid/Services/Meeting/MeetingSessionStore.swift
+Sources/Fluid/Services/Meeting/MeetingLocationService.swift
+Sources/Fluid/UI/MeetingLocationSettingsContent.swift
 Sources/Fluid/Services/Meeting/MeetingSignalDomainGate.swift
 Sources/Fluid/Services/Meeting/MeetingSpeechActivityDetector.swift
 Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift

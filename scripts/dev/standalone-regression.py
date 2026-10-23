@@ -248,7 +248,7 @@ SHELL_PROBES = (
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
     "local_text_model_catalog", "meeting_capture_pcm", "meeting_capture_activity", "meeting_microphone_capture_contracts", "meeting_pending_speech", "native_window_appearance",
     "meeting_summary_evidence", "onboarding",
-    "page_presentation", "participant_input_contrast", "paste_key_cache", "private_profile_logging", "private_ai_idle_unloader",
+    "page_presentation", "participant_input_contrast", "paste_key_cache", "private_profile_defaults", "private_profile_logging", "private_profile_stores", "private_ai_idle_unloader",
     "release_highlights", "settings_owned_copy", "settings_viewport", "speech_model_provider_presentation", "ui_contrast",
     "stats_snapshot", "voice_edit_cancellation",
 )
@@ -268,6 +268,7 @@ PROBES = tuple(sorted(
        Probe("Tests/run_meeting_timeline_trace_tests.sh", "sh"),
        Probe("Tests/run_process_cpu_diagnostics_tests.sh", "bash"),
        Probe("Tests/run_publication_consent_tests.sh", "bash"),
+       Probe("Tests/run_publication_outbox_tests.sh", "bash"),
        Probe("Tests/run_transcript_privacy_tests.sh", "bash"),
        Probe("Tests/run_privacy_idle_preparation_tests.sh", "bash"),
        Probe("Tests/run_upstream_sync_tests.sh", "bash"),
