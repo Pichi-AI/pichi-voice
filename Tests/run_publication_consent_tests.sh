@@ -7,7 +7,9 @@ xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
     -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
-    Sources/Fluid/Account/AccountDomain.swift \
+    Sources/Fluid/Account/*.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationConsentStore.swift \
-    Tests/PichiPublicationConsentTests.swift -o "$task_test_dir/tests"
-"$task_test_dir/tests" "$task_test_dir/fixtures-$(uuidgen)"
+    Sources/Fluid/Services/CloudPublication/PichiPublicationWire.swift \
+    Sources/Fluid/Services/CloudPublication/PichiPublicationRetryPolicy.swift \
+    Tests/PichiPublicationConsentTests.swift Tests/PichiPublicationWireTests.swift -o "$task_test_dir/tests"
+"$task_test_dir/tests" "$task_test_dir/fixtures-$(uuidgen)" "$PWD/Tests/Fixtures/PichiAccountSyncV1"
