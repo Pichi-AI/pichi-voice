@@ -3,11 +3,12 @@ import UniformTypeIdentifiers
 
 /// Settings routes belong to the Settings stack, rather than to the selected app section.
 enum MobileSettingsDestination: Hashable {
-    case general, recording, models, privacy
+    case general, recording, models, privacy, account
 }
 
 /// The mobile subset keeps the desktop destinations and their existing preference owner.
 struct MobileSettingsRoot: View {
+    @ObservedObject var accountSession: AccountSessionService = AppServices.shared.accountSession
     @ObservedObject var asr: ASRService
     let privacy: PichiTranscriptPrivacyService
     let microphones: [MeetingMicrophoneIdentity]
@@ -19,6 +20,13 @@ struct MobileSettingsRoot: View {
 
     var body: some View {
         List {
+            if accountSession.configuration != nil {
+                Section {
+                    NavigationLink(value: MobileSettingsDestination.account) {
+                        Label(PichiLocalization.text("account.title", defaultValue: "Account"), systemImage: "person.crop.circle")
+                    }.accessibilityIdentifier("settings.account")
+                }
+            }
             Section {
                 NavigationLink(value: MobileSettingsDestination.general) { Label(PichiLocalization.text("General"), systemImage: "gearshape") }
                     .accessibilityIdentifier("settings.general")
@@ -38,6 +46,7 @@ struct MobileSettingsRoot: View {
         }.listStyle(.insetGrouped).accessibilityIdentifier("settings.root")
             .navigationDestination(for: MobileSettingsDestination.self) { destination in
                 switch destination {
+                case .account: MobileAccountSettings(session: accountSession)
                 case .general: MobileGeneralSettings()
                 case .recording: MobileRecordingSettings(microphones: microphones, required: required)
                 case .models: MobileVoiceEngineSettings(asr: asr, reportError: reportError)

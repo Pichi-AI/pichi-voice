@@ -4,6 +4,7 @@ import SwiftUI
 /// Desktop onboarding uses AppKit window/permission controls; mobile reuses its service contracts,
 /// portable brand mark, text roles, local model metadata and progressive preparation semantics.
 struct MobileOnboarding: View {
+    @ObservedObject var accountSession: AccountSessionService = AppServices.shared.accountSession
     @ObservedObject var asr: ASRService
     @ObservedObject var required: MobileRequiredResources
     @ObservedObject var privacy: MobilePrivacyActivation
@@ -15,6 +16,7 @@ struct MobileOnboarding: View {
     @State private var advancing = false
     @State private var error: String?
     @State private var operation: Task<Void, Never>?
+    @State private var accountActionIsActive = false
     private var step: Int { settings.mobileSetupStep }
     private let titles = ["Welcome", "Choose Voice Engine", "Automatic speaker labels", "Data cleanup", "My voice", "Meeting location", "Ready to meet"]
 
@@ -115,6 +117,10 @@ struct MobileOnboarding: View {
                 .font(theme.typography.sectionTitle).foregroundStyle(theme.palette.success)
             Text(PichiLocalization.text("Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings."))
                 .font(theme.typography.body)
+            if accountSession.configuration != nil {
+                MobileAccountOnboarding(session: accountSession, continueAsGuest: next,
+                    actionChanged: { accountActionIsActive = $0 })
+            }
             if advancing && asr.modelPreparationPhase == nil {
                 ProgressView(PichiLocalization.text("Checking setup…"))
             }
@@ -145,7 +151,8 @@ struct MobileOnboarding: View {
             }
             Button(PichiLocalization.text(step == 6 ? "Get started" : error == nil ? "Next" : "Try again")) { next() }
                 .buttonStyle(.borderedProminent).foregroundStyle(theme.palette.accentForeground)
-                .disabled(advancing || (step == 3 && privacy.isPreparing))
+                .disabled(advancing || (step == 3 && privacy.isPreparing)
+                    || accountSession.state == .signingIn || accountActionIsActive)
                 .accessibilityIdentifier("onboarding.next")
         }.controlSize(.large)
         }.padding(20).frame(maxWidth: 680).frame(maxWidth: .infinity)
