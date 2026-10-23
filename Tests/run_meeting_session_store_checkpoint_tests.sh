@@ -36,6 +36,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
+    Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationSource.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
@@ -45,5 +46,6 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     "$task_test_dir/ApplicationSupport.swift" Tests/MeetingSessionStoreCheckpointTests.swift \
     Tests/MeetingTranscriptReadingContractTests.swift \
     Tests/MeetingProtectedTranscriptExportTests.swift \
+    Tests/PichiProtectedPublicationSourceTests.swift \
     -o "$task_test_dir/checkpoint-tests"
 "$task_test_dir/checkpoint-tests" "$task_test_dir/fixtures-$(uuidgen)" "$@"
