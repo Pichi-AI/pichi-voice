@@ -60,6 +60,12 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
                 let suite = UserDefaults(suiteName: name)!
                 suite.removePersistentDomain(forName: name)
                 precondition(suite.synchronize(), "Synthetic domain cleanup must persist")
+                let file = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("Preferences").appendingPathComponent(name + ".plist")
+                if let data = try? Data(contentsOf: file),
+                   let values = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any], values.isEmpty {
+                    try! FileManager.default.removeItem(at: file)
+                }
             }
             PrivateProfileStorage.select(original)
         }
