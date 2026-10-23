@@ -127,10 +127,12 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     // Disk scans in the model picker remain cheap. Full digests are verified off the
     // main actor during import and preparation, never on a SwiftUI render.
-    func modelsExistOnDisk() -> Bool { (try? self.installedModel()) != nil }
+    func modelsExistOnDisk(selection admittedSelection: Selection? = nil) -> Bool {
+        (try? self.installedModel(selection: admittedSelection)) != nil
+    }
 
-    func installedModel() throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
-        let selection = try self.selectedArtifact()
+    func installedModel(selection admittedSelection: Selection? = nil) throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
+        let selection = try admittedSelection ?? self.selectedArtifact()
         guard let directory = Self.locate(selection.descriptor, in: selection.root) else {
             throw GigaAMError.missingModels(selection.root)
         }
@@ -293,8 +295,8 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     /// Remove only the selected owned artifact, retaining other downloaded/imported choices.
     /// Explicit external overrides are read-only even when they reference the owned path.
-    func removeOwnedModels() throws {
-        let selection = try self.selectedArtifact()
+    func removeOwnedModels(selection admittedSelection: Selection? = nil) throws {
+        let selection = try admittedSelection ?? self.selectedArtifact()
         let directory = selection.root.standardizedFileURL
         guard self.overriddenDirectory == nil,
               self.environment["PICHI_GIGAAM_MODEL_DIR"]?.isEmpty != false,
@@ -446,7 +448,9 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         )
     }
 
-    func modelsExistOnDisk() -> Bool { self.modelStore.modelsExistOnDisk() }
+    func modelsExistOnDisk() -> Bool {
+        self.modelStore.modelsExistOnDisk(selection: self.admittedSource?.selection)
+    }
 
     func unloadModel() async {
         // Invalidate ownership before suspending. An old prepare completion cannot
@@ -474,7 +478,10 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     }
 
     func clearCache() async throws {
+        // Recovery belongs to the admitted artifact even if preparation or unload
+        // suspends while the source profile is concealed or its lease is released.
+        let admittedSelection = self.admittedSource?.selection
         await self.unloadModel()
-        try self.modelStore.removeOwnedModels()
+        try self.modelStore.removeOwnedModels(selection: admittedSelection)
     }
 }
