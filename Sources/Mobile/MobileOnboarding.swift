@@ -5,6 +5,7 @@ import SwiftUI
 /// portable brand mark, text roles, local model metadata and progressive preparation semantics.
 struct MobileOnboarding: View {
     @ObservedObject var accountSession: AccountSessionService = AppServices.shared.accountSession
+    @ObservedObject private var privateProfile = PrivateProfileService.shared
     @ObservedObject var asr: ASRService
     @ObservedObject var required: MobileRequiredResources
     @ObservedObject var privacy: MobilePrivacyActivation
@@ -135,7 +136,8 @@ struct MobileOnboarding: View {
         HStack(spacing: 16) {
             if step > 0 {
                 Button(PichiLocalization.text("Back")) { error = nil; settings.mobileSetupStep -= 1 }
-                    .disabled(advancing || accountSession.state == .signingIn || accountActionIsActive)
+                    .disabled(advancing || accountSession.state == .signingIn || accountActionIsActive
+                        || !privateProfile.isPrivateDataVisible)
                     .accessibilityIdentifier("onboarding.back")
             }
             Spacer()
@@ -153,7 +155,8 @@ struct MobileOnboarding: View {
             Button(PichiLocalization.text(step == 6 ? "Get started" : error == nil ? "Next" : "Try again")) { next() }
                 .buttonStyle(.borderedProminent).foregroundStyle(theme.palette.accentForeground)
                 .disabled(advancing || (step == 3 && privacy.isPreparing)
-                    || accountSession.state == .signingIn || accountActionIsActive)
+                    || accountSession.state == .signingIn || accountActionIsActive
+                    || !privateProfile.isPrivateDataVisible)
                 .accessibilityIdentifier("onboarding.next")
         }.controlSize(.large)
         }.padding(20).frame(maxWidth: 680).frame(maxWidth: .infinity)
