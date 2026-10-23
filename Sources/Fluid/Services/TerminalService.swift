@@ -201,7 +201,10 @@ private nonisolated final class TerminalCommandExecution: @unchecked Sendable {
                     if waitid(P_PID, id_t(pid), &exitInfo, WEXITED | WNOHANG | WNOWAIT) == 0 {
                         exited = exitInfo.si_pid == pid
                     } else if errno != EINTR {
-                        failure = failure ?? "Failed to observe command exit."
+                        // An external reaper or SIGCHLD policy can remove our unreaped-leader
+                        // reservation. Its numeric PID/PGID is then unsafe to signal again.
+                        // Our read descriptors remain owned and are closed by the outer defer.
+                        return result(status: -1, failure: "Command wait ownership was lost; no further signals were sent.")
                     }
                 }
                 if exited && outputEnded && errorEnded && !overflow && (failure == nil || killed) { break }

@@ -3601,9 +3601,14 @@ struct ContentView: View {
         }
 
         if !shouldTypeExternally {
-            await PasteDeliveryCoordinator.shared.copyBackup(finalText, enabled: shouldCopyToClipboard, isOutputValid: { privateOutput?.isVisible == true && self.cancelledOutputLifecycleID != expectedOverlayLifecycleID })
+            let copied = try? await self.privateOutputOperations.perform {
+                await PasteDeliveryCoordinator.shared.copyBackup(finalText, enabled: shouldCopyToClipboard,
+                    isOutputValid: { privateOutput?.isVisible == true && self.cancelledOutputLifecycleID != expectedOverlayLifecycleID })
+            }
+            guard copied != nil else { return }
         }
 
+        guard privateOutput?.isVisible == true else { return }
         guard self.cancelledOutputLifecycleID != expectedOverlayLifecycleID || outputRoute == .historyOnly else { return }
 
         // Submit raw fallback delivery before failure UI or notification work can

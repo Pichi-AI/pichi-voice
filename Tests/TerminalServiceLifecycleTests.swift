@@ -52,6 +52,14 @@ import Foundation
 
     @MainActor static func main() async throws {
         if CommandLine.arguments.contains("--flood") { flood() }
+        if CommandLine.arguments.contains("--auto-reap") {
+            _ = signal(SIGCHLD, SIG_IGN)
+            let result = await TerminalService().execute(command: "printf completed", timeout: 2)
+            precondition(!result.success && result.error?.contains("wait ownership was lost") == true)
+            precondition(result.executionTimeMs < 1_000)
+            print("PASS: lost wait ownership returns without signalling")
+            return
+        }
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let service = TerminalService()
@@ -66,6 +74,9 @@ import Foundation
         check(!invalid.success && invalid.exitCode == -1 && invalid.output.isEmpty, "Invalid cwd must fail before executing")
 
         let executable = quote(URL(fileURLWithPath: CommandLine.arguments[0]).standardized.path)
+        let ownership = await service.execute(command: executable + " --auto-reap", timeout: 3)
+        check(ownership.success && ownership.output.contains("PASS: lost wait ownership"),
+            "Lost wait ownership must close owned IO and stop signalling numeric process IDs")
         let flooded = await service.execute(command: executable + " --flood 96", timeout: 8)
         check(flooded.success && flooded.exitCode == 0, "Concurrent stream flood deadlocked or timed out")
         check(flooded.output.utf8.count == 96 * 32_768, "Stdout pipe lost bytes")
