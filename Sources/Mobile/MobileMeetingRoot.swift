@@ -14,40 +14,97 @@ struct MobileMeetingRoot: View {
     @ObservedObject var privacyActivation: MobilePrivacyActivation
     let microphones: @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var privateProfile = PrivateProfileService.shared
+    @StateObject private var privatePresentation = MobilePrivatePresentationState()
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var scenePhase
-    @State private var destination = Destination.meetings
-    @State private var settingsPath: [MobileSettingsDestination] = []
+    private var destination: Destination {
+        get { privatePresentation.destination }
+        nonmutating set { privatePresentation.destination = newValue }
+    }
+    private var settingsPath: [MobileSettingsDestination] {
+        get { privatePresentation.settingsPath }
+        nonmutating set { privatePresentation.settingsPath = newValue }
+    }
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @StateObject private var historySnapshot: MeetingHistorySnapshot
     private var sessions: [MeetingSession] { historySnapshot.sessions }
     // The snapshot owns committed sessions; History's own path keeps only pushed identities.
-    @State private var historyPath: [MeetingSessionID] = []
-    @State private var copiedSessionID: MeetingSessionID?
-    @State private var search = ""
-    @State private var isBusy = false
-    @State private var error: String?
-    @State private var showError = false
-    @State private var showMicrophoneSettings = false
-    @State private var showRecordingSettings = false
+    private var historyPath: [MeetingSessionID] {
+        get { privatePresentation.historyPath }
+        nonmutating set { privatePresentation.historyPath = newValue }
+    }
+    private var copiedSessionID: MeetingSessionID? {
+        get { privatePresentation.copiedSessionID }
+        nonmutating set { privatePresentation.copiedSessionID = newValue }
+    }
+    private var search: String {
+        get { privatePresentation.search }
+        nonmutating set { privatePresentation.search = newValue }
+    }
+    @State private var isDomainBusy = false
+    private var isBusy: Bool { isDomainBusy || privatePresentation.publications.busyCount > 0 }
+    private var error: String? {
+        get { privatePresentation.error }
+        nonmutating set { privatePresentation.error = newValue }
+    }
+    private var showError: Bool {
+        get { privatePresentation.showError }
+        nonmutating set { privatePresentation.showError = newValue }
+    }
+    private var showMicrophoneSettings: Bool {
+        get { privatePresentation.showMicrophoneSettings }
+        nonmutating set { privatePresentation.showMicrophoneSettings = newValue }
+    }
+    private var showRecordingSettings: Bool {
+        get { privatePresentation.showRecordingSettings }
+        nonmutating set { privatePresentation.showRecordingSettings = newValue }
+    }
     @State private var microphoneSnapshot = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
-    @State private var edit: MeetingEditDraft?
-    @State private var participantEdit: MeetingParticipantEditDraft?
-    @State private var speakerAssignment: MeetingSpeakerAssignmentDraft?
-    @State private var deletion: Deletion?
-    @State private var share: MeetingSharePayload?
-    @State private var showPresentationPicker = false
-    @State private var presentation: MobilePresentationDocument?
-    @StateObject private var presentationLoader = MobilePresentationLoader()
+    private var edit: MeetingEditDraft? {
+        get { privatePresentation.edit }
+        nonmutating set { privatePresentation.edit = newValue }
+    }
+    private var participantEdit: MeetingParticipantEditDraft? {
+        get { privatePresentation.participantEdit }
+        nonmutating set { privatePresentation.participantEdit = newValue }
+    }
+    private var speakerAssignment: MeetingSpeakerAssignmentDraft? {
+        get { privatePresentation.speakerAssignment }
+        nonmutating set { privatePresentation.speakerAssignment = newValue }
+    }
+    private var deletion: Deletion? {
+        get { privatePresentation.deletion }
+        nonmutating set { privatePresentation.deletion = newValue }
+    }
+    private var share: MeetingSharePayload? {
+        get { privatePresentation.share }
+        nonmutating set { privatePresentation.share = newValue }
+    }
+    private var showPresentationPicker: Bool {
+        get { privatePresentation.showPresentationPicker }
+        nonmutating set { privatePresentation.showPresentationPicker = newValue }
+    }
+    private var presentation: MobilePresentationDocument? {
+        get { privatePresentation.presentation }
+        nonmutating set { privatePresentation.presentation = newValue }
+    }
+    private var presentationLoader: MobilePresentationLoader { privatePresentation.presentationLoader }
     @State private var recordingScreenAwakeToken: UUID?
     @StateObject private var playback = MeetingSegmentPlayback()
     // Projection is independent of microphone meters, pending audio, playback progress
     // and other frequent view invalidations. Keep one result for the visible transcript.
-    @State private var transcriptReadingSource: MeetingTranscriptExporter.ReadingInput?
-    @State private var transcriptReading: [MeetingTranscriptExporter.DisplayParagraph] = []
+    private var transcriptReadingSource: MeetingTranscriptExporter.ReadingInput? {
+        get { privatePresentation.transcriptReadingSource }
+        nonmutating set { privatePresentation.transcriptReadingSource = newValue }
+    }
+    private var transcriptReading: [MeetingTranscriptExporter.DisplayParagraph] {
+        get { privatePresentation.transcriptReading }
+        nonmutating set { privatePresentation.transcriptReading = newValue }
+    }
 
 
 
@@ -74,15 +131,7 @@ struct MobileMeetingRoot: View {
     }
 
     /// Destructive actions share one confirmation, as on the desktop.
-    private enum Deletion {
-        case meeting(MeetingSession), audio(MeetingSession)
-        var title: String { if case .audio = self { return "Delete Audio?" }; return "Delete Meeting" }
-        var action: String { if case .audio = self { return "Delete Audio" }; return "Delete" }
-        var message: String {
-            if case .audio = self { return "The transcript stays; the audio files are deleted." }
-            return "Delete this meeting and its recordings?"
-        }
-    }
+    private typealias Deletion = MobilePrivatePresentationState.Deletion
 
     var body: some View {
         Group {
@@ -104,7 +153,7 @@ struct MobileMeetingRoot: View {
         }
         .foregroundStyle(theme.palette.primaryText)
         .background(theme.palette.windowBackground)
-        .alert(PichiLocalization.text("Error"), isPresented: $showError) {
+        .alert(PichiLocalization.text("Error"), isPresented: $privatePresentation.showError) {
             if showMicrophoneSettings {
                 Button(PichiLocalization.text("Open Settings")) {
                     guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
@@ -113,13 +162,13 @@ struct MobileMeetingRoot: View {
             }
             Button(PichiLocalization.text("OK"), role: .cancel) { error = nil }
         } message: { Text(error ?? "") }
-        .sheet(isPresented: $showRecordingSettings) {
+        .sheet(isPresented: $privatePresentation.showRecordingSettings) {
             NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities, isPresentedAsSheet: true, required: required) }
         }
-        .sheet(item: $edit) { draft in
+        .sheet(item: $privatePresentation.edit) { draft in
             MeetingEditSheet(draft: draft, cancel: { edit = nil }) { kind, updated in
                 edit = nil
-                run {
+                run(session: draft.session) {
                     let result: MeetingSession
                     switch kind {
                     case .segment(let segment):
@@ -135,15 +184,15 @@ struct MobileMeetingRoot: View {
                 }
             }
         }
-        .sheet(item: $share) { payload in
+        .sheet(item: $privatePresentation.share) { payload in
             MobileActivitySheet(items: payload.items) { share = nil }
                 .onDisappear { payload.cleanup() }
         }
-        .sheet(item: $speakerAssignment) { draft in
+        .sheet(item: $privatePresentation.speakerAssignment) { draft in
             MeetingSpeakerAssignmentSheet(draft: draft, cancel: { speakerAssignment = nil }) { segmentIDs, speakerID in
                 guard coordinator.isQuiescent, !isBusy else { return }
                 speakerAssignment = nil
-                run {
+                run(session: draft.session) {
                     let result: MeetingSession
                     if let segmentID = segmentIDs.first, segmentIDs.count == 1 {
                         result = try await coordinator.reassignSegment(sessionID: draft.session.id, segmentID: segmentID, to: speakerID)
@@ -155,11 +204,15 @@ struct MobileMeetingRoot: View {
             }
             .disabled(!coordinator.isQuiescent || isBusy)
         }
-        .fileImporter(isPresented: $showPresentationPicker, allowedContentTypes: [.pdf]) { result in
+        .fileImporter(isPresented: $privatePresentation.showPresentationPicker, allowedContentTypes: [.pdf]) { result in
+            let admission = privatePresentation.presentationPickerAdmission
+            privatePresentation.presentationPickerAdmission = nil
             showPresentationPicker = false
+            guard let admission, privatePresentation.publications.canPublish(admission) else { return }
             switch result {
             case .success(let url):
-                presentationLoader.load(url: url) { result in
+                presentationLoader.load(url: url, canPublish: { privatePresentation.publications.canPublish(admission) }) { result in
+                    guard privatePresentation.publications.canPublish(admission) else { return }
                     switch result {
                     case .success(let document): presentation = document
                     case .failure:
@@ -174,7 +227,7 @@ struct MobileMeetingRoot: View {
                 }
             }
         }
-        .fullScreenCover(item: $presentation) { document in
+        .fullScreenCover(item: $privatePresentation.presentation) { document in
             PDFPresentation(document: document, coordinator: coordinator) { presentation = nil }
         }
         .confirmationDialog(PichiLocalization.text(deletion?.title ?? ""), isPresented: Binding(
@@ -186,10 +239,13 @@ struct MobileMeetingRoot: View {
                     playback.stop()
                     switch item {
                     case .meeting(let session):
+                        guard canPresent(session) else { return }
                         try await coordinator.deleteSession(id: session.id)
+                        guard canPresent(session) else { return }
                         if historyPath.contains(session.id) { historyPath.removeAll() }
                         await refreshHistory()
                     case .audio(let session):
+                        guard canPresent(session) else { return }
                         acceptCommittedSession(try await coordinator.deleteAudio(sessionID: session.id))
                     }
                 }
@@ -212,7 +268,7 @@ struct MobileMeetingRoot: View {
         .onChange(of: destination) { _, _ in playback.stop(); presentationLoader.cancel(); participantEdit = nil }
         .onChange(of: historyPath) { _, _ in playback.stop(); presentationLoader.cancel(); participantEdit = nil }
         .onDisappear {
-            presentationLoader.cancel()
+            privatePresentation.invalidate()
             updateRecordingScreenAwake(isVisible: false)
         }
         .onChange(of: settings.meetingAudioRetentionPolicy) { _, _ in
@@ -238,12 +294,19 @@ struct MobileMeetingRoot: View {
         let document: MobilePresentationDocument
         @ObservedObject var coordinator: MeetingSessionCoordinator
         @Environment(\.scenePhase) private var scenePhase
+        @ObservedObject private var privateProfile = PrivateProfileService.shared
         let close: () -> Void
 
         var body: some View {
             NavigationStack {
-                MobilePresentationPDFView(document: document, isRecording: coordinator.isRecording,
-                                          isSceneActive: scenePhase == .active)
+                Group {
+                    if privateProfile.isPrivateDataVisible {
+                        MobilePresentationPDFView(document: document, isRecording: coordinator.isRecording,
+                                                  isSceneActive: scenePhase == .active)
+                    } else {
+                        Text(PichiLocalization.text("account.profile.unavailable"))
+                    }
+                }
                     .ignoresSafeArea(edges: .bottom)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
@@ -294,13 +357,13 @@ struct MobileMeetingRoot: View {
         // section, and its explicit path survives switching sections or the adaptive layout.
         switch item {
         case .settings:
-            NavigationStack(path: $settingsPath) {
+            NavigationStack(path: $privatePresentation.settingsPath) {
                 sectionRoot(for: item)
             }
         case .meetings:
             NavigationStack { sectionRoot(for: item) }
         case .history:
-            NavigationStack(path: $historyPath) { sectionRoot(for: item) }
+            NavigationStack(path: $privatePresentation.historyPath) { sectionRoot(for: item) }
         }
     }
 
@@ -308,18 +371,27 @@ struct MobileMeetingRoot: View {
         Group {
             switch item {
             case .meetings: currentMeeting
-            case .history: history
+            case .history:
+                if privateProfile.isPrivateDataVisible { history } else { concealedPrivateData }
             case .settings:
-                MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
-                    required: required, privacyActivation: privacyActivation, reportError: report)
+                if privateProfile.isPrivateDataVisible {
+                    MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
+                        required: required, privacyActivation: privacyActivation, reportError: report)
+                } else {
+                    MobileAccountSettings(session: AppServices.shared.accountSession)
+                }
             }
         }
         .navigationTitle(item == .meetings ? AppBrand.meetingName : PichiLocalization.text(item.title))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if item == .meetings, coordinator.isRecording || coordinator.isQuiescent {
+            if privateProfile.isPrivateDataVisible, item == .meetings, coordinator.isRecording || coordinator.isQuiescent {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showPresentationPicker = true } label: {
+                    Button {
+                        guard let admission = privatePresentation.publications.admit() else { return }
+                        privatePresentation.presentationPickerAdmission = admission
+                        showPresentationPicker = true
+                    } label: {
                         HStack {
                             if presentationLoader.isLoading { ProgressView() }
                             Label(PichiLocalization.text("PDF Presentation"), systemImage: "doc.richtext")
@@ -330,7 +402,7 @@ struct MobileMeetingRoot: View {
                     .accessibilityHint(PichiLocalization.text("Open a PDF in this app while recording continues."))
                 }
             }
-            if item == .meetings, coordinator.isQuiescent, !coordinator.isRecording, !isShowingStart {
+            if privateProfile.isPrivateDataVisible, item == .meetings, coordinator.isQuiescent, !coordinator.isRecording, !isShowingStart {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { newMeeting() } label: { Label(PichiLocalization.text("New Meeting"), systemImage: "plus") }
                         .accessibilityIdentifier("meeting.new")
@@ -345,11 +417,27 @@ struct MobileMeetingRoot: View {
             case .preparing, .recording, .recordingDegraded, .stopping:
                 recording(session)
             case .processing(_, let stage): processing(session, stage: stage)
-            case .completed: transcript(session)
-            case .interrupted, .failed: recovery(session)
-            case .idle: start
+            case .completed:
+                if canPresent(session) { transcript(session) } else { concealedPrivateData }
+            case .interrupted, .failed:
+                if canPresent(session) { recovery(session) } else { concealedPrivateData }
+            case .idle:
+                if privateProfile.isPrivateDataVisible { start } else { concealedPrivateData }
             }
-        } else { start }
+        } else if privateProfile.isPrivateDataVisible { start } else { concealedPrivateData }
+    }
+
+    private var concealedPrivateData: some View {
+        Text(PichiLocalization.text("account.profile.unavailable"))
+            .font(theme.typography.body).fixedSize(horizontal: false, vertical: true)
+            .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .accessibilityIdentifier("meeting.profile.hidden")
+    }
+
+    private func canPresent(_ session: MeetingSession) -> Bool {
+        let profile = PrivateProfileStorage.current
+        guard privateProfile.isPrivateDataVisible, PrivateProfileStorage.isReadable(profile) else { return false }
+        return session.profileOwnership?.matches(profile) ?? profile.isGuest
     }
 
     private var isShowingStart: Bool { coordinator.currentSession == nil || coordinator.state == .idle }
@@ -399,7 +487,7 @@ struct MobileMeetingRoot: View {
                         .monospacedDigit().accessibilityIdentifier("meeting.timer")
                 }
             }
-            if !compactHeight {
+            if !compactHeight, canPresent(session) {
                 Text(session.displayTitle).font(theme.typography.title).lineLimit(2)
             }
             HStack {
@@ -410,6 +498,7 @@ struct MobileMeetingRoot: View {
                     isAnimating: coordinator.isRecording, isIdleWaveEnabled: false)
                     .foregroundStyle(theme.palette.accent).frame(width: 45, height: 26).accessibilityHidden(true)
             }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            if canPresent(session) {
             if !compactHeight {
                 Divider()
                 Text(PichiLocalization.text("Live transcript")).font(theme.typography.sectionTitle)
@@ -435,13 +524,16 @@ struct MobileMeetingRoot: View {
                     : "Speaker labels are added after recording."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
+            } else {
+                concealedPrivateData
+            }
                 }.padding(compactHeight ? 12 : 24)
                     .frame(maxWidth: 1000, maxHeight: .infinity, alignment: .topLeading)
                     .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("meeting.recording")
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            Button { run { _ = try await coordinator.stopAndTranscribe() } } label: {
+            Button { run(requiresVisibleProfile: false) { _ = try await coordinator.stopAndTranscribe() } } label: {
                 Label(PichiLocalization.text("Stop & Transcribe"), systemImage: "stop.fill")
                     .foregroundStyle(theme.palette.accentForeground)
                     .frame(maxWidth: .infinity, minHeight: 48)
@@ -456,7 +548,7 @@ struct MobileMeetingRoot: View {
         VStack(alignment: .leading, spacing: 24) {
             Label(PichiLocalization.text("Preparing your transcript"), systemImage: "text.alignleft")
                 .font(theme.typography.sectionTitle)
-            Text(session.displayTitle).font(theme.typography.title)
+            if canPresent(session) { Text(session.displayTitle).font(theme.typography.title) }
             ProgressView(PichiLocalization.text(stageTitle(stage)))
                 .accessibilityIdentifier("meeting.processing")
             Spacer()
@@ -504,12 +596,18 @@ struct MobileMeetingRoot: View {
                     if session.hasRetryableAudio {
                         Button(PichiLocalization.text("Retry transcription")) {
                             playback.stop()
-                            run { _ = try await coordinator.retryProcessing(sessionID: session.id); destination = .meetings }
+                            run(session: session) {
+                                _ = try await coordinator.retryProcessing(sessionID: session.id)
+                                if canPresent(session) { destination = .meetings }
+                            }
                         }.disabled(isBusy || !coordinator.isQuiescent).accessibilityIdentifier("meeting.retry")
                         if session.audioStorageMode == .retainedFiles {
                             Button(PichiLocalization.text("Start processing again")) {
                                 playback.stop()
-                                run { _ = try await coordinator.restartProcessing(sessionID: session.id); destination = .meetings }
+                                run(session: session) {
+                                    _ = try await coordinator.restartProcessing(sessionID: session.id)
+                                    if canPresent(session) { destination = .meetings }
+                                }
                             }.disabled(isBusy || !coordinator.isQuiescent).accessibilityIdentifier("meeting.restartProcessing")
                             Text(PichiLocalization.text("Retry continues from the last saved step. Starting again discards processing progress and keeps your audio."))
                                 .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
@@ -547,7 +645,7 @@ struct MobileMeetingRoot: View {
                         ? "Completed meetings will appear here." : "Try a different title, app, or speaker.")))
             }
         }
-        .searchable(text: $search, prompt: PichiLocalization.text("Search meetings"))
+        .searchable(text: $privatePresentation.search, prompt: PichiLocalization.text("Search meetings"))
         .refreshable { await refreshHistory() }.accessibilityIdentifier("history.list")
         .navigationDestination(for: MeetingSessionID.self) { id in
             if let session = sessions.first(where: { $0.id == id }) {
@@ -605,7 +703,7 @@ struct MobileMeetingRoot: View {
                                 if session.hasRetryableAudio {
                                     Button(PichiLocalization.text("Retry transcription")) {
                                         playback.stop()
-                                        run { _ = try await coordinator.retryProcessing(sessionID: session.id) }
+                                        run(session: session) { _ = try await coordinator.retryProcessing(sessionID: session.id) }
                                     }.disabled(!coordinator.isQuiescent)
                                 }
                                 Button(PichiLocalization.text("Export Audio")) { exportAudio(session) }
@@ -614,7 +712,7 @@ struct MobileMeetingRoot: View {
                             Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.displayTitle) }
                             if coordinator.canUndoCorrection(sessionID: session.id) {
                                 Button(PichiLocalization.text("Undo correction")) {
-                                    run {
+                                    run(session: session) {
                                         let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
                                         acceptCommittedSession(updated)
                                     }
@@ -686,13 +784,13 @@ struct MobileMeetingRoot: View {
                     withAnimation { reader.scrollTo(draft.id, anchor: .bottom) }
                 }
                 .task(id: readingInput) {
-                    do {
+                    let job = privatePresentation.publications.start(affectsBusy: false, report: report) { admission in
                         let projection = try await MeetingTranscriptExporter.readingParagraphs(for: session)
-                        try Task.checkCancellation()
+                        guard privatePresentation.publications.canPublish(admission) else { return }
                         transcriptReading = projection
                         transcriptReadingSource = readingInput
-                    } catch is CancellationError { }
-                    catch { report(error) }
+                    }
+                    await withTaskCancellationHandler { await job?.value } onCancel: { job?.cancel() }
                 }
         }
     }
@@ -721,18 +819,18 @@ struct MobileMeetingRoot: View {
         MeetingParticipantInlineEditor(name: draft.name, isLocalUser: speaker.isLocalUser,
             save: { name in
                 guard coordinator.isQuiescent, !isBusy else { return }
-                run {
+                run(session: session) {
                     let updated = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speaker.id, to: name)
                     acceptCommittedSession(updated)
-                    participantEdit = nil
+                    if canPresent(session) { participantEdit = nil }
                 }
             }, cancel: { participantEdit = nil }, designate: {
                 guard coordinator.isQuiescent, !isBusy else { return }
-                run {
+                run(session: session) {
                     let updated = try await coordinator.setLocalUserSpeaker(sessionID: session.id,
                         speakerID: speaker.isLocalUser ? nil : speaker.id)
                     acceptCommittedSession(updated)
-                    participantEdit = nil
+                    if canPresent(session) { participantEdit = nil }
                 }
             }, reassign: segments.map { members in
                 {
@@ -815,32 +913,57 @@ struct MobileMeetingRoot: View {
     }
 
     private func beginMeeting() {
+        guard privateProfile.isPrivateDataVisible, PrivateProfileStorage.acceptsNewWork,
+              let admission = privatePresentation.publications.admit() else { return }
         run {
             // Finish preparation before the capture lease can open the microphone.
             try await required.prepare(modelID: settings.selectedSpeechModel.rawValue)
+            guard privatePresentation.publications.canPublish(admission) else { return }
             try await privacyActivation.waitUntilReadyIfRequested()
+            guard privatePresentation.publications.canPublish(admission) else { return }
             await refreshMicrophones()
+            guard privatePresentation.publications.canPublish(admission) else { return }
             let configuration = try await coordinator.defaultConfiguration(mode: .inRoom,
                 title: PichiLocalization.text("In-room meeting"))
+            guard privatePresentation.publications.canPublish(admission) else { return }
             _ = try await coordinator.startRecording(configuration: configuration)
         }
     }
 
     private func newMeeting() {
+        guard privateProfile.isPrivateDataVisible, PrivateProfileStorage.acceptsNewWork else { return }
         playback.stop()
         do { try coordinator.resetForNewMeeting(); destination = .meetings } catch { report(error) }
     }
 
-    private func run(_ operation: @escaping @MainActor () async throws -> Void) {
+    private func run(session: MeetingSession? = nil, requiresVisibleProfile: Bool = true,
+                     _ operation: @escaping @MainActor () async throws -> Void) {
         guard !isBusy else { return }
-        isBusy = true
+        let admission = privatePresentation.publications.admit()
+        guard !requiresVisibleProfile || admission != nil else { return }
+        if let session, !canPresent(session) { return }
+        isDomainBusy = true
         Task { @MainActor in
-            defer { isBusy = false }
-            do { try await operation() } catch { report(error) }
+            defer { isDomainBusy = false }
+            if requiresVisibleProfile {
+                guard let admission, privatePresentation.publications.canPublish(admission) else { return }
+                if let session, !canPresent(session) { return }
+            }
+            do { try await operation() }
+            catch {
+                guard let admission, privatePresentation.publications.canPublish(admission) else { return }
+                report(error)
+            }
         }
     }
 
+    private func runPrivate(_ operation: @escaping @MainActor (MobilePrivatePublicationTasks.Admission) async throws -> Void) {
+        guard !isBusy else { return }
+        privatePresentation.publications.start(report: report, operation: operation)
+    }
+
     private func report(_ failure: Error) {
+        guard privateProfile.isPrivateDataVisible else { return }
         showMicrophoneSettings = false
         if let captureError = failure as? MeetingCaptureError, case .microphonePermissionDenied = captureError {
             showMicrophoneSettings = true
@@ -849,63 +972,181 @@ struct MobileMeetingRoot: View {
         showError = true
     }
     private func acceptCommittedSession(_ session: MeetingSession) {
+        guard canPresent(session) else { return }
         historySnapshot.applyCommitted(session)
     }
     private func refreshHistory() async {
-        await historySnapshot.refresh()
-        if let message = historySnapshot.errorMessage { error = message; showError = true; return }
-        if let id = historyPath.last, !sessions.contains(where: { $0.id == id }) { historyPath.removeAll() }
+        let job = privatePresentation.publications.start(affectsBusy: false) { admission in
+            await historySnapshot.refresh()
+            guard privatePresentation.publications.canPublish(admission) else { return }
+            if let message = historySnapshot.errorMessage { error = message; showError = true; return }
+            if let id = historyPath.last, !sessions.contains(where: { $0.id == id }) { historyPath.removeAll() }
+        }
+        await withTaskCancellationHandler { await job?.value } onCancel: { job?.cancel() }
     }
     private func refreshMicrophones() async {
         do { microphoneSnapshot = try await microphones() } catch { report(error) }
     }
 
     private func copyTranscript(_ session: MeetingSession) {
-        run {
+        guard canPresent(session) else { return }
+        runPrivate { admission in
             let output: MeetingSession
             if settings.meetingPIIRedactionRequested {
                 let redactor = try settings.transcriptPrivacyRedactor(wrapping: privacy)
                 try await redactor.prepareForMeeting()
+                guard privatePresentation.publications.canPublish(admission) else { return }
                 output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: session, using: redactor)
             } else { output = session }
+            guard privatePresentation.publications.canPublish(admission) else { return }
             UIPasteboard.general.string = MeetingTranscriptExporter.text(for: output)
             copiedSessionID = session.id
-            Task {
-                try? await Task.sleep(for: .seconds(2))
+            privatePresentation.publications.start(affectsBusy: false) { confirmation in
+                try await Task.sleep(for: .seconds(2))
+                guard privatePresentation.publications.canPublish(confirmation) else { return }
                 if copiedSessionID == session.id { copiedSessionID = nil }
             }
         }
     }
 
     private func exportTranscript(_ session: MeetingSession, json: Bool) {
-        run {
+        guard canPresent(session) else { return }
+        runPrivate { admission in
             let redactor = settings.meetingPIIRedactionRequested ? try settings.transcriptPrivacyRedactor(wrapping: privacy) : nil
             guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
+            guard privatePresentation.publications.canPublish(admission) else { return }
             let output: MeetingSession
             if let redactor {
                 try await redactor.prepareForMeeting()
+                guard privatePresentation.publications.canPublish(admission) else { return }
                 output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: fresh, using: redactor)
             } else { output = fresh }
+            guard privatePresentation.publications.canPublish(admission) else { return }
             let data = json ? try MeetingTranscriptExporter.json(for: output) : Data(MeetingTranscriptExporter.text(for: output).utf8)
-            share = try MeetingSharePayload.transcript(data: data, title: output.title, fileExtension: json ? "json" : "txt")
+            let payload = try MeetingSharePayload.transcript(data: data, title: output.title, fileExtension: json ? "json" : "txt")
+            guard privatePresentation.publications.canPublish(admission) else { payload.cleanup(); return }
+            share?.cleanup(); share = payload
         }
     }
 
     private func exportAudio(_ session: MeetingSession) {
-        run {
+        guard canPresent(session) else { return }
+        runPrivate { admission in
             guard let fresh = try await store.load(id: session.id), fresh.retention.audioDeletedAt == nil,
-                  fresh.hasFinalizedAudio, let directory = try await store.existingSessionDirectory(for: fresh.id)
+                  fresh.hasFinalizedAudio
             else { throw CocoaError(.fileNoSuchFile) }
-            share = try await MeetingSharePayload.audio(session: fresh, directory: directory)
+            guard privatePresentation.publications.canPublish(admission) else { return }
+            guard let directory = try await store.existingSessionDirectory(for: fresh.id) else { throw CocoaError(.fileNoSuchFile) }
+            guard privatePresentation.publications.canPublish(admission) else { return }
+            let payload = try await MeetingSharePayload.audio(session: fresh, directory: directory)
+            guard privatePresentation.publications.canPublish(admission) else { payload.cleanup(); return }
+            share?.cleanup(); share = payload
         }
     }
 
     private func exportProtectedTranscript(_ session: MeetingSession) {
-        run {
+        guard canPresent(session) else { return }
+        runPrivate { admission in
             guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
+            guard privatePresentation.publications.canPublish(admission) else { return }
             let data = try await MeetingTranscriptExporter.protectedTranscriptJSONForSharing(for: fresh)
-            share = try MeetingSharePayload.transcript(data: data, title: fresh.displayTitle, fileExtension: "json")
+            guard privatePresentation.publications.canPublish(admission) else { return }
+            let payload = try MeetingSharePayload.transcript(data: data, title: fresh.displayTitle, fileExtension: "json")
+            guard privatePresentation.publications.canPublish(admission) else { payload.cleanup(); return }
+            share?.cleanup(); share = payload
         }
+    }
+}
+
+
+/// Per-window private UI values and publication jobs. N2 owns profile selection;
+/// this participant only retires transient readers/payloads before replacement.
+@MainActor
+private final class MobilePrivatePresentationState: ObservableObject, PrivateProfileTransitionParticipant {
+    @Published var destination: MobileMeetingRoot.Destination = .meetings
+    @Published var settingsPath: [MobileSettingsDestination] = []
+    @Published var historyPath: [MeetingSessionID] = []
+    @Published var copiedSessionID: MeetingSessionID?
+    @Published var search: String = ""
+    @Published var error: String?
+    @Published var showError: Bool = false
+    @Published var showMicrophoneSettings: Bool = false
+    @Published var showRecordingSettings: Bool = false
+    @Published var edit: MeetingEditDraft?
+    @Published var participantEdit: MeetingParticipantEditDraft?
+    @Published var speakerAssignment: MeetingSpeakerAssignmentDraft?
+    @Published var deletion: Deletion?
+    @Published var share: MeetingSharePayload?
+    @Published var showPresentationPicker: Bool = false
+    @Published var presentation: MobilePresentationDocument?
+    @Published var transcriptReadingSource: MeetingTranscriptExporter.ReadingInput?
+    @Published var transcriptReading: [MeetingTranscriptExporter.DisplayParagraph] = []
+    enum Deletion {
+        case meeting(MeetingSession), audio(MeetingSession)
+        var title: String { if case .audio = self { return "Delete Audio?" }; return "Delete Meeting" }
+        var action: String { if case .audio = self { return "Delete Audio" }; return "Delete" }
+        var message: String {
+            if case .audio = self { return "The transcript stays; the audio files are deleted." }
+            return "Delete this meeting and its recordings?"
+        }
+    }
+
+    let presentationLoader = MobilePresentationLoader()
+    let publications: MobilePrivatePublicationTasks
+    var presentationPickerAdmission: MobilePrivatePublicationTasks.Admission?
+    private var cleanupTask: Task<Void, Never>?
+    private var observers = Set<AnyCancellable>()
+
+    init(profiles: PrivateProfileService = .shared) {
+        publications = MobilePrivatePublicationTasks(capture: {
+            let profile = PrivateProfileStorage.current
+            guard profiles.isPrivateDataVisible, !profiles.isTransitioning,
+                  PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(profile) else { return nil }
+            return .init(profile: profile, projectionRevision: profiles.projectionRevision)
+        }, validate: { context in
+            profiles.isPrivateDataVisible && !profiles.isTransitioning
+                && profiles.projectionRevision == context.projectionRevision
+                && PrivateProfileStorage.acceptsNewWork
+                && PrivateProfileStorage.current == context.profile
+                && PrivateProfileStorage.isReadable(context.profile)
+        })
+        profiles.register(self)
+        profiles.$isPrivateDataVisible.dropFirst().sink { [weak self] visible in
+            if !visible { self?.invalidate() }
+        }.store(in: &observers)
+        profiles.$projectionRevision.dropFirst().sink { [weak self] _ in self?.invalidate() }
+            .store(in: &observers)
+        publications.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &observers)
+        presentationLoader.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &observers)
+    }
+
+    func invalidate() {
+        publications.cancel(); presentationLoader.cancel()
+        clear()
+        guard cleanupTask == nil else { return }
+        cleanupTask = Task { @MainActor in
+            await self.publications.cancelAndJoin()
+            await self.presentationLoader.waitUntilFinished()
+            self.clear()
+            self.cleanupTask = nil
+            self.publications.resume()
+        }
+    }
+
+    func prepareForPrivateProfileTransition() async throws {
+        invalidate()
+        await cleanupTask?.value
+    }
+
+    private func clear() {
+        destination = .meetings; settingsPath = []; historyPath = []; search = ""
+        copiedSessionID = nil; edit = nil; participantEdit = nil; speakerAssignment = nil; deletion = nil
+        share?.cleanup(); share = nil
+        presentationPickerAdmission = nil; showPresentationPicker = false; presentation = nil
+        transcriptReadingSource = nil; transcriptReading = []
+        error = nil; showError = false; showMicrophoneSettings = false; showRecordingSettings = false
     }
 }
 

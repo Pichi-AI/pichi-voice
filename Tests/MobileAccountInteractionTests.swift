@@ -98,7 +98,7 @@ private actor SyntheticAccountTransport: AccountTransporting {
     func shutdown() async { await ui.waitUntilIdle(); await session.shutdown() }
 }
 
-@main private struct MobileAccountInteractionTests {
+@main struct MobileAccountInteractionTests {
     @MainActor static var assertions = 0
     @MainActor static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         precondition(condition(), message); assertions += 1
@@ -230,6 +230,7 @@ private actor SyntheticAccountTransport: AccountTransporting {
             let text = MobileAccountCopy.error(error, language: .english)
             expect(!text.isEmpty && !text.hasPrefix("account.error."), "Every service error has safe fallback copy")
         }
+        try await privatePublicationTests()
         print("PASS: \(assertions) focused synthetic mobile account interaction assertions")
     }
 }
