@@ -112,6 +112,11 @@ struct CommandModeView: View {
         }
         .onDisappear { self.updatePresentationActivity(false) }
         .onChange(of: self.isActive) { _, active in self.updatePresentationActivity(active) }
+        .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
+            self.showModelPicker = false
+            self.compactHistoryPresented = false
+            self.composerFocused = false
+        }
         .onChange(of: self.compactHistoryPresented) { _, presented in
             if presented { self.composerFocused = false }
         }

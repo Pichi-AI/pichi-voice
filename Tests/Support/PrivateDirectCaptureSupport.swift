@@ -6,6 +6,10 @@ enum AudioCaptureStartOutcome: Equatable { case started, alreadyActive, failed }
 
 @MainActor final class ASRService {
     var isRunningOrStarting = false
+    var isStarting = false
+    var isRunning: Bool { isRunningOrStarting && !isStarting }
+    var isDictionaryTrainingCaptureActive = false
+    func cancelPendingAudioCaptureStart(reason: String) async { isRunningOrStarting = false; isStarting = false }
     var starts = 0
     var stops = 0
     var trainingStarts: [Bool] = []

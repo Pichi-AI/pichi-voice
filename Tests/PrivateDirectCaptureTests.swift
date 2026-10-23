@@ -77,6 +77,17 @@ extension AdmittedHistoryWritesTests {
         PrivateProfileStorage.select(profile)
         expect(try await writer.load().count == 2, "Disabled hidden training creates no text or audio record")
 
+        let fallbackASR = ASRService()
+        let fallback = try PrivateDirectDictationCapture(asr: fallbackASR, savesHistory: true,
+            savesAudio: false, transcriptionModel: "synthetic", history: history)
+        _ = await fallback.start()
+        let hotkey = DirectHotkeyStopHarness(asr: fallbackASR, capture: fallback)
+        await hotkey.stopRecordingInternal()
+        expect(fallback.isFinished && hotkey.fallbackCapture == nil && !PrivateProfileService.shared.hasRetainedCaptureStopHandler,
+            "Production callback-less hotkey Stop joins and releases the retained capture owner")
+        expect(history.admittedRecordingWriteCount == 0,
+            "Normal fallback Stop releases its admitted history output")
+
         let failedASR = ASRService(); failedASR.outcome = .failed
         let failed = try PrivateDirectDictationCapture(asr: failedASR, savesHistory: true,
             savesAudio: true, transcriptionModel: "synthetic", history: history)

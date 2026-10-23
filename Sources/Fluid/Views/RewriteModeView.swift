@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct RewriteModeView: View {
+    private let profile = PrivateProfileStorage.current
+    private var isProfileVisible: Bool { PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork }
     @ObservedObject var service: RewriteModeService
     @EnvironmentObject var appServices: AppServices
     private var asr: ASRService {
@@ -289,9 +291,9 @@ struct RewriteModeView: View {
             let result = await self.service.acceptRewrite(
                 text,
                 targetContext: targetContext,
-                isOutputValid: { self.acceptanceID == id && !self.isClosing }
+                isOutputValid: { self.isProfileVisible && self.acceptanceID == id && !self.isClosing }
             )
-            guard !Task.isCancelled, self.acceptanceID == id, !self.isClosing else { return }
+            guard self.isProfileVisible, !Task.isCancelled, self.acceptanceID == id, !self.isClosing else { return }
             if result.wasDispatched {
                 self.onClose?()
             } else if case let .recoverableFailure(failure) = result,
@@ -314,11 +316,12 @@ struct RewriteModeView: View {
         self.acceptanceCancellationTask = Task { @MainActor in
             if let task { await task.value }
             guard !Task.isCancelled else { return }
-            if closeAfterJoining { self.onClose?() }
+            if closeAfterJoining, self.isProfileVisible { self.onClose?() }
         }
     }
 
     private func toggleRecording() {
+        guard self.isProfileVisible else { return }
         if let capture = self.privateCapture, !capture.isFinished {
             guard !self.isCaptureStopPending else { return }
             self.isCaptureStopPending = true

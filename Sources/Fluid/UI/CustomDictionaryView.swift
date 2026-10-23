@@ -398,8 +398,15 @@ struct CustomDictionaryView: View {
                 self.trainingStatusMessage = "Pronunciation learning was turned off. Try saving your spelling corrections again."
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
+            self.editingEntry = nil
+            self.isDrawerActionsPresented = false
+            self.isCustomWordsPresented = false
+            self.isYourDictionaryPresented = false
+            self.isPunctuationDictionaryPresented = false
+        }
         .onDisappear {
-            guard !self.formattingOnly else { return }
+            guard self.isProfileVisible, !self.formattingOnly else { return }
             if self.trainingSaveID != nil {
                 self.trainingSaveID = nil
                 self.isTrainingProcessing = false

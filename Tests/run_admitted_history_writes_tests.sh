@@ -28,6 +28,23 @@ trap cleanup EXIT HUP INT TERM
 # Extract only the policy class. The unrelated Accessibility observer is owned by composition.
 sed '/^final class AutomaticDictionaryCorrectionTracker/,$d' \
     Sources/Fluid/Services/AutomaticDictionaryCorrectionTracker.swift | sed '$ { /^@MainActor$/d; }' > "$task_test_dir/CorrectionPolicy.swift"
+python3 - "$task_test_dir/HotkeyFallback.swift" <<'PY_HOTKEY'
+from pathlib import Path
+import sys
+source = Path("Sources/Fluid/Services/GlobalHotkeyManager.swift").read_text()
+method = source[source.index("    @MainActor\n    private func stopRecordingInternal("):source.index("    func isEventTapEnabled()")]
+method = method.replace("private func stopRecordingInternal", "func stopRecordingInternal")
+Path(sys.argv[1]).write_text("""import Foundation
+@MainActor final class DirectHotkeyStopHarness {
+    let asrService: ASRService
+    var fallbackCapture: PrivateDirectDictationCapture?
+    var stopAndProcessCallback: ((TimeInterval?) async -> Void)?
+    var isProcessingStop = false
+    init(asr: ASRService, capture: PrivateDirectDictationCapture) { asrService = asr; fallbackCapture = capture }
+    func traceStopLocked() -> Double { isProcessingStop = true; return 0 }
+    func traceStopUnlocked(since: Double) { isProcessingStop = false }
+""" + method + "}\n")
+PY_HOTKEY
 xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version 5 \
     -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
@@ -46,7 +63,8 @@ xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version 5 
     Sources/Fluid/Services/Meeting/Backend/MeetingOwnerVoiceProfile.swift Sources/Fluid/Services/TranscriptionExecutor.swift \
     "$task_test_dir/CorrectionPolicy.swift" Tests/Support/PrivateProfileStoresSupport.swift \
     Tests/AdmittedHistoryWritesTests.swift Tests/PrivateDictationCaptureOutputTests.swift \
-    Tests/Support/PrivateDirectCaptureSupport.swift Tests/PrivateDirectCaptureTests.swift -lsqlite3 -o "$task_test_dir/tests" > "$task_evidence_dir/compile.log" 2>&1 || {
+    Tests/Support/PrivateDirectCaptureSupport.swift Tests/PrivateDirectCaptureTests.swift \
+    "$task_test_dir/HotkeyFallback.swift" -lsqlite3 -o "$task_test_dir/tests" > "$task_evidence_dir/compile.log" 2>&1 || {
         cat "$task_evidence_dir/compile.log"; exit 1;
     }
 "$task_test_dir/tests" "$task_test_dir/fixtures" "$task_test_dir/owned-domains.json" > "$task_evidence_dir/run.log" 2>&1 || {

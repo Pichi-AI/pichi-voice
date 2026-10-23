@@ -2494,6 +2494,8 @@ final class GlobalHotkeyManager: NSObject {
         } else {
             if let capture = self.fallbackCapture {
                 _ = await capture.stop()
+                capture.acknowledgeVisibleResult()
+                await capture.complete()
                 if self.fallbackCapture?.output.id == capture.output.id { self.fallbackCapture = nil }
             }
         }

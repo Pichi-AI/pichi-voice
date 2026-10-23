@@ -64,7 +64,7 @@ struct MeetingOwnerVoiceSettingsContent: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.ownerVoice")
         .task { await self.model.refresh() }
-        .onDisappear { self.model.cancel() }
+        .onDisappear { self.model.cancelIfVisible() }
         .onChange(of: self.scenePhase) { _, phase in
             // System permission prompts temporarily make the scene inactive.
             if phase == .background { self.model.cancel() }
@@ -219,6 +219,8 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
 
     /// The operation owns its cleanup and keeps itself alive until microphone,
     /// PCM conversion and embedding are joined, then releases the audio lease.
+    func cancelIfVisible() { if isProfileVisible { cancel() } }
+
     func cancel() {
         self.operation?.cancel()
         if self.operation == nil { self.discardDraft() }
