@@ -150,7 +150,7 @@ final class AppSearchService: ObservableObject {
 
     /// Explicit retries may reload failed history. Ordinary keystrokes never do.
     func retry() {
-        guard !self.stopped else { return }
+        guard self.acceptsProfile else { return }
         self.retryPreparation()
         self.schedule()
     }

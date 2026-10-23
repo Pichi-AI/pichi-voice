@@ -98,6 +98,7 @@ final nonisolated class FileLogger: @unchecked Sendable {
     private init() {
         let profile = PrivateProfileStorage.current
         self.profile = profile
+        self.acceptsWrites = profile.isReadable
         #if FLUID_ASR_BASELINE
         // Baseline runs log to an isolated per-process temp root, never user Library.
         let baseDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
@@ -116,6 +117,7 @@ final nonisolated class FileLogger: @unchecked Sendable {
         self.backupLogURL = self.logDirectory.appendingPathComponent("diagnostics.log.1", isDirectory: false)
 
         self.queue.sync {
+            guard self.acceptsWrites else { return }
             self.createLogDirectoryIfNeeded()
             self.rotateIfNeeded(force: false)
             self.prepareCrashLogging()
