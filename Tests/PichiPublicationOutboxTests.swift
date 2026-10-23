@@ -268,6 +268,45 @@ struct PichiPublicationOutboxTests {
         try await capacity.pauseAll(reason: .profileTransition)
         check(try await capacity.record(id: ids[1])?.pauseReason == .retryBudgetExhausted,
               "Logout cannot erase an exhausted automatic retry budget")
+        let retryProfile = try profile("retry-deadlines")
+        let retryStore = PichiPublicationOutboxStore(profile: retryProfile, configuration: configuration)
+        let retrySource = try source()
+        _ = try await retryStore.capture(id: retrySource.sessionID, automaticConsent: true)
+        _ = try await retryStore.installSource(id: retrySource.sessionID, source: retrySource)
+        for attempt in 1...5 {
+            let time = now.addingTimeInterval(Double(attempt * 100))
+            _ = try await retryStore.beginAttempt(id: retrySource.sessionID, now: time)
+            _ = try await retryStore.scheduleRetry(id: retrySource.sessionID,
+                decision: PichiPublicationRetryPolicy.decision(afterAttempt: attempt, retryAfter: .seconds(30)),
+                retryAfter: .seconds(30), now: time)
+        }
+        let fifthDeadline = now.addingTimeInterval(530)
+        let exhausted = try await retryStore.record(id: retrySource.sessionID)!
+        check(exhausted.pauseReason == .retryBudgetExhausted && exhausted.retryNotBefore == fifthDeadline,
+              "Fifth-attempt Retry-After survives automatic budget exhaustion")
+        try await retryStore.pauseAll(reason: .profileTransition)
+        let retryReopened = PichiPublicationOutboxStore(profile: retryProfile, configuration: configuration)
+        try await rejects(.invalidTransition, "Explicit retry after restart cannot bypass the fifth-attempt deadline") {
+            _ = try await retryReopened.explicitRetry(id: retrySource.sessionID, now: fifthDeadline.addingTimeInterval(-1))
+        }
+        let due = try await retryReopened.explicitRetry(id: retrySource.sessionID, now: fifthDeadline)
+        check(due.state == .queued && due.operationID == exhausted.operationID && due.transcriptBytes == exhausted.transcriptBytes,
+              "A due explicit retry retains the exhausted operation's original bytes and key")
+        _ = try await retryReopened.beginAttempt(id: retrySource.sessionID, now: fifthDeadline)
+        let longDelay = try await retryReopened.scheduleRetry(id: retrySource.sessionID, decision: .pause(.retryBudgetExhausted),
+            retryAfter: .seconds(7200), now: fifthDeadline)
+        check(longDelay.retryNotBefore == fifthDeadline.addingTimeInterval(7200), "Long server delay remains durable even after budget exhaustion")
+        try await rejects(.invalidTransition, "Manual retry cannot shorten a long server delay") {
+            _ = try await retryReopened.explicitRetry(id: retrySource.sessionID, now: fifthDeadline.addingTimeInterval(60))
+        }
+        _ = try await retryReopened.explicitRetry(id: retrySource.sessionID, now: fifthDeadline.addingTimeInterval(7200))
+        _ = try await retryReopened.beginAttempt(id: retrySource.sessionID, now: fifthDeadline.addingTimeInterval(7200))
+        _ = try await retryReopened.scheduleRetry(id: retrySource.sessionID, decision: .pause(.retryAfterBeyondBudget),
+            retryAfter: .beyondAutomaticWindow, now: fifthDeadline)
+        let unrepresentable = PichiPublicationOutboxStore(profile: retryProfile, configuration: configuration)
+        try await rejects(.invalidTransition, "An unrepresentable server deadline remains a review pause after restart") {
+            _ = try await unrepresentable.explicitRetry(id: retrySource.sessionID, now: .distantFuture)
+        }
         print("Pichi publication outbox: \(checks) synthetic checks passed")
         let facadeChecks = try await Self.checkCloudPublicationService(root: root.appendingPathComponent("facade", isDirectory: true))
         print("Pichi publication facade: \(facadeChecks) synthetic integration checks passed; no live transport")

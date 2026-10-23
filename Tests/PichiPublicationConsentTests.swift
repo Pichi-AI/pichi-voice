@@ -61,6 +61,7 @@ struct PichiPublicationConsentTests {
         check(try await restarted.deliveryPaused(for: a), "Explicit pause is durable across a new actor")
         check(try await !store.deliveryPaused(for: context("subject")), "Pause cannot cross account ownership")
         try await restarted.setAutomaticPublicationEnabled(false, for: a)
+        check(try await !store.automaticPublicationEnabled(for: a), "Opt-out is durable without stale in-memory caching")
         check(try await store.deliveryPaused(for: a), "Changing future-capture consent preserves explicit pause")
         try await store.setDeliveryPaused(false, for: a)
         check(try await !restarted.deliveryPaused(for: a), "Explicit resume clears only this account/workspace pause")
@@ -72,7 +73,6 @@ struct PichiPublicationConsentTests {
         let coherentOn = try await store.automaticPublicationEnabled(for: a)
         let pausedOn = try await store.deliveryPaused(for: a)
         check(coherentOn && !pausedOn, "Cloud sync ON atomically opts in future captures and clears scoped pause")
-        check(try await !store.automaticPublicationEnabled(for: a), "Opt-out is durable without stale in-memory caching")
         try await store.setAutomaticPublicationEnabled(true, for: a)
         check(try manager.contentsOfDirectory(atPath: root.path).count == 1, "Atomic replacement leaves no task-owned temporary files")
 

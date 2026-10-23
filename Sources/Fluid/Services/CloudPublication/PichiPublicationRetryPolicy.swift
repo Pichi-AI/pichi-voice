@@ -50,6 +50,9 @@ nonisolated enum PichiPublicationRetryPolicy {
             guard let date = formatter.date(from: value), formatter.string(from: date) == value else { return nil }
             delay = max(0, date.timeIntervalSince(now))
         }
-        return delay <= self.maximumAutomaticDelay ? .seconds(delay) : .beyondAutomaticWindow
+        // Retain a representable server deadline even when automatic delivery must
+        // pause. Manual retry and a later login must obey the same lower bound.
+        guard delay.isFinite, now.addingTimeInterval(delay) <= .distantFuture else { return .beyondAutomaticWindow }
+        return .seconds(delay)
     }
 }

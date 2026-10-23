@@ -191,13 +191,14 @@ extension PichiPublicationConsentTests {
         for header in ["-1", "1.5", "NaN", "garbage", "Mon, 14 Nov 2023 22:13:50 GMT"] {
             check(PichiPublicationRetryPolicy.parseRetryAfter(header, now: now) == nil, "Invalid retry headers do not become numeric schedules")
         }
-        for header in ["3601", String(repeating: "9", count: 128), "Wed, 15 Nov 2023 22:13:50 GMT"] {
-            check(PichiPublicationRetryPolicy.parseRetryAfter(header, now: now) == .beyondAutomaticWindow, "Excessive valid retry windows pause rather than retrying early")
-        }
+        check(PichiPublicationRetryPolicy.parseRetryAfter("3601", now: now) == .seconds(3601), "A long representable Retry-After retains its real deadline")
+        check(PichiPublicationRetryPolicy.parseRetryAfter("Wed, 15 Nov 2023 22:13:50 GMT", now: now) == .seconds(86430), "A long HTTP-date retains its real deadline")
+        check(PichiPublicationRetryPolicy.parseRetryAfter(String(repeating: "9", count: 128), now: now) == .beyondAutomaticWindow, "An unrepresentable server deadline requires review")
         check(PichiPublicationRetryPolicy.decision(afterAttempt: 1, retryAfter: nil) == .retry(afterSeconds: 5), "Retry backoff starts bounded")
         check(PichiPublicationRetryPolicy.decision(afterAttempt: 4, retryAfter: nil) == .retry(afterSeconds: 40), "Retry backoff increases without a hot loop")
         check(PichiPublicationRetryPolicy.decision(afterAttempt: 1, retryAfter: .seconds(30)) == .retry(afterSeconds: 30), "Valid server retry timing is honored")
         check(PichiPublicationRetryPolicy.decision(afterAttempt: 1, retryAfter: .beyondAutomaticWindow) == .pause(.retryAfterBeyondBudget), "Over-window retry becomes visible pause")
+        check(PichiPublicationRetryPolicy.decision(afterAttempt: 1, retryAfter: .seconds(7200)) == .pause(.retryAfterBeyondBudget), "Long server delays do not extend automatic delivery")
         for attempt in [-1, 0, 5, Int.max] {
             check(PichiPublicationRetryPolicy.decision(afterAttempt: attempt, retryAfter: nil) == .pause(.retryBudgetExhausted), "Automatic attempts have a finite persisted budget")
         }

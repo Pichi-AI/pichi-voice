@@ -13,7 +13,9 @@ delta review resolved the refresh/workspace and command-cancellation issues with
 N1's final native/runtime evidence remains its own gate. No duplicate account or token
 manager is introduced, and N5 does not alter N1 account sources. N2 source API `917bd15d`
 and published follow-up `66ae984b15d58e0c0d4ff71cd5f5573a4e5d9183` are integrated, with
-runtime/composition acceptance still pending. The next mandatory local integration is N2 `d5febd94`.
+mandatory source correction `d5febd9421918c192063b61e53d3f208f80d2fb7` is integrated.
+Runtime/composition acceptance remains pending; focused publication targets the named N2
+branch after that correction is published.
 
 ## Implemented source gate
 
@@ -39,7 +41,7 @@ not discover profiles, read settings, choose a destination or perform network re
 The existing coordinator stores nil gaps for a known-complete result without exclusions.
 Therefore nil gaps are accepted only alongside `transcriptIsComplete == true`. An empty gap
 collection cannot make unknown completeness eligible. Fully measured no-speech recognition
-is not classified as incomplete; W2 still needs to specify its empty-source validation.
+is withheld as `emptyTranscript`, separately from incomplete recognition, before any request.
 
 The exporter remains the only payload encoder. Its 750,000-byte and 100,000-UTF-16-unit
 limits and allowlist remain authoritative. Existing explicit protected manual export remains
@@ -88,15 +90,15 @@ cancellation, oversized/truncated/foreign/versioned records, permissions, symlin
 links, FIFO rejection and interrupted temporary files. Recreating an actor and generation
 simulates storage recovery; this is not a native application relaunch or logout test.
 N1's account probe declares sh; N5 consent and outbox probes declare Bash. All are registered
-without UI access. With the N2 probes, registry assertions cover 73 probes: 55 sh, 10 Bash
+without UI access. With the N2 probes, registry assertions cover 74 probes: 56 sh, 10 Bash
 and 8 Python.
 
 ## Implemented W2 wire codec
 
 W2 approved fixture commit `128e1dc17b51f0f0877e00eafb1f73c13cadddf5` supplies the exact
 synthetic request, receipts, errors and pending/PATCH rules. The copied approved files and
-their hashes are recorded in `Tests/Fixtures/PichiAccountSyncV1/provenance.json`. The
-unapproved own-history read candidate and server runtime are not copied or implemented.
+their hashes are recorded in `Tests/Fixtures/PichiAccountSyncV1/provenance.json`. W2 runtime `ac2b6c352de1c74080c44e0fe206f039b84726eb` preserves this wire contract
+and adds purge GET404/replay POST409 behavior. Server implementation is not copied into Swift.
 
 `PichiPublicationRequest` builds immutable POST, GET and PATCH values using N1's existing
 configuration/context types. POST body bytes exactly match both W2 multipart fixtures,
@@ -111,10 +113,12 @@ not prove native completeness, actual redaction or profile ownership. It rejects
 outside the exporter allowlist, original/audio/internal exports and invalid typed structure.
 The original exporter remains the only admission encoder. Source bytes/text keep its existing
 limits. The server contract additionally requires at least one nonblank segment, positive
-intervals, at most 86,400 seconds and at most 100 speakers. Empty complete sources are
+intervals, at most 86,400 seconds and at most 100 speakers. The serialized validator also enforces nonblank speaker names,
+one local-user speaker, ordered starts within duration and a 250,000-unit rendered UTF-16
+budget. Empty complete sources are
 withheld as `emptyTranscript`, separately from incomplete recognition.
 Multipart is capped at 1 MiB, response bodies at 65,536 bytes, and explicit selections
-at 100 unique opaque criteria IDs with at most 512 UTF-8 bytes per ID. These are conservative
+at 100 unique opaque criteria IDs with at most 256 UTF-16 units and 512 UTF-8 bytes per ID. These are conservative
 client resource bounds, not a change to server authorization or criteria policy.
 
 Runtime authorization uses the existing N1 `authorizedAccess(for:)`, checks the request's
@@ -140,7 +144,9 @@ malformed bodies or unknown codes pause for review rather than becoming acceptan
 `PichiPublicationRetryPolicy` permits five total automatic attempts with 5/10/20/40-second
 backoff. Valid delta-seconds or IMF-fixdate Retry-After is honored within a one-hour automatic
 window. Longer valid windows pause rather than retrying early; exhaustion also pauses.
-The durable worker persists the attempt budget. The codec starts no timer/retry.
+The durable worker persists the attempt budget and server deadline independently. Explicit
+retry cannot bypass a future server deadline after exhaustion, logout or restart. A delay
+that cannot be represented safely remains a review pause. The codec starts no timer/retry.
 
 The existing consent probe also compiles the actual N1 account sources and wire code in
 Swift 6. It passed 55 consent checks and 124 wire checks, including exact fixture hashes/body
@@ -163,6 +169,10 @@ The shared facade binds the N2 recording observer, persisted-source reload and t
 participant. It freezes consent before capture, deduplicates repeated notifications and
 keeps callbacks local. An explicitly activated worker handles HTTP independently. Transition
 cleanup joins complete manual commands, the worker and HTTP before clearing projections.
+Individual command cancellation joins its concrete request and durably pauses uncertain
+delivery without recreating the retained store. Accepted GET/PATCH failures persist a review
+overlay while retaining receipt, source and key. The same worker polls observed active
+analysis receipts with a bounded budget; it never discovers accepted history.
 Billing, permission/validation review and Retry-After deadlines survive logout/resume.
 
 The UI toggle is `setCloudSyncEnabled(_:)`. OFF closes network admission, joins POST/GET/PATCH,
@@ -258,9 +268,9 @@ is supplied by N5.
 | Owner | Exact handoff required before dependent implementation |
 | --- | --- |
 | N1 | Corrected source types are available at `f989116f`; native builds, combined joined-operation gates and composition/Xcode ownership handoff remain required |
-| N2 | Approved source `917bd15d` supplies private root, immutable capture admission, persisted source, observer and joined transition APIs; integrate without enabling readiness or altering N2 composition |
-| W2 | Approved wire fixtures at `128e1dc1` are available and tested; actual transactional import/status/PATCH runtime and authorization/billing/restart acceptance remain required |
-| W2 | Authorized participant/criteria discovery or UI path, empty/no-speech runtime validation and approved live endpoint ownership remain separate gates |
+| N2 | Integrated `d5febd94` supplies private roots, immutable admissions, persisted sources, observer and joined transitions; composition/source membership and runtime acceptance remain N2-owned |
+| W2 | Frozen runtime `ac2b6c35` and original fixtures `128e1dc1` are available; native HTTPS integration and combined live identity/authorization/billing acceptance remain required |
+| W2 | Authorized participant/criteria discovery or UI path and approved HTTPS fixture ownership remain separate gates; empty sources are locally withheld |
 | Coordinator | Frozen approved dependency SHAs and explicit composition/Xcode ownership release; heavy-job admission before native builds |
 
 Live transport additionally needs an approved local endpoint and test credential owner. W2's

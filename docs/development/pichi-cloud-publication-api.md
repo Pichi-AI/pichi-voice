@@ -4,12 +4,13 @@ Status: early working source API for N3/N4 and the N2 composition owner. It is n
 production readiness declaration. The source probes use actual N1/N2/store/exporter code
 with synthetic in-memory authentication and HTTP fixtures, not a live W2 service.
 
-Source inputs: N1 `f989116f2028d1bb1d47cac86ff65f6e57a2391a`, published N2
-`66ae984b15d58e0c0d4ff71cd5f5573a4e5d9183`, W2 wire fixtures
+Source inputs: N1 `f989116f2028d1bb1d47cac86ff65f6e57a2391a`, integrated N2
+`d5febd9421918c192063b61e53d3f208f80d2fb7`, W2 runtime source
+`ac2b6c352de1c74080c44e0fe206f039b84726eb` and original wire fixtures
 `128e1dc17b51f0f0877e00eafb1f73c13cadddf5` and additive provisional compatibility fixture
-`c76d7dde2c7bc3c2f374238b8e780fab9d5a145f`. Mandatory N2 transition/composition correction
-`d5febd9421918c192063b61e53d3f208f80d2fb7` is the next approved local integration input;
-final publication must consume it and target its published N2 dependency branch.
+`c76d7dde2c7bc3c2f374238b8e780fab9d5a145f`. Focused PR publication remains gated on
+N2 publishing the integrated correction to its named dependency branch. Source availability
+does not establish combined native/runtime acceptance.
 
 ## One facade for both platforms
 
@@ -74,6 +75,7 @@ enum PichiCloudPublicationStatus {
     case retryScheduled(Date)
     case paused(PichiPublicationPauseReason)
     case accepted(PichiPublicationReceipt)
+    case acceptedNeedsReview(PichiPublicationReceipt, PichiPublicationPauseReason)
     case conflict
 }
 ```
@@ -84,6 +86,18 @@ or `needsCriteria`. An upload can stay accepted when analysis fails or needs exp
 Initial POST assessment is always explicit null participant/empty criteria. A represented
 participant is selected by the user later; `isLocalUser` and provisional display flags confer
 no employee or account authority. W2 still owns authorized criteria discovery/detail routing.
+
+`acceptedNeedsReview` retains the accepted receipt while showing a safe GET/PATCH failure.
+A purge GET404 requires receipt review; replay POST409 retains the original conflict. Neither
+can create a replacement operation or charge. Successful explicit reconciliation clears the
+review overlay. Server Retry-After survives review, logout and restart, even after automatic
+POST retries exhaust. Unrepresentable deadlines remain paused for review.
+
+The active worker polls only observed queued/running receipts, at most 12 times per
+observation, at least 10 seconds apart after the initial check, and at most four per worker
+pass. It never scans settled history. Terminal/action/review states stop polling. After the
+budget ends, explicit reconciliation remains available. OFF and transitions cancel and join
+this same worker. Both platform views should use this owner instead of adding polling loops.
 
 Source withholding codes are `notCompleted`, `redactionNotEnabled`, `originalTextRetained`,
 `completenessUnknown`, `incompleteTranscript`, `emptyTranscript`, `excludedIntervals`,
@@ -107,6 +121,7 @@ they are presentation mappings, not behavior selectors or a second status contra
 | `sending` | `Uploading protected transcript` |
 | `retryScheduled` | `Retry at %@` |
 | `accepted` | `Cloud upload accepted` |
+| `acceptedNeedsReview(receipt, reason)` | Show retained upload acceptance and the matching `paused` reason below |
 | `pausing` | `Stopping cloud sync` |
 | `paused.userRequested` | `Cloud uploads paused` |
 | `paused.authenticationRequired` | `Sign in again to resume cloud uploads` |
@@ -146,10 +161,13 @@ state is published. Do not invoke it inside an unfinished N1/N2 transition. Regi
 CloudPublication sources in the mobile manifest/Xcode project under N2's coordinated lease;
 N5 does not regenerate or edit common composition, project IDs or readiness flags.
 
-Working source evidence: 73 durable-store checks and 37 facade checks passed in the actual
+Earlier source evidence at `d42ceb25`: 73 durable-store checks and 37 facade checks passed in the actual
 N1/N2 observer/store probe. They cover scoped policy, same-owner/new-generation recovery,
 response loss, original-byte replay, A/B and guest isolation, coherent OFF join, OFF captures,
 blocked GET/PATCH, explicit pending resolution and storage failure without recording failure.
+The current correction adds individual cancellation, active GET/PATCH OFF joining, persistent
+receipt review and bounded analysis polling. Fresh combined evidence is recorded with the
+final frozen source revision; the earlier counts are not a fresh test of these changes.
 The probe uses Swift 5 mode because the existing unrelated `ExportedTranscript: Encodable`
 conformance warns under that mode; strict Swift 6 consent/wire checks are separate. These
 results do not establish a native target build, UI quality, full N2 private-source inventory,

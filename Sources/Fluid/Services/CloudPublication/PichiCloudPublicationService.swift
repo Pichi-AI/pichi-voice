@@ -15,6 +15,7 @@ nonisolated enum PichiCloudPublicationStatus: Equatable, Sendable {
     case retryScheduled(Date)
     case paused(PichiPublicationPauseReason)
     case accepted(PichiPublicationReceipt)
+    case acceptedNeedsReview(PichiPublicationReceipt, PichiPublicationPauseReason)
     case conflict
 }
 
@@ -54,6 +55,8 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private var cloudToggle: (id: UUID, task: Task<Void, Error>)?
     private var offLatch: (profileID: String, failed: Bool)?
     private var itemOrder: [MeetingSessionID] = []
+    // Only already observed receipts are polled, with a finite per-observation budget.
+    private var analysisPolls: [MeetingSessionID: (attempts: Int, notBefore: Date)] = [:]
 
     init(account: AccountSessionService, meetings: PrivateProfileMeetingStore = .shared,
          profiles: PrivateProfileService? = nil, http: (any PichiPublicationHTTPPerforming)? = nil) {
@@ -228,6 +231,14 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         try self.check(profile, context: context)
         for record in records where record.state == .paused {
             if record.pauseReason == .profileTransition || record.pauseReason == .uncertainDelivery || (resumeUserPauses && record.pauseReason == .userRequested) {
+                if record.attemptCount >= PichiPublicationRetryPolicy.maximumAutomaticAttempts {
+                    _ = try await store.pause(id: record.sessionID, reason: .retryBudgetExhausted)
+                    continue
+                }
+                if record.retryAfterRequiresReview == true || (record.retryNotBefore?.timeIntervalSinceNow ?? 0) > PichiPublicationRetryPolicy.maximumAutomaticDelay {
+                    _ = try await store.pause(id: record.sessionID, reason: .retryAfterBeyondBudget)
+                    continue
+                }
                 _ = try await store.explicitRetry(id: record.sessionID)
                 try self.check(profile, context: context)
             }
@@ -242,11 +253,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         guard let record = try await store.record(id: id), let receipt = record.receipt else { throw PichiPublicationOutboxFailure.notAdmitted }
         try self.check(profile, context: context)
         let request = try PichiPublicationRequest.status(configuration: record.configuration, context: context, receipt: receipt)
-        let current = try await self.perform(request, profile: profile)
-        try self.check(profile, context: context)
-        let updated = try await store.updateReceipt(id: id, receipt: current)
-        try self.check(profile, context: context)
-        self.project(id, Self.status(updated), profile: profile)
+        try await self.performReceiptRequest(request, record: record, profile: profile, store: store)
     }
 
     private func resolveAssessmentBody(_ id: MeetingSessionID, participantID: UUID, criteriaIDs: [String]) async throws {
@@ -256,11 +263,36 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         try self.check(profile, context: context)
         let request = try PichiPublicationRequest.resolveAssessment(configuration: record.configuration, context: context,
             receipt: receipt, transcriptBytes: bytes, assessment: .init(participantID: participantID, criteriaIDs: criteriaIDs))
-        let current = try await self.perform(request, profile: profile)
-        try self.check(profile, context: context)
-        let updated = try await store.updateReceipt(id: id, receipt: current)
-        try self.check(profile, context: context)
-        self.project(id, Self.status(updated), profile: profile)
+        try await self.performReceiptRequest(request, record: record, profile: profile, store: store)
+    }
+
+    private func performReceiptRequest(_ request: PichiPublicationRequest, record: PichiPublicationOutboxRecord,
+                                       profile: PrivateProfileSnapshot, store: PichiPublicationOutboxStore) async throws {
+        guard record.retryAfterRequiresReview != true, (record.retryNotBefore ?? .distantPast) <= Date() else {
+            throw PichiPublicationOutboxFailure.invalidTransition
+        }
+        do {
+            let current = try await self.perform(request, profile: profile)
+            try self.check(profile, context: request.context)
+            let updated = try await store.updateReceipt(id: record.sessionID, receipt: current)
+            try self.check(profile, context: request.context)
+            self.project(record.sessionID, Self.status(updated), profile: profile)
+        } catch {
+            // Cancellation/concealment leaves the accepted receipt intact. A current
+            // owner's safe remote failure remains visible across restart and login.
+            guard (try? self.check(profile, context: request.context)) != nil,
+                  !(error is PichiCloudPublicationControlFailure) else { throw error }
+            let remote = error as? PichiPublicationRemoteFailure
+            let reason: PichiPublicationPauseReason
+            if let remote { reason = remote.action == .boundedRetry ? .transportUnavailable : Self.pauseReason(remote.action) }
+            else if let account = error as? AccountError { reason = account == .permissionDenied ? .permissionReview : .authenticationRequired }
+            else if error is PichiPublicationNetworkFailure { reason = .transportUnavailable }
+            else { reason = .receiptReview }
+            let updated = try await store.pauseReceipt(id: record.sessionID, reason: reason, retryAfter: remote?.retryAfter)
+            try self.check(profile, context: request.context)
+            self.project(record.sessionID, Self.status(updated), profile: profile)
+            throw error
+        }
     }
 
     // MARK: N2 local-only recording observer
@@ -309,6 +341,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         self.userPaused = true
         self.snapshot = .init(availability: .profileUnavailable, cloudSyncEnabled: false, items: [:])
         self.itemOrder.removeAll()
+        self.analysisPolls.removeAll()
         await self.joinOwnedWork()
         if let outbox { try await outbox.pauseAll(reason: .profileTransition) }
         self.outbox = nil; self.consent = nil; self.scope = nil
@@ -322,6 +355,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             if let outbox = self.outbox { try? await outbox.pauseAll(reason: .profileTransition) }
             await self.http?.shutdown()
             self.outbox = nil; self.consent = nil; self.scope = nil
+            self.analysisPolls.removeAll()
             self.snapshot = .init(availability: .profileUnavailable, cloudSyncEnabled: false, items: [:])
         }
         self.shutdownTask = task
@@ -340,7 +374,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             self.closing = false
         }
         if self.scope != profile || self.outbox == nil {
-            self.snapshot = .init(availability: .paused, cloudSyncEnabled: false, items: [:]); self.itemOrder.removeAll()
+            self.snapshot = .init(availability: .paused, cloudSyncEnabled: false, items: [:]); self.itemOrder.removeAll(); self.analysisPolls.removeAll()
             let rootAttributes = try FileManager.default.attributesOfItem(atPath: profile.rootDirectory.path)
             guard rootAttributes[.type] as? FileAttributeType == .typeDirectory,
                   let rootPermissions = (rootAttributes[.posixPermissions] as? NSNumber)?.intValue,
@@ -449,9 +483,19 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                             await self.deliver(id: record.sessionID, profile: profile, context: context, store: store)
                         }
                     }
+                    var polls = 0
+                    for (id, plan) in self.analysisPolls.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+                        try self.check(profile, context: context)
+                        guard polls < 4 else { break }
+                        guard plan.attempts < 12, plan.notBefore <= Date() else { continue }
+                        self.analysisPolls[id] = (plan.attempts + 1, Date().addingTimeInterval(10))
+                        polls += 1
+                        do { try await self.reconcileBody(id) }
+                        catch { try self.check(profile, context: context) }
+                    }
                     // Local notifications never start HTTP. This single resumed worker
                     // checks only its bounded pending IDs; there is no history scan.
-                    try await Task.sleep(for: .seconds(1))
+                    try await Task.sleep(for: .seconds(5))
                 } catch { return }
             }
         }
@@ -475,13 +519,33 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             try self.check(profile, context: context)
             self.project(id, Self.status(accepted), profile: profile)
         } catch {
+            if Task.isCancelled || error is CancellationError {
+                // The HTTP task has joined. This task is owned and joined by its
+                // enclosing command/worker, but must not inherit caller cancellation:
+                // the retained store's one-time crash recovery cannot repair this run.
+                let cleanup = Task { @MainActor in
+                    guard (try? self.check(profile, context: context)) != nil else { return }
+                    do {
+                        guard try await store.record(id: id)?.state == .sending else { return }
+                        let paused = try await store.pause(id: id, reason: .uncertainDelivery)
+                        self.project(id, Self.status(paused), profile: profile)
+                    } catch {
+                        if self.scope == profile, !self.closing, PrivateProfileStorage.isReadable(profile) {
+                            self.snapshot = .init(availability: .storageUnavailable,
+                                cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items)
+                        }
+                    }
+                }
+                await cleanup.value
+                return
+            }
             guard (try? self.check(profile, context: context)) != nil else { return }
             do {
                 let updated: PichiPublicationOutboxRecord
                 if let remote = error as? PichiPublicationRemoteFailure {
                     if remote.action == .boundedRetry {
                         let count = try await store.record(id: id)?.attemptCount ?? PichiPublicationRetryPolicy.maximumAutomaticAttempts
-                        updated = try await store.scheduleRetry(id: id, decision: PichiPublicationRetryPolicy.decision(afterAttempt: count, retryAfter: remote.retryAfter), now: Date())
+                        updated = try await store.scheduleRetry(id: id, decision: PichiPublicationRetryPolicy.decision(afterAttempt: count, retryAfter: remote.retryAfter), retryAfter: remote.retryAfter, now: Date())
                     } else { updated = try await store.pause(id: id, reason: Self.pauseReason(remote.action)) }
                 } else if error is PichiCloudPublicationControlFailure {
                     updated = try await store.pause(id: id, reason: .userRequested)
@@ -519,6 +583,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private func project(_ id: MeetingSessionID, _ status: PichiCloudPublicationStatus, profile: PrivateProfileSnapshot) {
         guard !self.closing, !self.shutDown, self.scope == profile, PrivateProfileStorage.isReadable(profile) else { return }
         var items = self.snapshot.items; items[id] = status
+        if case let .accepted(receipt) = status, [.queued, .running].contains(receipt.analysisState) {
+            if self.analysisPolls[id] == nil { self.analysisPolls[id] = (0, Date().addingTimeInterval(1)) }
+        } else { self.analysisPolls.removeValue(forKey: id) }
         self.itemOrder.removeAll { $0 == id }; self.itemOrder.append(id)
         self.snapshot = .init(availability: self.snapshot.availability,
             cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.bounded(items))
@@ -526,7 +593,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
 
     private func bounded(_ items: [MeetingSessionID: PichiCloudPublicationStatus]) -> [MeetingSessionID: PichiCloudPublicationStatus] {
         for id in items.keys where !self.itemOrder.contains(id) { self.itemOrder.append(id) }
-        while self.itemOrder.count > 128 { self.itemOrder.removeFirst() }
+        while self.itemOrder.count > 128 { self.analysisPolls.removeValue(forKey: self.itemOrder.removeFirst()) }
         let retained = Set(self.itemOrder)
         return items.filter { retained.contains($0.key) }
     }
@@ -539,7 +606,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         case .sending: return .sending
         case .retryScheduled: return .retryScheduled(record.nextAttemptAt ?? .distantFuture)
         case .paused: return .paused(record.pauseReason ?? .receiptReview)
-        case .accepted: return record.receipt.map(PichiCloudPublicationStatus.accepted) ?? .paused(.receiptReview)
+        case .accepted:
+            guard let receipt = record.receipt else { return .paused(.receiptReview) }
+            return record.receiptPauseReason.map { .acceptedNeedsReview(receipt, $0) } ?? .accepted(receipt)
         case .withheld: return record.withholdingReason.map(PichiCloudPublicationStatus.withheld) ?? .localOnly
         case .conflict: return .conflict
         }

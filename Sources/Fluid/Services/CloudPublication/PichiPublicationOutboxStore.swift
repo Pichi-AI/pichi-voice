@@ -35,7 +35,9 @@ nonisolated struct PichiPublicationOutboxRecord: Codable, Equatable, Sendable {
     var withholdingReason: PichiPublicationWithholdingReason?
     var nextAttemptAt: Date?
     var retryNotBefore: Date?
+    var retryAfterRequiresReview: Bool?
     var receipt: PichiPublicationReceipt?
+    var receiptPauseReason: PichiPublicationPauseReason?
 
     var originalAssessment: PichiPublicationAssessment { .init(participantID: nil, criteriaIDs: []) }
     var multipartBoundary: String { "pichi-import-" + operationID.uuidString }
@@ -137,6 +139,7 @@ actor PichiPublicationOutboxStore {
             var record = try self.required(id, directories)
             guard now.timeIntervalSince1970.isFinite, record.transcriptBytes != nil,
                   record.state == .queued || (record.state == .retryScheduled && (record.nextAttemptAt ?? .distantFuture) <= now),
+                  record.retryAfterRequiresReview != true, (record.retryNotBefore ?? .distantPast) <= now,
                   record.attemptCount < Self.maximumAttemptCount else { throw PichiPublicationOutboxFailure.invalidTransition }
             record.attemptCount += 1; record.state = .sending; record.nextAttemptAt = nil; record.retryNotBefore = nil; record.pauseReason = nil
             try self.commit(record, directories)
@@ -167,25 +170,61 @@ actor PichiPublicationOutboxStore {
             guard record.state == .accepted, record.receipt != nil else { throw PichiPublicationOutboxFailure.invalidTransition }
             try self.checkReceipt(receipt, replacing: record.receipt)
             record.receipt = receipt
+            record.receiptPauseReason = nil; record.retryNotBefore = nil; record.retryAfterRequiresReview = nil
+            try self.commit(record, directories)
+            return record
+        }
+    }
+
+    /// A failed GET/PATCH never reopens POST delivery or erases accepted cloud history.
+    /// Keep its safe review state durable alongside the immutable receipt and source.
+    func pauseReceipt(id: MeetingSessionID, reason: PichiPublicationPauseReason,
+                      retryAfter: PichiPublicationRetryAfter? = nil, now: Date = Date()) throws -> PichiPublicationOutboxRecord {
+        try self.withDirectories { directories in
+            var record = try self.required(id, directories)
+            guard record.state == .accepted, record.receipt != nil, now.timeIntervalSince1970.isFinite else {
+                throw PichiPublicationOutboxFailure.invalidTransition
+            }
+            record.receiptPauseReason = reason
+            switch retryAfter {
+            case let .seconds(delay):
+                let deadline = now.addingTimeInterval(delay)
+                if delay.isFinite, delay >= 0, deadline.timeIntervalSince1970.isFinite, deadline <= .distantFuture {
+                    record.retryNotBefore = deadline
+                } else { record.retryAfterRequiresReview = true }
+            case .beyondAutomaticWindow: record.retryAfterRequiresReview = true
+            case nil: break
+            }
             try self.commit(record, directories)
             return record
         }
     }
 
     func scheduleRetry(id: MeetingSessionID, decision: PichiPublicationRetryDecision,
+                       retryAfter: PichiPublicationRetryAfter? = nil,
                        now: Date = Date()) throws -> PichiPublicationOutboxRecord {
         try self.withDirectories { directories in
             var record = try self.required(id, directories)
             guard record.state == .sending, now.timeIntervalSince1970.isFinite else {
                 throw PichiPublicationOutboxFailure.invalidTransition
             }
+            switch retryAfter {
+            case let .seconds(delay):
+                let deadline = now.addingTimeInterval(delay)
+                if delay.isFinite, delay >= 0, deadline.timeIntervalSince1970.isFinite, deadline <= .distantFuture {
+                    record.retryNotBefore = deadline
+                } else { record.retryAfterRequiresReview = true }
+            case .beyondAutomaticWindow: record.retryAfterRequiresReview = true
+            case nil: break
+            }
+            let proposed = retryAfter.map { PichiPublicationRetryPolicy.decision(afterAttempt: record.attemptCount, retryAfter: $0) } ?? decision
             let bounded: PichiPublicationRetryDecision
-            switch decision {
+            switch proposed {
             case let .retry(afterSeconds: delay):
                 bounded = PichiPublicationRetryPolicy.decision(afterAttempt: record.attemptCount, retryAfter: .seconds(delay))
-            case .pause: bounded = decision
+            case .pause: bounded = proposed
             }
-            switch bounded {
+            switch record.retryAfterRequiresReview == true ? .pause(.retryAfterBeyondBudget) : bounded {
             case let .retry(afterSeconds: delay):
                 record.state = .retryScheduled; record.nextAttemptAt = now.addingTimeInterval(delay); record.retryNotBefore = record.nextAttemptAt
             case let .pause(reason):
@@ -224,15 +263,21 @@ actor PichiPublicationOutboxStore {
         }
     }
 
-    func explicitRetry(id: MeetingSessionID) throws -> PichiPublicationOutboxRecord {
+    func explicitRetry(id: MeetingSessionID, now: Date = Date()) throws -> PichiPublicationOutboxRecord {
         try self.withDirectories { directories in
             var record = try self.required(id, directories)
             guard record.automaticConsent,
                   [.paused, .retryScheduled, .queued].contains(record.state),
+                  now.timeIntervalSince1970.isFinite, record.retryAfterRequiresReview != true,
                   record.attemptCount < Self.maximumAttemptCount else { throw PichiPublicationOutboxFailure.invalidTransition }
             guard record.transcriptBytes != nil || record.attemptCount == 0 else { throw PichiPublicationOutboxFailure.invalidTransition }
+            if let due = record.retryNotBefore, due > now,
+               record.attemptCount >= PichiPublicationRetryPolicy.maximumAutomaticAttempts
+                || due.timeIntervalSince(now) > PichiPublicationRetryPolicy.maximumAutomaticDelay {
+                throw PichiPublicationOutboxFailure.invalidTransition
+            }
             if record.transcriptBytes == nil { record.state = .waitingForSource; record.nextAttemptAt = nil }
-            else if let due = record.retryNotBefore, due > Date() { record.state = .retryScheduled; record.nextAttemptAt = due }
+            else if let due = record.retryNotBefore, due > now { record.state = .retryScheduled; record.nextAttemptAt = due }
             else { record.state = .queued; record.nextAttemptAt = nil }
             record.pauseReason = nil
             try self.commit(record, directories)
@@ -309,6 +354,7 @@ actor PichiPublicationOutboxStore {
         }
         guard validState, record.attemptCount == 0 || hasSource,
               (record.state == .accepted) == (record.receipt != nil),
+              record.state == .accepted || record.receiptPauseReason == nil,
               (record.state == .retryScheduled) == (record.nextAttemptAt != nil),
               record.state == .withheld || record.withholdingReason == nil else {
             throw PichiPublicationOutboxFailure.corruptRecord

@@ -116,6 +116,50 @@ extension PichiPublicationOutboxTests {
         let afterPatch = try durable(profileA, id: first.id, settled: true)
         check(afterPatch.transcriptBytes == firstRecord.transcriptBytes && afterPatch.sourceSHA256 == firstRecord.sourceSHA256
               && afterPatch.originalAssessment.participantID == nil, "Assessment resolution never rewrites original POST fingerprint")
+        await http.failNextRequest("GET", status: 404, code: "RESOURCE_NOT_FOUND")
+        do { try await service.reconcile(first.id); check(false, "Purged import status must require review") }
+        catch let error as PichiPublicationRemoteFailure { check(error.action == .pauseForReceiptReview, "Purge GET404 is a receipt review response") }
+        let reviewedReceipt = try durable(profileA, id: first.id, settled: true)
+        let reopenedReceipt = PichiPublicationOutboxStore(profile: profileA, configuration: configuration)
+        check(try await reopenedReceipt.record(id: first.id)?.receiptPauseReason == .receiptReview
+              && reviewedReceipt.operationID == firstRecord.operationID && reviewedReceipt.transcriptBytes == firstRecord.transcriptBytes,
+              "Receipt review persists across a new store without erasing acceptance or creating another operation")
+        if case let .acceptedNeedsReview(receipt, reason) = try await service.status(for: first.id) {
+            check(receipt == reviewedReceipt.receipt && reason == .receiptReview, "Shared status separates retained acceptance from receipt review")
+        } else { check(false, "Receipt review must be visible") }
+        try await service.reconcile(first.id)
+        check(try durable(profileA, id: first.id, settled: true).receiptPauseReason == nil, "A successful explicit GET clears the receipt review overlay")
+        await http.failNextRequest("PATCH", status: 429, code: "RATE_LIMITED")
+        do { try await service.resolveAssessment(first.id, participantID: participantID, criteriaIDs: ["31"]); check(false, "PATCH429 must remain visible") }
+        catch let error as PichiPublicationRemoteFailure { check(error.action == .boundedRetry, "Assessment throttling retains bounded retry classification") }
+        check(try durable(profileA, id: first.id, settled: true).receiptPauseReason == .transportUnavailable,
+              "PATCH transport review is durable while original upload remains accepted")
+        try await service.reconcile(first.id)
+        await http.finishNextStatus()
+        try await wait {
+            if case let .accepted(receipt) = try await service.status(for: first.id) { return receipt.analysisState == .succeeded }; return false
+        }
+        check(true, "The bounded worker reconciles observed queued analysis to completion without reimport")
+
+        await service.pause()
+        let cancelledSource = try await capture()
+        let beforeCancel = try durable(profileA, id: cancelledSource.id, settled: false)
+        await http.holdNextPost()
+        var cancelledReturned = false
+        let cancelledSend = Task { try await service.send(cancelledSource.id); cancelledReturned = true }
+        try await wait { await http.isHeld() }
+        cancelledSend.cancel()
+        try await Task.sleep(for: .milliseconds(50))
+        check(!cancelledReturned, "A cancelled manual send still joins its uncooperative concrete request")
+        await http.release(); _ = await cancelledSend.result
+        let afterCancel = try durable(profileA, id: cancelledSource.id, settled: false)
+        check(afterCancel.state == .paused && afterCancel.pauseReason == .uncertainDelivery
+              && afterCancel.operationID == beforeCancel.operationID && afterCancel.transcriptBytes == beforeCancel.transcriptBytes,
+              "Individual cancellation durably releases sending state without replacing owner, key or bytes")
+        try await service.retry(cancelledSource.id)
+        let afterCancelledRetry = try durable(profileA, id: cancelledSource.id, settled: true)
+        check(afterCancelledRetry.operationID == beforeCancel.operationID && afterCancelledRetry.attemptCount == 2,
+              "Cancelled delivery can replay in the same retained service without restart")
 
         await service.pause()
         let paused = try await capture()
@@ -154,6 +198,24 @@ extension PichiPublicationOutboxTests {
         try await service.setCloudSyncEnabled(true)
         try await wait { if case .accepted = try await service.status(for: disabledDuringTransfer.id) { return true }; return false }
         check(try await service.status(for: capturedDuringOff.id) == .localOnly, "ON resumes prior admissions without claiming captures made during OFF")
+
+        for method in ["GET", "PATCH"] {
+            await http.holdNextRequest(method)
+            let inFlight = Task {
+                if method == "GET" { try await service.reconcile(first.id) }
+                else { try await service.resolveAssessment(first.id, participantID: participantID, criteriaIDs: ["31"]) }
+            }
+            try await wait { await http.isHeld() }
+            var stopped = false
+            let offCommand = Task { try await service.setCloudSyncEnabled(false); stopped = true }
+            try await wait { service.snapshot.availability == .pausing }
+            check(!stopped && service.snapshot.cloudSyncEnabled, "OFF joins an already active " + method + " before publishing disabled")
+            await http.release(); try await offCommand.value; _ = await inFlight.result
+            let receiptRetained = try durable(profileA, id: first.id, settled: true).receipt != nil
+            check(stopped && !service.snapshot.cloudSyncEnabled && receiptRetained,
+                  "Joined " + method + " cancellation preserves accepted cloud history")
+            try await service.setCloudSyncEnabled(true)
+        }
 
         await service.pause()
         let frozenConsent = try await capture(beforeSave: { try await service.setCloudSyncEnabled(false) })
@@ -258,20 +320,29 @@ private actor FacadeFixtureHTTP: PichiPublicationHTTPPerforming {
     private var bodiesMatch = true
     private var requests = 0
     private var loseNext = false
-    private var holdNext = false
+    private var heldMethod: String?
     private var gate: CheckedContinuation<Void, Never>?
     private var held = false
     private var closed = false
+    private var failure: (method: String, status: Int, code: String)?
+    private var finishStatus = false
     func count() -> Int { requests }
     func identicalPosts() -> Bool { bodiesMatch }
     func loseNextResponse() { loseNext = true }
-    func holdNextPost() { holdNext = true }
+    func holdNextPost() { heldMethod = "POST" }
+    func holdNextRequest(_ method: String) { heldMethod = method }
     func isHeld() -> Bool { held }
     func release() { let saved = gate; gate = nil; held = false; saved?.resume() }
     func wasShutdown() -> Bool { closed }
+    func failNextRequest(_ method: String, status: Int, code: String) { failure = (method, status, code) }
+    func finishNextStatus() { finishStatus = true }
     func perform(_ request: URLRequest) async throws -> PichiPublicationHTTPResponse {
         requests += 1
         let method = request.httpMethod ?? "GET"
+        if let failure, failure.method == method {
+            self.failure = nil
+            return .init(status: failure.status, body: try JSONSerialization.data(withJSONObject: ["error": ["code": failure.code, "status": failure.status]]), retryAfter: "0")
+        }
         let key: String
         var status = 200
         if method == "POST" {
@@ -282,8 +353,6 @@ private actor FacadeFixtureHTTP: PichiPublicationHTTPPerforming {
                 receipts[key] = .init(schemaVersion: 1, importID: "import-" + key, recordingID: "recording-" + key,
                     uploadState: .accepted, analysisState: .needsParticipant)
             }
-            if holdNext { holdNext = false; held = true; await withCheckedContinuation { gate = $0 } }
-            if loseNext { loseNext = false; throw PichiPublicationNetworkFailure.unavailable }
         } else {
             let components = request.url!.pathComponents
             let importID = method == "PATCH" ? components[components.count - 2] : components.last!
@@ -293,8 +362,15 @@ private actor FacadeFixtureHTTP: PichiPublicationHTTPPerforming {
                 status = old.analysisState == .needsParticipant ? 202 : 200
                 receipts[key] = .init(schemaVersion: 1, importID: old.importID, recordingID: old.recordingID,
                     uploadState: .accepted, analysisState: .queued)
+            } else if finishStatus {
+                finishStatus = false
+                let old = receipts[key]!
+                receipts[key] = .init(schemaVersion: 1, importID: old.importID, recordingID: old.recordingID,
+                    uploadState: .accepted, analysisState: .succeeded)
             }
         }
+        if heldMethod == method { heldMethod = nil; held = true; await withCheckedContinuation { gate = $0 } }
+        if method == "POST", loseNext { loseNext = false; throw PichiPublicationNetworkFailure.unavailable }
         return .init(status: status, body: try JSONEncoder().encode(receipts[key]!), retryAfter: nil)
     }
     func shutdown() async { closed = true; release(); posts.removeAll(); receipts.removeAll() }

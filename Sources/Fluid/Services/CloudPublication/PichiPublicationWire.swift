@@ -230,7 +230,7 @@ nonisolated struct PichiPublicationRequest: Sendable {
     }
 
     fileprivate static func validID(_ value: String) -> Bool {
-        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && value.utf8.count <= 512
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && value.utf16.count <= 256 && value.utf8.count <= 512
             && value.rangeOfCharacter(from: .controlCharacters) == nil
     }
 
