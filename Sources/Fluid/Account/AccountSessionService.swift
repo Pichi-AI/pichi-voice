@@ -22,6 +22,14 @@ import Foundation
         let task: Task<Void, Error>
     }
     private var ownedOperation: OwnedOperation?
+    /// Owns the complete user command, including any pre-admission logout. It is
+    /// deliberately outside ownedOperation because the logout boundary joins that slot.
+    private struct AuthenticationCommand {
+        let id: UUID
+        let task: Task<Void, Never>
+    }
+    private var authenticationCommand: AuthenticationCommand?
+    private var isShuttingDown = false
     private var refreshTask: Task<AccountGrant, Error>?
     private var refreshID: UUID?
     private var logoutTask: Task<Void, Never>?
@@ -30,9 +38,11 @@ import Foundation
     private var requiresAccountValidation = false
     private var latestDeviceRefreshToken: String?
 
-    var isSignInAvailable: Bool {
-        configuration != nil && lifecycle?.isAccountIsolationReady == true && !boundaryInProgress && !cleanupRequired
+    private var canAdmitSignIn: Bool {
+        configuration != nil && lifecycle?.isAccountIsolationReady == true
+            && !boundaryInProgress && !cleanupRequired && !isShuttingDown
     }
+    var isSignInAvailable: Bool { canAdmitSignIn && authenticationCommand == nil }
 
     init(configuration: AccountConfiguration?, browser: any AccountBrowserAuthenticating,
          transport: any AccountTransporting, credentials: any AccountCredentialStoring,
@@ -44,33 +54,57 @@ import Foundation
 
     /// Composition-only handoff. UI must never manufacture an isolation participant.
     func installLifecycle(_ lifecycle: any AccountSessionLifecycle) throws {
-        guard self.lifecycle == nil, ownedOperation == nil, refreshTask == nil, grant == nil, !boundaryInProgress else { throw AccountError.busy }
+        guard self.lifecycle == nil, authenticationCommand == nil, ownedOperation == nil,
+              refreshTask == nil, grant == nil, !boundaryInProgress, !isShuttingDown else { throw AccountError.busy }
         self.lifecycle = lifecycle
     }
 
     func signIn() async {
-        let requiresExplicitIdentity = state == .reauthenticationRequired
-        if requiresExplicitIdentity { await logout() }
-        await beginSignIn(requiresExplicitIdentity: requiresExplicitIdentity, excluding: nil)
+        let reauthentication = state == .reauthenticationRequired
+        await runAuthenticationCommand(logoutFirst: reauthentication,
+            requiresExplicitIdentity: reauthentication, excluding: nil)
     }
 
     /// Explicit person switch requests a fresh browser interaction and rejects the prior
     /// verified identity if a federated provider nevertheless returns it without a choice.
     func switchPerson() async {
         let previousIdentity = context?.identity ?? grant?.identity
-        await logout()
-        guard !cleanupRequired else { return }
-        await beginSignIn(requiresExplicitIdentity: true, excluding: previousIdentity)
+        await runAuthenticationCommand(logoutFirst: true,
+            requiresExplicitIdentity: true, excluding: previousIdentity)
+    }
+
+    private func runAuthenticationCommand(logoutFirst: Bool, requiresExplicitIdentity: Bool,
+                                          excluding previousIdentity: AccountIdentity?) async {
+        guard !Task.isCancelled else { return }
+        guard authenticationCommand == nil, !isShuttingDown else { presentationError = .busy; return }
+        let id = UUID()
+        let task = Task { @MainActor in
+            guard !Task.isCancelled else { return }
+            // Internal cleanup never joins this encompassing command, avoiding a self-cycle.
+            if logoutFirst { await self.logoutSession() }
+            guard !Task.isCancelled, self.authenticationCommand?.id == id else { return }
+            await self.beginSignIn(requiresExplicitIdentity: requiresExplicitIdentity, excluding: previousIdentity)
+            if Task.isCancelled { await self.logoutSession() }
+        }
+        authenticationCommand = AuthenticationCommand(id: id, task: task)
+        // Cancellation must reach the concrete task synchronously. A queued actor callback
+        // could otherwise run after this command has admitted or a replacement has started.
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: { task.cancel() }
+        if authenticationCommand?.id == id { authenticationCommand = nil }
     }
 
     private func beginSignIn(requiresExplicitIdentity: Bool, excluding previousIdentity: AccountIdentity?) async {
+        guard !Task.isCancelled else { return }
         guard let configuration else { presentationError = .unconfigured; return }
-        guard isSignInAvailable else { presentationError = cleanupRequired ? .credentialsUnavailable : .isolationRequired; return }
+        guard canAdmitSignIn else { presentationError = cleanupRequired ? .credentialsUnavailable : .isolationRequired; return }
         guard ownedOperation == nil, grant == nil else { presentationError = .busy; return }
         presentationError = nil; state = .signingIn; generation = UUID()
         let captured = generation, id = UUID()
         let task = Task { @MainActor in
             do {
+                try self.check(captured)
                 let attempt = try AccountAuthorizationAttempt(redirectURI: configuration.redirectURI)
                 var url = try await self.transport.authorizationURL(state: attempt.state, nonce: attempt.nonce, challenge: attempt.challenge)
                 if requiresExplicitIdentity {
@@ -108,7 +142,9 @@ import Foundation
             }
         }
         ownedOperation = OwnedOperation(id: id, kind: .admission, task: task)
-        _ = try? await task.value
+        await withTaskCancellationHandler {
+            _ = try? await task.value
+        } onCancel: { task.cancel() }
         if ownedOperation?.id == id { ownedOperation = nil }
     }
 
@@ -167,13 +203,14 @@ import Foundation
     }
 
     func cancelSignIn() async {
-        guard state == .signingIn else { return }
+        guard authenticationCommand != nil || state == .signingIn else { return }
         await logout()
         if !cleanupRequired { presentationError = nil }
     }
 
     func selectWorkspace(organizationID: String, workspaceID: String) async throws {
-        guard !boundaryInProgress, !cleanupRequired, ownedOperation == nil, state == .signedIn,
+        guard !isShuttingDown, authenticationCommand == nil, !boundaryInProgress,
+              !cleanupRequired, ownedOperation == nil, state == .signedIn,
               let account, grant != nil, let oldContext = context else { throw AccountError.busy }
         guard account.contains(organizationID: organizationID, workspaceID: workspaceID) else { throw AccountError.workspaceUnavailable }
         let id = UUID()
@@ -208,12 +245,13 @@ import Foundation
 
     /// N2 checks this immutable context again before accepting a transfer result.
     func authorizedAccess(for expected: AccountContext) async throws -> AccountAuthorizedAccess {
-        guard !boundaryInProgress, !cleanupRequired, ownedOperation == nil, state == .signedIn,
+        guard !isShuttingDown, authenticationCommand == nil, !boundaryInProgress,
+              !cleanupRequired, ownedOperation == nil, state == .signedIn,
               expected == context, let current = grant else { throw AccountError.staleOperation }
         let needsRefresh = current.expiresAt.timeIntervalSinceNow <= 60 || requiresAccountValidation
         let validated = needsRefresh ? try await refresh(current) : current
         try check(expected.generation)
-        guard expected == context else { throw AccountError.staleOperation }
+        guard !isShuttingDown, authenticationCommand == nil, expected == context else { throw AccountError.staleOperation }
         return AccountAuthorizedAccess(context: expected, accessToken: validated.accessToken)
     }
 
@@ -261,6 +299,16 @@ import Foundation
     /// Device logout only. Concurrent callers join the same cleanup. A durable nonsecret marker
     /// prevents a failed Keychain deletion from restoring a deliberately logged-out grant on restart.
     func logout() async {
+        let command = authenticationCommand
+        command?.task.cancel()
+        await logoutSession()
+        await command?.task.value
+        if let command, authenticationCommand?.id == command.id { authenticationCommand = nil }
+    }
+
+    /// Joined profile/credential cleanup only. This must never await authenticationCommand:
+    /// that command may itself be suspended on this logout task during its preflight.
+    private func logoutSession() async {
         if let logoutTask { await logoutTask.value; return }
         boundaryInProgress = true; generation = UUID()
         let task = Task { @MainActor in await self.performLogout() }
@@ -296,6 +344,11 @@ import Foundation
 
     /// Termination joins account work and closes only this service's HTTP session. Persisted grant remains.
     func shutdown() async {
+        isShuttingDown = true
+        let command = authenticationCommand
+        command?.task.cancel()
+        await command?.task.value
+        if let command, authenticationCommand?.id == command.id { authenticationCommand = nil }
         if let logoutTask { await logoutTask.value }
         boundaryInProgress = true
         browser.cancel()
@@ -312,7 +365,8 @@ import Foundation
     }
 
     func isCurrent(_ context: AccountContext) -> Bool {
-        !boundaryInProgress && !cleanupRequired && ownedOperation == nil && state == .signedIn && self.context == context
+        !isShuttingDown && authenticationCommand == nil && !boundaryInProgress
+            && !cleanupRequired && ownedOperation == nil && state == .signedIn && self.context == context
     }
 
     private func failedAdmission(_ error: Error, generation captured: UUID) async {
