@@ -86,18 +86,22 @@ private struct MobileRecordingLockScreenView: View {
         HStack(alignment: .center, spacing: 12) {
             MobileActivityBrandMark(asset: self.attributes.markAsset, color: accent, size: 36)
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: self.attributes.productName)
-                    .font(.system(.headline, design: self.attributes.bodyDesign.font))
-                    .lineLimit(1)
+                // The timer shares only the product name's line, so the status keeps the full width
+                // once the timer reaches h:mm:ss.
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(verbatim: self.attributes.productName)
+                        .font(.system(.headline, design: self.attributes.bodyDesign.font))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if !self.isStale {
+                        MobileActivityElapsedTimer(startedAt: self.state.startedAt)
+                            .font(.system(.title2, design: self.attributes.titleDesign.font).weight(.bold))
+                            .foregroundStyle(accent)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 120, alignment: .trailing)
+                    }
+                }
                 MobileActivityStatusLine(attributes: self.attributes, accent: accent, isStale: self.isStale, alignment: .leading)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if !self.isStale {
-                MobileActivityElapsedTimer(startedAt: self.state.startedAt)
-                    .font(.system(.title2, design: self.attributes.titleDesign.font).weight(.bold))
-                    .foregroundStyle(accent)
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 120, alignment: .trailing)
             }
         }
         .padding(16)
