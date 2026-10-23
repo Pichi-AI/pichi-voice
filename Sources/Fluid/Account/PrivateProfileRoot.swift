@@ -28,17 +28,19 @@ struct PrivateProfileRoot<Content: View>: View {
                 theme.palette.windowBackground.ignoresSafeArea()
                 VStack(spacing: theme.metrics.spacing.lg) {
                     Image(systemName: "lock.fill").foregroundStyle(theme.palette.secondaryText)
-                    if !services.hasRestoredAccount || profiles.isTransitioning || stopping { ProgressView() }
-                    else if services.hasActivePrivateCapture {
+                    if services.hasActivePrivateCapture {
                         Button(PichiLocalization.text("Stop Recording")) {
                             stopping = true
                             Task { await services.stopPrivateCaptureAndLogout(); stopping = false }
-                        }.buttonStyle(.borderedProminent)
+                        }.buttonStyle(.borderedProminent).disabled(stopping)
                     } else {
-                        Button(PichiLocalization.text("Continue")) {
-                            stopping = true
-                            Task { await services.retryPrivateProfileCleanupAndLogout(); stopping = false }
-                        }.buttonStyle(.borderedProminent)
+                        if !services.hasRestoredAccount || profiles.isTransitioning || stopping { ProgressView() }
+                        else {
+                            Button(PichiLocalization.text("Continue")) {
+                                stopping = true
+                                Task { await services.retryPrivateProfileCleanupAndLogout(); stopping = false }
+                            }.buttonStyle(.borderedProminent)
+                        }
                     }
                 }.font(theme.typography.body)
             }

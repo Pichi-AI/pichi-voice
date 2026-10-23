@@ -9,7 +9,7 @@ nonisolated final class PrivateProfileDefaults: UserDefaults, @unchecked Sendabl
         // Installation wizard gates survive sign-in, including an explicit replay.
         // Model, provider, privacy and speech-language choices remain private.
         "OnboardingCompleted", "OnboardingCurrentStep", "ManualOnboardingResetRequested",
-        "ManualOnboardingResetRequestedAt", "MobileSetupVersion",
+        "ManualOnboardingResetRequestedAt", "MobileSetupVersion", "MobileSetupStep",
         "PichiInterfaceLanguage", "AppleLanguages", "ThemePreference", "AccentColorOption",
         "ShowInDock", "IntendedDockVisibility", "ShowMainWindowAtLoginLaunch", "LaunchAtStartup",
         "LaunchAtStartupCompatibilityFallback", "AutoUpdateCheckEnabled", "ShowUpdatePopups",
