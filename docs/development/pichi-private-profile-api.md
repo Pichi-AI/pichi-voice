@@ -1,6 +1,6 @@
 # Private profile source API for N3, N4 and N5
 
-Status: early source handoff, not native/runtime acceptance. Baseline API is parent revision `911b0677`, containing corrected N1 source dependency `9fc25a13558d4eb241cebdf7ff92d059edb80804`. N2 profile composition and admitted dictation-write corrections remain in progress. Do not enable production sign-in based on this source handoff.
+Status: early source handoff, not native/runtime acceptance. Baseline API is parent revision `911b0677`, containing the N1 source boundary, now corrected to `f989116f2028d1bb1d47cac86ff65f6e57a2391a`. N2 profile composition and admitted dictation-write corrections remain in progress. Do not enable production sign-in based on this source handoff.
 
 N1 remains the only account/token manager. N2 supplies one `PrivateProfileService: AccountSessionLifecycle` participant. N5 registers its joined delivery cleanup inside that participant and owns its own consent/outbox/status operations. It must not install a second account lifecycle or create another profile registry.
 
@@ -47,7 +47,7 @@ For a later retry/reconciliation after logout, a queue item keeps its frozen own
 
 ## Joined transitions and UI projection lifetime
 
-`PrivateProfileService.shared` is observable with `projectionRevision`, `isTransitioning`, `isPrivateDataVisible` and `isAccountIsolationReady`. `requireTransitionAdmission()` allows N3/N4 to refuse an explicit account/workspace switch before invoking N1. N1's lifecycle remains the final isolation boundary.
+`PrivateProfileService.shared` is observable with `sourceRevision`, `projectionRevision`, `isTransitioning`, `isPrivateDataVisible` and `isAccountIsolationReady`. `requireTransitionAdmission()` allows N3/N4 to refuse an explicit account/workspace switch before invoking N1. N1's lifecycle remains the final isolation boundary.
 
 N2 composition alone calls `configure(isBusy:prepare:activate:)` and installs the service through N1's `installLifecycle`. The concrete source hooks must be complete before isolation readiness is true. This source handoff does not assert that those production hooks are installed or verified.
 
@@ -61,10 +61,12 @@ Per-window readers and N5's delivery owner conform to:
 
 Register through `PrivateProfileService.shared.register(_:)`. Registration is weak; the composition/view retains its participant. Cleanup closes admission, cancels and joins owned work, and clears private projections before source replacement. N5's participant pauses and joins transfers but preserves the original owner's durable queue.
 
-N3/N4 must follow the composition's profile projection revision and visibility to clear local selections, drafts, share payloads and old source views. Account/workspace switching is blocked during capture/finalization and admitted output persistence. Logout clears N1 credentials offline while the local capture retains its original writer; another person cannot enter before required local cleanup completes. Token expiry alone never switches local profile or stops recording.
+N2 owns common app/window composition. Use `sourceRevision` for rebuilding private source-bound views after successful source replacement. `projectionRevision` also advances on concealment and must not key the whole app root during an admitted capture. Concealment hides private pixels, focus and accessibility while preserving the controller needed to stop/finalize the old recording. N3 owns mobile late copy/export/PDF result fences; N4 owns desktop view-local payload/projection fences. They must not install parallel root composition or profile managers. Account/workspace switching is blocked during capture/finalization and admitted output persistence. Logout clears N1 credentials offline while the local capture retains its original writer; another person cannot enter before required local cleanup completes. Token expiry alone never switches local profile or stops recording.
 
 ## Evidence and pending gates
 
-The actual scoped meeting store, persisted codecs and exporter passed 950 synthetic assertions in the existing checkpoint runner, including 19 profile cases. The new recording observer is source-only at this handoff; observer/lifecycle integration cases and production composition are still being completed. Agent store/settings/auxiliary suites provide additional isolated evidence, not combined native acceptance.
+The actual scoped meeting store, persisted codecs and exporter passed 960 synthetic assertions in the existing checkpoint runner, including 19 meeting-profile cases and 10 injected lifecycle cases. The new recording observer is source-only at this handoff; recording-observer cases and production composition are still being completed. Agent store/settings/auxiliary suites provide additional isolated evidence, not combined native acceptance.
 
-Pending: admitted dictation/audio completion after immediate conceal, queued guest migration across conceal, full source/observer transition tests, combined independent review, final corrected N1 delta, and actual sequential iOS/macOS builds under N2's admitted heavy slot. Cloud readiness remains separately owned by N5.
+Pending: admitted dictation/audio completion after immediate conceal, queued guest migration across conceal, full source/observer transition tests, combined independent review, actual sequential iOS/macOS builds under N2's admitted heavy slot. Cloud readiness remains separately owned by N5.
+
+The mobile source manifest now explicitly registers N1 account files and the published N2 profile sources, so project regeneration preserves them. `update-mobile-project.py` already includes every top-level `Sources/Mobile/*.swift`; N3's `MobileAccount.swift` will therefore be included when its source branch is integrated and the common composition owner regenerates once. No concurrent project regeneration is authorized.

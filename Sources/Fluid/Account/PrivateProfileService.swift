@@ -9,7 +9,9 @@ import Foundation
 /// N1's single composition-owned local-data participant. This service stores no auth credentials.
 @MainActor final class PrivateProfileService: ObservableObject, AccountSessionLifecycle {
     static let shared = PrivateProfileService()
+    static let willConceal = Notification.Name("SettingsStore.privateProfileWillChange")
     @Published private(set) var projectionRevision = UUID()
+    @Published private(set) var sourceRevision = UUID()
     @Published private(set) var isTransitioning = false
     @Published private(set) var isPrivateDataVisible = true
     private var installed = false
@@ -17,6 +19,7 @@ import Foundation
     private var prepareSources: @MainActor () async throws -> Void = {}
     private var activateSources: @MainActor (PrivateProfileSnapshot) async throws -> Void = { _ in }
     private var pendingWrites: [UUID: Task<Void, Never>] = [:]
+    private var captureStopHandler: (id: UUID, stop: @MainActor () async -> Void)?
     private struct WeakParticipant { weak var value: (any PrivateProfileTransitionParticipant)? }
     private var participants: [WeakParticipant] = []
 
@@ -41,6 +44,13 @@ import Foundation
 
     func retainPrivateWrite(_ task: Task<Void, Never>, id: UUID) { pendingWrites[id] = task }
     func finishPrivateWrite(id: UUID) { pendingWrites.removeValue(forKey: id) }
+    func installCaptureStopHandler(id: UUID, stop: @escaping @MainActor () async -> Void) {
+        captureStopHandler = (id, stop)
+    }
+    func clearCaptureStopHandler(id: UUID) {
+        if captureStopHandler?.id == id { captureStopHandler = nil }
+    }
+    func requestCaptureStop() async { await captureStopHandler?.stop() }
     private func joinPrivateWrites() async {
         while !pendingWrites.isEmpty {
             for task in Array(pendingWrites.values) { await task.value }
@@ -50,7 +60,8 @@ import Foundation
     /// UI can refuse an explicit switch before asking N1 to mutate account/workspace state.
     /// N1's follow-up preflight hook can call this same check, without another account manager.
     func requireTransitionAdmission() throws {
-        guard installed, !isTransitioning, !isBusy() else { throw AccountError.busy }
+        guard installed, !isTransitioning, isPrivateDataVisible,
+              PrivateProfileStorage.acceptsNewWork, !isBusy() else { throw AccountError.busy }
     }
 
     func transition(from: AccountContext?, to: AccountContext?, generation: UUID) async throws {
@@ -62,8 +73,9 @@ import Foundation
                 // hide every private projection and require cleanup retry after capture drains.
                 PrivateProfileStorage.closeAdmission()
                 isPrivateDataVisible = false; projectionRevision = UUID()
-                try persistHiddenMarker(generation: generation)
                 PrivateProfileStorage.conceal(generation: generation)
+                NotificationCenter.default.post(name: Self.willConceal, object: nil)
+                try persistHiddenMarker(generation: generation)
                 await joinPrivateWrites()
                 for participant in participants.compactMap(\.value) {
                     try await participant.prepareForPrivateProfileTransition()
@@ -75,8 +87,9 @@ import Foundation
         isTransitioning = true; isPrivateDataVisible = false; projectionRevision = UUID()
         PrivateProfileStorage.closeAdmission()
         do {
-            try persistHiddenMarker(generation: generation)
             PrivateProfileStorage.conceal(generation: generation)
+            NotificationCenter.default.post(name: Self.willConceal, object: nil)
+            try persistHiddenMarker(generation: generation)
             await joinPrivateWrites()
             for participant in participants.compactMap(\.value) {
                 try await participant.prepareForPrivateProfileTransition()
@@ -87,6 +100,7 @@ import Foundation
             await PrivateProfileMeetingStore.shared.finishProfileTransition()
             PrivateProfileStorage.clearStoreCaches()
             PrivateProfileObjectCache.removeAll()
+            captureStopHandler = nil
             if to != nil { try Task.checkCancellation() }
             try Self.prepareDirectory(next.rootDirectory)
             PrivateProfileStorage.select(next)
@@ -95,7 +109,7 @@ import Foundation
             if to != nil { try Task.checkCancellation() }
             try PrivateProfileStorage.persistAccessMarker(next)
             PrivateProfileStorage.select(next)
-            isPrivateDataVisible = true; projectionRevision = UUID(); isTransitioning = false
+            isPrivateDataVisible = true; projectionRevision = UUID(); sourceRevision = UUID(); isTransitioning = false
         } catch {
             // No fallback to another account. Failed cleanup leaves private reads concealed
             // until N1 performs its explicit joined guest rollback/logout cleanup retry.

@@ -244,6 +244,7 @@ struct MeetingSessionStoreCheckpointTests {
         try await Self.checkReadingProjectionCache(template: session, check: check)
         try await Self.checkProtectedPortableExport(check: check)
         try await Self.checkPrivateProfileMeetingStore(root: root.appendingPathComponent("profile-isolation"), check: check)
+        try await Self.checkPrivateProfileLifecycle(root: root.appendingPathComponent("profile-lifecycle"), check: check)
 
         let nativePresentation = MeetingTranscriptExporter.speakerPresentation(
             for: session.transcriptSegments[0], in: session)
