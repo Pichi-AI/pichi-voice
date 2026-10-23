@@ -3293,13 +3293,13 @@ struct ContentView: View {
                 self.logAIProcessCall(pipelineID, postProcessingModelInfo, postProcessingInputChars)
                 let result = try await self.privateOutputOperations.perform {
                     try await self.processTextWithAIMetrics(
-                    normalizedTranscribedText,
-                    overrideSystemPrompt: promptOverride,
-                    overrideProviderID: practiceModelID == nil ? nil : PrivateAIProviderFeature.shared.providerID,
-                    overrideModel: practiceModelID,
-                    dictationSlot: activeDictationSlot,
-                    streamHandler: streamHandler,
-                    benchmarkID: pipelineID,
+                        normalizedTranscribedText,
+                        overrideSystemPrompt: promptOverride,
+                        overrideProviderID: practiceModelID == nil ? nil : PrivateAIProviderFeature.shared.providerID,
+                        overrideModel: practiceModelID,
+                        dictationSlot: activeDictationSlot,
+                        streamHandler: streamHandler,
+                        benchmarkID: pipelineID,
                         stopSnapshot: stopSnapshot
                     )
                 }
