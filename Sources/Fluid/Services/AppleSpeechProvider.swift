@@ -32,9 +32,12 @@ final class AppleSpeechProvider: TranscriptionProvider {
 
     private let dictationCaptureLock = NSRecursiveLock()
     private var dictationCaptureConfiguration: DictationCaptureConfiguration?
+    private var recognitionOperations: [UUID: AppleSpeechRecognitionOperation] = [:]
+    private var isEndingAdmission = false
 
     func beginAdmittedTranscription(leaseID: UUID) throws {
         try self.dictationCaptureLock.withLock {
+            guard !self.isEndingAdmission else { throw CancellationError() }
             if let capture = self.dictationCaptureConfiguration {
                 guard capture.leaseID == leaseID else {
                     throw CancellationError()
@@ -47,10 +50,19 @@ final class AppleSpeechProvider: TranscriptionProvider {
         }
     }
 
-    func endAdmittedTranscription(leaseID: UUID) {
+    func endAdmittedTranscription(leaseID: UUID) async {
+        let operations = self.dictationCaptureLock.withLock { () -> [AppleSpeechRecognitionOperation]? in
+            guard self.dictationCaptureConfiguration?.leaseID == leaseID else { return nil }
+            self.isEndingAdmission = true
+            return Array(self.recognitionOperations.values)
+        }
+        guard let operations else { return }
+        for operation in operations { operation.cancel() }
+        for operation in operations { await operation.waitUntilFinished() }
         self.dictationCaptureLock.withLock {
             guard self.dictationCaptureConfiguration?.leaseID == leaseID else { return }
             self.dictationCaptureConfiguration = nil
+            self.isEndingAdmission = false
         }
     }
 
@@ -124,30 +136,26 @@ final class AppleSpeechProvider: TranscriptionProvider {
         request.append(buffer)
         request.endAudio() // Signal that this buffer is the complete utterance for this request
 
-        // 4. Execute Recognition
-        return try await withCheckedThrowingContinuation { continuation in
-            var hasResumed = false
-
-            recognizer.recognitionTask(with: request) { result, error in
-                // Ensure we only resume once
-                guard !hasResumed else { return }
-
-                if let error = error {
-                    hasResumed = true
-                    // Ignore "No speech detected" errors often returned for silent chunks
-                    DebugLogger.shared.warning("Apple transcribed error: \(error.localizedDescription)", source: "AppleSpeechProvider")
-                    continuation.resume(returning: ASRTranscriptionResult(text: "", confidence: 0.0))
-                    return
-                }
-
-                if let result = result, result.isFinal {
-                    hasResumed = true
-                    let transcription = result.bestTranscription.formattedString
-                    DebugLogger.shared.debug("AppleSpeechProvider: Got final result: '\(transcription)'", source: "AppleSpeechProvider")
-                    continuation.resume(returning: ASRTranscriptionResult(text: transcription, confidence: 1.0))
-                }
-                // Partial results ignored as we requested final only
-            }
+        // The delegate owns both the request and task until Apple's terminal callback.
+        // Cancellation may arrive before recognitionTask has returned its handle.
+        let operation = AppleSpeechRecognitionOperation(request: request)
+        let operationID = UUID()
+        try self.dictationCaptureLock.withLock {
+            guard !self.isEndingAdmission else { throw CancellationError() }
+            self.recognitionOperations[operationID] = operation
+        }
+        defer {
+            self.dictationCaptureLock.withLock { self.recognitionOperations[operationID] = nil }
+            operation.finishJoining()
+        }
+        return try await withTaskCancellationHandler {
+            if Task.isCancelled { operation.cancel() }
+            let result = await operation.recognize(using: recognizer)
+            try Task.checkCancellation()
+            try operation.checkCancellation()
+            return try result.get()
+        } onCancel: {
+            operation.cancel()
         }
     }
 
@@ -196,6 +204,104 @@ final class AppleSpeechProvider: TranscriptionProvider {
             SFSpeechRecognizer.requestAuthorization { status in
                 continuation.resume(returning: status)
             }
+        }
+    }
+}
+
+// MARK: - Legacy recognition ownership
+
+/// The system does not retain a recognition delegate. Keep it, the input request and
+/// the task alive until didFinishSuccessfully, including cancellation and startup races.
+final nonisolated class AppleSpeechRecognitionOperation: NSObject, SFSpeechRecognitionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private var task: SFSpeechRecognitionTask?
+    private var cancelled = false
+    private var terminal = false
+    private var handleInstalled = false
+    private var joined = false
+    private var text = ""
+    private var continuation: CheckedContinuation<Result<ASRTranscriptionResult, Error>, Never>?
+    private var joinWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(request: SFSpeechAudioBufferRecognitionRequest) {
+        self.request = request
+    }
+
+    func recognize(using recognizer: SFSpeechRecognizer) async -> Result<ASRTranscriptionResult, Error> {
+        await withCheckedContinuation { continuation in
+            self.lock.withLock { self.continuation = continuation }
+            // Always install the handle, even if cancellation raced the synchronous SDK call.
+            let request = self.lock.withLock { self.request! }
+            let task = recognizer.recognitionTask(with: request, delegate: self)
+            let cancelled = self.lock.withLock {
+                self.task = task
+                self.handleInstalled = true
+                return self.cancelled
+            }
+            if cancelled { task.cancel() }
+            self.deliverTerminalIfReady()
+        }
+    }
+
+    func checkCancellation() throws {
+        if self.lock.withLock({ self.cancelled }) { throw CancellationError() }
+    }
+
+    func cancel() {
+        let resources = self.lock.withLock { () -> (SFSpeechAudioBufferRecognitionRequest?, SFSpeechRecognitionTask?) in
+            self.cancelled = true
+            return (self.request, self.task)
+        }
+        resources.0?.endAudio()
+        resources.1?.cancel()
+    }
+
+    func speechRecognitionTask(_ task: SFSpeechRecognitionTask, didFinishRecognition result: SFSpeechRecognitionResult) {
+        self.lock.withLock {
+            guard !self.cancelled, !self.terminal else { return }
+            self.text = result.bestTranscription.formattedString
+        }
+    }
+
+    func speechRecognitionTask(_ task: SFSpeechRecognitionTask, didFinishSuccessfully successfully: Bool) {
+        self.lock.withLock { self.terminal = true }
+        self.deliverTerminalIfReady()
+    }
+
+    private func deliverTerminalIfReady() {
+        let delivery = self.lock.withLock { () -> (CheckedContinuation<Result<ASRTranscriptionResult, Error>, Never>, Result<ASRTranscriptionResult, Error>)? in
+            guard self.terminal, self.handleInstalled, let continuation = self.continuation else { return nil }
+            self.continuation = nil
+            let result: Result<ASRTranscriptionResult, Error> = self.cancelled
+                ? .failure(CancellationError())
+                : .success(ASRTranscriptionResult(text: self.text, confidence: self.text.isEmpty ? 0 : 1))
+            self.request = nil
+            self.task = nil
+            return (continuation, result)
+        }
+        if let delivery { delivery.0.resume(returning: delivery.1) }
+    }
+
+    /// Separate terminal system completion from return of the provider's Swift work.
+    func finishJoining() {
+        let waiters = self.lock.withLock {
+            self.joined = true
+            let waiters = self.joinWaiters
+            self.joinWaiters.removeAll()
+            return waiters
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func waitUntilFinished() async {
+        await withCheckedContinuation { continuation in
+            let ready = self.lock.withLock {
+                guard !self.joined else { return true }
+                self.joinWaiters.append(continuation)
+                return false
+            }
+            if ready { continuation.resume() }
         }
     }
 }

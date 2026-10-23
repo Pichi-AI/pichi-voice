@@ -35,6 +35,12 @@ final class SettingsStore {
     var selectedCohereLanguage: CohereLanguage { hidden ? .english : cohereLanguage }
     func externalCoreMLArtifactsDirectory(for model: SpeechModel) -> URL? { hidden ? nil : artifactDirectory }
 }
+// The configuration-only projection has no active recognition workers. Full worker
+// ownership is exercised separately by AppleSpeechLifecycleTests from actual sources.
+final class AppleSpeechRecognitionOperation {
+    func cancel() {}
+    func waitUntilFinished() async {}
+}
 final class SFSpeechRecognizer {
     let locale: Locale
     init?(locale: Locale) { self.locale = locale }
@@ -109,9 +115,9 @@ final class NemotronStreamingAsrManager {
             check(provider.observedRecognizer() === original, "Concealment cannot replace admitted Apple recognizer/locale")
             rejects { try provider.beginAdmittedTranscription(leaseID: other) }
             try provider.beginAdmittedTranscription(leaseID: lease)
-            provider.endAdmittedTranscription(leaseID: other)
+            await provider.endAdmittedTranscription(leaseID: other)
             check(provider.observedRecognizer()?.locale.identifier == "ru-RU", "Stale Apple end retains locale")
-            provider.endAdmittedTranscription(leaseID: lease)
+            await provider.endAdmittedTranscription(leaseID: lease)
             check(provider.observedRecognizer()?.locale.identifier == "en-US", "Matching Apple end restores current locale")
         }
         do {
