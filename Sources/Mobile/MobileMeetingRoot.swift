@@ -275,7 +275,17 @@ struct MobileMeetingRoot: View {
         }
         .onAppear { updateRecordingScreenAwake() }
         .onChange(of: scenePhase) { _, _ in updateRecordingScreenAwake() }
-        .onChange(of: destination) { _, _ in playback.stop(); presentationLoader.cancel(); participantEdit = nil }
+        .onChange(of: destination) { previous, selected in
+            if previous == .settings, selected != .settings, settingsPath.last == .account {
+                Task { await AppServices.shared.accountSession.cancelSignIn() }
+            }
+            playback.stop(); presentationLoader.cancel(); participantEdit = nil
+        }
+        .onChange(of: settingsPath) { previous, selected in
+            if previous.last == .account, selected.last != .account {
+                Task { await AppServices.shared.accountSession.cancelSignIn() }
+            }
+        }
         .onChange(of: historyPath) { _, _ in playback.stop(); presentationLoader.cancel(); participantEdit = nil }
         .onDisappear {
             // A PDF full-screen cover can temporarily hide its presenting root.
@@ -386,12 +396,8 @@ struct MobileMeetingRoot: View {
             case .history:
                 if privateProfile.isPrivateDataVisible { history } else { concealedPrivateData }
             case .settings:
-                if privateProfile.isPrivateDataVisible {
-                    MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
-                        required: required, privacyActivation: privacyActivation, reportError: report)
-                } else {
-                    MobileAccountSettings(session: AppServices.shared.accountSession)
-                }
+                MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
+                    required: required, privacyActivation: privacyActivation, reportError: report)
             }
         }
         .navigationTitle(item == .meetings ? AppBrand.meetingName : PichiLocalization.text(item.title))
@@ -1192,7 +1198,12 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
     func waitForPendingRetirement() async { await cleanupTask?.value }
 
     private func clear() {
-        destination = .meetings; settingsPath = []; historyPath = []; search = ""
+        // Retain the safe account host during its own service-driven concealment.
+        // Private settings/history routes and all private values are still retired.
+        if destination != .settings || settingsPath.last != .account {
+            destination = .meetings; settingsPath = []
+        }
+        historyPath = []; search = ""
         copiedSessionID = nil; edit = nil; participantEdit = nil; speakerAssignment = nil; deletion = nil
         share?.cleanup(); share = nil
         presentationPickerAdmission = nil; showPresentationPicker = false; presentation = nil

@@ -67,9 +67,11 @@ private actor SyntheticAccountTransport: AccountTransporting {
     var holdWorkspace = false
     var waiting = false
     var transitions = 0
+    var onTransition: (@MainActor () -> Void)?
     var gate: CheckedContinuation<Void, Never>?
     func transition(from: AccountContext?, to: AccountContext?, generation: UUID) async {
         transitions += 1
+        onTransition?()
         if holdWorkspace, to?.workspaceID != nil {
             waiting = true; await withCheckedContinuation { gate = $0 }; waiting = false
         }
@@ -190,6 +192,19 @@ private actor SyntheticAccountTransport: AccountTransporting {
         dismissed.browser.release(); await dismissed.ui.waitUntilIdle()
         expect(dismissed.session.state == .signedOut && dismissed.ui.action == nil, "Disappearance cannot finish a late sign-in")
         await dismissed.shutdown()
+
+        let concealedPanel = SyntheticAccountUIFixture()
+        let interaction = concealedPanel.ui
+        concealedPanel.lifecycle.onTransition = { [weak interaction] in
+            interaction?.cancelOwnedSignInOnDisappear(profileBoundaryChanged: true)
+        }
+        concealedPanel.ui.signIn(); await concealedPanel.ui.waitUntilIdle()
+        expect(concealedPanel.session.state == .signedIn, "Profile-driven disappearance cannot cancel final sign-in admission")
+        concealedPanel.ui.switchPerson(); await concealedPanel.ui.waitUntilIdle()
+        expect(concealedPanel.browser.starts == 2 && concealedPanel.session.presentationError == .previousAccountReturned,
+               "Switch preflight concealment does not cancel its fresh browser admission")
+        concealedPanel.lifecycle.onTransition = nil
+        await concealedPanel.shutdown()
 
         let restoring = SyntheticAccountUIFixture()
         await restoring.credentials.seed(AccountGrant(identity: .init(issuer: "https://identity.example/realms/test",

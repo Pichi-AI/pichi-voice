@@ -16,6 +16,7 @@ struct MobileSettingsRoot: View {
     @ObservedObject var privacyActivation: MobilePrivacyActivation
     let reportError: (Error) -> Void
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var privateProfile = PrivateProfileService.shared
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -27,6 +28,7 @@ struct MobileSettingsRoot: View {
                     }.accessibilityIdentifier("settings.account")
                 }
             }
+            if privateProfile.isPrivateDataVisible {
             Section {
                 NavigationLink(value: MobileSettingsDestination.general) { Label(PichiLocalization.text("General"), systemImage: "gearshape") }
                     .accessibilityIdentifier("settings.general")
@@ -43,15 +45,22 @@ struct MobileSettingsRoot: View {
                 Text(PichiLocalization.text("Audio recordings and transcripts are stored on this device."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
+            }
         }.listStyle(.insetGrouped).accessibilityIdentifier("settings.root")
             .navigationDestination(for: MobileSettingsDestination.self) { destination in
+                if destination == .account {
+                    MobileAccountSettings(session: accountSession)
+                } else if !privateProfile.isPrivateDataVisible {
+                    Text(PichiLocalization.text("account.profile.unavailable"))
+                } else {
                 switch destination {
-                case .account: MobileAccountSettings(session: accountSession)
+                case .account: EmptyView()
                 case .general: MobileGeneralSettings()
                 case .recording: MobileRecordingSettings(microphones: microphones, required: required)
                 case .models: MobileVoiceEngineSettings(asr: asr, reportError: reportError)
                 case .privacy:
                     MobilePrivacySettings(activation: privacyActivation)
+                }
                 }
             }
     }

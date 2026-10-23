@@ -68,7 +68,7 @@ final class MobileAccountInteraction: ObservableObject {
     }
 
     func cancelSignIn() {
-        guard action == .signIn || action == .switchPerson else { return }
+        guard action == .signIn || action == .switchPerson || session.state == .signingIn else { return }
         let previous = operation
         begin(.cancel) {
             await self.session.cancelSignIn()
@@ -91,7 +91,10 @@ final class MobileAccountInteraction: ObservableObject {
         }
     }
 
-    func cancelOwnedSignInOnDisappear() { cancelSignIn() }
+    func cancelOwnedSignInOnDisappear(profileBoundaryChanged: Bool = false) {
+        guard !profileBoundaryChanged else { return }
+        cancelSignIn()
+    }
 
     func privateProjectionDidChange() { selectionError = nil }
 
@@ -176,6 +179,7 @@ private struct MobileAccountPanel: View {
     var continueAsGuest: (@MainActor () -> Void)?
     var actionChanged: (Bool) -> Void
     @StateObject private var interaction: MobileAccountInteraction
+    @State private var presentedProjectionRevision: UUID?
     @Environment(\.theme) private var theme
 
     init(session: AccountSessionService, continueAsGuest: (@MainActor () -> Void)? = nil,
@@ -220,7 +224,13 @@ private struct MobileAccountPanel: View {
         .onChange(of: interaction.action != nil) { _, active in actionChanged(active) }
         .onChange(of: privateProfile.projectionRevision) { _, _ in interaction.privateProjectionDidChange() }
         .onChange(of: privateProfile.isPrivateDataVisible) { _, _ in interaction.privateProjectionDidChange() }
-        .onDisappear { interaction.cancelOwnedSignInOnDisappear() }
+        .onAppear { presentedProjectionRevision = privateProfile.projectionRevision }
+        .onDisappear {
+            // N2 can conceal/remove this presentation during the command's own
+            // admission. That is not a user request to cancel authentication.
+            interaction.cancelOwnedSignInOnDisappear(
+                profileBoundaryChanged: presentedProjectionRevision != privateProfile.projectionRevision)
+        }
     }
 
     @ViewBuilder private var signedOut: some View {
