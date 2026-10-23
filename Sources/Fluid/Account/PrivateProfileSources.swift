@@ -21,7 +21,8 @@ import Foundation
         catch { audio.resumeAfterFailedProfileTransition(); if firstError == nil { firstError = error } }
         await StatsSnapshotStore.shared.prepareForPrivateProfileTransition()
         ChatHistoryStore.shared.prepareForProfileTransition()
-        FileTranscriptionHistoryStore.shared.prepareForProfileTransition()
+        do { try await FileTranscriptionHistoryStore.shared.prepareForProfileTransition() }
+        catch { if firstError == nil { firstError = error } }
         AutomaticDictionarySuggestionPolicy.shared.prepareForProfileTransition()
         #endif
         await SettingsStore.prepareForPrivateProfileTransition()

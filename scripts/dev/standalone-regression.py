@@ -243,14 +243,14 @@ SHELL_PROBES = (
     "command_archive_search", "command_cancellation", "command_markdown",
     "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
-    "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export",
+    "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export", "file_operation_isolation",
     "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
     "local_text_model_catalog", "meeting_capture_pcm", "meeting_capture_activity", "meeting_microphone_capture_contracts", "meeting_pending_speech", "native_window_appearance",
     "meeting_summary_evidence", "onboarding",
     "page_presentation", "participant_input_contrast", "paste_key_cache", "private_profile_defaults", "private_profile_logging", "private_profile_stores", "private_ai_idle_unloader",
     "release_highlights", "settings_owned_copy", "settings_viewport", "speech_model_provider_presentation", "ui_contrast",
-    "stats_snapshot", "voice_edit_cancellation",
+    "stats_snapshot", "terminal_service_lifecycle", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
     "diarization_repeatability", "dictionary_training_save", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
