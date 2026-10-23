@@ -44,6 +44,12 @@ final class SettingsStore: @unchecked Sendable {
     var customDictionaryEntries: [CustomDictionaryEntry] = []
     ENTRY
 }
+struct PrivateProfileSnapshot: Equatable, Sendable { let id = UUID() }
+enum PrivateProfileStorage {
+    static var current = PrivateProfileSnapshot()
+    static var acceptsNewWork = true
+    static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool { profile == current }
+}
 struct PronunciationEnrollmentCapture: Equatable, Sendable { var modelKey = "test" }
 enum DictionaryMatcherExperiment {
     static var sharedFeaturesEnabled = true
@@ -94,6 +100,8 @@ actor PronunciationDictionaryStore {
 PROGRESS
 MERGE
 @MainActor final class SaveHarness {
+    let profile = PrivateProfileStorage.current
+    var isProfileVisible: Bool { PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork }
     READINESS
     CAN_SAVE
     var trainingSampleCount = 3
@@ -127,6 +135,8 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             [Entry(triggers: ["fluid voice"], replacement: "FluidVoice"), Entry(triggers: ["other"], replacement: "Other")]
         }
         func reset(_ entries: [Entry]) -> SaveHarness {
+            PrivateProfileStorage.current = PrivateProfileSnapshot()
+            PrivateProfileStorage.acceptsNewWork = true
             SettingsStore.shared.customDictionaryEntries = entries
             DictionaryMatcherExperiment.sharedFeaturesEnabled = true
             DictionaryMatcherExperiment.generation = UUID()
@@ -180,6 +190,24 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             check(!view.trainingPronunciationEnrollments.isEmpty && !view.trainingVariants.isEmpty, "Conflict must retain captures")
             let writes = await PronunciationDictionaryStore.shared.writes
             check(writes.isEmpty, "Persistence guard must reject changed dictionary")
+            passes += 1
+        }
+        // Conceal and another account cannot complete the original wizard into the new source.
+        for replaceProfile in [false, true] {
+            let original = baseline()
+            let view = reset(original)
+            let gate = Gate()
+            await PronunciationDictionaryStore.shared.configure(gate: gate)
+            let save = Task { await view.addTrainedReplacement() }
+            try await waitForGate(gate)
+            if replaceProfile { PrivateProfileStorage.current = PrivateProfileSnapshot() }
+            else { PrivateProfileStorage.acceptsNewWork = false }
+            await gate.release(); await save.value
+            let profiles = await PronunciationDictionaryStore.shared.writes
+            check(profiles.isEmpty && view.writes == 0, "Stale profile cannot persist a voice or text rule")
+            check(SettingsStore.shared.customDictionaryEntries == original, "Profile change preserves the destination dictionary")
+            check(view.wizardStep == .recording && !view.trainingHasError, "Conceal suppresses old success and error UI")
+            check(!view.trainingPronunciationEnrollments.isEmpty, "Original unsaved samples remain in their original owner")
             passes += 1
         }
         // An edit after the profile write but before the MainActor resumes must still preserve the dictionary.

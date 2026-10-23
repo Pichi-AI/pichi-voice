@@ -13,6 +13,8 @@ struct RewriteModeView: View {
     var onClose: (() -> Void)?
 
     @State private var inputText: String = ""
+    @State private var privateCapture: PrivateDirectDictationCapture?
+    @State private var isCaptureStopPending = false
     @State private var showOriginal: Bool = true
     @State private var showHowTo: Bool = false
     @State private var isHoveringHowTo: Bool = false
@@ -252,7 +254,7 @@ struct RewriteModeView: View {
             }
         }
         .onChange(of: self.asr.finalText) { _, newText in
-            if !newText.isEmpty {
+            if self.privateCapture?.isVisible == true, !newText.isEmpty {
                 self.inputText = newText
             }
         }
@@ -317,13 +319,29 @@ struct RewriteModeView: View {
     }
 
     private func toggleRecording() {
-        if self.asr.isRunning {
+        if let capture = self.privateCapture, !capture.isFinished {
+            guard !self.isCaptureStopPending else { return }
+            self.isCaptureStopPending = true
             Task {
-                _ = await self.asr.stop()
-                _ = self.asr.consumeLastCompletedAudioSnapshot()
+                let text = await capture.stop()
+                self.isCaptureStopPending = false
+                if capture.isVisible, !self.isClosing, !text.isEmpty { self.inputText = text }
+                capture.acknowledgeVisibleResult()
+                await capture.complete()
+                if self.privateCapture?.output.id == capture.output.id { self.privateCapture = nil }
             }
         } else {
-            Task { await self.asr.start() }
+            guard let capture = try? PrivateDirectDictationCapture(asr: self.asr,
+                savesHistory: self.settings.saveTranscriptionHistory,
+                savesAudio: self.settings.saveAudioWithTranscriptionHistory,
+                transcriptionModel: self.settings.selectedSpeechModel.displayName) else { return }
+            self.privateCapture = capture
+            Task {
+                _ = await capture.start()
+                if capture.isFinished, self.privateCapture?.output.id == capture.output.id {
+                    self.privateCapture = nil
+                }
+            }
         }
     }
 

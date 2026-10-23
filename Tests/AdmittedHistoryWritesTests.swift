@@ -119,6 +119,7 @@ import SQLite3
         try await testLegacyMigration(root: root)
         try await testFailedStores(root: root, profile: a)
         try await testCaptureOutputOwner(root: root, profile: a)
+        try await testDirectCaptureOwner(root: root, profile: a)
         print("PASS: \(checks) admitted history/audio conceal, cancellation, generation, migration and retry assertions")
     }
 

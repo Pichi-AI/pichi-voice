@@ -15,6 +15,8 @@ import UniformTypeIdentifiers
 // This legacy screen still owns several dictionary editors; split them into standalone views incrementally.
 // swiftlint:disable:next type_body_length
 struct CustomDictionaryView: View {
+    private let profile = PrivateProfileStorage.current
+    private var isProfileVisible: Bool { PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork }
     var formattingOnly = false
     @State private var isWordDrawerPresented = false
     @State private var wordSearch = ""
@@ -48,6 +50,7 @@ struct CustomDictionaryView: View {
     @State private var wizardStep: DictionaryWordWizardStep = .spelling
     @State private var wizardSavedWord = ""
     @State private var trainingReplacement = ""
+    @State private var privateTrainingCapture: PrivateDirectDictationCapture?
     @State private var trainingSaveID: UUID?
     @State private var trainingVariants: [String] = []
     @AppStorage("DictionarySharedFeatureMatcherEnabled", store: PrivateProfileDefaults.shared) private var pronunciationEnabled = false
@@ -2236,10 +2239,18 @@ struct CustomDictionaryView: View {
     }
 
     private func startTrainingSample() async {
-        guard self.isAutomaticTrainingEnabled, self.canRecordTrainingSample else {
+        guard self.isProfileVisible, self.isAutomaticTrainingEnabled, self.canRecordTrainingSample else {
             self.isAutomaticTrainingEnabled = false
             return
         }
+        let settings = SettingsStore.shared
+        guard let capture = try? PrivateDirectDictationCapture(asr: self.asr,
+            savesHistory: settings.saveTranscriptionHistory,
+            savesAudio: settings.saveAudioWithTranscriptionHistory,
+            transcriptionModel: settings.selectedSpeechModel.displayName,
+            forDictionaryTraining: true, requiresPronunciation: false,
+            captureDictionaryPronunciation: self.activePronunciationMatching) else { return }
+        self.privateTrainingCapture = capture
         self.isTrainingActive = true
         self.trainingHasError = false
         self.trainingStatusMessage = ""
@@ -2247,9 +2258,9 @@ struct CustomDictionaryView: View {
         self.isTrainingStarting = true
         self.isTrainingRecording = true
 
-        await self.asr.start(forDictionaryTraining: true, requiresPronunciation: false)
+        await capture.start()
         self.isTrainingStarting = false
-        if !self.asr.isRunning {
+        if capture.isFinished || !self.asr.isRunning {
             self.isTrainingRecording = false
             self.trainingStopRequestedDuringStart = false
             self.isAutomaticTrainingEnabled = false
@@ -2298,7 +2309,23 @@ struct CustomDictionaryView: View {
         self.trainingStatusMessage = ""
 
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
-        let transcript = await self.asr.stop(forDictionaryTraining: true, captureDictionaryPronunciation: self.activePronunciationMatching)
+        guard let capture = self.privateTrainingCapture else { return }
+        let transcript = await capture.stop()
+        guard capture.isVisible else {
+            await capture.complete()
+            if self.privateTrainingCapture?.output.id == capture.output.id { self.privateTrainingCapture = nil }
+            self.isTrainingProcessing = false
+            self.isAutomaticTrainingEnabled = false
+            return
+        }
+        self.applyTrainingSample(transcript, pronunciationGeneration: pronunciationGeneration)
+        capture.acknowledgeVisibleResult()
+        await capture.complete()
+        if self.privateTrainingCapture?.output.id == capture.output.id { self.privateTrainingCapture = nil }
+        await self.continueAutomaticTrainingIfNeeded()
+    }
+
+    private func applyTrainingSample(_ transcript: String, pronunciationGeneration: UUID) {
         self.isTrainingProcessing = false
         guard !CustomDictionaryTrainingMerge.isOversizedResponse(transcript, intendedReplacement: self.normalizedTrainingReplacement) else {
             self.isAutomaticTrainingEnabled = false
@@ -2322,11 +2349,10 @@ struct CustomDictionaryView: View {
             self.isAutomaticTrainingEnabled = false
             self.wizardStep = .review
         }
-        await self.continueAutomaticTrainingIfNeeded()
     }
 
     private func continueAutomaticTrainingIfNeeded() async {
-        guard self.isAutomaticTrainingEnabled,
+        guard self.isProfileVisible, self.isAutomaticTrainingEnabled,
               !self.trainingFinalOutputIsReady,
               !self.trainingAlreadyCorrectWithoutReplacement,
               self.trainingSampleCount < CustomDictionaryTrainingMerge.maxSamples
@@ -2412,7 +2438,7 @@ struct CustomDictionaryView: View {
     }
 
     private func addTrainedReplacement() async {
-        guard self.canAddTrainedReplacement else { return }
+        guard self.isProfileVisible, self.canAddTrainedReplacement else { return }
         self.isTrainingProcessing = true
         let saveID = UUID()
         self.trainingSaveID = saveID
@@ -2422,12 +2448,16 @@ struct CustomDictionaryView: View {
                 self.isTrainingProcessing = false
             }
         }
+        let profile = self.profile
+        guard self.isProfileVisible else { return }
+        let pronunciationStore = PronunciationDictionaryStore.shared
         let replacementText = self.normalizedTrainingReplacement
         let enrollments = self.trainingPronunciationEnrollments
         let savePronunciation = self.trainingProgress.pronunciationReady
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
         let filtered = await VoiceTrainingAliasFilter.filter(self.trainingVariants)
-        guard self.trainingSaveID == saveID, !Task.isCancelled else { return }
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              self.trainingSaveID == saveID, !Task.isCancelled else { return }
         DebugLogger.shared.info(
             "VOICE_TRAINING_ALIAS_FILTER accepted=\(filtered.accepted.count) rejected=\(filtered.rejected.count) available=\(filtered.lookupAvailable)",
             source: "CustomDictionary"
@@ -2452,20 +2482,22 @@ struct CustomDictionaryView: View {
         }
         if savePronunciation, let entry, let modelKey = enrollments.first?.modelKey {
             do {
-                try await PronunciationDictionaryStore.shared.upsert(
+                try await pronunciationStore.upsert(
                     dictionaryEntryID: entry.id,
                     label: replacementText,
                     modelKey: modelKey,
                     enrollments: enrollments,
                     automaticMatchingEnabled: true,
                     canPersist: {
-                        DictionaryMatcherExperiment.sharedFeaturesEnabled &&
+                        PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork &&
+                            DictionaryMatcherExperiment.sharedFeaturesEnabled &&
                             DictionaryMatcherExperiment.generation == pronunciationGeneration &&
                             SettingsStore.shared.customDictionaryEntries == originalEntries
                     }
                 )
             } catch {
-                guard self.trainingSaveID == saveID, !Task.isCancelled else { return }
+                guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+                      self.trainingSaveID == saveID, !Task.isCancelled else { return }
                 self.trainingHasError = true
                 self.trainingStatusMessage = SettingsStore.shared.customDictionaryEntries == originalEntries
                     ? "Couldn't save the voice profile. Try again."
@@ -2477,7 +2509,8 @@ struct CustomDictionaryView: View {
                 return
             }
         }
-        guard self.trainingSaveID == saveID, !Task.isCancelled else { return }
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              self.trainingSaveID == saveID, !Task.isCancelled else { return }
         // Profile persistence suspends this view. Never publish a snapshot over a newer
         // manual edit, import, or deletion; keep the recordings available for a retry.
         guard SettingsStore.shared.customDictionaryEntries == originalEntries else {

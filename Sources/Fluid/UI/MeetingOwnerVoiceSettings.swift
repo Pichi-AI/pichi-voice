@@ -112,6 +112,9 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
     @Published private(set) var seconds: Double = 0
     @Published private(set) var error: String?
     @Published var showDeleteConfirmation = false
+    private let profile = PrivateProfileStorage.current
+    private var captureStopID: UUID?
+    private var isProfileVisible: Bool { PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork }
     private let audioArbiter: any MeetingAudioActivityArbitrating
     private let service: MeetingOwnerVoiceProfileService
     private let modelResidency: MeetingModelResidencyCoordinator
@@ -134,12 +137,23 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
     }
 
     func refresh() async {
-        do { self.hasProfile = try await self.service.metadata() != nil }
-        catch { self.error = Self.message(for: error) }
+        guard isProfileVisible else { return }
+        do {
+            let exists = try await self.service.metadata() != nil
+            if isProfileVisible { self.hasProfile = exists }
+        } catch { if isProfileVisible { self.error = Self.message(for: error) } }
     }
 
     func start(microphone: MeetingMicrophoneIdentity?) {
-        guard self.operation == nil else { return }
+        guard self.isProfileVisible, self.operation == nil,
+              !PrivateProfileService.shared.hasRetainedCaptureStopHandler else { return }
+        let captureID = UUID()
+        guard PrivateProfileService.shared.installCaptureStopHandler(id: captureID, stop: {
+            self.finishRecording()
+            await self.operation?.value
+        }) else { return }
+        self.captureStopID = captureID
+        let preferredMicrophoneUID = SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID
         self.error = nil; self.draft = nil; self.seconds = 0; self.stopRequested = false
         self.phase = .preparing
         self.operation = Task {
@@ -160,24 +174,24 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
                 if let microphone { selected = microphone }
                 else {
                     #if os(iOS)
-                    selected = try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID)
+                    selected = try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: preferredMicrophoneUID)
                     #else
-                    selected = try await MeetingCaptureSourceCatalog.defaultMicrophone(preferredCoreAudioUID: SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID)
+                    selected = try await MeetingCaptureSourceCatalog.defaultMicrophone(preferredCoreAudioUID: preferredMicrophoneUID)
                     #endif
                 }
                 try Task.checkCancellation()
+                guard !self.stopRequested else { throw CancellationError() }
                 let active = try self.makeCapture()
                 capture = active
                 try await active.start(microphone: selected)
-                self.phase = .recording
+                if self.isProfileVisible { self.phase = .recording }
                 let deadline = ContinuousClock.now.advanced(by: .seconds(25))
                 while !self.stopRequested, active.capturedSeconds < MeetingOwnerVoiceEnrollmentCapture.maximumSeconds, ContinuousClock.now < deadline {
                     try active.checkFailure()
-                    self.seconds = active.capturedSeconds
+                    if self.isProfileVisible { self.seconds = active.capturedSeconds }
                     try await Task.sleep(for: .milliseconds(100))
                 }
-                self.seconds = active.capturedSeconds
-                self.phase = .checking
+                if self.isProfileVisible { self.seconds = active.capturedSeconds; self.phase = .checking }
                 var pcm = try await active.stop(discard: false)
                 capture = nil
                 do {
@@ -189,13 +203,15 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
             } catch {
                 if let capture { _ = try? await capture.stop(discard: true) }
                 self.draft = nil
-                if !(error is CancellationError) { self.error = Self.message(for: error) }
+                if self.isProfileVisible, !(error is CancellationError) { self.error = Self.message(for: error) }
             }
             if let modelOperation { self.modelResidency.endOperation(modelOperation) }
             if let lease { await self.audioArbiter.release(lease) }
-            if Task.isCancelled { self.draft = nil; self.error = nil }
+            if Task.isCancelled || !self.isProfileVisible { self.draft = nil; self.error = nil }
             self.phase = self.draft == nil ? .idle : .ready
             self.operation = nil
+            if self.captureStopID == captureID { self.captureStopID = nil }
+            PrivateProfileService.shared.clearCaptureStopHandler(id: captureID)
         }
     }
 
@@ -209,6 +225,9 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
     }
 
     func prepareForPrivateProfileTransition() async throws {
+        // Busy logout hides the retained owner; only the root Stop action or the
+        // existing capture deadline ends enrollment. It never auto-saves a profile.
+        if captureStopID != nil { hasProfile = false; return }
         let task = operation; task?.cancel()
         await task?.value
         operation = nil; discardDraft(); hasProfile = false; seconds = 0
@@ -217,25 +236,25 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
     func discardDraft() { self.draft = nil; self.phase = .idle; self.error = nil }
 
     func save() {
-        guard self.operation == nil, let draft = self.draft else { return }
+        guard self.isProfileVisible, self.operation == nil, let draft = self.draft else { return }
         self.phase = .saving
         self.operation = Task {
             do {
                 _ = try await self.service.save(draft)
-                self.hasProfile = true
+                if self.isProfileVisible { self.hasProfile = true }
                 self.draft = nil
-            } catch { if !(error is CancellationError) { self.error = Self.message(for: error) } }
+            } catch { if self.isProfileVisible, !(error is CancellationError) { self.error = Self.message(for: error) } }
             self.phase = self.draft == nil ? .idle : .ready
             self.operation = nil
         }
     }
 
     func delete() {
-        guard self.operation == nil else { return }
+        guard self.isProfileVisible, self.operation == nil else { return }
         self.phase = .saving
         self.operation = Task {
             do { try await self.service.delete(); self.hasProfile = false; self.draft = nil }
-            catch { if !(error is CancellationError) { self.error = Self.message(for: error) } }
+            catch { if self.isProfileVisible, !(error is CancellationError) { self.error = Self.message(for: error) } }
             self.phase = .idle
             self.operation = nil
         }
