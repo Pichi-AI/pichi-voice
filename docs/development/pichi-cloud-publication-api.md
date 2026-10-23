@@ -93,6 +93,9 @@ can create a replacement operation or charge. Successful explicit reconciliation
 review overlay. Server Retry-After survives review, logout and restart, even after automatic
 POST retries exhaust. Unrepresentable deadlines remain paused for review.
 
+Receipt GET/PATCH requests share one per-record lease and reload durable deadlines after
+acquisition. A concurrent request returns `AccountError.busy` before HTTP.
+
 The active worker polls only observed queued/running receipts, at most 12 times per
 observation, at least 10 seconds apart after the initial check, and at most four per worker
 pass. It never scans settled history. Terminal/action/review states stop polling. After the
@@ -172,3 +175,21 @@ The probe uses Swift 5 mode because the existing unrelated `ExportedTranscript: 
 conformance warns under that mode; strict Swift 6 consent/wire checks are separate. These
 results do not establish a native target build, UI quality, full N2 private-source inventory,
 physical-device behavior, real token/browser behavior or live W2 persistence/billing/dispatch.
+
+## Frozen source verification
+
+Code candidate `8f3055b2e49bd6a8a95c7150109b41a59fa2f66d` passed 81 durable-store and
+61 facade checks in 40.119 seconds. Independent automated architecture/security review found
+no unresolved material issue after the final corrections. The facade checks include actual
+permission failures, recovery after repair, cancellation joins, concurrent receipt exclusion,
+and local capture/save completing while an unrelated uncooperative upload remains held.
+
+The strict Swift 6 consent/wire probe passed 62 and 151 checks at `60068f39`. The production
+store/exporter/checkpoint/source probe passed 1,065 checks at that revision in 38.361 seconds.
+Their relevant sources, scripts, fixtures and toolchain are unchanged in the final candidate;
+these are reused results, not fresh executions of changed facade code. N1 core remains exact
+to `f989116f`; N2 composition, project and mobile-manifest ownership remains unchanged.
+
+No native target build, simulator/device UI, model/inference, actual recording, real account
+credentials or live HTTPS endpoint was used. The existing Swift 5 exporter isolation warning
+remains. N2 must publish the approved dependency base before the focused stacked draft PR.

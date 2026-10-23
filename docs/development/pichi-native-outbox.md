@@ -301,3 +301,21 @@ app-managed worktree archival was requested and must be verified separately.
 No speech models, UI, simulators, devices, microphone/audio routes or server were started.
 Keep this worktree for the named unfinished dependency integration. Native builds require
 coordinator admission and private DerivedData/SourcePackages.
+
+## Frozen source handoff
+
+Final code candidate: `8f3055b2e49bd6a8a95c7150109b41a59fa2f66d`. Independent source review
+covered N1/N2 extension reuse, owner/generation/configuration fences, immutable replay,
+bounded storage/polling and joined cancellation, with no unresolved material findings.
+
+| Check | Revision | Result |
+| --- | --- | --- |
+| Actual N1/N2 store/facade standalone probe | `8f3055b2` | 81 store + 61 facade checks, 40.119 seconds |
+| Strict Swift 6 consent/wire probe | `60068f39` | 62 consent + 151 wire checks |
+| Production store/exporter/checkpoint/source probe | `60068f39` | 1,065 checks, 38.361 seconds |
+
+The latter two results are reused only because their source, script, fixture and toolchain
+inputs are unchanged; they are not fresh runtime validation of the changed facade. Native
+targets/UI, live HTTPS/I1 and final composition acceptance remain required. The focused draft
+PR base is `codex/pichi-sso-native-sync-20261022` after it publishes the approved N2 correction.
+The source API and exact shared presentation cases are in the linked API handoff.
