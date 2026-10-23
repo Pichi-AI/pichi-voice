@@ -70,6 +70,7 @@ struct MobileOnboarding: View {
         .tint(theme.palette.accent)
         .animation(reduceMotion ? FluidOnboardingMotion.crossfade : FluidOnboardingMotion.step, value: step)
         .onChange(of: step) { pageShownAt = ProcessInfo.processInfo.systemUptime }
+        .sensoryFeedback(.selection, trigger: step)
         .task { if selected == nil { selected = settings.mobileSetupSelectedModel ?? settings.selectedSpeechModel } }
         .onChange(of: selected) { _, model in settings.mobileSetupSelectedModel = model }
         .onDisappear { operation?.cancel(); asr.cancelModelDownload() }
@@ -85,37 +86,44 @@ struct MobileOnboarding: View {
                 .accessibilityIdentifier("onboarding.step.0")
         } else {
             GeometryReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        FluidOnboardingCompactAppIconMark()
-                            .padding(.bottom, 22)
-                        Text(PichiLocalization.text(titles[step]))
-                            .font(.fluidSystem(size: titleSize, weight: .semibold, role: .title))
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("onboarding.step.\(step)")
-                        if let subtitle {
-                            Text(PichiLocalization.text(subtitle))
-                                .font(.fluidSystem(size: subtitleSize, weight: .medium))
-                                .foregroundStyle(theme.palette.secondaryText)
+                ScrollViewReader { reader in
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            FluidOnboardingCompactAppIconMark()
+                                .padding(.bottom, 22)
+                            Text(PichiLocalization.text(titles[step]))
+                                .font(.fluidSystem(size: titleSize, weight: .semibold, role: .title))
                                 .multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true)
-                                .padding(.top, 14)
-                        }
-                        VStack(alignment: .leading, spacing: 16) {
-                            content
-                            if let error {
-                                Text(error).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
-                                    .accessibilityIdentifier("onboarding.error")
+                                .accessibilityIdentifier("onboarding.step.\(step)")
+                            if let subtitle {
+                                Text(PichiLocalization.text(subtitle))
+                                    .font(.fluidSystem(size: subtitleSize, weight: .medium))
+                                    .foregroundStyle(theme.palette.secondaryText)
+                                    .multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.top, 14)
                             }
+                            VStack(alignment: .leading, spacing: 16) {
+                                content
+                                if let error {
+                                    Text(error).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
+                                        .accessibilityIdentifier("onboarding.error")
+                                }
+                            }
+                            .padding(.top, 26)
                         }
-                        .padding(.top, 26)
+                        // The desktop column, centered like a desktop step, so cards, text and actions line up.
+                        .padding(.horizontal, 24).padding(.vertical, 28)
+                        .frame(maxWidth: Metrics.column + 48).frame(maxWidth: .infinity, minHeight: proxy.size.height)
                     }
-                    // The desktop column, centered like a desktop step, so cards, text and actions line up.
-                    .padding(.horizontal, 24).padding(.vertical, 28)
-                    .frame(maxWidth: Metrics.column + 48).frame(maxWidth: .infinity, minHeight: proxy.size.height)
+                    .scrollBounceBehavior(.basedOnSize)
+                    // Preparation shows its progress in the chosen card; keep that card in view.
+                    .onChange(of: advancing) { _, isAdvancing in
+                        guard isAdvancing, step == 1, let selected else { return }
+                        withAnimation(reduceMotion ? nil : FluidOnboardingMotion.step) { reader.scrollTo(selected.id, anchor: .center) }
+                    }
                 }
-                .scrollBounceBehavior(.basedOnSize)
             }
         }
     }
@@ -156,7 +164,7 @@ struct MobileOnboarding: View {
                 title: "Just speak.",
                 accentTitle: "We'll handle the rest.",
                 firstDetail: PichiLocalization.text("Record your meeting. Come back to every word."),
-                secondDetail: "Built for creators, thinkers, and builders.",
+                secondDetail: "Speech is transcribed on this device.",
                 actions: actions
             )
             .padding(24)
@@ -223,9 +231,13 @@ struct MobileOnboarding: View {
                         .accessibilityIdentifier("onboarding.model.\(model.id)")
                         .accessibilityAddTraits(isSelected ? .isSelected : [])
                     MobileModelDetails(modelID: model.id)
+                    if advancing && isSelected {
+                        MobileASRPreparationStatus(asr: asr).padding(.top, 4)
+                    }
                 }
                 .fluidOnboardingStepCard(isSelected: isSelected)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isSelected)
+                .id(model.id)
             }
         case 2:
             VStack(alignment: .leading, spacing: 12) {
@@ -268,7 +280,8 @@ struct MobileOnboarding: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if advancing && (step == 1 || asr.modelPreparationPhase != nil) {
+            // The model page shows its preparation in the chosen card.
+            if advancing && step != 1 && asr.modelPreparationPhase != nil {
                 MobileASRPreparationStatus(asr: asr)
             }
             HStack(spacing: isCompact ? 8 : 12) { backAction; Spacer(minLength: 0); optionalActions; nextAction }
@@ -377,7 +390,10 @@ struct MobileOnboarding: View {
                 try await preparation()
                 try Task.checkCancellation()
                 guard settings.mobileSetupStep == current else { return }
-                if current == 6 { settings.mobileSetupCompleted = true }
+                if current == 6 {
+                    if !settings.isReplayingMobileSetup { FirstMeetingTip.setupFinished = true }
+                    settings.mobileSetupCompleted = true
+                }
                 else { settings.mobileSetupStep = current + 1 }
             } catch is CancellationError { }
             catch { self.error = error.localizedDescription }

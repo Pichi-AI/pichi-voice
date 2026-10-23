@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import UniformTypeIdentifiers
 import SwiftUI
+import TipKit
 import UIKit
 
 /// Platform navigation and transient view state only. The shared coordinator owns every meeting.
@@ -27,6 +28,7 @@ struct MobileMeetingRoot: View {
     // The snapshot owns committed sessions; History's own path keeps only pushed identities.
     @State private var historyPath: [MeetingSessionID] = []
     @State private var copiedSessionID: MeetingSessionID?
+    @State private var startFeedback = 0
     @State private var search = ""
     @State private var isBusy = false
     @State private var error: String?
@@ -200,6 +202,10 @@ struct MobileMeetingRoot: View {
             await refreshHistory()
             await refreshMicrophones()
         }
+        // iOS mutes haptics while the microphone records, so they mark the Start tap and the end of
+        // capture rather than the recording states themselves.
+        .sensoryFeedback(.start, trigger: startFeedback)
+        .sensoryFeedback(trigger: coordinator.state) { previous, state in Self.captureEndFeedback(from: previous, to: state) }
         // The app's UI-ready signal owns the launch sweep; its committed deletions reload History.
         .onChange(of: coordinator.retentionSweepRevision) { _, _ in Task { await refreshHistory() } }
         .onChange(of: coordinator.state) { _, state in
@@ -383,6 +389,11 @@ struct MobileMeetingRoot: View {
                             .accessibilityIdentifier("meeting.settings")
                     }
                     if isBusy { ProgressView().accessibilityIdentifier("meeting.preparing") }
+                    // Inline under the button, so it covers no copy and takes the brand tint. Without a
+                    // freshly finished first setup it is not laid out at all.
+                    if FirstMeetingTip.setupFinished {
+                        TipView(FirstMeetingTip()).tint(theme.palette.accent)
+                    }
                 }.padding(compactHeight ? 12 : 20).background(theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: theme.metrics.corners.lg))
                 Label(PichiLocalization.text("Stored on this device. Place the microphone where everyone can be heard."), systemImage: "lock")
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
@@ -819,7 +830,22 @@ struct MobileMeetingRoot: View {
         }.accessibilityElement(children: .contain).accessibilityIdentifier("transcript.paragraph.\(paragraph.id)")
     }
 
+    /// A soft tap when capture ends normally and a warning when it ends early; nothing on restore.
+    private static func captureEndFeedback(from previous: MeetingCoordinatorState, to state: MeetingCoordinatorState) -> SensoryFeedback? {
+        switch previous {
+        case .recording, .recordingDegraded, .stopping: break
+        default: return nil
+        }
+        switch state {
+        case .processing, .completed: return .stop
+        case .interrupted, .failed: return .warning
+        default: return nil
+        }
+    }
+
     private func beginMeeting() {
+        startFeedback += 1
+        FirstMeetingTip().invalidate(reason: .actionPerformed)
         run {
             // Finish preparation before the capture lease can open the microphone.
             try await required.prepare(modelID: settings.selectedSpeechModel.rawValue)
