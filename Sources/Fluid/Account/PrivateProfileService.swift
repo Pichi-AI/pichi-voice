@@ -54,7 +54,12 @@ import Foundation
         if captureStopHandler?.id == id { captureStopHandler = nil }
     }
     var hasRetainedCaptureStopHandler: Bool { captureStopHandler != nil }
+    var captureStopHandlerID: UUID? { captureStopHandler?.id }
     func requestCaptureStop() async { await captureStopHandler?.stop() }
+    func requestCaptureStop(id: UUID) async {
+        guard let handler = captureStopHandler, handler.id == id else { return }
+        await handler.stop()
+    }
     private func joinPrivateWrites() async {
         while !pendingWrites.isEmpty {
             for task in Array(pendingWrites.values) { await task.value }

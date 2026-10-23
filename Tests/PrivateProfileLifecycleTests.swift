@@ -128,6 +128,8 @@ extension MeetingSessionStoreCheckpointTests {
         check(!service.installCaptureStopHandler(id: replacementStopID) { state.stopRequests += 100 },
             "Another view cannot replace an admitted capture's Stop owner")
         service.clearCaptureStopHandler(id: replacementStopID)
+        await service.requestCaptureStop(id: replacementStopID)
+        check(state.stopRequests == 0, "A queued Stop request cannot target a replacement owner")
         await service.requestCaptureStop()
         check(state.stopRequests == 1 && service.hasRetainedCaptureStopHandler,
             "Stale cleanup leaves the original capture Stop callback usable")

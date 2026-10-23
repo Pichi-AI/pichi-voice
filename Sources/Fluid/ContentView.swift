@@ -5321,6 +5321,16 @@ struct ContentView: View {
             // A stop already owns the audio; suppress its pending output without stopping again.
             self.cancelledOutputLifecycleID = lifecycleID
             handled = true
+        } else if self.privateCaptureStopID == nil,
+                  let captureID = PrivateProfileService.shared.captureStopHandlerID {
+            // A command, rewrite or enrollment controller owns this capture. Keep Escape
+            // bound to that exact owner instead of silently discarding its Stop request.
+            self.isSavingCancelledRecording = true
+            Task { @MainActor in
+                defer { self.isSavingCancelledRecording = false }
+                await PrivateProfileService.shared.requestCaptureStop(id: captureID)
+            }
+            handled = true
         } else if self.asr.isRunningOrStarting {
             let preservesHistory = self.settings.saveTranscriptionHistory && self.asr.isRunning && !self.asr.isDictionaryTrainingCaptureActive
                 && (self.activeRecordingMode == .dictate || self.activeRecordingMode == .promptMode)
