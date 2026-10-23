@@ -44,7 +44,7 @@ Authentication failure is 401. Valid identity without current permission is 403.
 
 ## 3. Shared native operation contract
 
-N1 publishes the concrete Swift API and a frozen implementation commit before N2/N3/N4 bind production code. Required semantics:
+N1 publishes the concrete Swift API and a frozen implementation commit before N2/N3/N4/N5 bind production code. Required semantics:
 
 - Observable account states: unconfigured, signed out, signing in, signed in, reauthentication required; sanitized presentation errors are separate from tokens.
 - Immutable account identity/context: issuer, subject, internal user ID, organization ID, workspace ID.
@@ -55,7 +55,7 @@ N1 publishes the concrete Swift API and a frozen implementation commit before N2
 - A signed-in UI is not enabled in shipped configuration until N2 supplies safe account/guest data isolation.
 - Auth/session failures never stop local recording or erase stored meetings.
 
-N2 publishes the concrete shared sync/status API before N3/N4 bind it. Required semantics: per-account/workspace consent, per-record eligibility/status, manual send/retry, pause/resume, joined logout and immutable owner snapshots. No independent mobile/desktop queue implementations.
+N2 publishes the concrete private-profile/isolation API and joined transition hooks. N5 consumes that boundary and publishes the shared sync/status API before N3/N4 bind cloud UI. Required delivery semantics: per-account/workspace consent, per-record eligibility/status, manual send/retry, pause/resume, joined logout and immutable owner snapshots. No independent mobile/desktop queue implementations and no second profile manager inside the outbox.
 
 ## 4. Local ownership and export
 
@@ -90,7 +90,7 @@ The request is multipart/form-data:
 
 No audio/file-path/embedding/original-text parts are allowed. Do not log credentials, raw source text or personal metadata.
 
-W2 must publish a synthetic request/receipt fixture and exact validation/error codes before N2 runs live integration. Reusing the existing multipart/import service is preferred over a second parser.
+W2 must publish a synthetic request/receipt fixture and exact validation/error codes before N5 runs live integration. Reusing the existing multipart/import service is preferred over a second parser.
 
 Assessment identity is separate from upload ownership. Names, `isLocalUser` and heuristic diarization do not prove the represented employee. The new route persists an otherwise valid protected source even when participant/criteria binding is unavailable, returning `needsParticipant` or `needsCriteria`. It does not start assessment until the binding is explicit and authorized. This extends the new route only; the existing manual importer keeps its existing validation contract. No silent employee guess is allowed.
 
@@ -114,7 +114,7 @@ Preserve the PR 1614 workspace/source uniqueness boundary and enforce uploader o
 
 `GET /api/v1/recordings/imports/{importID}` returns the authorized receipt/status. Analysis states are `queued`, `running`, `succeeded`, `failed`, `needsParticipant` and `needsCriteria`. Acceptance is not completed analysis.
 
-W2 also owns `PATCH /api/v1/recordings/imports/{importID}/assessment`, taking `participantID` and `criteriaIDs`, and its minimal integration with the existing recording detail UI. Require current `recordings:assess-own`, import ownership, a valid source participant and workspace-authorized criteria. The operation can resolve a pending import without granting workspace editor rights or changing the destination employee/source bytes. Use the existing attempt/concurrency boundary, keep the original import fingerprint for identical delivery retries, and publish the resulting status/receipt. N2/N3/N4 expose the pending action and an authorized path to resolve it; they do not silently select another speaker or criteria policy.
+W2 also owns `PATCH /api/v1/recordings/imports/{importID}/assessment`, taking `participantID` and `criteriaIDs`, and its minimal integration with the existing recording detail UI. Require current `recordings:assess-own`, import ownership, a valid source participant and workspace-authorized criteria. The operation can resolve a pending import without granting workspace editor rights or changing the destination employee/source bytes. Use the existing attempt/concurrency boundary, keep the original import fingerprint for identical delivery retries, and publish the resulting status/receipt. N5/N3/N4 expose the pending action and an authorized path to resolve it; they do not silently select another speaker or criteria policy.
 
 - Use the existing durable job mechanism, such as pg-boss, with transaction/outbox recovery as needed.
 - A crash between source persistence, billing and job dispatch must not lose analysis or charge twice.

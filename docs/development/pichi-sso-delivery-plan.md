@@ -26,7 +26,7 @@ Status: coordinated implementation, contract version 1. Initial baselines were v
 
 The existing local `pichi` checkout has unrelated changes and an `origin` pointing to Aspirity/AICallStudio. Web workers must use a fresh isolated clone whose `origin` is Pichi-AI/web. Do not change shared remotes or touch that checkout's changes.
 
-## Seven delivery sessions and one planning PR
+## Eight delivery sessions and one planning PR
 
 | ID | Session / PR | Repository | Owned implementation | Integration prerequisites |
 | --- | --- | --- | --- | --- |
@@ -35,11 +35,12 @@ The existing local `pichi` checkout has unrelated changes and an `origin` pointi
 | W1 | Web identity bridge | web | OIDC web flow, verified native bearer principal, external identity links, account/capability endpoint, tenant membership checks | P0; live check with I1 |
 | W2 | Protected cloud ingestion | web | PR 1614 integration, own-upload/assessment authorization, pending assessment resolution, durable dispatch, persistent deduplication, receipts/status | P0, W1, reviewed PR 1614 |
 | N1 | Shared native account core | pichi-voice | Browser login, Keychain, refresh/logout, generation cancellation, trusted config and both composition roots | P0; live check with I1/W1 |
-| N2 | Native isolation and outbox | pichi-voice | Account/guest storage boundaries, all read paths, owner profiles, durable immutable outbox, transport/status | P0, N1; server integration with W2 |
-| N3 | iPhone/iPad account UX | pichi-voice | Skippable onboarding migration, settings/account/workspace screens, consent and per-record statuses | N1; usable account switching and sync require N2 |
-| N4 | macOS account UX | pichi-voice | Desktop onboarding/settings/history presentation using the same services | N1; usable account switching and sync require N2 |
+| N2 | Native profile isolation | pichi-voice | Account/guest storage boundaries, every private-data read path, owner profiles, dictionaries/credentials and safe migration | P0, N1 |
+| N5 | Native durable outbox | pichi-voice | Immutable protected snapshots, consent, durable queue, transport/status, delivery recovery and pending assessment | P0, N1, N2; server integration with W2 |
+| N3 | iPhone/iPad account UX | pichi-voice | Skippable onboarding migration, settings/account/workspace screens, consent and per-record statuses | N1/N2 for account UI; N5 for cloud UI |
+| N4 | macOS account UX | pichi-voice | Desktop onboarding/settings/history presentation using the same services | N1/N2 for account UI; N5 for cloud UI |
 
-Each session produces one focused draft PR. P0 is a documentation PR. The first planned delivery therefore has eight new PRs plus the existing import dependency, not eight parallel feature implementations in one branch.
+Each session produces one focused draft PR. P0 is a documentation PR. The first planned delivery therefore has nine new PRs plus the existing import dependency. Native profile isolation and cloud delivery are separate reviewable changes because the inventory found private history, dictionaries, credentials, backups and cached projections beyond the outbox itself.
 
 Independent implementation can proceed against [contract v1](pichi-account-sync-contract-v1.md). A dependent session may inspect sources, design UI and prepare its verification cases before prerequisites arrive. It must not duplicate another owner's runtime models, invent production stubs or mark dependency-bound behaviour as tested. Missing prerequisites are reported to the coordinator with the exact required interface.
 
@@ -50,12 +51,15 @@ flowchart TD
     P0 --> N1[Native account core]
     W1 --> W2[Protected ingestion]
     E[Existing PR 1614] --> W2
-    N1 --> N2[Native isolation and outbox]
-    W2 --> N2
+    N1 --> N2[Native profile isolation]
+    N2 --> N5[Native durable outbox]
+    W2 --> N5
     N1 --> N3[iPhone and iPad UX]
     N1 --> N4[macOS UX]
     N2 --> N3
     N2 --> N4
+    N5 --> N3
+    N5 --> N4
     I1 --> V[Combined acceptance]
     W1 --> V
     W2 --> V
@@ -68,7 +72,8 @@ flowchart TD
 
 - N1 owns both composition roots (`Sources/Mobile/MobileApp.swift` and `Sources/Fluid/Services/AppServices.swift`), account settings, trusted distribution auth configuration, callback declarations and initial Xcode target membership.
 - N2 owns account isolation in `MeetingSessionStore`, meeting ownership metadata, owner voice/profile access, and every user-data read path including history, playback, summaries and Local API. A tagged outbox alone is insufficient.
-- N2 may modify composition wiring after N1 publishes its stable commit. N3/N4 request lifecycle hooks rather than adding independent account managers.
+- N5 owns cloud consent/outbox/status and the use of immutable publication sources admitted through N2. It does not implement another profile store or account manager.
+- N2 may modify composition wiring after N1 publishes its stable commit; N5 follows N2's explicit handoff. N3/N4 request lifecycle hooks rather than adding independent account managers.
 - N3 owns new shared account/sync String Catalog entries for both platforms. N4 sends its key delta through the coordinator. Avoid wholesale catalog reformatting.
 - Xcode project, shared settings and entitlements changes are sequenced by the coordinator. Independent UI source files can proceed concurrently.
 - W1 owns authentication middleware/principal and identity schema migrations. W2 consumes that boundary and owns recording/job schema migrations. Coordinate migration filenames and reconcile PR 1614 before assigning a new number.
@@ -77,8 +82,8 @@ flowchart TD
 ## Merge and rollout gates
 
 1. Review and publish P0. Freeze its commit and the three input revisions.
-2. Run I1, W1 and N1 independently. W2 inventories and reconciles PR 1614; N2 inventories all local profile/read paths. N3/N4 prepare platform UX against the agreed domain contract.
-3. Integrate W1 before W2, N1 before N2, and N1/N2 before enabling production UI in N3/N4. Use stacked draft PRs only when their base dependency is explicit.
+2. Run I1, W1 and N1 independently. W2 inventories and reconciles PR 1614; N2 inventories all local profile/read paths; N5 prepares the bounded delivery state machine. N3/N4 prepare platform UX against the agreed domain contract.
+3. Integrate W1 before W2, N1 before N2, and N2 before N5 runtime wiring. Enable account UI in N3/N4 only after N1/N2; cloud UI requires N5. Use stacked draft PRs only when their base dependency is explicit.
 4. Every PR preserves current behaviour when the trusted account configuration is absent or disabled. Test-only fakes must not activate production cloud paths.
 5. Keep upload opt-in separate and off by default. Authentication errors never disable local recording. Account switching must not expose another profile's data.
 6. Pin all candidate SHAs and run combined server/native acceptance. Isolated passing checks do not prove the combined flow.
@@ -96,7 +101,8 @@ Each feature PR is independently reviewable and testable in its declared depende
 | W1 | Wrong issuer/audience/signature/expiry, unavailable JWKS, no email-only account linking, cross-organization denial, existing local-session regression, web callback state/nonce |
 | W2 | Same request retry, same key/different bytes conflict, scoped receipt access, representative upload and pending-assessment resolution without editor access, transaction/worker restart, no duplicate charge, source text/timing preservation |
 | N1 | Callback/state/nonce failure and cancellation, single concurrent refresh, stale completion after logout, device-specific revoke, isolated branded credentials, actual affected macOS/iOS target builds |
-| N2 | A/logout/B history and profile isolation, guest migration preservation, offline restart, accepted-but-response-lost replay, logout during transfer, no retroactive upload, redaction/incomplete/size-limit failures |
+| N2 | A/logout/B history/profile/dictionary/credential isolation, joined profile transitions, safe guest migration and backup/restore preservation |
+| N5 | Offline restart, accepted-but-response-lost replay, logout during transfer, no retroactive upload, scoped consent, redaction/incomplete/size-limit failures and pending-assessment recovery |
 | N3 | iPhone and iPad native simulator smoke, skip/cancel/offline/account switch, RU/EN and light/dark screenshots, onboarding resume migration |
 | N4 | macOS build and focused integration checks, native skip/login/logout/relaunch/history smoke, RU/EN and light/dark screenshots |
 
@@ -117,4 +123,4 @@ The coordinator is the current chat `01a16612-f106-7292-9300-8e0e83997b0d`. It o
 
 ## Completion definition
 
-The planning task is complete after contracts are published, the seven sessions exist with bounded scopes, and their initial progress/dependency states are checked. Feature delivery remains in progress until all required PRs have passed their declared and combined acceptance gates. No session may describe planning, mocks or an unsigned build as production SSO, cloud sync, or physical-device validation.
+The planning task is complete after contracts are published, the eight sessions exist with bounded scopes, and their initial progress/dependency states are checked. Feature delivery remains in progress until all required PRs have passed their declared and combined acceptance gates. No session may describe planning, mocks or an unsigned build as production SSO, cloud sync, or physical-device validation.
