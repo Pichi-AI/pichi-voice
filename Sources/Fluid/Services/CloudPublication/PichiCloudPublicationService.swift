@@ -210,7 +210,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     self.snapshot = .init(availability: .paused, cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items)
                 }
             } catch {
-                if self.scope == profile { self.snapshot = .init(availability: .storageUnavailable, cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items) }
+                self.storageFailed(profile: profile, because: error)
             }
         }
     }

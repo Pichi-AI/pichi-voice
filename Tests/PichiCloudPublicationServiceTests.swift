@@ -191,6 +191,14 @@ extension PichiPublicationOutboxTests {
         let repaired = try durable(profileA, id: diskFailureSource.id, settled: true)
         check(repaired.operationID == beforeDiskFailure.operationID && repaired.transcriptBytes == beforeDiskFailure.transcriptBytes,
               "Explicit recovery after repairing disk joins work and replays the same uncertain operation")
+        let pauseConsentRoot = profileA.rootDirectory.appendingPathComponent("CloudPublication/Consent")
+        try manager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: pauseConsentRoot.path)
+        await service.pause()
+        check(service.snapshot.availability == .storageUnavailable, "A failed scoped pause write stays visibly unavailable")
+        do { try await service.reconcile(first.id); check(false, "Failed pause persistence must close transport admission") }
+        catch let error as PichiCloudPublicationControlFailure { check(error == .cloudSyncDisabled, "Failed pause persistence cannot leave manual network admission open") }
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: pauseConsentRoot.path)
+        try await service.setCloudSyncEnabled(true)
 
         await service.pause()
         let paused = try await capture()
