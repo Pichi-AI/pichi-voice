@@ -30,7 +30,7 @@ W1 owns `GET /api/v1/account` for verified native user bearer credentials and th
     "workspaces": [{
       "id": "9",
       "name": "Synthetic Team",
-      "capabilities": ["recordings:create-own", "recordings:read-own"]
+      "capabilities": ["recordings:create-own", "recordings:read-own", "recordings:assess-own"]
     }]
   }]
 }
@@ -38,7 +38,7 @@ W1 owns `GET /api/v1/account` for verified native user bearer credentials and th
 
 IDs in this boundary are opaque nonempty strings, even where the legacy database uses integer IDs. Identity issuer/subject must match the authenticated grant. Pagination/limits and unavailable memberships must fail explicitly rather than silently granting a default workspace.
 
-`recordings:create-own` permits a representative to import a recording as themselves without workspace editor access. Assignment to another employee requires an independent authorized capability. W1 supplies the principal/capability operation; W2 enforces it.
+`recordings:create-own` permits a representative to import a recording as themselves without workspace editor access. `recordings:assess-own` permits resolving the represented source participant and choosing only the workspace-authorized assessment criteria for their own import. Assignment to another employee requires an independent authorized capability. W1 supplies these principal/capability operations; W2 enforces them and owns the pending-assessment resolution path.
 
 Authentication failure is 401. Valid identity without current permission is 403. Failure of an identity/database dependency is a bounded service error, not an anonymous fallback.
 
@@ -112,7 +112,9 @@ An identical retry returns 200 and the same receipt. The same scoped operation/s
 
 Preserve the PR 1614 workspace/source uniqueness boundary and enforce uploader ownership on duplicate/status lookups. Record any necessary migration before changing that boundary.
 
-`GET /api/v1/recordings/imports/{importID}` returns the authorized receipt/status. Analysis states are `queued`, `running`, `succeeded`, `failed`, `needsParticipant` and `needsCriteria`. Acceptance is not completed analysis. The existing authorized recording UI/operation can resolve pending assessment bindings; no replacement public editing API is introduced by this contract.
+`GET /api/v1/recordings/imports/{importID}` returns the authorized receipt/status. Analysis states are `queued`, `running`, `succeeded`, `failed`, `needsParticipant` and `needsCriteria`. Acceptance is not completed analysis.
+
+W2 also owns `PATCH /api/v1/recordings/imports/{importID}/assessment`, taking `participantID` and `criteriaIDs`, and its minimal integration with the existing recording detail UI. Require current `recordings:assess-own`, import ownership, a valid source participant and workspace-authorized criteria. The operation can resolve a pending import without granting workspace editor rights or changing the destination employee/source bytes. Use the existing attempt/concurrency boundary, keep the original import fingerprint for identical delivery retries, and publish the resulting status/receipt. N2/N3/N4 expose the pending action and an authorized path to resolve it; they do not silently select another speaker or criteria policy.
 
 - Use the existing durable job mechanism, such as pg-boss, with transaction/outbox recovery as needed.
 - A crash between source persistence, billing and job dispatch must not lose analysis or charge twice.
@@ -127,6 +129,6 @@ Cloud publication defaults off for every new account/workspace, independently of
 
 All initial infrastructure/accounts/transcripts are synthetic and local/test only. No production identity migration, external partner contact, paid provisioning, shared-device installation or live recording upload is authorized by this contract.
 
-Required combined cases: guest/skip, local-only signed-in mode, account A/B isolation, offline restart, token refresh/revoke, response-lost replay, duplicate/conflicting import, membership revocation, worker restart, partial source, size/redaction limits and white-label issuer/credential isolation.
+Required combined cases: guest/skip, local-only signed-in mode, account A/B isolation, offline restart, token refresh/revoke, response-lost replay, duplicate/conflicting import, membership revocation, worker restart, an ordinary representative resolving pending assessment without workspace edit privileges, partial source, size/redaction limits and white-label issuer/credential isolation.
 
 Keep absence-of-configuration behaviour unchanged. A feature flag alone does not replace safe storage/auth boundaries. Native screenshots and physical-device gates remain governed by AGENTS.md.

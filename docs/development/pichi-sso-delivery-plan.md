@@ -33,7 +33,7 @@ The existing local `pichi` checkout has unrelated changes and an `origin` pointi
 | P0 | Contracts and orchestration | pichi-voice | This plan and the versioned cross-repository contract | None |
 | I1 | Keycloak foundation | infra | Reproducible dev/test deployment, pinned image, realms/clients, synthetic partner theme, secret references and runbook | P0 |
 | W1 | Web identity bridge | web | OIDC web flow, verified native bearer principal, external identity links, account/capability endpoint, tenant membership checks | P0; live check with I1 |
-| W2 | Protected cloud ingestion | web | PR 1614 integration, own-upload authorization, durable dispatch, persistent deduplication, receipts/status | P0, W1, reviewed PR 1614 |
+| W2 | Protected cloud ingestion | web | PR 1614 integration, own-upload/assessment authorization, pending assessment resolution, durable dispatch, persistent deduplication, receipts/status | P0, W1, reviewed PR 1614 |
 | N1 | Shared native account core | pichi-voice | Browser login, Keychain, refresh/logout, generation cancellation, trusted config and both composition roots | P0; live check with I1/W1 |
 | N2 | Native isolation and outbox | pichi-voice | Account/guest storage boundaries, all read paths, owner profiles, durable immutable outbox, transport/status | P0, N1; server integration with W2 |
 | N3 | iPhone/iPad account UX | pichi-voice | Skippable onboarding migration, settings/account/workspace screens, consent and per-record statuses | N1; usable account switching and sync require N2 |
@@ -94,7 +94,7 @@ Each feature PR is independently reviewable and testable in its declared depende
 | --- | --- |
 | I1 | Fresh realm import, discovery/JWKS, PKCE/redirect validation, synthetic partner isolation, logout and documented key rotation; static Helm/compose validation as applicable |
 | W1 | Wrong issuer/audience/signature/expiry, unavailable JWKS, no email-only account linking, cross-organization denial, existing local-session regression, web callback state/nonce |
-| W2 | Same request retry, same key/different bytes conflict, scoped receipt access, representative own-upload permission, transaction/worker restart, no duplicate charge, source text/timing preservation |
+| W2 | Same request retry, same key/different bytes conflict, scoped receipt access, representative upload and pending-assessment resolution without editor access, transaction/worker restart, no duplicate charge, source text/timing preservation |
 | N1 | Callback/state/nonce failure and cancellation, single concurrent refresh, stale completion after logout, device-specific revoke, isolated branded credentials, actual affected macOS/iOS target builds |
 | N2 | A/logout/B history and profile isolation, guest migration preservation, offline restart, accepted-but-response-lost replay, logout during transfer, no retroactive upload, redaction/incomplete/size-limit failures |
 | N3 | iPhone and iPad native simulator smoke, skip/cancel/offline/account switch, RU/EN and light/dark screenshots, onboarding resume migration |
