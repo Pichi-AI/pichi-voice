@@ -176,6 +176,31 @@ import Darwin
         rejects("Oversized negative bank must reject admission") {
             _ = try freshNegatives.admitCaptureRead(leaseID: UUID(), modelKey: "synthetic", entryIDs: [entry])
         }
+        let bInspection = b.rootDirectory.appendingPathComponent("pronunciation-inspection")
+        try FileManager.default.createDirectory(at: bInspection, withIntermediateDirectories: true)
+        try encoder.encode(replacement).write(to: bInspection.appendingPathComponent("\(ids[0]).plist"))
+        let savedInspections = a.rootDirectory.appendingPathComponent("synthetic-saved-inspections")
+        try FileManager.default.moveItem(at: inspectionDirectory, to: savedInspections)
+        try FileManager.default.createSymbolicLink(at: inspectionDirectory, withDestinationURL: bInspection)
+        let beforeSymlinkFailure = try descriptorCount()
+        rejects("An intermediate evidence directory cannot redirect A admission to B") {
+            _ = try partial.admitCaptureRead(leaseID: UUID(), modelKey: "synthetic", entryIDs: [entry])
+        }
+        expect(try descriptorCount() == beforeSymlinkFailure, "Intermediate symlink failure closes all directory and metadata descriptors")
+        try FileManager.default.removeItem(at: inspectionDirectory)
+        try FileManager.default.moveItem(at: savedInspections, to: inspectionDirectory)
+        let savedProfile = a.rootDirectory.appendingPathExtension("synthetic-preserved")
+        try FileManager.default.moveItem(at: a.rootDirectory, to: savedProfile)
+        try FileManager.default.createSymbolicLink(at: a.rootDirectory, withDestinationURL: b.rootDirectory)
+        rejects("A symlinked profile root cannot redirect A metadata admission to B") {
+            _ = try partial.admitCaptureRead(leaseID: UUID(), modelKey: "synthetic", entryIDs: [entry])
+        }
+        rejects("A symlinked profile root cannot redirect negative admission") {
+            _ = try freshNegatives.admitCaptureRead(leaseID: UUID(), modelKey: "synthetic", entryIDs: [entry])
+        }
+        expect(try descriptorCount() == beforeSymlinkFailure, "Profile symlink failures release their directory descriptors")
+        try FileManager.default.removeItem(at: a.rootDirectory)
+        try FileManager.default.moveItem(at: savedProfile, to: a.rootDirectory)
         let rawURL = root.appendingPathComponent("synthetic-joined-read")
         try Data("synthetic".utf8).write(to: rawURL)
         let heldFile = try DictionaryCaptureEvidenceFile(url: rawURL, maximumBytes: 32)!

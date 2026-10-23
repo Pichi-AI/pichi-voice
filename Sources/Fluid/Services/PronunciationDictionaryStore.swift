@@ -153,7 +153,7 @@ actor PronunciationDictionaryStore {
         guard let profile = self.profile, PrivateProfileStorage.isReadable(profile),
               PrivateProfileStorage.acceptsNewWork else { throw PronunciationDictionaryStoreError.staleEvidence }
         var profiles: [PronunciationDictionaryProfile] = []
-        if let metadata = try DictionaryCaptureEvidenceFile(url: self.fileURL, maximumBytes: 16_000_000) {
+        if let metadata = try DictionaryCaptureEvidenceFile(url: self.fileURL, maximumBytes: 16_000_000, profile: profile) {
             defer { metadata.close() }
             profiles = try metadata.read { data in
                 let document = try JSONDecoder().decode(Document.self, from: data)
@@ -180,9 +180,9 @@ actor PronunciationDictionaryStore {
         for selected in profiles {
             for capture in selected.enrollments.prefix(3) {
                 if let id = capture.inspectionID, inspections[id] == nil {
-                    inspections[id] = try DictionaryCaptureEvidenceFile(url: self.inspectionURL(id), maximumBytes: 24_000_000)
+                    inspections[id] = try DictionaryCaptureEvidenceFile(url: self.inspectionURL(id), maximumBytes: 24_000_000, profile: profile)
                 } else if capture.inspectionID == nil, let id = capture.originalAudioID, originals[id] == nil {
-                    originals[id] = try DictionaryCaptureEvidenceFile(url: self.audioURL(id), maximumBytes: 2_000_000)
+                    originals[id] = try DictionaryCaptureEvidenceFile(url: self.audioURL(id), maximumBytes: 2_000_000, profile: profile)
                 }
             }
         }

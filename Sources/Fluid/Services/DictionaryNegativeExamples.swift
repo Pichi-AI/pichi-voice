@@ -9,12 +9,8 @@ nonisolated final class DictionaryCaptureEvidenceFile: @unchecked Sendable {
     private var handle: FileHandle?
     private let maximumBytes: Int
 
-    init?(url: URL, maximumBytes: Int) throws {
-        let descriptor = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
-        guard descriptor >= 0 else {
-            if errno == ENOENT { return nil }
-            throw PronunciationDictionaryStoreError.inconsistentEnrollment
-        }
+    init?(url: URL, maximumBytes: Int, profile: PrivateProfileSnapshot? = nil) throws {
+        guard let descriptor = try Self.openDescriptor(url: url, profile: profile) else { return nil }
         var attributes = stat()
         guard fstat(descriptor, &attributes) == 0,
               attributes.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
@@ -24,6 +20,42 @@ nonisolated final class DictionaryCaptureEvidenceFile: @unchecked Sendable {
         }
         self.handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         self.maximumBytes = maximumBytes
+    }
+
+    private static func openDescriptor(url: URL, profile: PrivateProfileSnapshot?) throws -> Int32? {
+        let flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
+        guard let profile else { return try self.validateOpen(open(url.path, flags)) }
+        // The legacy root is the trusted storage anchor. Every profile and evidence
+        // component below it is opened relative to a descriptor without symlink traversal.
+        let profileComponents = profile.isGuest ? [] : ["Profiles", profile.id]
+        let expectedRoot = profileComponents.reduce(profile.legacyRootDirectory) { $0.appendingPathComponent($1) }
+        let rootComponents = expectedRoot.standardizedFileURL.pathComponents
+        let fileComponents = url.standardizedFileURL.pathComponents
+        guard expectedRoot.standardizedFileURL == profile.rootDirectory.standardizedFileURL,
+              fileComponents.starts(with: rootComponents), fileComponents.count > rootComponents.count else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        let relative = Array(fileComponents.dropFirst(rootComponents.count))
+        let components = profileComponents + relative
+        guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/") }) else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        guard var directory = try self.validateOpen(open(profile.legacyRootDirectory.path, flags | O_DIRECTORY)) else { return nil }
+        defer { Darwin.close(directory) }
+        for component in components.dropLast() {
+            guard let next = try self.validateOpen(openat(directory, component, flags | O_DIRECTORY)) else { return nil }
+            Darwin.close(directory)
+            directory = next
+        }
+        return try self.validateOpen(openat(directory, components[components.count - 1], flags))
+    }
+
+    private static func validateOpen(_ descriptor: Int32) throws -> Int32? {
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return nil }
+            throw PronunciationDictionaryStoreError.inconsistentEnrollment
+        }
+        return descriptor
     }
 
     func read<Value>(_ decode: (Data) throws -> Value) throws -> Value {
@@ -165,7 +197,7 @@ actor DictionaryNegativeExampleStore {
         guard let profile = self.profile, PrivateProfileStorage.isReadable(profile),
               PrivateProfileStorage.acceptsNewWork else { throw PronunciationDictionaryStoreError.staleEvidence }
         var examples: [Example] = []
-        if let file = try DictionaryCaptureEvidenceFile(url: self.url, maximumBytes: 32_000_000) {
+        if let file = try DictionaryCaptureEvidenceFile(url: self.url, maximumBytes: 32_000_000, profile: profile) {
             defer { file.close() }
             examples = try file.read { data in
                 let all = try PropertyListDecoder().decode([Example].self, from: data)
