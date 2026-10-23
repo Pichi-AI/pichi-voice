@@ -4,13 +4,14 @@ Status: early working source API for N3/N4 and the N2 composition owner. It is n
 production readiness declaration. The source probes use actual N1/N2/store/exporter code
 with synthetic in-memory authentication and HTTP fixtures, not a live W2 service.
 
-Source inputs: N1 `f989116f2028d1bb1d47cac86ff65f6e57a2391a`, integrated N2
-`d5febd9421918c192063b61e53d3f208f80d2fb7`, W2 runtime source
+Source inputs: N1 `f989116f2028d1bb1d47cac86ff65f6e57a2391a`, focused N2
+`ccd61fb78c1156432f339e03b4dd1ed596e3317e`, W2 runtime source
 `ac2b6c352de1c74080c44e0fe206f039b84726eb` and original wire fixtures
 `128e1dc17b51f0f0877e00eafb1f73c13cadddf5` and additive provisional compatibility fixture
 `c76d7dde2c7bc3c2f374238b8e780fab9d5a145f`. Focused PR publication remains gated on
-N2 publishing the integrated correction to its named dependency branch. Source availability
-does not establish combined native/runtime acceptance.
+approved N2 remote publication checks and native compilation of the frozen assembled
+delivery. Historical `032ad7e3` used N2 `d5febd94`; the focused foundation is now merged
+without coalesced or N3 UI ancestry. Source availability is not combined runtime acceptance.
 
 ## One facade for both platforms
 
@@ -254,10 +255,10 @@ reviewed `b0176c90`; the final documentation correction changes no production so
 | Actual N1/N2/store/facade with synthetic HTTP | `e4e29f5b` | 81 store + 73 facade checks, 42.603 seconds |
 | Portable repository checks | `e14d749d` | Passed, 20.220 seconds |
 
-The facade inputs are identical between `e4e29f5b` and `e14d749d`; the latter adds only
-strict wire tests and their runner call. The historical 1,065 source/checkpoint result remains
-reusable only for its unchanged source/exporter/payload inputs. It does not validate the
-changed options wire/facade. The fresh cases cover exact W2-derived fixture provenance,
+The facade inputs were identical between `e4e29f5b` and `e14d749d`; the latter added only
+strict wire tests and their runner call. Those are historical options/base results. Focused
+N2 `ccd61fb7` advances profile lifecycle and checkpoint inputs, so the historical 1,065
+checkpoint result does not establish acceptance of the new assembly. The fresh cases cover exact W2-derived fixture provenance,
 paging, context/receipt/participant checks, strict nested decoding, safe errors, narrow query
 preflight, owner isolation, request exclusion, held OFF/logout joins and no automatic PATCH.
 
@@ -268,3 +269,19 @@ configuration and source registration; N3/N4 consume this shared method and type
 ## Native common composition
 
 See [native protected publication composition](pichi-cloud-publication-composition.md) for the retained shared facade, observer-before-auth installation, bounded account readiness activation and fixture isolation.
+
+## Focused delivery assembly
+
+The delivery merges only approved focused N2 `ccd61fb78c1156432f339e03b4dd1ed596e3317e`
+into the staged descendant of published N5 `032ad7e3`. The merge retains both N2's capture
+admission and the cloud observer installation gate, then restores Local API before cloud
+activation. No coalesced snapshot, mobile account type or N3 constructor injection is merged.
+The actual registry union contains 86 runners: 62 sh, 11 Bash and 13 Python.
+
+The eight N5 production files and approved N2 activation helper remain unchanged. The shared
+String Catalog stays byte-exact to N3's `5bf11971` resource. Current affected facade, shared
+composition, checkpoint and portable checks are recorded against the frozen assembled Git
+revision in local independent evidence. Unchanged wire/consent results are not rerun merely
+for status. Both native target builds require new coordinator admission and must compile
+that assembled revision; isolated N2 builds are not integration proof. Publication remains
+gated on the coordinator's remote-head checks and explicit release.

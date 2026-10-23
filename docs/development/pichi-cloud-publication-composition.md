@@ -43,10 +43,11 @@ service container exposes the retained facade, while the `MobileOnboarding` and
 and cloud argument injections in its own delivery PR. N4 consumes the same service seam.
 
 This is the projected N2 contribution from `32e5575496ffa9ea2a0bff1efeae989ce2a3e271`.
-The delivery branch starts at published N5 `032ad7e3` and awaits the approved focused N2
-foundation. No coalesced snapshot or full N3 branch is merged. Existing profile preparation,
-concealment and capture ownership code stays with N2; resolve only these common service
-hunks after its focused delivery arrives. The frozen shared catalog is imported as the exact
+The delivery branch starts at published N5 `032ad7e3` and merges only focused N2
+`ccd61fb78c1156432f339e03b4dd1ed596e3317e`. No coalesced snapshot or full N3 branch is
+merged. Profile preparation, concealment and capture ownership code stays with N2. The
+resolved roots preserve its retained capture admission and private-source cleanup alongside
+the cloud installation gate; Local API restoration precedes cloud activation. The frozen shared catalog is imported as the exact
 N3-authored `5bf11971` resource, with N3 retaining semantic ownership.
 
 Run `bash Tests/run_publication_composition_tests.sh` for synthetic tests over the

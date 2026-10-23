@@ -339,3 +339,19 @@ Synthetic ac2-derived examples and provenance are in `Tests/Fixtures/PichiAssess
 Original approved wire fixtures remain byte-identical. The concrete typed fields, pagination
 semantics, UI catalog keys and fresh reviewed/check revisions are in the
 [shared API handoff](pichi-cloud-publication-api.md#authorized-assessment-options).
+
+## Focused N2 delivery integration
+
+The current N5 delivery consumes focused N2 `ccd61fb78c1156432f339e03b4dd1ed596e3317e`,
+which descends from published N2 `66ae984b` and N1 `f989116f`. It excludes queue/account UI
+source and uses the existing profile/admission/observer/transition contracts. N5 retains its
+eight unchanged production files plus N2's approved activation helper and common roots.
+The full N3 catalog is imported byte-exact; UI constructor injection remains in N3.
+
+Merge resolutions retain both observer installation and admitted-capture cleanup gates.
+Registry counts derive from the actual 86 runners, including all three N5 publication probes.
+The focused delivery and published `032ad7e3` are ancestors of this assembly; the coalesced
+`f5c8a4b3` snapshot is only a separately preserved comparison input. A fresh assembled
+checkpoint/facade/composition result is required after the lifecycle input advancement.
+Native builds remain coordinator-admitted and must bind this assembly, followed by approved
+native/live acceptance. No prior isolated N2 build proves the combined N5 target compiled.
