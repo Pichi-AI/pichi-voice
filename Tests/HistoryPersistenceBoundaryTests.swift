@@ -13,6 +13,9 @@ struct DictationAudioMetadata: Codable, Equatable, Sendable {
 }
 
 final class DictationAudioSaveAdmission {
+    func save(snapshot: DictationAudioSnapshot, model: String?) throws -> DictationAudioMetadata {
+        fatalError("Audio recovery is covered by the actual admitted history/audio probe")
+    }
     func complete() {}
     func abortIfUnstarted() {}
     func discardUnattached() {}
