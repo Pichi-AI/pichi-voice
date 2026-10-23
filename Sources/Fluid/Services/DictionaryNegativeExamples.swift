@@ -60,7 +60,11 @@ nonisolated enum DictionaryNegativeEvidenceResolver {
 
 /// Separate, removable experimental store; never mutates positive enrollments or dictionary text.
 actor DictionaryNegativeExampleStore {
-    static let shared = DictionaryNegativeExampleStore()
+    private static let cache = PrivateProfileStoreCache<DictionaryNegativeExampleStore>()
+    static var shared: DictionaryNegativeExampleStore {
+        cache.value { profile in DictionaryNegativeExampleStore(
+            url: profile.rootDirectory.appendingPathComponent("dictionary-negative-examples-v1.plist"), profile: profile) }
+    }
     struct Example: Codable, Sendable {
         let id: UUID
         let entryID: UUID
@@ -69,22 +73,33 @@ actor DictionaryNegativeExampleStore {
         let frames: DictionaryMatchFrames
     }
 
+    private let profile: PrivateProfileSnapshot?
+    private var retired = false
+    private var canAccess: Bool { !self.retired && self.profile.map(PrivateProfileStorage.isReadable) != false }
     private let url: URL
     private var generation = UUID()
     private let collectionEnabled: @Sendable () -> Bool
 
     init(
-        url: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("\(AppBrand.storageNamespace)/dictionary-negative-examples-v1.plist"),
+        url: URL? = nil,
+        profile: PrivateProfileSnapshot? = nil,
         collectionEnabled: @escaping @Sendable () -> Bool = { DictionaryMatcherExperiment.collectNegatives }
     ) {
-        self.url = url
+        let selected = profile ?? (url == nil ? PrivateProfileStorage.current : nil)
+        self.profile = selected
+        self.url = url ?? selected!.rootDirectory.appendingPathComponent("dictionary-negative-examples-v1.plist")
         self.collectionEnabled = collectionEnabled
     }
 
     func revision() -> UUID { self.generation }
 
+    func prepareForProfileTransition() {
+        self.retired = true
+        self.generation = UUID()
+    }
+
     private func read() throws -> [Example] {
+        guard self.canAccess else { throw PronunciationDictionaryStoreError.staleEvidence }
         guard FileManager.default.fileExists(atPath: self.url.path) else { return [] }
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
         guard size <= 32_000_000 else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
@@ -101,6 +116,7 @@ actor DictionaryNegativeExampleStore {
     }
 
     func save(_ correction: DictionaryNegativeCorrection, expectedRevision: UUID) throws {
+        guard self.canAccess else { throw PronunciationDictionaryStoreError.staleEvidence }
         guard self.generation == expectedRevision, self.collectionEnabled(), correction.expiresAt > Date() else { throw PronunciationDictionaryStoreError.staleEvidence }
         let e = correction.evidence
         guard e.frames.isValid else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
@@ -121,11 +137,13 @@ actor DictionaryNegativeExampleStore {
     }
 
     func clear() throws {
+        guard self.canAccess else { throw PronunciationDictionaryStoreError.staleEvidence }
         self.generation = UUID()
         if FileManager.default.fileExists(atPath: self.url.path) { try FileManager.default.removeItem(at: self.url) }
     }
 
     func remove(id: UUID) throws {
+        guard self.canAccess else { throw PronunciationDictionaryStoreError.staleEvidence }
         let all = try read().filter { $0.id != id }
         let encoder = PropertyListEncoder(); encoder.outputFormat = .binary
         try encoder.encode(all).write(to: self.url, options: .atomic)

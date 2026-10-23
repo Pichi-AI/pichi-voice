@@ -1,6 +1,6 @@
 import Foundation
 
-struct DictationAudioSnapshot: Sendable {
+nonisolated struct DictationAudioSnapshot: Sendable {
     let samples: [Float]
     let sampleRate: Int
     let channels: Int
@@ -12,7 +12,7 @@ struct DictationAudioSnapshot: Sendable {
     }
 }
 
-struct DictationAudioMetadata: Codable, Equatable, Sendable {
+nonisolated struct DictationAudioMetadata: Codable, Equatable, Sendable {
     let fileName: String
     let durationMilliseconds: Int
     let byteCount: Int
@@ -42,15 +42,48 @@ enum DictationAudioHistoryError: LocalizedError {
 }
 
 final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
-    static let shared = DictationAudioHistoryStore()
+    private static let cache = PrivateProfileStoreCache<DictationAudioHistoryStore>()
+    static var shared: DictationAudioHistoryStore { scoped(to: PrivateProfileStorage.current) }
+    static func scoped(to profile: PrivateProfileSnapshot) -> DictationAudioHistoryStore {
+        cache.value(for: profile) { profile in DictationAudioHistoryStore(rootDirectory: profile.rootDirectory, profile: profile) }
+    }
 
-    private let appSupportFolder = AppBrand.storageNamespace
+    private let rootDirectory: URL
+    private let profile: PrivateProfileSnapshot?
+    private var retired = false
+    private var transitionWaiters: [CheckedContinuation<Void, Never>] = []
     private let audioFolder = "DictationAudioHistory"
     private let fileManager = FileManager.default
     private let pendingSaveLock = NSLock()
     private var pendingSaveFileNames: Set<String> = []
 
-    private init() {}
+    init(rootDirectory: URL? = nil, profile: PrivateProfileSnapshot? = nil) {
+        let selected = profile ?? (rootDirectory == nil ? PrivateProfileStorage.current : nil)
+        self.profile = selected
+        self.rootDirectory = rootDirectory ?? selected!.rootDirectory
+    }
+
+    /// New saves are denied while admitted saves finish metadata attachment.
+    func prepareForProfileTransition() async {
+        await withCheckedContinuation { continuation in
+            self.pendingSaveLock.withLock {
+                self.retired = true
+                if self.pendingSaveFileNames.isEmpty { continuation.resume() }
+                else { self.transitionWaiters.append(continuation) }
+            }
+        }
+    }
+
+    /// A rejected transition must leave the selected profile's recording path usable.
+    @discardableResult
+    func resumeAfterFailedProfileTransition() -> Bool {
+        self.pendingSaveLock.withLock {
+            guard self.pendingSaveFileNames.isEmpty,
+                  self.profile.map(PrivateProfileStorage.isReadable) != false else { return false }
+            self.retired = false
+            return true
+        }
+    }
 
     func save(
         snapshot: DictationAudioSnapshot,
@@ -58,15 +91,18 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
         timestamp: Date,
         model: String?
     ) throws -> DictationAudioMetadata {
-        let directory = try self.audioDirectory()
-        let fileName = self.pendingSaveLock.withLock { () -> String in
+        let fileName = try self.pendingSaveLock.withLock { () throws -> String in
+            guard !self.retired, self.profile.map(PrivateProfileStorage.isReadable) != false else { throw CancellationError() }
             let fileName = self.audioFileName(entryID: entryID, timestamp: timestamp)
             self.pendingSaveFileNames.insert(fileName)
             return fileName
         }
-        let url = directory.appendingPathComponent(fileName, isDirectory: false)
         let data: Data
         do {
+            // The writer was admitted above. Its root remains pinned until metadata joins.
+            let directory = self.rootDirectory.appendingPathComponent(self.audioFolder, isDirectory: true)
+            try self.fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent(fileName, isDirectory: false)
             data = Self.wavData(from: snapshot)
             try data.write(to: url, options: .atomic)
         } catch {
@@ -89,6 +125,11 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
     func completePendingSave(fileName: String) {
         self.pendingSaveLock.withLock {
             self.pendingSaveFileNames.remove(fileName)
+            if self.pendingSaveFileNames.isEmpty {
+                let waiters = self.transitionWaiters
+                self.transitionWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
         }
     }
 
@@ -289,12 +330,9 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
     }
 
     private func audioDirectory(createIfNeeded: Bool = true) throws -> URL {
-        guard let base = self.fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            throw DictationAudioHistoryError.applicationSupportUnavailable
-        }
-        let directory = base
-            .appendingPathComponent(self.appSupportFolder, isDirectory: true)
-            .appendingPathComponent(self.audioFolder, isDirectory: true)
+        guard self.pendingSaveLock.withLock({ !self.retired }),
+              self.profile.map(PrivateProfileStorage.isReadable) != false else { throw CancellationError() }
+        let directory = self.rootDirectory.appendingPathComponent(self.audioFolder, isDirectory: true)
         if createIfNeeded {
             try self.fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
@@ -403,14 +441,14 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
         return formatter
     }()
 
-    private static let isoFormatter: ISO8601DateFormatter = {
+    private static var isoFormatter: ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
-    }()
+    }
 }
 
-private struct AudioManifestRow: Encodable {
+private nonisolated struct AudioManifestRow: Encodable {
     let audio: String
     let text: String
     let rawTranscript: String

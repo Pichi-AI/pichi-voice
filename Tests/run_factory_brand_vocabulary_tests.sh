@@ -8,6 +8,8 @@ trap 'rm -rf "$brand_vocab_dir"' EXIT HUP INT TERM
 xcrun swiftc -target x86_64-apple-macosx15.0 -default-isolation MainActor -parse-as-library \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
+    Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileDefaults.swift \
     Sources/Fluid/Services/ParakeetVocabularyStore.swift Tests/FactoryBrandVocabularyTests.swift \
     -o "$brand_vocab_dir/tests"
 "$brand_vocab_dir/tests"

@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 /// Owned by the history writer's serial queue. One JSON payload per entry, not per history.
-final class TranscriptionHistoryDatabase {
+nonisolated final class TranscriptionHistoryDatabase {
     struct Record: Equatable {
         let id: UUID
         let payload: Data
@@ -124,22 +124,28 @@ final class TranscriptionHistoryDatabase {
 }
 
 /// All disk queries and Codable work happen here, including the one-time legacy import.
-final class TranscriptionHistoryWriter: @unchecked Sendable {
+nonisolated final class TranscriptionHistoryWriter: @unchecked Sendable {
     private let queue = DispatchQueue(label: "fluid.history.persistence", qos: .utility)
     private var database: TranscriptionHistoryDatabase?
     private var writeError: Error?
     private let defaults: UserDefaults
     private let url: URL
     private let legacyKey = "TranscriptionHistoryEntries"
+    private let profile: PrivateProfileSnapshot?
 
-    init(defaults: UserDefaults = .standard, url: URL? = nil) {
-        self.defaults = defaults
-        self.url = url ?? AppBrand.applicationSupportDirectory
+    init(defaults: UserDefaults? = nil, url: URL? = nil, profile: PrivateProfileSnapshot? = nil) {
+        let selected = profile ?? (defaults == nil && url == nil ? PrivateProfileStorage.current : nil)
+        self.profile = selected
+        self.defaults = defaults ?? PrivateProfileDefaults.bound(to: selected ?? PrivateProfileStorage.current)
+        self.url = url ?? (selected ?? PrivateProfileStorage.current).rootDirectory
             .appendingPathComponent("TranscriptionHistory.sqlite3")
     }
 
+    private var canAccess: Bool { self.profile.map(PrivateProfileStorage.isReadable) != false }
+
     func load() async throws -> [TranscriptionHistoryEntry] {
-        try await withCheckedThrowingContinuation { continuation in
+        guard self.canAccess else { throw CancellationError() }
+        return try await withCheckedThrowingContinuation { continuation in
             self.queue.async {
                 do {
                     let database = try self.database ?? TranscriptionHistoryDatabase(url: self.url)
@@ -168,6 +174,7 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
         upserts: [TranscriptionHistoryEntry], deletes: [UUID] = [], replacing: Bool = false,
         completion: @escaping @Sendable (Error?) -> Void
     ) {
+        guard self.canAccess else { completion(CancellationError()); return }
         self.queue.async {
             let startedAt = ProcessInfo.processInfo.systemUptime
             do {
