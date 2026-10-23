@@ -334,6 +334,7 @@ struct MobileAccountOnboarding: View {
             }
         }.padding(16)
             .background(theme.palette.secondaryText.opacity(0.06), in: RoundedRectangle(cornerRadius: theme.metrics.corners.md))
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("onboarding.account")
     }
 }
