@@ -29,7 +29,10 @@ enum PronunciationDictionaryStoreError: Error { case inconsistentEnrollment, sta
             generation: generation, legacyRootDirectory: FileManager.default.temporaryDirectory)
         PrivateProfileStorage.select(profile)
         defer {
-            UserDefaults.standard.removePersistentDomain(forName: AppBrand.storageNamespace + ".private-profile." + profile.id)
+            let name = AppBrand.storageNamespace + ".private-profile." + profile.id
+            let suite = UserDefaults(suiteName: name)!
+            suite.removePersistentDomain(forName: name)
+            precondition(suite.synchronize(), "Synthetic domain cleanup must persist")
             PrivateProfileStorage.select(original)
         }
         let keys = [

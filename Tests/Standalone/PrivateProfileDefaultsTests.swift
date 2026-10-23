@@ -56,7 +56,11 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         let a = try profile("A"), b = try profile("B"), secondWorkspace = try profile("A", workspace: "other")
         let domains = [a, b, secondWorkspace].map { AppBrand.storageNamespace + ".private-profile." + $0.id }
         defer {
-            for name in domains + [guestName] { guestDefaults.removePersistentDomain(forName: name) }
+            for name in domains + [guestName] {
+                let suite = UserDefaults(suiteName: name)!
+                suite.removePersistentDomain(forName: name)
+                precondition(suite.synchronize(), "Synthetic domain cleanup must persist")
+            }
             PrivateProfileStorage.select(original)
         }
         let defaults = PrivateProfileDefaults(guestDefaults: guestDefaults)
