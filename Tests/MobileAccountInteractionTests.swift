@@ -12,9 +12,13 @@ private actor SyntheticAccountCredentials: AccountCredentialStoring {
         grant = nil
     }
     func failClear() { rejectClear = true }
+    func seed(_ grant: AccountGrant) { self.grant = grant }
 }
 
 private actor SyntheticAccountTransport: AccountTransporting {
+    var holdRefresh = false
+    var waiting = false
+    var refreshGate: CheckedContinuation<Void, Never>?
     let snapshot = AccountSnapshot(schemaVersion: 1,
         account: .init(id: "synthetic-user", displayName: "Ёжик Synthetic", email: nil),
         identity: .init(issuer: "https://identity.example/realms/test", subject: "synthetic-subject"),
@@ -29,10 +33,13 @@ private actor SyntheticAccountTransport: AccountTransporting {
         .init(accessToken: "synthetic-access", refreshToken: "synthetic-refresh",
               expiresAt: Date().addingTimeInterval(3600), subject: "synthetic-subject")
     }
-    func refresh(_ grant: AccountGrant) -> AccountTokenResponse {
-        .init(accessToken: "synthetic-rotated", refreshToken: "synthetic-rotated-refresh",
+    func refresh(_ grant: AccountGrant) async -> AccountTokenResponse {
+        if holdRefresh { waiting = true; await withCheckedContinuation { refreshGate = $0 }; waiting = false }
+        return .init(accessToken: "synthetic-rotated", refreshToken: "synthetic-rotated-refresh",
               expiresAt: Date().addingTimeInterval(3600), subject: "synthetic-subject")
     }
+    func suspendRefresh() { holdRefresh = true }
+    func releaseRefresh() { holdRefresh = false; refreshGate?.resume(); refreshGate = nil }
     func account(accessToken: String) -> AccountSnapshot { snapshot }
     func revoke(refreshToken: String) {}
 }
@@ -92,9 +99,9 @@ private actor SyntheticAccountTransport: AccountTransporting {
     @MainActor static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         precondition(condition(), message); assertions += 1
     }
-    @MainActor static func until(_ condition: () -> Bool) async {
+    @MainActor static func until(_ condition: () async -> Bool) async {
         for _ in 0..<10_000 {
-            if condition() { return }
+            if await condition() { return }
             await Task.yield()
         }
         preconditionFailure("Synthetic operation did not reach its explicit gate")
@@ -164,6 +171,24 @@ private actor SyntheticAccountTransport: AccountTransporting {
         dismissed.browser.release(); await dismissed.ui.waitUntilIdle()
         expect(dismissed.session.state == .signedOut && dismissed.ui.action == nil, "Disappearance cannot finish a late sign-in")
         await dismissed.shutdown()
+
+        let restoring = SyntheticAccountUIFixture()
+        await restoring.credentials.seed(AccountGrant(identity: .init(issuer: "https://identity.example/realms/test",
+            subject: "synthetic-subject", internalUserID: "synthetic-user"), accessToken: "synthetic-old-access",
+            refreshToken: "synthetic-old-refresh", expiresAt: Date().addingTimeInterval(-1), nonce: "synthetic-nonce"))
+        await restoring.transport.suspendRefresh()
+        let restore = Task { await restoring.session.restore() }
+        await until { await restoring.transport.waiting }
+        expect(restoring.session.state == .signedOut, "Startup restoration is not inferred from public sign-in state")
+        var restoredGuest = false
+        restoring.ui.continueAsGuest { restoredGuest = true }
+        await until { restoring.browser.cancelCalls > 0 }
+        expect(!restoredGuest, "Guest completion joins a pending restoration")
+        await restoring.transport.releaseRefresh()
+        await restore.value; await restoring.ui.waitUntilIdle()
+        expect(restoredGuest && restoring.session.context == nil && restoring.session.state == .signedOut,
+               "Restoration cannot admit an account after explicit guest choice")
+        await restoring.shutdown()
 
         let failedCleanup = SyntheticAccountUIFixture()
         failedCleanup.browser.hold = true

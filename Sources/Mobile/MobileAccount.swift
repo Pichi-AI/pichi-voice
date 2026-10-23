@@ -66,19 +66,13 @@ final class MobileAccountInteraction: ObservableObject {
     func continueAsGuest(_ completion: @escaping @MainActor () -> Void) {
         guard action == nil || action == .signIn || action == .switchPerson else { return }
         let previous = operation
-        let requiresJoinedCleanup = previous != nil || session.state == .signingIn
-            || session.state == .signedIn || session.state == .reauthenticationRequired
         begin(.guest) {
-            await self.session.cancelSignIn()
+            // Restoration retains signedOut while doing work. Explicit guest choice
+            // must join all shared account work, rather than infer it from view state.
+            await self.session.logout()
             await previous?.value
-            // The callback can win the race with the tap. Guest is an explicit choice,
-            // so retire that admitted grant as well before advancing onboarding.
-            if self.session.state == .signedIn || self.session.state == .reauthenticationRequired {
-                await self.session.logout()
-            }
             guard self.session.context == nil,
-                  (!requiresJoinedCleanup || self.session.isSignInAvailable),
-                  self.session.presentationError != .credentialsUnavailable,
+                  self.session.presentationError == nil || self.session.presentationError == .revocationUnavailable,
                   self.session.state == .signedOut || self.session.state == .unconfigured else { return }
             completion()
         }
