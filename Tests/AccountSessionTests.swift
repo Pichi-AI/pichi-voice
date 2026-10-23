@@ -14,6 +14,7 @@ private actor MemoryCredentials: AccountCredentialStoring {
     func setClearFailure(_ value: Bool) { failClear = value }
 }
 private actor FakeTransport: AccountTransporting {
+    var authorizations = 0
     var blockAuthorization = false
     var authorizationGate: CheckedContinuation<Void, Never>?
     var refreshes = 0
@@ -28,6 +29,7 @@ private actor FakeTransport: AccountTransporting {
     var initialExpiry = Date().addingTimeInterval(-1)
     var snapshot = fixtureSnapshot()
     func authorizationURL(state: String, nonce: String, challenge: String) async -> URL {
+        authorizations += 1
         if blockAuthorization { await withCheckedContinuation { authorizationGate = $0 } }
         return URL(string: "https://identity.example/auth?state=\(state)&nonce=\(nonce)&code_challenge=\(challenge)")!
     }
@@ -143,6 +145,8 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         reject("insecure issuer") { try JSONDecoder().decode(AccountConfiguration.self, from: JSONSerialization.data(withJSONObject: object)).validate() }
         try jwtTests()
         try await transportTests(configuration)
+        await commandPreflightCancellationTests(configuration)
+        await callerCancellationDuringAdmissionTests(configuration)
         let browser = FakeBrowser(), transport = FakeTransport(), credentials = MemoryCredentials(), lifecycle = Lifecycle()
         let service = AccountSessionService(configuration: configuration, browser: browser, transport: transport, credentials: credentials)
         await service.signIn()
@@ -196,6 +200,84 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         await inactive.restore(); await inactive.signIn()
         expect(inactive.state == .unconfigured && !inactive.isSignInAvailable, "absent config stays inactive")
         print("PASS: \(count) native account synthetic assertions; no real account, browser, Keychain, model or UI access")
+    }
+    @MainActor static func commandPreflightCancellationTests(_ configuration: AccountConfiguration) async {
+        for reauthentication in [false, true] {
+            for cancellation in 0..<5 {
+                let transport = FakeTransport(), credentials = MemoryCredentials(), browser = FakeBrowser(), lifecycle = Lifecycle()
+                let service = AccountSessionService(configuration: configuration, browser: browser, transport: transport, credentials: credentials, lifecycle: lifecycle)
+                await service.signIn()
+                if reauthentication {
+                    await transport.setRefreshFailure(.reauthenticationRequired)
+                    _ = try? await service.authorizedAccess(for: service.context!)
+                    expect(service.state == .reauthenticationRequired, "fixture requires reauthentication")
+                }
+                lifecycle.blockRollback = true
+                var commandFinished = false
+                let command = Task {
+                    if reauthentication { await service.signIn() } else { await service.switchPerson() }
+                    commandFinished = true
+                }
+                await until { lifecycle.rollbackGate != nil }
+                var cancellationFinished = false
+                if cancellation == 1 { command.cancel() }
+                let cancel = Task {
+                    switch cancellation {
+                    case 0: await service.cancelSignIn()
+                    case 1: await command.value
+                    case 2: await service.logout()
+                    case 3: await service.shutdown()
+                    default:
+                        async let first: Void = service.cancelSignIn()
+                        async let second: Void = service.logout()
+                        _ = await (first, second)
+                    }
+                    cancellationFinished = true
+                }
+                for _ in 0..<30 { await Task.yield() }
+                let stayedJoined = !cancellationFinished && !commandFinished
+                lifecycle.releaseRollback()
+                await cancel.value; await command.value
+                if !stayedJoined || browser.requests != 1 {
+                    let diagnostic = "Preflight regression: reauthentication=\(reauthentication) cancellation=\(cancellation) joined=\(stayedJoined) browserStarts=\(browser.requests) state=\(service.state.rawValue)\n"
+                    FileHandle.standardError.write(Data(diagnostic.utf8))
+                }
+                expect(stayedJoined, "preflight cancellation joins suspended logout")
+                expect(browser.requests == 1, "cancelled preflight never starts another browser")
+                expect(await transport.authorizations == 1, "cancelled preflight never starts authorization lookup")
+                expect(await credentials.load() == nil, "cancelled preflight saves no later grant")
+                expect(service.context == nil && service.account == nil && service.state == .signedOut, "cancelled preflight retains guest")
+                if cancellation == 3 {
+                    await service.signIn()
+                    expect(!service.isSignInAvailable && browser.requests == 1, "shutdown remains terminal after joined logout")
+                } else {
+                    await service.signIn()
+                    expect(service.state == .signedIn && browser.requests == 2, "cancelled command retires before replacement login")
+                    await service.logout()
+                }
+            }
+        }
+    }
+    @MainActor static func callerCancellationDuringAdmissionTests(_ configuration: AccountConfiguration) async {
+        for exchange in [false, true] {
+            let transport = FakeTransport(), credentials = MemoryCredentials(), browser = FakeBrowser()
+            let service = AccountSessionService(configuration: configuration, browser: browser, transport: transport, credentials: credentials, lifecycle: Lifecycle())
+            if exchange { await transport.holdExchange() } else { await transport.holdAuthorization() }
+            let command = Task { await service.signIn() }
+            await until { if exchange { return await transport.isExchangeWaiting }; return await transport.isAuthorizationWaiting }
+            command.cancel()
+            if exchange { await transport.releaseExchange() } else { await transport.releaseAuthorization() }
+            await command.value
+            expect(browser.requests == (exchange ? 1 : 0), "caller cancellation cannot start a late browser")
+            expect(await credentials.load() == nil, "caller cancellation joins credential cleanup")
+            expect(service.context == nil && service.account == nil && service.state == .signedOut, "caller cancellation prevents late account admission")
+            if exchange { expect(await transport.revocations == ["initial-refresh"], "cancelled exchange revokes acquired device grant") }
+            await service.signIn()
+            let replacement = service.context
+            await service.cancelSignIn()
+            expect(service.state == .signedIn && service.context == replacement, "retired cancellation cannot cancel completed replacement")
+            await service.logout()
+        }
     }
     @MainActor static func staleRefreshTest(_ configuration: AccountConfiguration) async {
         let transport = FakeTransport(), credentials = MemoryCredentials()
