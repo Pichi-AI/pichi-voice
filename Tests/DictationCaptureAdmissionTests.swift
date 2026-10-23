@@ -58,6 +58,19 @@ nonisolated enum AppBrand { static func text(_ value: String) -> String { value 
         if lease == leaseID { lease = nil }
     }
 }
+@MainActor final class SynchronousEndWitness: TranscriptionProvider {
+    let name = "Sync witness"
+    let isAvailable = true
+    let isReady = true
+    var ends = 0
+    #if TEST_MAIN_ACTOR
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {}
+    #else
+    nonisolated func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {}
+    #endif
+    func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult { .init(text: "") }
+    func endAdmittedTranscription(leaseID: UUID) { ends += 1 }
+}
 @MainActor final class ASRService {
     var activeActivityLease: ASRActivityLease?
     var dictationActivityLease: ASRActivityLease?
@@ -103,6 +116,10 @@ actor Gate {
         func check(_ value: @autoclosure () -> Bool, _ message: String) {
             precondition(value(), message); checks += 1
         }
+        let syncWitness = SynchronousEndWitness()
+        let erasedWitness: any TranscriptionProvider = syncWitness
+        await erasedWitness.endAdmittedTranscription(leaseID: UUID())
+        check(syncWitness.ends == 1, "existing synchronous adapters witness the async generic retirement requirement")
         service.modelProvidersForTesting = [.gigaam: a, .whisper: b]
         let settings = SettingsStore.shared
         let leaseA = ASRActivityLease(id: UUID(), activity: .dictation)
