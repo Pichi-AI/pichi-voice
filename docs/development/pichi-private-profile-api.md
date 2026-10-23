@@ -1,6 +1,6 @@
 # Private profile source API for N3, N4 and N5
 
-Status: source integration and verification are in progress on N2's task branch. N1 remains frozen at `f989116f2028d1bb1d47cac86ff65f6e57a2391a`. The shared local composition, admitted capture writers, provider leases and concealed-view retirement are implemented. Production enablement, final combined native builds and visual/runtime acceptance remain separate gates.
+Status: focused N2 private-profile foundation. N1 remains frozen at `f989116f2028d1bb1d47cac86ff65f6e57a2391a`. This layer supplies local source isolation, guest preservation, joined cleanup and original capture ownership. N5 delivers the queue and shared cloud activation after this foundation; N3 and N4 deliver account/cloud UI. Their implementations are excluded from the focused N2 branch.
 
 N1 remains the only account/token manager. N2 supplies one `PrivateProfileService: AccountSessionLifecycle` participant. N5 registers its joined delivery cleanup inside that participant and owns its own consent/outbox/status operations. It must not install a second account lifecycle or create another profile registry.
 
@@ -75,10 +75,12 @@ The common ASR service pins the existing provider and immutable model/options un
 
 Terminal commands run in an explicitly owned process group with bounded pipes, cancellation and timeout. Cleanup may signal that group only while its original leader remains reserved. A command that successfully starts an intentionally redirected background job transfers that job to the user; later profile cleanup does not kill it or claim it was joined. No broad process-name cleanup or process registry changes that boundary.
 
-## Evidence and pending gates
+## Evidence and delivery boundaries
 
-The frozen `d5febd94` common source passed an unsigned iOS simulator SDK build. This is compile evidence for that revision only. Later recovery and concealment changes passed 167 admitted history/audio assertions, 54 ASR admission assertions in each compiler mode, the native export and rename value-type probes, and portable repository checks. The independent panel probe passed 26 synthetic actual-method checks and 34 source guards. These fixtures do not establish microphone, model inference, native visual quality or physical-device behavior.
+The focused foundation extends the reviewed `65b5eaa8` source with the corrected capture feedback, menu discovery, paste verification and approved shared audio-export cancellation. Menu discovery uses the existing private operation owner only until its immutable configuration is ready. Profile cleanup cancels and joins that phase; the existing coordinator independently owns capture admission afterward, so busy logout cannot cancel an admitted recorder.
 
-Final N5 common composition, exact integrated review and sequential unsigned macOS/iOS compilation remain in progress. N3 and N4 own the final view payload and cloud controls. Production sign-in, real network publication, native visual acceptance, microphone/audio routing and physical-device tests are not enabled by this source handoff.
+Synthetic verification covers 1,148 checkpoint assertions, 167 admitted history/audio assertions, 59 callback/discovery assertions in each compiler mode, seven source guards and 14 negative controls. The typing-focus fixture covers 286 checks and rejects a wrong-field forwarding mutation. These results establish their recorded source and fixture scope. Final delivery checks and native build evidence are pinned independently to the delivery revision; portable or synthetic passes do not establish microphone, model inference, native visual quality or physical-device behavior.
 
-The mobile manifest explicitly registers the N1 account and N2 shared sources. `update-mobile-project.py` also includes every top-level `Sources/Mobile/*.swift`; N3's `MobileAccount.swift` is included when its source branch is integrated and the common composition owner regenerates the combined project. Project generation has one owner at a time.
+The earlier `d5febd94` unsigned iOS simulator SDK compile is historical evidence for that revision only. Exact delivery compilation, signing, interactive screenshots, audio routing and physical-device acceptance remain separate gates. Production sign-in or cloud publication is not enabled by this foundation.
+
+The mobile manifest explicitly registers the N1 account and N2 shared sources. Common cloud activation and N3/N4 account/cloud constructors are delivered in later layers. Project generation has one owner at a time.

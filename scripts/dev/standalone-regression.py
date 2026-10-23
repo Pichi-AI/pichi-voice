@@ -247,7 +247,7 @@ SHELL_PROBES = (
     "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
     "local_text_model_catalog", "meeting_capture_pcm", "meeting_capture_activity", "meeting_microphone_capture_contracts", "meeting_pending_speech", "native_window_appearance",
-    "meeting_summary_evidence", "onboarding",
+    "meeting_summary_evidence", "meeting_audio_export", "onboarding",
     "page_presentation", "participant_input_contrast", "paste_key_cache", "private_profile_defaults", "private_profile_logging", "private_profile_stores", "private_ai_idle_unloader", "provider_dictation_capture_options",
     "release_highlights", "settings_owned_copy", "settings_viewport", "speech_model_provider_presentation", "ui_contrast",
     "stats_snapshot", "terminal_service_lifecycle", "voice_edit_cancellation",
@@ -255,7 +255,7 @@ SHELL_PROBES = (
 PYTHON_PROBES = (
     "diarization_repeatability", "dictionary_training_save", "dictation_capture_admission", "fluid_audio_capture_options", "gigaam_artifact_ownership", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
     "meeting_speaker_attribution",
-    "private_panel_concealment", "settings_backup_concurrency",
+    "private_capture_feedback", "private_panel_concealment", "settings_backup_concurrency",
 )
 PROBES = tuple(sorted(
     [Probe(f"Tests/run_{name}_tests.sh", "sh") for name in SHELL_PROBES]

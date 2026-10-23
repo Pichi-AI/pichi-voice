@@ -57,9 +57,9 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0].interpreter, "sh")
         self.assertFalse(pending[0].requires_ui)
-        self.assertEqual(len(RUNNER.PROBES), 81)
-        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 61)
-        self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 12)
+        self.assertEqual(len(RUNNER.PROBES), 83)
+        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 62)
+        self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 13)
         self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 8)
         admitted = [probe for probe in RUNNER.PROBES if probe.name == "admitted_history_writes"]
         self.assertEqual(len(admitted), 1)
