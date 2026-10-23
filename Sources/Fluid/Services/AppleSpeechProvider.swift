@@ -23,6 +23,45 @@ final class AppleSpeechProvider: TranscriptionProvider {
     private var recognizer: SFSpeechRecognizer?
     private var recognizerLocaleIdentifier: String?
 
+    // MARK: - Dictation capture configuration
+
+    private struct DictationCaptureConfiguration {
+        let leaseID: UUID
+        let locale: Locale
+    }
+
+    private let dictationCaptureLock = NSRecursiveLock()
+    private var dictationCaptureConfiguration: DictationCaptureConfiguration?
+
+    func beginDictationCapture(leaseID: UUID) throws {
+        try self.dictationCaptureLock.withLock {
+            if let capture = self.dictationCaptureConfiguration {
+                guard capture.leaseID == leaseID else {
+                    throw CancellationError()
+                }
+                return
+            }
+            self.dictationCaptureConfiguration = DictationCaptureConfiguration(
+                leaseID: leaseID, locale: self.selectedSpeechLocale
+            )
+        }
+    }
+
+    func endDictationCapture(leaseID: UUID) {
+        self.dictationCaptureLock.withLock {
+            guard self.dictationCaptureConfiguration?.leaseID == leaseID else { return }
+            self.dictationCaptureConfiguration = nil
+        }
+    }
+
+    private var selectedSpeechLocale: Locale {
+        self.dictationCaptureLock.withLock {
+            self.dictationCaptureConfiguration?.locale ?? SettingsStore.shared.selectedAppleSpeechLocale
+        }
+    }
+
+    // MARK: - Provider initialization
+
     init() {
         _ = self.updateRecognizerIfNeeded()
     }
@@ -115,7 +154,7 @@ final class AppleSpeechProvider: TranscriptionProvider {
     // MARK: - Helpers
 
     private func updateRecognizerIfNeeded() -> SFSpeechRecognizer? {
-        let locale = SettingsStore.shared.selectedAppleSpeechLocale
+        let locale = self.selectedSpeechLocale
         let localeIdentifier = locale.identifier.replacingOccurrences(of: "_", with: "-")
         if self.recognizer == nil || self.recognizerLocaleIdentifier != localeIdentifier {
             self.recognizer = SFSpeechRecognizer(locale: locale)
