@@ -74,7 +74,11 @@ run_case() {
         -module-cache-path "$task_test_dir/$task_case/ModuleCache" \
         "$task_test_dir/ProviderProjections.swift" Tests/AppleSpeechLifecycleTests.swift \
         -o "$task_test_dir/$task_case/tests"
-    "$task_test_dir/$task_case/tests"
+    python3 -S - "$task_test_dir/$task_case/tests" <<'PYTHON'
+import subprocess
+import sys
+subprocess.run([sys.argv[1]], check=True, timeout=20)
+PYTHON
     # Full production files against the actual local Speech/AVFoundation SDK.
     # Type checking alone never creates a recognizer or requests authorization.
     xcrun swiftc -swift-version 5 -typecheck -target arm64-apple-macos26.0 "$@" \
