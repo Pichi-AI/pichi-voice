@@ -13,6 +13,10 @@ import Darwin
         semaphore.wait(timeout: .now() + seconds) == .success
     }
 
+    static func descriptorCount() throws -> Int {
+        try FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count
+    }
+
     static func rejects(_ message: String, _ body: () throws -> Void) {
         do { try body(); preconditionFailure(message) }
         catch { checks += 1 }
@@ -93,10 +97,12 @@ import Darwin
             profileKey: "selected", modelKey: "synthetic", sourceWordRange: 0..<1, frames: negativeFrames),
             correctedText: "synthetic", expiresAt: Date().addingTimeInterval(60))
         try await negativeStore.save(correction, expectedRevision: negativeStore.revision())
+        let handlesBefore = try descriptorCount()
         let leaseID = UUID()
         let read = try store.admitCaptureRead(leaseID: leaseID, modelKey: "synthetic", entryIDs: [entry, originalEntry])
         let negatives = try negativeStore.admitCaptureRead(leaseID: leaseID, modelKey: "synthetic", entryIDs: [entry])
         defer { read.close(leaseID: leaseID); negatives.close(leaseID: leaseID) }
+        expect(try descriptorCount() == handlesBefore + 4, "Admission retains only three inspection and one original descriptor globally")
         expect(read.profile == a && read.profiles == profiles, "Admission freezes original metadata and generation")
         expect(try read.inspection(for: ids[0]) == inspection, "Selected evidence decodes through the retained descriptor")
         rejects("Fourth reference must not be pinned") { _ = try read.inspection(for: ids[3]) }
@@ -132,6 +138,7 @@ import Darwin
         expect(try read.inspection(for: ids[0]) == inspection, "Foreign lease cannot close the active read")
         expect(!negatives.frames(entryID: entry, profileKey: "selected", modelKey: "synthetic").isEmpty, "Foreign lease cannot close negative snapshot")
         read.close(leaseID: leaseID); negatives.close(leaseID: leaseID)
+        expect(try descriptorCount() == handlesBefore, "Exact close releases every retained process descriptor")
         expect(read.profiles.isEmpty, "Exact close removes private metadata")
         rejects("Exact close releases reference authority") { _ = try read.inspection(for: ids[0]) }
         rejects("Exact close releases original authority") { _ = try read.originalAudioSamples(for: originalCapture, entryID: originalEntry) }
@@ -141,6 +148,14 @@ import Darwin
         PrivateProfileStorage.select(sameAccountNewGeneration)
         rejects("Same account with a new generation cannot reuse old admission") { _ = try store.admitCaptureRead(leaseID: UUID(), modelKey: "synthetic", entryIDs: [entry]) }
         // Bounded failures reject the whole snapshot rather than silently omitting selected data.
+        let failedReference = try FileHandle(forWritingTo: inspectionDirectory.appendingPathComponent("\(ids[1]).plist"))
+        try failedReference.truncate(atOffset: 24_000_001); try failedReference.close()
+        let partial = PronunciationDictionaryStore(fileURL: file, profile: sameAccountNewGeneration)
+        let beforeFailure = try descriptorCount()
+        rejects("Oversized second reference must reject the whole admission") {
+            _ = try partial.admitCaptureRead(leaseID: UUID(), modelKey: "synthetic", entryIDs: [entry])
+        }
+        expect(try descriptorCount() == beforeFailure, "Partial admission closes both earlier reference and metadata descriptors")
         let largeURL = a.rootDirectory.appendingPathComponent("synthetic-large-metadata.json")
         let large = PronunciationDictionaryStore(fileURL: largeURL, profile: sameAccountNewGeneration)
         let tooMany = (0..<129).map { _ in PronunciationDictionaryProfile(dictionaryEntryID: UUID(),
