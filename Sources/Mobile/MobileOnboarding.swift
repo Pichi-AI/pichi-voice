@@ -135,7 +135,8 @@ struct MobileOnboarding: View {
         HStack(spacing: 16) {
             if step > 0 {
                 Button(PichiLocalization.text("Back")) { error = nil; settings.mobileSetupStep -= 1 }
-                    .disabled(advancing).accessibilityIdentifier("onboarding.back")
+                    .disabled(advancing || accountSession.state == .signingIn || accountActionIsActive)
+                    .accessibilityIdentifier("onboarding.back")
             }
             Spacer()
             if step == 4 || step == 5 {
