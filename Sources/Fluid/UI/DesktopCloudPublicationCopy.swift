@@ -110,4 +110,3 @@ nonisolated enum DesktopCloudPublicationCopy {
         }
     }
 }
-
