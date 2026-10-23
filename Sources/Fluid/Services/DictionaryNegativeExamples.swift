@@ -1,5 +1,83 @@
 import CryptoKit
 import Foundation
+import Darwin
+
+/// A capture retains read authority to one already selected regular file, never its path.
+/// The lock joins a bounded read/decode with close, including cancellation cleanup.
+nonisolated final class DictionaryCaptureEvidenceFile: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handle: FileHandle?
+    private let maximumBytes: Int
+
+    init?(url: URL, maximumBytes: Int, profile: PrivateProfileSnapshot? = nil) throws {
+        guard let descriptor = try Self.openDescriptor(url: url, profile: profile) else { return nil }
+        var attributes = stat()
+        guard fstat(descriptor, &attributes) == 0,
+              attributes.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              attributes.st_size >= 0, attributes.st_size <= maximumBytes else {
+            Darwin.close(descriptor)
+            throw PronunciationDictionaryStoreError.inconsistentEnrollment
+        }
+        self.handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        self.maximumBytes = maximumBytes
+    }
+
+    private static func openDescriptor(url: URL, profile: PrivateProfileSnapshot?) throws -> Int32? {
+        let flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK
+        guard let profile else { return try self.validateOpen(open(url.path, flags)) }
+        // The legacy root is the trusted storage anchor. Every profile and evidence
+        // component below it is opened relative to a descriptor without symlink traversal.
+        let profileComponents = profile.isGuest ? [] : ["Profiles", profile.id]
+        let expectedRoot = profileComponents.reduce(profile.legacyRootDirectory) { $0.appendingPathComponent($1) }
+        let rootComponents = expectedRoot.standardizedFileURL.pathComponents
+        let fileComponents = url.standardizedFileURL.pathComponents
+        guard expectedRoot.standardizedFileURL == profile.rootDirectory.standardizedFileURL,
+              fileComponents.starts(with: rootComponents), fileComponents.count > rootComponents.count else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        let relative = Array(fileComponents.dropFirst(rootComponents.count))
+        let components = profileComponents + relative
+        guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/") }) else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        guard var directory = try self.validateOpen(open(profile.legacyRootDirectory.path, flags | O_DIRECTORY)) else { return nil }
+        defer { Darwin.close(directory) }
+        for component in components.dropLast() {
+            guard let next = try self.validateOpen(openat(directory, component, flags | O_DIRECTORY)) else { return nil }
+            Darwin.close(directory)
+            directory = next
+        }
+        return try self.validateOpen(openat(directory, components[components.count - 1], flags))
+    }
+
+    private static func validateOpen(_ descriptor: Int32) throws -> Int32? {
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return nil }
+            throw PronunciationDictionaryStoreError.inconsistentEnrollment
+        }
+        return descriptor
+    }
+
+    func read<Value>(_ decode: (Data) throws -> Value) throws -> Value {
+        self.lock.lock(); defer { self.lock.unlock() }
+        guard let handle = self.handle else { throw PronunciationDictionaryStoreError.staleEvidence }
+        try Task.checkCancellation()
+        try handle.seek(toOffset: 0)
+        let data = try handle.read(upToCount: self.maximumBytes + 1) ?? Data()
+        guard data.count <= self.maximumBytes else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+        let value = try decode(data)
+        try Task.checkCancellation()
+        return value
+    }
+
+    func close() {
+        self.lock.lock(); defer { self.lock.unlock() }
+        try? self.handle?.close()
+        self.handle = nil
+    }
+
+    deinit { self.close() }
+}
 
 nonisolated struct DictionaryAcousticEvidence: Sendable {
     let id: UUID
@@ -79,6 +157,62 @@ actor DictionaryNegativeExampleStore {
     private let url: URL
     private var generation = UUID()
     private let collectionEnabled: @Sendable () -> Bool
+
+    nonisolated final class CaptureRead: @unchecked Sendable {
+        let profile: PrivateProfileSnapshot
+        let revision = UUID()
+        private let leaseID: UUID
+        private let lock = NSLock()
+        private var examples: [Example]
+        private var closed = false
+
+        fileprivate init(profile: PrivateProfileSnapshot, leaseID: UUID, examples: [Example]) {
+            self.profile = profile
+            self.leaseID = leaseID
+            self.examples = examples
+        }
+
+        func frames(entryID: UUID, profileKey: String, modelKey: String) -> [DictionaryMatchFrames] {
+            self.lock.lock(); defer { self.lock.unlock() }
+            guard !self.closed,
+                  ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: modelKey) != nil
+                    || !ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey(modelKey) else { return [] }
+            return self.examples.filter {
+                $0.entryID == entryID && $0.profileKey == profileKey && $0.modelKey == modelKey
+            }.map(\.frames)
+        }
+
+        func close(leaseID: UUID) {
+            self.lock.lock(); defer { self.lock.unlock() }
+            guard self.leaseID == leaseID else { return }
+            self.closed = true
+            self.examples.removeAll()
+        }
+    }
+
+    /// Called synchronously by the admitted provider before its first suspension. The
+    /// value is independent of later store selection and has no write authority.
+    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>) throws -> CaptureRead {
+        try Task.checkCancellation()
+        guard let profile = self.profile, PrivateProfileStorage.isReadable(profile),
+              PrivateProfileStorage.acceptsNewWork else { throw PronunciationDictionaryStoreError.staleEvidence }
+        var examples: [Example] = []
+        if let file = try DictionaryCaptureEvidenceFile(url: self.url, maximumBytes: 32_000_000, profile: profile) {
+            defer { file.close() }
+            examples = try file.read { data in
+                let all = try PropertyListDecoder().decode([Example].self, from: data)
+                guard all.count <= 32, all.allSatisfy({ $0.frames.isValid }) else {
+                    throw PronunciationDictionaryStoreError.inconsistentEnrollment
+                }
+                return all.filter { $0.modelKey == modelKey && entryIDs.contains($0.entryID) }
+            }
+        }
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        try Task.checkCancellation()
+        return CaptureRead(profile: profile, leaseID: leaseID, examples: examples)
+    }
 
     init(
         url: URL? = nil,

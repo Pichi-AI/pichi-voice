@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Transient bottom-center panel for a transcript that could not be
@@ -45,14 +46,34 @@ final class DeliveryFailureOverlayController {
     static let accessibilitySettingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
 
     private static let displayDuration: TimeInterval = 10
+    private var profileSubscription: AnyCancellable?
     private var panel: NSPanel?
     private var hostingView: NSHostingView<DeliveryFailureOverlayView>?
     private var dismissTask: Task<Void, Never>?
     private var generation: UInt64 = 0
 
-    private init() {}
+    private init() {
+        self.profileSubscription = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.concealPrivatePresentation() }
+            }
+    }
+
+    private func concealPrivatePresentation() {
+        self.generation &+= 1
+        self.dismissTask?.cancel()
+        self.dismissTask = nil
+        self.panel?.orderOut(nil)
+        self.panel?.contentView = nil
+        self.hostingView = nil
+        self.panel = nil
+    }
 
     func show(kind: Kind, transcript: String) {
+        let profile = PrivateProfileStorage.current
+        guard PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(profile) else {
+            self.concealPrivatePresentation(); return
+        }
         self.generation &+= 1
         let currentGeneration = self.generation
         self.dismissTask?.cancel()
@@ -60,12 +81,17 @@ final class DeliveryFailureOverlayController {
         let rootView = DeliveryFailureOverlayView(
             kind: kind,
             transcript: transcript,
+            profile: profile,
             displayDuration: Self.displayDuration,
             startedAt: Date(),
             onCopied: { [weak self] in
+                guard PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(profile) else { return }
                 self?.hide(after: 0.9)
             },
-            onDismiss: { [weak self] in self?.hide() }
+            onDismiss: { [weak self] in
+                guard PrivateProfileStorage.isReadable(profile) else { return }
+                self?.hide()
+            }
         )
         if let hostingView = self.hostingView {
             hostingView.rootView = rootView
@@ -168,6 +194,7 @@ private struct DeliveryFailureOverlayView: View {
     @ObservedObject private var settings = SettingsStore.shared
     let kind: DeliveryFailureOverlayController.Kind
     let transcript: String
+    let profile: PrivateProfileSnapshot
     let displayDuration: TimeInterval
     let startedAt: Date
     let onCopied: () -> Void
@@ -281,6 +308,7 @@ private struct DeliveryFailureOverlayView: View {
     }
 
     private func copy() {
+        guard PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(self.profile) else { return }
         guard !self.didCopy else { return }
         _ = ClipboardService.copyToClipboard(self.transcript)
         withAnimation(.easeOut(duration: 0.15)) { self.didCopy = true }

@@ -66,7 +66,7 @@ actor PronunciationDictionaryStore {
             fileURL: profile.rootDirectory.appendingPathComponent("pronunciation-dictionary-v1.json"), profile: profile) }
     }
 
-    private struct Document: Codable {
+    private struct Document: Codable, Sendable {
         let version: Int
         var profiles: [PronunciationDictionaryProfile]
     }
@@ -79,6 +79,125 @@ actor PronunciationDictionaryStore {
     private let profile: PrivateProfileSnapshot?
     private var retired = false
     private var canAccess: Bool { !self.retired && self.profile.map(PrivateProfileStorage.isReadable) != false }
+
+    /// Only a provider admitted while this exact profile is visible receives this
+    /// bounded read lease. Ordinary store/UI reads still require current visibility.
+    nonisolated final class CaptureRead: @unchecked Sendable {
+        let profile: PrivateProfileSnapshot
+        private let leaseID: UUID
+        private let lock = NSLock()
+        private var selectedProfiles: [PronunciationDictionaryProfile]
+        private var inspections: [UUID: DictionaryCaptureEvidenceFile]
+        private var originals: [UUID: DictionaryCaptureEvidenceFile]
+        private var closed = false
+
+        fileprivate init(profile: PrivateProfileSnapshot, leaseID: UUID,
+                         profiles: [PronunciationDictionaryProfile],
+                         inspections: [UUID: DictionaryCaptureEvidenceFile],
+                         originals: [UUID: DictionaryCaptureEvidenceFile]) {
+            self.profile = profile
+            self.leaseID = leaseID
+            self.selectedProfiles = profiles
+            self.inspections = inspections
+            self.originals = originals
+        }
+
+        var profiles: [PronunciationDictionaryProfile] {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.closed ? [] : self.selectedProfiles
+        }
+
+        func inspection(for id: UUID) throws -> DictionaryAudioInspection {
+            self.lock.lock(); defer { self.lock.unlock() }
+            guard !self.closed, let file = self.inspections[id] else {
+                throw PronunciationDictionaryStoreError.staleEvidence
+            }
+            return try file.read { data in
+                let value = try PropertyListDecoder().decode(DictionaryAudioInspection.self, from: data)
+                guard value.isValid else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+                return value
+            }
+        }
+
+        func originalAudioSamples(for capture: PronunciationEnrollmentCapture, entryID: UUID) throws -> [Float] {
+            self.lock.lock(); defer { self.lock.unlock() }
+            guard !self.closed, let id = capture.originalAudioID, let file = self.originals[id],
+                  self.selectedProfiles.contains(where: {
+                      $0.dictionaryEntryID == entryID && $0.enrollments.prefix(3).contains(capture)
+                  }) else { throw PronunciationDictionaryStoreError.staleEvidence }
+            return try file.read { try PronunciationDictionaryStore.decodeOriginalAudio($0, capture: capture, entryID: entryID) }
+        }
+
+        func close(leaseID: UUID) {
+            self.lock.lock(); defer { self.lock.unlock() }
+            guard self.leaseID == leaseID else { return }
+            self.closeFiles()
+        }
+
+        private func closeFiles() {
+            self.closed = true
+            for file in self.inspections.values { file.close() }
+            for file in self.originals.values { file.close() }
+            self.inspections.removeAll()
+            self.originals.removeAll()
+            self.selectedProfiles.removeAll()
+        }
+
+        deinit { self.closeFiles() }
+    }
+
+    /// Opens only the references the existing matcher can use (first three per
+    /// selected profile). It does not load PCM, mutate metadata or delete orphans.
+    nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>) throws -> CaptureRead {
+        try Task.checkCancellation()
+        guard let profile = self.profile, PrivateProfileStorage.isReadable(profile),
+              PrivateProfileStorage.acceptsNewWork else { throw PronunciationDictionaryStoreError.staleEvidence }
+        var profiles: [PronunciationDictionaryProfile] = []
+        if let metadata = try DictionaryCaptureEvidenceFile(url: self.fileURL, maximumBytes: 16_000_000, profile: profile) {
+            defer { metadata.close() }
+            profiles = try metadata.read { data in
+                let document = try JSONDecoder().decode(Document.self, from: data)
+                guard document.version == 1 else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+                let selected = document.profiles.filter { $0.modelKey == modelKey && entryIDs.contains($0.dictionaryEntryID) }
+                guard selected.count <= 128, selected.allSatisfy({ item in
+                    (1...2048).contains(item.hiddenSize) && item.enrollments.count <= 10 &&
+                    item.enrollments.allSatisfy {
+                        $0.modelKey == item.modelKey && $0.values.count == item.hiddenSize && $0.values.allSatisfy(\.isFinite)
+                    }
+                }) else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+                return selected
+            }
+        }
+        var inspections: [UUID: DictionaryCaptureEvidenceFile] = [:]
+        var originals: [UUID: DictionaryCaptureEvidenceFile] = [:]
+        var transferred = false
+        defer {
+            if !transferred {
+                for file in inspections.values { file.close() }
+                for file in originals.values { file.close() }
+            }
+        }
+        for selected in profiles {
+            for capture in selected.enrollments.prefix(3) {
+                if let id = capture.inspectionID, inspections[id] == nil {
+                    inspections[id] = try DictionaryCaptureEvidenceFile(url: self.inspectionURL(id), maximumBytes: 24_000_000, profile: profile)
+                } else if capture.inspectionID == nil, let id = capture.originalAudioID, originals[id] == nil {
+                    originals[id] = try DictionaryCaptureEvidenceFile(url: self.audioURL(id), maximumBytes: 2_000_000, profile: profile)
+                }
+            }
+        }
+        guard inspections.count + originals.count <= 384 else {
+            throw PronunciationDictionaryStoreError.inconsistentEnrollment
+        }
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
+        try Task.checkCancellation()
+        let result = CaptureRead(profile: profile, leaseID: leaseID, profiles: profiles,
+            inspections: inspections, originals: originals)
+        transferred = true
+        return result
+    }
 
     init(fileManager: FileManager = .default) {
         let profile = PrivateProfileStorage.current
@@ -231,7 +350,12 @@ actor PronunciationDictionaryStore {
         let url = self.audioURL(id)
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
         guard size <= 2_000_000 else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
-        let record = try JSONDecoder().decode(OriginalAudioRecord.self, from: Data(contentsOf: url))
+        return try Self.decodeOriginalAudio(Data(contentsOf: url), capture: capture, entryID: entryID)
+    }
+
+    nonisolated private static func decodeOriginalAudio(_ data: Data, capture: PronunciationEnrollmentCapture, entryID: UUID) throws -> [Float] {
+        guard let id = capture.originalAudioID else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
+        let record = try JSONDecoder().decode(OriginalAudioRecord.self, from: data)
         guard record.version == 1, record.sampleRate == 16_000, record.encoding == "float32-little-endian",
               record.entryID == entryID, record.evidenceID == id, record.modelKey == capture.modelKey,
               record.pcmFloat32.count % MemoryLayout<Float>.size == 0,
@@ -261,7 +385,7 @@ actor PronunciationDictionaryStore {
         return value
     }
 
-    private func inspectionURL(_ id: UUID) -> URL {
+    nonisolated private func inspectionURL(_ id: UUID) -> URL {
         self.fileURL.deletingLastPathComponent().appendingPathComponent("pronunciation-inspection", isDirectory: true)
             .appendingPathComponent(id.uuidString).appendingPathExtension("plist")
     }
@@ -473,7 +597,7 @@ actor PronunciationDictionaryStore {
         let pcmFloat32: Data
     }
 
-    private func audioURL(_ id: UUID) -> URL {
+    nonisolated private func audioURL(_ id: UUID) -> URL {
         self.fileURL.deletingLastPathComponent().appendingPathComponent(
             "pronunciation-audio",
             isDirectory: true

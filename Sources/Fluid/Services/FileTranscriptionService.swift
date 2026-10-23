@@ -365,14 +365,51 @@ nonisolated enum FileTranscriptionStatus: Equatable, Sendable {
 @MainActor
 final class FileTranscriptionService: ObservableObject, PrivateProfileTransitionParticipant {
     private let privateOperations = PrivateProfileOperationOwner()
-    @Published private(set) var currentFileURL: URL?
-    @Published var isTranscribing: Bool = false
-    @Published var progress: Double = 0.0
-    @Published private(set) var status: FileTranscriptionStatus = .idle
+    private nonisolated final class CallerCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var canceled = false
+        var isCanceled: Bool { self.lock.withLock { self.canceled } }
+        func cancel() { self.lock.withLock { self.canceled = true } }
+    }
+    private struct Presentation {
+        var currentFileURL: URL?
+        var isTranscribing = false
+        var progress = 0.0
+        var status: FileTranscriptionStatus = .idle
+        var error: String?
+        var result: TranscriptionResult?
+        var fallbackNotice: String?
+    }
+    @Published private var presentation = Presentation()
+    private(set) var currentFileURL: URL? {
+        get { self.privateOperations.isCurrent ? self.presentation.currentFileURL : nil }
+        set { if self.privateOperations.isCurrent { self.presentation.currentFileURL = newValue } }
+    }
+    var isTranscribing: Bool {
+        get { self.privateOperations.isCurrent && self.presentation.isTranscribing }
+        set { if self.privateOperations.isCurrent { self.presentation.isTranscribing = newValue } }
+    }
+    var progress: Double {
+        get { self.privateOperations.isCurrent ? self.presentation.progress : 0 }
+        set { if self.privateOperations.isCurrent { self.presentation.progress = newValue } }
+    }
+    private(set) var status: FileTranscriptionStatus {
+        get { self.privateOperations.isCurrent ? self.presentation.status : .idle }
+        set { if self.privateOperations.isCurrent { self.presentation.status = newValue } }
+    }
     var currentStatus: String { self.status.text() }
-    @Published var error: String?
-    @Published var result: TranscriptionResult?
-    @Published var fallbackNotice: String?
+    var error: String? {
+        get { self.privateOperations.isCurrent ? self.presentation.error : nil }
+        set { if self.privateOperations.isCurrent { self.presentation.error = newValue } }
+    }
+    var result: TranscriptionResult? {
+        get { self.privateOperations.isCurrent ? self.presentation.result : nil }
+        set { if self.privateOperations.isCurrent { self.presentation.result = newValue } }
+    }
+    var fallbackNotice: String? {
+        get { self.privateOperations.isCurrent ? self.presentation.fallbackNotice : nil }
+        set { if self.privateOperations.isCurrent { self.presentation.fallbackNotice = newValue } }
+    }
 
     // MARK: - Supported Formats
 
@@ -401,16 +438,19 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
 
     /// Share the ASR service instance to avoid loading models twice
     private let asrService: ASRService
+    private let historyStore: FileTranscriptionHistoryStore
 
-    init(asrService: ASRService) {
+    init(asrService: ASRService, historyStore: FileTranscriptionHistoryStore? = nil) {
         self.asrService = asrService
+        self.historyStore = historyStore ?? FileTranscriptionHistoryStore.shared
         PrivateProfileService.shared.register(self)
     }
 
     func prepareForPrivateProfileTransition() async throws {
+        self.presentation = Presentation()
+        self.historyStore.concealPrivateProjections()
         await privateOperations.retireAndJoin()
-        currentFileURL = nil; result = nil; error = nil; fallbackNotice = nil
-        progress = 0; status = .idle
+        self.presentation = Presentation()
     }
 
     enum TranscriptionError: LocalizedError {
@@ -438,6 +478,15 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
 
     /// Initialize the ASR models (reuses models from ASRService - no duplicate download!)
     func initializeModels() async throws {
+        do { try await self.privateOperations.perform { try await self.initializeModelsBound() } }
+        catch {
+            guard self.privateOperations.isCurrent, !Task.isCancelled else { throw CancellationError() }
+            throw error
+        }
+    }
+
+    private func initializeModelsBound() async throws {
+        try self.requireCurrentOperation()
         guard !self.asrService.isAsrReady else { return }
 
         self.status = .preparingModels
@@ -457,10 +506,40 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
     /// - Parameters:
     ///   - fileURL: URL to the audio/video file
     func transcribeFile(_ fileURL: URL) async throws -> TranscriptionResult {
-        try await privateOperations.perform { try await self.transcribeFileBound(fileURL) }
+        let callerCancellation = CallerCancellation()
+        do {
+            return try await withTaskCancellationHandler {
+                try await self.privateOperations.perform {
+                    try await self.transcribeFileBound(fileURL, callerCancellation: callerCancellation)
+                }
+            } onCancel: { callerCancellation.cancel() }
+        }
+        catch {
+            guard self.privateOperations.isCurrent, !Task.isCancelled else { throw CancellationError() }
+            throw error
+        }
     }
 
-    private func transcribeFileBound(_ fileURL: URL) async throws -> TranscriptionResult {
+    private func requireCurrentOperation() throws {
+        guard self.privateOperations.isCurrent, !Task.isCancelled else { throw CancellationError() }
+    }
+
+    private func complete(_ result: TranscriptionResult, profile: PrivateProfileSnapshot,
+                          admission: FileTranscriptionHistoryWriteAdmission,
+                          callerCancellation: CallerCancellation) throws -> TranscriptionResult {
+        // Explicit visible cancellation discards output. A provider already completing after
+        // logout may commit only through its original hidden-profile write capability.
+        if callerCancellation.isCanceled || (Task.isCancelled && PrivateProfileStorage.isReadable(profile)) { throw CancellationError() }
+        try self.historyStore.addEntry(result, admission: admission)
+        if self.privateOperations.isCurrent, !Task.isCancelled {
+            self.status = .complete; self.progress = 1
+            self.result = result
+        }
+        return result
+    }
+
+    private func transcribeFileBound(_ fileURL: URL, callerCancellation: CallerCancellation) async throws -> TranscriptionResult {
+        try self.requireCurrentOperation()
         guard !self.isTranscribing else {
             throw TranscriptionError.activityInProgress(PichiLocalization.text("This file is already being transcribed."))
         }
@@ -474,249 +553,270 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
             throw wrappedError
         }
 
-        self.currentFileURL = fileURL
-        self.isTranscribing = true
-        error = nil
-        self.fallbackNotice = nil
-        self.progress = 0.0
-        let startTime = Date()
+        defer { self.asrService.releaseExclusiveActivity(activityLease) }
+        let profile = PrivateProfileStorage.current
+        let output = try self.historyStore.admitWrite()
+        defer { output.finish() }
+        let provider = try self.asrService.beginAdmittedTranscription(lease: activityLease)
+        let operation = { [self] () async throws -> TranscriptionResult in
+            let settings = SettingsStore.shared
+            let speakerLabelsEnabled = settings.fileTranscriptionSpeakerLabelsEnabled
+            let expectedSpeakers = settings.fileTranscriptionExpectedSpeakerCount
+            let analyticsModel = settings.selectedSpeechModel.analyticsDescriptor
+            let analytics = AnalyticsService.shared
+            var labelingNotice: String?
 
-        defer {
-            self.isTranscribing = false
+            self.currentFileURL = fileURL
+            self.isTranscribing = true
+            error = nil
+            self.fallbackNotice = nil
             self.progress = 0.0
-            self.asrService.releaseExclusiveActivity(activityLease)
-        }
+            let startTime = Date()
 
-        do {
-            // Initialize models if not already done (reuses ASRService models)
-            if !self.asrService.isAsrReady {
-                try await self.initializeModels()
+            defer {
+                self.isTranscribing = false
+                self.progress = 0.0
             }
 
-            // Get the current transcription provider (works for both Parakeet and Whisper)
-            let provider = self.asrService.fileTranscriptionProvider
-            guard provider.isReady else {
-                throw TranscriptionError.modelLoadFailed(PichiLocalization.text("Transcription provider not ready"))
-            }
-
-            // Check file extension
-            let fileExtension = fileURL.pathExtension.lowercased()
-
-            guard Self.supportedFileExtensions.contains(fileExtension) else {
-                throw TranscriptionError
-                    .fileNotSupported(PichiLocalization.format("Format .%@ not supported. %@", fileExtension,
-                                                               PichiLocalization.text(Self.supportedFormatsDescription)))
-            }
-
-            AnalyticsService.shared.recordUsage(
-                mode: .meeting,
-                transcriptionModel: SettingsStore.shared.selectedSpeechModel.analyticsDescriptor
-            )
-
-            // Get audio duration for progress display
-            self.status = .analyzingAudio
-            self.progress = 0.2
-
-            let asset = AVAsset(url: fileURL)
-            let duration: Double
             do {
-                let cmDuration = try await asset.load(.duration)
-                duration = CMTimeGetSeconds(cmDuration)
-            } catch {
-                // Fall back to 0 if we can't determine duration
-                duration = 0
-                DebugLogger.shared.warning("Could not determine audio duration: \(error.localizedDescription)", source: "FileTranscriptionService")
-            }
-
-            let isVideoContainer = UTType(filenameExtension: fileExtension)
-                .map { $0.conforms(to: .movie) } ?? false
-
-            // Speaker-labeled path: diarize first, then transcribe each speaker turn.
-            // Any diarization failure falls back to the standard paths below.
-            if SettingsStore.shared.fileTranscriptionSpeakerLabelsEnabled,
-               SpeakerDiarizationService.isSupported,
-               !isVideoContainer
-            {
-                if let labeledResult = await self.transcribeFileWithSpeakerLabels(
-                    fileURL,
-                    provider: provider,
-                    duration: duration,
-                    startTime: startTime
-                ) {
-                    return labeledResult
+                // Initialize models if not already done (reuses ASRService models)
+                if !self.asrService.isAsrReady {
+                    try await self.initializeModelsBound()
                 }
-                DebugLogger.shared.warning(
-                    "Speaker labeling unavailable for this file; falling back to standard transcription",
-                    source: "FileTranscriptionService"
-                )
-                self.fallbackNotice = "Speaker labeling was unavailable for this file. The transcript was completed without speaker labels."
-                self.progress = 0.3
-            } else if SettingsStore.shared.fileTranscriptionSpeakerLabelsEnabled, isVideoContainer {
-                DebugLogger.shared.info(
-                    "Speaker labeling skipped for video container; using standard transcription",
-                    source: "FileTranscriptionService"
-                )
-            }
 
-            if provider.prefersNativeFileTranscription && !isVideoContainer {
+                // Get the current transcription provider (works for both Parakeet and Whisper)
+                try self.requireCurrentOperation()
+                guard provider.isReady else {
+                    throw TranscriptionError.modelLoadFailed(PichiLocalization.text("Transcription provider not ready"))
+                }
+
+                // Check file extension
+                let fileExtension = fileURL.pathExtension.lowercased()
+
+                guard Self.supportedFileExtensions.contains(fileExtension) else {
+                    throw TranscriptionError
+                        .fileNotSupported(PichiLocalization.format("Format .%@ not supported. %@", fileExtension,
+                                                                   PichiLocalization.text(Self.supportedFormatsDescription)))
+                }
+
+                analytics.recordUsage(mode: .meeting, transcriptionModel: analyticsModel)
+
+                // Get audio duration for progress display
+                self.status = .analyzingAudio
+                self.progress = 0.2
+
+                let asset = AVAsset(url: fileURL)
+                let duration: Double
+                do {
+                    let cmDuration = try await asset.load(.duration)
+                    duration = CMTimeGetSeconds(cmDuration)
+                } catch {
+                    try self.requireCurrentOperation()
+                    // Fall back to 0 if we can't determine duration
+                    duration = 0
+                    DebugLogger.shared.warning("Could not determine audio duration: \(error.localizedDescription)", source: "FileTranscriptionService")
+                }
+
+                try self.requireCurrentOperation()
+                let isVideoContainer = UTType(filenameExtension: fileExtension)
+                    .map { $0.conforms(to: .movie) } ?? false
+
+                // Speaker-labeled path: diarize first, then transcribe each speaker turn.
+                // Any diarization failure falls back to the standard paths below.
+                if speakerLabelsEnabled,
+                   SpeakerDiarizationService.isSupported,
+                   !isVideoContainer
+                {
+                    if let labeledResult = try await self.transcribeFileWithSpeakerLabels(
+                        fileURL,
+                        provider: provider,
+                        duration: duration,
+                        startTime: startTime,
+                        expectedSpeakers: expectedSpeakers,
+                        entryID: output.entryID
+                    ) {
+                        return try self.complete(labeledResult, profile: profile, admission: output, callerCancellation: callerCancellation)
+                    }
+                    try self.requireCurrentOperation()
+                    DebugLogger.shared.warning(
+                        "Speaker labeling unavailable for this file; falling back to standard transcription",
+                        source: "FileTranscriptionService"
+                    )
+                    labelingNotice = "Speaker labeling was unavailable for this file. The transcript was completed without speaker labels."
+                    self.fallbackNotice = labelingNotice
+                    self.progress = 0.3
+                } else if speakerLabelsEnabled, isVideoContainer {
+                    DebugLogger.shared.info(
+                        "Speaker labeling skipped for video container; using standard transcription",
+                        source: "FileTranscriptionService"
+                    )
+                }
+
+                if provider.prefersNativeFileTranscription && !isVideoContainer {
+                    self.status = .transcribingAudio(durationSeconds: duration > 0 ? Int(duration) : nil)
+                    self.progress = 0.3
+
+                    DebugLogger.shared.info(
+                        "FileTranscriptionService: using native file transcription path for provider=\(provider.name)",
+                        source: "FileTranscriptionService"
+                    )
+
+                    try self.requireCurrentOperation()
+                    let nativeResult = try await provider.transcribeFile(at: fileURL)
+                    let processingTime = Date().timeIntervalSince(startTime)
+                    let result = TranscriptionResult(
+                        id: output.entryID,
+                        text: nativeResult.text,
+                        confidence: nativeResult.confidence,
+                        duration: duration,
+                        processingTime: processingTime,
+                        fileName: fileURL.lastPathComponent,
+                        speakerLabelingNotice: labelingNotice
+                    )
+                    return try self.complete(result, profile: profile, admission: output, callerCancellation: callerCancellation)
+                }
+
+                if provider.prefersNativeFileTranscription && isVideoContainer {
+                    DebugLogger.shared.info(
+                        "FileTranscriptionService: using buffered transcription path for video container [provider=\(provider.name), extension=\(fileExtension)]",
+                        source: "FileTranscriptionService"
+                    )
+                }
+
+                // Transcribe using chunked processing for long files
+                // This reads audio in ~20 minute segments to avoid memory overflow on 3+ hour files
+                let chunkDurationSeconds: Double = 20 * 60 // 20 minutes per chunk (well under 24min model limit)
+                let sampleRate: Double = 16_000 // Target sample rate for ASR
+                let samplesPerChunk = Int(chunkDurationSeconds * sampleRate)
+
+                var allTranscriptions: [String] = []
+                var totalConfidence: Float = 0
+                var chunkCount = 0
+
+                // Open audio file for reading
+                let audioFile: AVAudioFile
+                do {
+                    audioFile = try AVAudioFile(forReading: fileURL)
+                } catch {
+                    throw TranscriptionError.audioConversionFailed(PichiLocalization.format("Could not open audio file: %@", error.localizedDescription))
+                }
+
+                let fileFormat = audioFile.processingFormat
+                let totalFrames = AVAudioFrameCount(audioFile.length)
+                let fileSampleRate = fileFormat.sampleRate
+                guard fileSampleRate > 0 else {
+                    throw TranscriptionError.audioConversionFailed(PichiLocalization.text("Invalid audio file: sample rate is 0"))
+                }
+                let resampleRatio = sampleRate / fileSampleRate
+
+                // Calculate chunk size in source file frames
+                let sourceFramesPerChunk = AVAudioFrameCount(Double(samplesPerChunk) / resampleRatio)
+                var currentFrame: AVAudioFramePosition = 0
+
                 self.status = .transcribingAudio(durationSeconds: duration > 0 ? Int(duration) : nil)
-                self.progress = 0.3
 
-                DebugLogger.shared.info(
-                    "FileTranscriptionService: using native file transcription path for provider=\(provider.name)",
-                    source: "FileTranscriptionService"
-                )
+                while currentFrame < audioFile.length {
+                    try self.requireCurrentOperation()
+                    let remainingFrames = AVAudioFrameCount(audioFile.length - currentFrame)
+                    let framesToRead = min(sourceFramesPerChunk, remainingFrames)
 
-                let nativeResult = try await provider.transcribeFile(at: fileURL)
-                let processingTime = Date().timeIntervalSince(startTime)
-                let result = TranscriptionResult(
-                    text: nativeResult.text,
-                    confidence: nativeResult.confidence,
-                    duration: duration,
-                    processingTime: processingTime,
-                    fileName: fileURL.lastPathComponent,
-                    speakerLabelingNotice: self.fallbackNotice
-                )
+                    // Read chunk from file
+                    guard let buffer = AVAudioPCMBuffer(pcmFormat: fileFormat, frameCapacity: framesToRead) else {
+                        throw TranscriptionError.audioConversionFailed(PichiLocalization.text("Could not create audio buffer"))
+                    }
+
+                    audioFile.framePosition = currentFrame
+                    do {
+                        try audioFile.read(into: buffer, frameCount: framesToRead)
+                    } catch {
+                        throw TranscriptionError.audioConversionFailed(PichiLocalization.format("Could not read audio chunk: %@", error.localizedDescription))
+                    }
+
+                    // Convert buffer to 16kHz mono Float32 samples
+                    var samples: [Float]
+                    do {
+                        samples = try AudioBufferConverter.monoSamples(
+                            from: buffer,
+                            targetSampleRate: sampleRate
+                        )
+                    } catch {
+                        throw TranscriptionError.audioConversionFailed(PichiLocalization.format("Could not resample audio: %@", error.localizedDescription))
+                    }
+
+                    // Keep short files and final tails. The existing ASR minimum is met with
+                    // trailing silence, without dropping source audio or changing its duration.
+                    guard !samples.isEmpty else {
+                        currentFrame += AVAudioFramePosition(framesToRead)
+                        continue
+                    }
+                    if samples.count < Int(sampleRate) {
+                        samples.append(contentsOf: repeatElement(Float(0), count: Int(sampleRate) - samples.count))
+                    }
+
+                    // Transcribe this chunk using the provider (works for both Parakeet and Whisper)
+                    let chunkResult = try await provider.transcribe(samples)
+
+                    if !chunkResult.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        allTranscriptions.append(chunkResult.text)
+                        totalConfidence += chunkResult.confidence
+                        chunkCount += 1
+                    }
+
+                    currentFrame += AVAudioFramePosition(framesToRead)
+
+                    // Update progress
+                    let progressPercent = Double(currentFrame) / Double(audioFile.length)
+                    self.progress = 0.3 + (progressPercent * 0.6) // Progress from 30% to 90%
+                    self.status = .transcribing(percent: Int(progressPercent * 100))
+                }
+
+                if allTranscriptions.isEmpty, self.privateOperations.isCurrent {
+                    DebugLogger.shared.warning(
+                        "No audio chunks produced recognized text",
+                        source: "FileTranscriptionService"
+                    )
+                }
+
+                // Combine all chunk transcriptions
+                let finalText = allTranscriptions.joined(separator: " ")
+                let avgConfidence = chunkCount > 0 ? totalConfidence / Float(chunkCount) : 0
+
+                let transcriptionResult = (text: finalText, confidence: avgConfidence)
 
                 self.status = .complete
                 self.progress = 1.0
 
-                self.result = result
-                FileTranscriptionHistoryStore.shared.addEntry(result)
-                return result
-            }
+                let processingTime = Date().timeIntervalSince(startTime)
 
-            if provider.prefersNativeFileTranscription && isVideoContainer {
-                DebugLogger.shared.info(
-                    "FileTranscriptionService: using buffered transcription path for video container [provider=\(provider.name), extension=\(fileExtension)]",
-                    source: "FileTranscriptionService"
+                let result = TranscriptionResult(
+                    id: output.entryID,
+                    text: transcriptionResult.text,
+                    confidence: transcriptionResult.confidence,
+                    duration: duration,
+                    processingTime: processingTime,
+                    fileName: fileURL.lastPathComponent,
+                    speakerLabelingNotice: labelingNotice
                 )
-            }
+                return try self.complete(result, profile: profile, admission: output, callerCancellation: callerCancellation)
 
-            // Transcribe using chunked processing for long files
-            // This reads audio in ~20 minute segments to avoid memory overflow on 3+ hour files
-            let chunkDurationSeconds: Double = 20 * 60 // 20 minutes per chunk (well under 24min model limit)
-            let sampleRate: Double = 16_000 // Target sample rate for ASR
-            let samplesPerChunk = Int(chunkDurationSeconds * sampleRate)
-
-            var allTranscriptions: [String] = []
-            var totalConfidence: Float = 0
-            var chunkCount = 0
-
-            // Open audio file for reading
-            let audioFile: AVAudioFile
-            do {
-                audioFile = try AVAudioFile(forReading: fileURL)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as TranscriptionError {
+                self.error = error.localizedDescription
+                throw error
             } catch {
-                throw TranscriptionError.audioConversionFailed(PichiLocalization.format("Could not open audio file: %@", error.localizedDescription))
+                let wrappedError = TranscriptionError.transcriptionFailed(error.localizedDescription)
+                self.error = wrappedError.localizedDescription
+                throw wrappedError
             }
-
-            let fileFormat = audioFile.processingFormat
-            let totalFrames = AVAudioFrameCount(audioFile.length)
-            let fileSampleRate = fileFormat.sampleRate
-            guard fileSampleRate > 0 else {
-                throw TranscriptionError.audioConversionFailed(PichiLocalization.text("Invalid audio file: sample rate is 0"))
-            }
-            let resampleRatio = sampleRate / fileSampleRate
-
-            // Calculate chunk size in source file frames
-            let sourceFramesPerChunk = AVAudioFrameCount(Double(samplesPerChunk) / resampleRatio)
-            var currentFrame: AVAudioFramePosition = 0
-
-            self.status = .transcribingAudio(durationSeconds: duration > 0 ? Int(duration) : nil)
-
-            while currentFrame < audioFile.length {
-                let remainingFrames = AVAudioFrameCount(audioFile.length - currentFrame)
-                let framesToRead = min(sourceFramesPerChunk, remainingFrames)
-
-                // Read chunk from file
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: fileFormat, frameCapacity: framesToRead) else {
-                    throw TranscriptionError.audioConversionFailed(PichiLocalization.text("Could not create audio buffer"))
-                }
-
-                audioFile.framePosition = currentFrame
-                do {
-                    try audioFile.read(into: buffer, frameCount: framesToRead)
-                } catch {
-                    throw TranscriptionError.audioConversionFailed(PichiLocalization.format("Could not read audio chunk: %@", error.localizedDescription))
-                }
-
-                // Convert buffer to 16kHz mono Float32 samples
-                var samples: [Float]
-                do {
-                    samples = try AudioBufferConverter.monoSamples(
-                        from: buffer,
-                        targetSampleRate: sampleRate
-                    )
-                } catch {
-                    throw TranscriptionError.audioConversionFailed(PichiLocalization.format("Could not resample audio: %@", error.localizedDescription))
-                }
-
-                // Keep short files and final tails. The existing ASR minimum is met with
-                // trailing silence, without dropping source audio or changing its duration.
-                guard !samples.isEmpty else {
-                    currentFrame += AVAudioFramePosition(framesToRead)
-                    continue
-                }
-                if samples.count < Int(sampleRate) {
-                    samples.append(contentsOf: repeatElement(Float(0), count: Int(sampleRate) - samples.count))
-                }
-
-                // Transcribe this chunk using the provider (works for both Parakeet and Whisper)
-                let chunkResult = try await provider.transcribe(samples)
-
-                if !chunkResult.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    allTranscriptions.append(chunkResult.text)
-                    totalConfidence += chunkResult.confidence
-                    chunkCount += 1
-                }
-
-                currentFrame += AVAudioFramePosition(framesToRead)
-
-                // Update progress
-                let progressPercent = Double(currentFrame) / Double(audioFile.length)
-                self.progress = 0.3 + (progressPercent * 0.6) // Progress from 30% to 90%
-                self.status = .transcribing(percent: Int(progressPercent * 100))
-            }
-
-            if allTranscriptions.isEmpty {
-                DebugLogger.shared.warning(
-                    "No audio chunks produced recognized text",
-                    source: "FileTranscriptionService"
-                )
-            }
-
-            // Combine all chunk transcriptions
-            let finalText = allTranscriptions.joined(separator: " ")
-            let avgConfidence = chunkCount > 0 ? totalConfidence / Float(chunkCount) : 0
-
-            let transcriptionResult = (text: finalText, confidence: avgConfidence)
-
-            self.status = .complete
-            self.progress = 1.0
-
-            let processingTime = Date().timeIntervalSince(startTime)
-
-            let result = TranscriptionResult(
-                text: transcriptionResult.text,
-                confidence: transcriptionResult.confidence,
-                duration: duration,
-                processingTime: processingTime,
-                fileName: fileURL.lastPathComponent,
-                speakerLabelingNotice: self.fallbackNotice
-            )
-
-            self.result = result
-            FileTranscriptionHistoryStore.shared.addEntry(result)
+        }
+        do {
+            let result = try await operation()
+            await self.asrService.endAdmittedTranscription(lease: activityLease)
             return result
-
-        } catch let error as TranscriptionError {
-            self.error = error.localizedDescription
-            throw error
         } catch {
-            let wrappedError = TranscriptionError.transcriptionFailed(error.localizedDescription)
-            self.error = wrappedError.localizedDescription
-            throw wrappedError
+            await self.asrService.endAdmittedTranscription(lease: activityLease)
+            throw error
         }
     }
 
@@ -751,12 +851,14 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
         _ fileURL: URL,
         provider: TranscriptionProvider,
         duration: Double,
-        startTime: Date
-    ) async -> TranscriptionResult? {
+        startTime: Date,
+        expectedSpeakers: Int,
+        entryID: UUID
+    ) async throws -> TranscriptionResult? {
+        try self.requireCurrentOperation()
         self.status = .identifyingSpeakers
         self.progress = 0.25
 
-        let expectedSpeakers = SettingsStore.shared.fileTranscriptionExpectedSpeakerCount
         let diarizer = SpeakerDiarizationService(
             expectedSpeakers: expectedSpeakers > 0 ? expectedSpeakers : nil
         )
@@ -764,7 +866,9 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
         let turns: [SpeakerDiarizationService.SpeakerTurn]
         do {
             turns = try await diarizer.diarize(fileURL: fileURL)
+            try self.requireCurrentOperation()
         } catch {
+            if error is CancellationError || !self.privateOperations.isCurrent || Task.isCancelled { throw CancellationError() }
             DebugLogger.shared.warning(
                 "Diarization failed: \(error.localizedDescription)",
                 source: "FileTranscriptionService"
@@ -794,6 +898,7 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
         var recognizedTurns: [SpeakerRecognizedTurn] = []
 
         for (index, turn) in turns.enumerated() {
+            try self.requireCurrentOperation()
             self.status = .transcribingSpeakerSegments(index: index + 1, total: turns.count)
             self.progress = 0.3 + (Double(index) / Double(turns.count)) * 0.65
 
@@ -801,6 +906,7 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
             do {
                 transcribed = try await self.transcribeSpeakerTurn(turn, from: audioFile, provider: provider)
             } catch {
+                if error is CancellationError || !self.privateOperations.isCurrent || Task.isCancelled { throw CancellationError() }
                 // A genuine audio-read or ASR failure can omit an unknown amount of speech.
                 // Use the standard full-file path rather than accepting uncertain labels.
                 DebugLogger.shared.warning(
@@ -819,6 +925,7 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
         }
 
         guard let labeledTranscript = SpeakerLabeledTranscriptionPolicy.assembleTurns(recognizedTurns) else {
+            try self.requireCurrentOperation()
             let gaps = recognizedTurns.flatMap(\.transcription.gaps)
             let diarizedDuration = recognizedTurns.reduce(0) {
                 $0 + max(0, $1.endSeconds - $1.startSeconds)
@@ -844,6 +951,7 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
         let processingTime = Date().timeIntervalSince(startTime)
 
         let result = TranscriptionResult(
+            id: entryID,
             text: labeledText,
             confidence: labeledTranscript.confidence,
             duration: duration,
@@ -854,11 +962,6 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
             speakerLabelingGaps: labeledTranscript.gaps
         )
 
-        self.status = .complete
-        self.progress = 1.0
-
-        self.result = result
-        FileTranscriptionHistoryStore.shared.addEntry(result)
         return result
     }
 
@@ -887,6 +990,7 @@ final class FileTranscriptionService: ObservableObject, PrivateProfileTransition
         }
 
         return try await SpeakerLabeledTranscriptionPolicy.transcribeChunks(ranges) { range in
+            try self.requireCurrentOperation()
             let samples = try self.readSamples(
                 from: audioFile,
                 startSeconds: range.startSeconds,

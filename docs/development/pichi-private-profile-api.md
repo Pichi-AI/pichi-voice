@@ -1,6 +1,6 @@
 # Private profile source API for N3, N4 and N5
 
-Status: early source handoff, not native/runtime acceptance. Baseline API is parent revision `911b0677`, containing the N1 source boundary, now corrected to `f989116f2028d1bb1d47cac86ff65f6e57a2391a`. N2 profile composition and admitted dictation-write corrections remain in progress. Do not enable production sign-in based on this source handoff.
+Status: focused N2 private-profile foundation. N1 remains frozen at `f989116f2028d1bb1d47cac86ff65f6e57a2391a`. This layer supplies local source isolation, guest preservation, joined cleanup and original capture ownership. N5 delivers the queue and shared cloud activation after this foundation; N3 and N4 deliver account/cloud UI. Their implementations are excluded from the focused N2 branch.
 
 N1 remains the only account/token manager. N2 supplies one `PrivateProfileService: AccountSessionLifecycle` participant. N5 registers its joined delivery cleanup inside that participant and owns its own consent/outbox/status operations. It must not install a second account lifecycle or create another profile registry.
 
@@ -49,7 +49,7 @@ For a later retry/reconciliation after logout, a queue item keeps its frozen own
 
 `PrivateProfileService.shared` is observable with `sourceRevision`, `projectionRevision`, `isTransitioning`, `isPrivateDataVisible` and `isAccountIsolationReady`. `requireTransitionAdmission()` allows N3/N4 to refuse an explicit account/workspace switch before invoking N1. N1's lifecycle remains the final isolation boundary.
 
-N2 composition alone calls `configure(isBusy:prepare:activate:)` and installs the service through N1's `installLifecycle`. The concrete source hooks must be complete before isolation readiness is true. This source handoff does not assert that those production hooks are installed or verified.
+N2 composition alone calls `configure(isBusy:prepare:activate:conceal:)` and installs the service through N1's `installLifecycle`. The concrete source hooks must be installed before isolation readiness is true. `conceal` cancels and joins private readers, settings work, background transfers and Local API requests even when an admitted recorder must continue. The quiescent `prepare` hook additionally retires capture-sensitive sources. An earlier marker or cleanup failure cannot skip the remaining joins or publish another readable profile.
 
 Per-window readers and N5's delivery owner conform to:
 
@@ -63,10 +63,24 @@ Register through `PrivateProfileService.shared.register(_:)`. Registration is we
 
 N2 owns common app/window composition. Use `sourceRevision` for rebuilding private source-bound views after successful source replacement. `projectionRevision` also advances on concealment and must not key the whole app root during an admitted capture. Concealment hides private pixels, focus and accessibility while preserving the controller needed to stop/finalize the old recording. N3 owns mobile late copy/export/PDF result fences; N4 owns desktop view-local payload/projection fences. They must not install parallel root composition or profile managers. Account/workspace switching is blocked during capture/finalization and admitted output persistence. Logout clears N1 credentials offline while the local capture retains its original writer; another person cannot enter before required local cleanup completes. Token expiry alone never switches local profile or stops recording.
 
-## Evidence and pending gates
+## Dictation and direct capture output
 
-The actual scoped meeting store, persisted codecs and exporter passed 960 synthetic assertions in the existing checkpoint runner, including 19 meeting-profile cases and 10 injected lifecycle cases. The new recording observer is source-only at this handoff; recording-observer cases and production composition are still being completed. Agent store/settings/auxiliary suites provide additional isolated evidence, not combined native acceptance.
+`PrivateDictationCaptureOutput` freezes the original history admission and recording-time history/audio preferences. A concealed capture saves its raw local result through that same admission. Empty ASR remains empty; successful approved WAV persistence can create an audio-only recoverable entry. No transcript text is fabricated. Failed WAV or history persistence retains the original payload and Stop owner for an explicit retry. `finish() async -> Bool` returns false until that ownership can be released safely.
 
-Pending: admitted dictation/audio completion after immediate conceal, queued guest migration across conceal, full source/observer transition tests, combined independent review, actual sequential iOS/macOS builds under N2's admitted heavy slot. Cloud readiness remains separately owned by N5.
+`PrivateDirectDictationCapture` supplies the same admission and joined Stop ownership to existing command, rewrite, training and fallback controls. A visible consumer acknowledges its result synchronously; otherwise concealment preserves the result under the original owner. Recreated windows forward Stop to the retained exact capture ID. A queued old view cannot type, copy or reopen private output in another generation.
 
-The mobile source manifest now explicitly registers N1 account files and the published N2 profile sources, so project regeneration preserves them. `update-mobile-project.py` already includes every top-level `Sources/Mobile/*.swift`; N3's `MobileAccount.swift` will therefore be included when its source branch is integrated and the common composition owner regenerates once. No concurrent project regeneration is authorized.
+The common ASR service pins the existing provider and immutable model/options under its admitted dictation, file or Local API lease. Provider cleanup joins admitted recognition workers before releasing their options. This contract extends the existing provider boundary; common orchestration does not add a model-specific factory or switch.
+
+## Process ownership boundary
+
+Terminal commands run in an explicitly owned process group with bounded pipes, cancellation and timeout. Cleanup may signal that group only while its original leader remains reserved. A command that successfully starts an intentionally redirected background job transfers that job to the user; later profile cleanup does not kill it or claim it was joined. No broad process-name cleanup or process registry changes that boundary.
+
+## Evidence and delivery boundaries
+
+The focused foundation extends the reviewed `65b5eaa8` source with the corrected capture feedback, menu discovery, paste verification and approved shared audio-export cancellation. Menu discovery uses the existing private operation owner only until its immutable configuration is ready. Profile cleanup cancels and joins that phase; the existing coordinator independently owns capture admission afterward, so busy logout cannot cancel an admitted recorder.
+
+Synthetic verification covers 1,148 checkpoint assertions, 167 admitted history/audio assertions, 59 callback/discovery assertions in each compiler mode, seven source guards and 14 negative controls. The typing-focus fixture covers 286 checks and rejects a wrong-field forwarding mutation. These results establish their recorded source and fixture scope. Final delivery checks and native build evidence are pinned independently to the delivery revision; portable or synthetic passes do not establish microphone, model inference, native visual quality or physical-device behavior.
+
+The earlier `d5febd94` unsigned iOS simulator SDK compile is historical evidence for that revision only. Exact delivery compilation, signing, interactive screenshots, audio routing and physical-device acceptance remain separate gates. Production sign-in or cloud publication is not enabled by this foundation.
+
+The mobile manifest explicitly registers the N1 account and N2 shared sources. Common cloud activation and N3/N4 account/cloud constructors are delivered in later layers. Project generation has one owner at a time.

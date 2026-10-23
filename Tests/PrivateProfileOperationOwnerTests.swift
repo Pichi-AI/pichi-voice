@@ -14,7 +14,8 @@ extension MeetingSessionStoreCheckpointTests {
             try await owner.perform {
                 started = true
                 await gate.wait()
-                return "late private result"
+                // A copy can finish with a recoverable failure after logout concealed its source.
+                return false
             }
         }
         while !started { await Task.yield() }
@@ -27,8 +28,8 @@ extension MeetingSessionStoreCheckpointTests {
         gate.open()
         await retirement.value
         check(joined, "Retirement joins the concrete operation before returning")
-        do { _ = try await operation.value; check(false, "Retired result must be discarded") }
-        catch { check(true, "Late result is discarded after joined cancellation") }
+        do { _ = try await operation.value; check(false, "Retired copy failure must not reach fallback presentation") }
+        catch { check(true, "Held copy failure is discarded after conceal and joined cancellation") }
         PrivateProfileStorage.select(profile)
         check(!owner.isCurrent, "An old controller cannot revive on the same profile")
         do { _ = try await owner.perform { 9 }; check(false, "Retired controller cannot admit work") }

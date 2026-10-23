@@ -18,6 +18,65 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
     private var coherePromptTemplate: [Int] = []
     private var cohereLanguageTokenIDs: [SettingsStore.CohereLanguage: Int] = [:]
 
+    // MARK: - Dictation capture configuration
+
+    private struct DictationCaptureConfiguration {
+        let leaseID: UUID
+        let model: SettingsStore.SpeechModel
+        let language: SettingsStore.CohereLanguage
+        let artifactsDirectory: URL?
+    }
+
+    private let dictationCaptureLock = NSRecursiveLock()
+    private var dictationCaptureConfiguration: DictationCaptureConfiguration?
+
+    func beginAdmittedTranscription(leaseID: UUID) throws {
+        try self.dictationCaptureLock.withLock {
+            if let capture = self.dictationCaptureConfiguration {
+                guard capture.leaseID == leaseID else {
+                    throw CancellationError()
+                }
+                return
+            }
+            let model = self.selectedModel
+            let directory = model.externalCoreMLSpec.flatMap { Self.artifactsDirectory(for: model, spec: $0) }
+            self.dictationCaptureConfiguration = DictationCaptureConfiguration(
+                leaseID: leaseID, model: model, language: self.selectedCohereLanguage,
+                artifactsDirectory: directory
+            )
+        }
+    }
+
+    func endAdmittedTranscription(leaseID: UUID) {
+        self.dictationCaptureLock.withLock {
+            guard self.dictationCaptureConfiguration?.leaseID == leaseID else { return }
+            self.dictationCaptureConfiguration = nil
+        }
+    }
+
+    private var selectedModel: SettingsStore.SpeechModel {
+        self.dictationCaptureLock.withLock {
+            self.dictationCaptureConfiguration?.model ?? self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        }
+    }
+
+    private var selectedCohereLanguage: SettingsStore.CohereLanguage {
+        self.dictationCaptureLock.withLock {
+            self.dictationCaptureConfiguration?.language ?? SettingsStore.shared.selectedCohereLanguage
+        }
+    }
+
+    private func resolvedArtifactsDirectory(for model: SettingsStore.SpeechModel, spec: ExternalCoreMLASRModelSpec) -> URL? {
+        self.dictationCaptureLock.withLock {
+            if let capture = self.dictationCaptureConfiguration, capture.model == model {
+                return capture.artifactsDirectory
+            }
+            return Self.artifactsDirectory(for: model, spec: spec)
+        }
+    }
+
+    // MARK: - Provider initialization
+
     init(modelOverride: SettingsStore.SpeechModel? = nil) {
         self.modelOverride = modelOverride
     }
@@ -26,7 +85,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         try Task.checkCancellation()
         guard self.isReady == false else { return }
 
-        let model = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        let model = self.selectedModel
         DebugLogger.shared.info(
             "ExternalCoreML: prepare requested for model=\(model.rawValue)",
             source: "ExternalCoreML"
@@ -38,7 +97,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             )
             throw Self.makeError("No external CoreML spec registered for \(model.displayName).")
         }
-        guard let directory = Self.artifactsDirectory(for: model, spec: spec) else {
+        guard let directory = self.resolvedArtifactsDirectory(for: model, spec: spec) else {
             DebugLogger.shared.error(
                 "ExternalCoreML: unable to resolve cache directory for model=\(model.rawValue)",
                 source: "ExternalCoreML"
@@ -148,7 +207,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
             throw Self.makeError("External CoreML model is not initialized.")
         }
         let startedAt = Date()
-        let sampleRate = Double((self.modelOverride ?? SettingsStore.shared.selectedSpeechModel).externalCoreMLSpec?.expectedSampleRate ?? 16_000)
+        let sampleRate = Double(self.selectedModel.externalCoreMLSpec?.expectedSampleRate ?? 16_000)
         let audioSeconds = sampleRate > 0 ? Double(samples.count) / sampleRate : 0
         DebugLogger.shared.debug(
             "ExternalCoreML: transcribing \(samples.count) samples [audioSeconds=\(String(format: "%.2f", audioSeconds))]",
@@ -169,9 +228,9 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
     }
 
     func modelsExistOnDisk() -> Bool {
-        let model = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        let model = self.selectedModel
         guard let spec = model.externalCoreMLSpec,
-              let directory = Self.artifactsDirectory(for: model, spec: spec)
+              let directory = self.resolvedArtifactsDirectory(for: model, spec: spec)
         else {
             return false
         }
@@ -184,9 +243,9 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         self.loadedManifest = nil
         self.coherePromptTemplate = []
         self.cohereLanguageTokenIDs = [:]
-        let model = self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        let model = self.selectedModel
         guard let spec = model.externalCoreMLSpec,
-              let directory = Self.artifactsDirectory(for: model, spec: spec)
+              let directory = self.resolvedArtifactsDirectory(for: model, spec: spec)
         else { return }
         let compiledDirectory = CohereTranscribeAsrModels.compiledArtifactsDirectory(for: directory)
         let isManaged = spec.isAppManagedArtifactsDirectory(directory)
@@ -392,7 +451,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
         let languageTokenIDs = self.cohereLanguageTokenIDs
         guard languageTokenIDs.isEmpty == false else { return promptTemplate }
 
-        let targetLanguage = SettingsStore.shared.selectedCohereLanguage
+        let targetLanguage = self.selectedCohereLanguage
         guard let targetTokenID = languageTokenIDs[targetLanguage] else { return promptTemplate }
 
         let supportedTokenIDs = Set(languageTokenIDs.values)
@@ -403,7 +462,7 @@ final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
 
     private func previewSamples(for samples: [Float]) -> [Float] {
         let sampleRate = self.loadedManifest?.sampleRate
-            ?? (self.modelOverride ?? SettingsStore.shared.selectedSpeechModel).externalCoreMLSpec?.expectedSampleRate
+            ?? self.selectedModel.externalCoreMLSpec?.expectedSampleRate
             ?? 16_000
         let maxPreviewSamples = Int(Double(sampleRate) * self.streamingPreviewMaxSeconds)
         guard samples.count > maxPreviewSamples else { return samples }

@@ -17,6 +17,7 @@ import Foundation
     private var installed = false
     private var isBusy: @MainActor () -> Bool = { true }
     private var prepareSources: @MainActor () async throws -> Void = {}
+    private var concealSources: @MainActor () async throws -> Void = {}
     private var activateSources: @MainActor (PrivateProfileSnapshot) async throws -> Void = { _ in }
     private var pendingWrites: [UUID: Task<Void, Never>] = [:]
     private var captureStopHandler: (id: UUID, stop: @MainActor () async -> Void)?
@@ -30,9 +31,11 @@ import Foundation
     /// Called once by the app composition after every concrete private store hook is installed.
     func configure(isBusy: @escaping @MainActor () -> Bool,
                    prepare: @escaping @MainActor () async throws -> Void,
-                   activate: @escaping @MainActor (PrivateProfileSnapshot) async throws -> Void) throws {
+                   activate: @escaping @MainActor (PrivateProfileSnapshot) async throws -> Void,
+                   conceal: @escaping @MainActor () async throws -> Void = {}) throws {
         guard !installed else { throw AccountError.busy }
         self.isBusy = isBusy; self.prepareSources = prepare; self.activateSources = activate
+        self.concealSources = conceal
         installed = true
     }
 
@@ -44,14 +47,22 @@ import Foundation
 
     func retainPrivateWrite(_ task: Task<Void, Never>, id: UUID) { pendingWrites[id] = task }
     func finishPrivateWrite(id: UUID) { pendingWrites.removeValue(forKey: id) }
-    func installCaptureStopHandler(id: UUID, stop: @escaping @MainActor () async -> Void) {
+    @discardableResult
+    func installCaptureStopHandler(id: UUID, stop: @escaping @MainActor () async -> Void) -> Bool {
+        guard captureStopHandler == nil || captureStopHandler?.id == id else { return false }
         captureStopHandler = (id, stop)
+        return true
     }
     func clearCaptureStopHandler(id: UUID) {
         if captureStopHandler?.id == id { captureStopHandler = nil }
     }
     var hasRetainedCaptureStopHandler: Bool { captureStopHandler != nil }
+    var captureStopHandlerID: UUID? { captureStopHandler?.id }
     func requestCaptureStop() async { await captureStopHandler?.stop() }
+    func requestCaptureStop(id: UUID) async {
+        guard let handler = captureStopHandler, handler.id == id else { return }
+        await handler.stop()
+    }
     private func joinPrivateWrites() async {
         while !pendingWrites.isEmpty {
             for task in Array(pendingWrites.values) { await task.value }
@@ -127,6 +138,10 @@ import Foundation
         var firstFailure: (any Error)?
         do { try persistHiddenMarker(generation: generation) }
         catch { firstFailure = error }
+        // Retire private readers/transfers even when an admitted recorder must remain alive.
+        // Capture-sensitive source retirement is still reserved for the quiescent path.
+        do { try await concealSources() }
+        catch { if firstFailure == nil { firstFailure = error } }
         await joinPrivateWrites()
         for participant in participants.compactMap(\.value) {
             do { try await participant.prepareForPrivateProfileTransition() }

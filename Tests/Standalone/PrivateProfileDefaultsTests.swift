@@ -74,11 +74,12 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         defaults.set("dark", forKey: "ThemePreference")
         defaults.set(true, forKey: "OnboardingCompleted")
         defaults.set(1, forKey: "MobileSetupVersion")
+        defaults.set(6, forKey: "MobileSetupStep")
         defaults.set(7, forKey: "OnboardingCurrentStep")
         let privateSetupValues: [String: Any] = [
             "OnboardingAISkipped": true,
             "OnboardingPlaygroundValidated": true, "OnboardingSelectedLanguageID": "ru",
-            "MobileSetupStep": 5, "MobileSetupSelectedModel": "guest-model",
+            "MobileSetupSelectedModel": "guest-model",
             "MobileMeetingBehaviorVersion": 1, "SelectedSpeechModel": "guest-model",
             "SelectedProviderID": "guest-provider", "MeetingPIIRedactionEnabled": true,
             "MeetingPIIRedactionRequested": true,
@@ -93,6 +94,7 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         expect(defaults.string(forKey: "ThemePreference") == "dark", "explicit device preference shared")
         expect(defaults.bool(forKey: "OnboardingCompleted"), "desktop installation stays complete in A")
         expect(defaults.integer(forKey: "MobileSetupVersion") == 1, "mobile installation stays complete in A")
+        expect(defaults.integer(forKey: "MobileSetupStep") == 6, "mobile Ready step survives sign-in to A")
         expect(defaults.integer(forKey: "OnboardingCurrentStep") == 7, "optional desktop account step survives sign-in")
         for key in privateSetupValues.keys {
             expect(!PrivateProfileDefaults.sharedDeviceKeys.contains(key), "\(key) remains outside device allowlist")
@@ -116,9 +118,11 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         PrivateProfileStorage.select(b)
         expect(defaults.bool(forKey: "OnboardingCompleted"), "desktop installation stays complete in B")
         expect(defaults.integer(forKey: "MobileSetupVersion") == 1, "mobile installation stays complete in B")
+        expect(defaults.integer(forKey: "MobileSetupStep") == 6, "mobile Ready step survives sign-in to B")
         expect(defaults.dictionaryRepresentation()["MobileSetupSelectedModel"] == nil, "device completion does not expose guest wizard model")
         defaults.set(false, forKey: "OnboardingCompleted")
         defaults.set(0, forKey: "MobileSetupVersion")
+        defaults.set(0, forKey: "MobileSetupStep")
         defaults.set(true, forKey: "ManualOnboardingResetRequested")
         let replayAt = Date(timeIntervalSince1970: 123456)
         defaults.set(replayAt, forKey: "ManualOnboardingResetRequestedAt")
@@ -126,9 +130,14 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         PrivateProfileStorage.select(a)
         expect(!defaults.bool(forKey: "OnboardingCompleted"), "explicit desktop replay applies to this installation")
         expect(defaults.integer(forKey: "MobileSetupVersion") == 0, "explicit mobile replay applies to this installation")
+        expect(defaults.integer(forKey: "MobileSetupStep") == 0, "mobile replay starts at the installation's first step")
         expect(defaults.bool(forKey: "ManualOnboardingResetRequested") && defaults.object(forKey: "ManualOnboardingResetRequestedAt") as? Date == replayAt,
                "manual desktop replay remains protected from legacy repair across profiles")
         expect(defaults.integer(forKey: "OnboardingCurrentStep") == 0, "desktop replay progress stays with installation")
+        defaults.set(6, forKey: "MobileSetupStep")
+        PrivateProfileStorage.select(b)
+        expect(defaults.integer(forKey: "MobileSetupVersion") == 0 && defaults.integer(forKey: "MobileSetupStep") == 6,
+            "An incomplete Ready step stays Ready when signing into another profile")
         defaults.set(true, forKey: "OnboardingCompleted")
         defaults.set(1, forKey: "MobileSetupVersion")
         defaults.removeObject(forKey: "ManualOnboardingResetRequested")
@@ -150,6 +159,7 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         expect(defaults.string(forKey: "ThemePreference") == "dark", "concealment retains explicit device behavior")
         expect(defaults.bool(forKey: "OnboardingCompleted"), "concealment retains desktop completion gate")
         expect(defaults.integer(forKey: "MobileSetupVersion") == 1, "concealment retains mobile completion gate")
+        expect(defaults.integer(forKey: "MobileSetupStep") == 6, "concealment retains device setup progress")
         PrivateProfileStorage.select(a)
         expect(defaults.string(forKey: "PrivatePrompt") == "A-prompt", "concealed write ignored")
         PrivateProfileStorage.select(guest)
