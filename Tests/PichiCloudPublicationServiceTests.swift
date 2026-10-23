@@ -140,6 +140,16 @@ extension PichiPublicationOutboxTests {
             if case let .accepted(receipt) = try await service.status(for: first.id) { return receipt.analysisState == .succeeded }; return false
         }
         check(true, "The bounded worker reconciles observed queued analysis to completion without reimport")
+        await http.holdNextRequest("GET")
+        let heldStatus = Task { try await service.reconcile(first.id) }
+        try await wait { await http.isHeld() }
+        let beforeConcurrent = await http.count()
+        do { try await service.reconcile(first.id); check(false, "Duplicate GET must not race receipt completion") }
+        catch let error as AccountError { check(error == .busy, "A current receipt request excludes another GET for that record") }
+        do { try await service.resolveAssessment(first.id, participantID: participantID, criteriaIDs: ["31"]); check(false, "PATCH must not race a receipt GET") }
+        catch let error as AccountError { check(error == .busy, "A current receipt request excludes PATCH for that record") }
+        check(await http.count() == beforeConcurrent, "Rejected concurrent receipt requests never reach transport")
+        await http.release(); try await heldStatus.value
 
         await service.pause()
         let cancelledSource = try await capture()

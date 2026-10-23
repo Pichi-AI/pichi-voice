@@ -190,7 +190,7 @@ actor PichiPublicationOutboxStore {
             case let .seconds(delay):
                 let deadline = now.addingTimeInterval(delay)
                 if delay.isFinite, delay >= 0, deadline.timeIntervalSince1970.isFinite, deadline <= .distantFuture {
-                    record.retryNotBefore = deadline
+                    record.retryNotBefore = max(record.retryNotBefore ?? deadline, deadline)
                 } else { record.retryAfterRequiresReview = true }
             case .beyondAutomaticWindow: record.retryAfterRequiresReview = true
             case nil: break

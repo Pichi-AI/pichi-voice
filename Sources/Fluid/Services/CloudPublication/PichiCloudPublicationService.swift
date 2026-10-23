@@ -268,7 +268,15 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
 
     private func performReceiptRequest(_ request: PichiPublicationRequest, record: PichiPublicationOutboxRecord,
                                        profile: PrivateProfileSnapshot, store: PichiPublicationOutboxStore) async throws {
-        guard record.retryAfterRequiresReview != true, (record.retryNotBefore ?? .distantPast) <= Date() else {
+        guard self.delivering.insert(record.sessionID).inserted else { throw AccountError.busy }
+        defer { self.delivering.remove(record.sessionID) }
+        // Reload after taking the per-record lease. A suspended caller may hold a
+        // snapshot from before another request committed a review or server deadline.
+        guard let current = try await store.record(id: record.sessionID), current.receipt != nil else {
+            throw PichiPublicationOutboxFailure.notAdmitted
+        }
+        try self.check(profile, context: request.context)
+        guard current.retryAfterRequiresReview != true, (current.retryNotBefore ?? .distantPast) <= Date() else {
             throw PichiPublicationOutboxFailure.invalidTransition
         }
         do {

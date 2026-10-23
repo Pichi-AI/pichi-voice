@@ -113,6 +113,13 @@ struct PichiPublicationOutboxTests {
         check(resolved.receipt?.analysisState == .running && resolved.originalAssessment == first.originalAssessment
             && resolved.transcriptBytes == first.transcriptBytes && resolved.operationID == first.operationID,
               "Effective PATCH receipt does not mutate initial POST fingerprint")
+        let receiptDelay = try await crashed.pauseReceipt(id: id, reason: .transportUnavailable, retryAfter: .seconds(7200), now: now)
+        let shorterDelay = try await crashed.pauseReceipt(id: id, reason: .transportUnavailable, retryAfter: .seconds(30), now: now)
+        check(shorterDelay.retryNotBefore == receiptDelay.retryNotBefore, "A shorter later receipt delay cannot erase the outstanding server deadline")
+        let receiptRestart = PichiPublicationOutboxStore(profile: newGeneration, configuration: configuration)
+        check(try await receiptRestart.record(id: id)?.retryNotBefore == receiptDelay.retryNotBefore,
+              "Accepted receipt review deadline survives store restart without returning to POST delivery")
+        _ = try await crashed.updateReceipt(id: id, receipt: receipt(.running))
         try await rejects(.receiptConflict, "Receipt IDs cannot change during reconciliation") {
             _ = try await crashed.updateReceipt(id: id, receipt: receipt(importID: "another-import"))
         }
