@@ -177,7 +177,7 @@ conformance warns under that mode; strict Swift 6 consent/wire checks are separa
 results do not establish a native target build, UI quality, full N2 private-source inventory,
 physical-device behavior, real token/browser behavior or live W2 persistence/billing/dispatch.
 
-## Frozen source verification
+## Historical stable base verification
 
 Code candidate `8f3055b2e49bd6a8a95c7150109b41a59fa2f66d` passed 81 durable-store and
 61 facade checks in 40.119 seconds. Independent automated architecture/security review found
@@ -187,8 +187,8 @@ and local capture/save completing while an unrelated uncooperative upload remain
 
 The strict Swift 6 consent/wire probe passed 62 and 151 checks at `60068f39`. The production
 store/exporter/checkpoint/source probe passed 1,065 checks at that revision in 38.361 seconds.
-Their relevant sources, scripts, fixtures and toolchain are unchanged in the final candidate;
-these are reused results, not fresh executions of changed facade code. N1 core remains exact
+Those inputs were unchanged within the historical `9dc4b6d5` base. They do not validate
+the later assessment-options wire/HTTP changes; fresh additive results are recorded below. N1 core remains exact
 to `f989116f`; N2 composition, project and mobile-manifest ownership remains unchanged.
 
 No native target build, simulator/device UI, model/inference, actual recording, real account
@@ -239,5 +239,28 @@ N3 owns additional suggested catalog keys: `Loading assessment options`, `Load m
 `No represented participants`, `No assessment criteria available` and `Assessment options unavailable`.
 Existing receipt review and participant/criteria selection keys remain applicable. N2 retains
 the same eight CloudPublication sources; this addition creates no production source file or
-second composition path. The previously published `9dc4b6d5` remains the stable base handoff
-while the additive options correction is reviewed and verified.
+second composition path. The previously published `9dc4b6d5` remains an immutable stable base handoff. The additive
+options candidate and its fresh evidence are pinned separately below.
+
+## Verified additive options candidate
+
+Independent automated architecture/security review found no material issue at
+`e14d749dbb55d6258074885e4c6ea4278d473c72`. Production options code is identical to
+reviewed `b0176c90`; the final documentation correction changes no production source.
+
+| Check | Tested revision | Result |
+| --- | --- | --- |
+| Strict Swift 6 consent/wire plus invalid-only HTTP preflight | `e14d749d` | 62 consent + 276 wire checks, 5.109 seconds; includes 125 new options checks |
+| Actual N1/N2/store/facade with synthetic HTTP | `e4e29f5b` | 81 store + 73 facade checks, 42.603 seconds |
+| Portable repository checks | `e14d749d` | Passed, 20.220 seconds |
+
+The facade inputs are identical between `e4e29f5b` and `e14d749d`; the latter adds only
+strict wire tests and their runner call. The historical 1,065 source/checkpoint result remains
+reusable only for its unchanged source/exporter/payload inputs. It does not validate the
+changed options wire/facade. The fresh cases cover exact W2-derived fixture provenance,
+paging, context/receipt/participant checks, strict nested decoding, safe errors, narrow query
+preflight, owner isolation, request exclusion, held OFF/logout joins and no automatic PATCH.
+
+No valid HTTP request, native target build, simulator/device UI, live identity grant or
+production readiness was exercised. N2 still owns the final coalesced composition/provider
+configuration and source registration; N3/N4 consume this shared method and typed page.

@@ -302,9 +302,9 @@ No speech models, UI, simulators, devices, microphone/audio routes or server wer
 Keep this worktree for the named unfinished dependency integration. Native builds require
 coordinator admission and private DerivedData/SourcePackages.
 
-## Frozen source handoff
+## Historical stable base handoff
 
-Final code candidate: `8f3055b2e49bd6a8a95c7150109b41a59fa2f66d`. Independent source review
+Base code candidate: `8f3055b2e49bd6a8a95c7150109b41a59fa2f66d`. Independent source review
 covered N1/N2 extension reuse, owner/generation/configuration fences, immutable replay,
 bounded storage/polling and joined cancellation, with no unresolved material findings.
 
@@ -319,3 +319,23 @@ inputs are unchanged; they are not fresh runtime validation of the changed facad
 targets/UI, live HTTPS/I1 and final composition acceptance remain required. The focused draft
 PR base is `codex/pichi-sso-native-sync-20261022` after it publishes the approved N2 correction.
 The source API and exact shared presentation cases are in the linked API handoff.
+
+## Additive authorized assessment options
+
+The real facade now exposes
+`assessmentOptions(for:cursor:limit:) async throws -> PichiPublicationAssessmentOptions`
+for a known meeting with a retained accepted receipt and frozen source. One typed page comes
+from W2 `ac2b6c35`'s existing authenticated assessment-options route. It carries pinned
+account/workspace context, the same receipt, exactly represented source participants, paged
+authorized criteria, current effective assessment and pending-resolution eligibility.
+
+The existing receipt lease and bounded HTTP owner handle options, status and PATCH. Only
+the options GET route admits its narrow context/limit/cursor query. Options share current
+consent, grant/configuration/profile fences, cancellation joins, persisted review and retry
+deadlines. Loading a page never changes original POST identity or selects/sends an assessment.
+No production source file, auth/profile manager or parallel transport pipeline is added.
+
+Synthetic ac2-derived examples and provenance are in `Tests/Fixtures/PichiAssessmentOptionsV1`.
+Original approved wire fixtures remain byte-identical. The concrete typed fields, pagination
+semantics, UI catalog keys and fresh reviewed/check revisions are in the
+[shared API handoff](pichi-cloud-publication-api.md#authorized-assessment-options).
