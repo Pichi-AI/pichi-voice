@@ -38,8 +38,6 @@ final class AppServices: ObservableObject {
                     || TranscriptionHistoryStore.shared.admittedRecordingWriteCount > 0
             }, prepare: { [weak self] in
                 guard let self else { throw AccountError.isolationRequired }
-                self.privateAIStartupWarmup?.cancel(); await self.privateAIStartupWarmup?.value
-                self.privateAIStartupWarmup = nil
                 await self._localAIModelResidency?.shutdown(); self._localAIModelResidency = nil
                 self._meetingAutoDetector?.stop(); self._meetingAutoDetector = nil
                 try await PrivateProfileSources.prepare(coordinator: self._meetingSessionCoordinator, asr: self._asr)
@@ -51,6 +49,13 @@ final class AppServices: ObservableObject {
                 try await PrivateProfileSources.activate(profile,
                     asr: self.isTerminating ? nil : self._asr)
                 if !self.isTerminating, self.isUIReady { _ = self.meetingAutoDetector }
+            }, conceal: { [weak self] in
+                guard let self else { throw AccountError.isolationRequired }
+                let warmup = self.privateAIStartupWarmup
+                warmup?.cancel(); await warmup?.value
+                self.privateAIStartupWarmup = nil
+                self._meetingAutoDetector?.stop(); self._meetingAutoDetector = nil
+                await PrivateProfileSources.conceal()
             })
         } catch {
             DebugLogger.shared.warning("Private profile composition unavailable", source: "AppServices")
@@ -84,6 +89,8 @@ final class AppServices: ObservableObject {
     func restorePrivateSourcesAfterCommit() async {
         guard !isTerminating, PrivateProfileStorage.acceptsNewWork else { return }
         await _meetingSessionCoordinator?.ensureRestored()
+        guard PrivateProfileStorage.acceptsNewWork else { return }
+        LocalAPIServer.shared.start()
     }
 
     var hasActivePrivateCapture: Bool {

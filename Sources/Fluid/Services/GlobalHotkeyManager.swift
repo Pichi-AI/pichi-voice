@@ -1317,8 +1317,8 @@ final class GlobalHotkeyManager: NSObject {
                     Task { @MainActor in if let capture = self.fallbackCapture {
                 _ = await capture.stop()
                 capture.acknowledgeVisibleResult()
-                await capture.complete()
-                if self.fallbackCapture?.output.id == capture.output.id { self.fallbackCapture = nil }
+                let completed = await capture.complete()
+                if completed, self.fallbackCapture?.output.id == capture.output.id { self.fallbackCapture = nil }
             } }
                     handled = true
                 }
@@ -2495,8 +2495,8 @@ final class GlobalHotkeyManager: NSObject {
             if let capture = self.fallbackCapture {
                 _ = await capture.stop()
                 capture.acknowledgeVisibleResult()
-                await capture.complete()
-                if self.fallbackCapture?.output.id == capture.output.id { self.fallbackCapture = nil }
+                let completed = await capture.complete()
+                if completed, self.fallbackCapture?.output.id == capture.output.id { self.fallbackCapture = nil }
             }
         }
     }

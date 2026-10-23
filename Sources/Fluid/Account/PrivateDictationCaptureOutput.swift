@@ -12,6 +12,7 @@ import Foundation
     let transcriptionModel: String
     private var audioWrites: [Task<Void, Never>] = []
     private var requiresPersistenceRetry = false
+    var hasPendingPersistenceRetry: Bool { requiresPersistenceRetry }
 
     init(id: UUID, savesHistory: Bool, savesAudio: Bool, transcriptionModel: String,
          history: TranscriptionHistoryStore? = nil) throws {

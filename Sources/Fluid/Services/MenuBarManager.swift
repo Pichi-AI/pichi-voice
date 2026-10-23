@@ -1531,9 +1531,12 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     private func createAndShowMainWindow() {
         // Build the SwiftUI root view with required environment
         let rootView = AdaptiveAppTheme(accent: SettingsStore.shared.accentColor) {
-            ContentView()
-                .environmentObject(self)
-                .environmentObject(AppServices.shared)
+            PrivateProfileRoot(services: AppServices.shared, profiles: AppServices.shared.privateProfiles) {
+                ContentView()
+                    .environmentObject(self)
+                    .environmentObject(AppServices.shared)
+                    .environment(\.locale, PichiLocalization.locale)
+            }
         }
 
         // Host inside an AppKit window

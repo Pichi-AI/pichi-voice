@@ -179,6 +179,8 @@ final class AppServices: ObservableObject {
                 guard let self else { throw AccountError.isolationRequired }
                 try await PrivateProfileSources.activate(profile, asr: self.asr)
                 self.privacyActivation.restore()
+            }, conceal: {
+                await PrivateProfileSources.conceal()
             })
             try self.accountSession.installLifecycle(self.privateProfiles)
             if store == nil, settings == nil, accountSession == nil { PrivateProfileStorage.closeAdmission() }

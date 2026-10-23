@@ -3055,6 +3055,14 @@ struct ContentView: View {
 
     private func stopAndProcessTranscription(route: DictationOutputRoute = .normal, toggleStopRequestedAt: TimeInterval? = nil) async {
         guard self.processingDictationLifecycleID == nil else { return }
+        if self.privateCaptureOutput == nil, let retainedID = PrivateProfileService.shared.captureStopHandlerID {
+            await PrivateProfileService.shared.requestCaptureStop(id: retainedID)
+            return
+        }
+        if let output = self.privateCaptureOutput, output.hasPendingPersistenceRetry {
+            await self.finishCancelledCaptureOutput(output, id: self.privateCaptureStopID)
+            return
+        }
         let outputLifecycleID = self.overlayLifecycleID
         let privateStopID = self.privateCaptureStopID
         let privateOutput = self.privateCaptureOutput
@@ -3077,7 +3085,7 @@ struct ContentView: View {
         // A busy summary may refuse processing before ASR stops. Keep the capture's local
         // output permit and Stop callback until the actual recording has joined.
         guard !self.asr.isRunningOrStarting else { return }
-        await privateOutput?.finish()
+        if let privateOutput, !(await privateOutput.finish()) { return }
         if self.privateCaptureOutput?.id == privateStopID { self.privateCaptureOutput = nil }
         if self.privateCaptureStopID == privateStopID { self.privateCaptureStopID = nil }
         if let privateStopID { PrivateProfileService.shared.clearCaptureStopHandler(id: privateStopID) }
@@ -3152,7 +3160,17 @@ struct ContentView: View {
             source: "ContentView"
         )
 
+        func preserveConcealedCapture() -> Bool {
+            guard privateOutput?.isVisible != true else { return false }
+            if route.savesHistory {
+                privateOutput?.preserveLocalResult(text: transcribedText, audio: audioSnapshot)
+            }
+            return true
+        }
+        if preserveConcealedCapture() { return }
+
         guard transcribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            if route.savesHistory { privateOutput?.preserveLocalResult(text: "", audio: audioSnapshot) }
             // Empty results have no delivery callback, so clear their stale
             // preview before the existing empty-result dismissal path runs.
             NotchOverlayManager.shared.updateTranscriptionText("")
@@ -3178,20 +3196,6 @@ struct ContentView: View {
         }
 
         let cancelledAtASRStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID
-        func preserveConcealedCapture() -> Bool {
-            guard privateOutput?.isVisible != true else { return false }
-            if route.savesHistory, let privateOutput, let admission = privateOutput.admission {
-                let info = self.recordingAppInfo ?? (name: "", bundleId: "", windowTitle: "")
-                let timestamp = Date()
-                privateOutput.history.addEntry(timestamp: timestamp, rawText: transcribedText,
-                    processedText: transcribedText, appName: info.name, windowTitle: info.windowTitle,
-                    wasAIProcessed: false, transcriptionDurationMilliseconds: transcriptionDurationMilliseconds,
-                    parakeetProcessingDurationMilliseconds: parakeetProcessingDurationMilliseconds, admission: admission)
-                privateOutput.saveAudio(audioSnapshot, timestamp: timestamp, model: privateOutput.transcriptionModel)
-            }
-            return true
-        }
-        if preserveConcealedCapture() { return }
         if cancelledAtASRStop, promptTestSessionID != nil || route == .onboardingSandbox { return }
 
         // Prompt Test Mode: reroute dictation hotkey output into the prompt editor (no typing/clipboard/history).
@@ -3287,7 +3291,8 @@ struct ContentView: View {
 
             do {
                 self.logAIProcessCall(pipelineID, postProcessingModelInfo, postProcessingInputChars)
-                let result = try await self.processTextWithAIMetrics(
+                let result = try await self.privateOutputOperations.perform {
+                    try await self.processTextWithAIMetrics(
                     normalizedTranscribedText,
                     overrideSystemPrompt: promptOverride,
                     overrideProviderID: practiceModelID == nil ? nil : PrivateAIProviderFeature.shared.providerID,
@@ -3295,8 +3300,9 @@ struct ContentView: View {
                     dictationSlot: activeDictationSlot,
                     streamHandler: streamHandler,
                     benchmarkID: pipelineID,
-                    stopSnapshot: stopSnapshot
-                )
+                        stopSnapshot: stopSnapshot
+                    )
+                }
                 refiningStatusTask.cancel()
                 finalText = result.text
                 self.appBench("ai_process_return id=\(pipelineID)")
@@ -4217,7 +4223,7 @@ struct ContentView: View {
     private func retryTextDelivery(_ transcript: String, targetContext: TypingService.RecordingTargetContext?, fallbackTargetPID: pid_t?, lifecycleID: UInt64) async {
         guard !transcript.isEmpty else { return }
         let privateProfile = PrivateProfileStorage.current
-        let isOutputValid: @MainActor () -> Bool = { PrivateProfileStorage.isReadable(privateProfile) && PrivateProfileStorage.acceptsNewWork && self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
+        let isOutputValid: @MainActor () -> Bool = { self.privateOutputOperations.isCurrent && PrivateProfileStorage.isReadable(privateProfile) && PrivateProfileStorage.acceptsNewWork && self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
         guard isOutputValid() else { return }
 
         self.menuBarManager.setProcessing(true)
@@ -4840,7 +4846,7 @@ struct ContentView: View {
     }
 
     private func finishCancelledCaptureOutput(_ output: PrivateDictationCaptureOutput?, id: UUID?) async {
-        await output?.finish()
+        if let output, !(await output.finish()) { return }
         if self.privateCaptureStopID == id {
             self.privateCaptureOutput = nil
             self.privateCaptureStopID = nil
@@ -4850,10 +4856,10 @@ struct ContentView: View {
 
     private func stopCaptureWithoutOutputTask() -> Task<Void, Never>? {
         guard let output = self.privateCaptureOutput, let id = self.privateCaptureStopID,
-              output.id == id, output.isVisible else { return nil }
+              output.id == id, output.isVisible, self.processingDictationLifecycleID == nil else { return nil }
         return Task { @MainActor in
             guard self.privateCaptureStopID == id, self.privateCaptureOutput?.id == id,
-                  output.isVisible else { return }
+                  output.isVisible, self.processingDictationLifecycleID == nil else { return }
             await self.asr.stopWithoutTranscription()
             await self.finishCancelledCaptureOutput(output, id: id)
         }
