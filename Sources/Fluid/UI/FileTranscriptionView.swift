@@ -138,7 +138,7 @@ struct FileTranscriptionView: View {
             }
             self.exportDocument = nil
         }
-        .onReceive(self.fileHistoryStore.$entries) { entries in
+        .onReceive(self.fileHistoryStore.entriesPublisher) { entries in
             self.rowMetadata = Dictionary(entries.map { entry in
                 (entry.id, self.metadata(for: entry))
             }, uniquingKeysWith: { _, latest in latest })
