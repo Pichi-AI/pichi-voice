@@ -36,7 +36,7 @@ The existing local `pichi` checkout has unrelated changes and an `origin` pointi
 | W2 | Protected cloud ingestion | web | PR 1614 integration, own-upload/assessment authorization, pending assessment resolution, durable dispatch, persistent deduplication, receipts/status | P0, W1, reviewed PR 1614 |
 | N1 | Shared native account core | pichi-voice | Browser login, Keychain, refresh/logout, generation cancellation, trusted config and both composition roots | P0; live check with I1/W1 |
 | N2 | Native profile isolation | pichi-voice | Account/guest storage boundaries, every private-data read path, owner profiles, dictionaries/credentials and safe migration | P0, N1 |
-| N5 | Native durable outbox | pichi-voice | Immutable protected snapshots, consent, durable queue, transport/status, delivery recovery and pending assessment | P0, N1, N2; server integration with W2 |
+| N5 | Native durable outbox | pichi-voice | Immutable protected snapshots, consent, durable queue, transport/status, shared activation wiring, delivery recovery and pending assessment | P0, N1, N2; server integration with W2 |
 | N3 | iPhone/iPad account UX | pichi-voice | Skippable onboarding migration, settings/account/workspace screens, consent and per-record statuses | N1/N2 for account UI; N5 for cloud UI |
 | N4 | macOS account UX | pichi-voice | Desktop onboarding/settings/history presentation using the same services | N1/N2 for account UI; N5 for cloud UI |
 
@@ -78,6 +78,21 @@ flowchart TD
 - Xcode project, shared settings and entitlements changes are sequenced by the coordinator. Independent UI source files can proceed concurrently.
 - W1 owns authentication middleware/principal and identity schema migrations. W2 consumes that boundary and owns recording/job schema migrations. Coordinate migration filenames and reconcile PR 1614 before assigning a new number.
 - I1 owns identity deployment artifacts; W1 owns application environment consumption. Do not copy secrets or server configuration into the native brand package.
+
+## Native delivery branches
+
+The native delivery order is N1, N2, N5, then N3 and N4. This clarifies packaging; contract v1 at `f3ea4b15160b92c095d9d83036e6a66e3be81c34` and the eight implementation PRs remain unchanged.
+
+**MUST:** Keep a combined test snapshot separate from each PR's delivery branch. A local snapshot containing profiles, outbox and UI is useful integration evidence, but publishing it as the N2 base would absorb the other features and create circular dependencies. Preserve combined snapshots under recoverable refs and retain their required ignored evidence before preparing delivery worktrees.
+
+- N2 delivers profile contracts, private stores/readers, capture ownership, migration and joined cleanup. It excludes the cloud queue and account/cloud UI. The reviewed shared audio-export cancellation helper may be included as N4's privacy contribution, keeping the same implementation upstream of both UI changes.
+- N5 consumes the focused N2 delivery and adds the queue, transport, facade and shared activation owner. N2 contributes reviewed common service wiring to this PR. Installation precedes account restoration; activation follows a committed verified context. Its mobile source list includes the cloud service files without referring to N3's UI types.
+- N3 contributes the frozen shared account/cloud String Catalog as a resource dependency in N5. N3 remains its sole semantic editor. N5 consumes that exact additive resource without importing mobile UI, so N3 and N4 can both depend on N5 independently.
+- N3 delivers mobile UI and the actual `MobileOnboarding` and `MobileMeetingRoot` account/cloud argument injections. N4 delivers desktop UI. Neither UI PR changes the shared service ownership or introduces another queue.
+
+Delivery branches must descend from their existing published PR heads. Use separate owned worktrees, recheck remote heads and push without force. Project only the owner's changes and explicitly approved shared contributions; do not merge an entire combined snapshot back into a focused branch. Preserve the complete regression registry union at each boundary, deriving runner counts from the files actually present.
+
+Before releasing a delivery dependency, check its allowed paths, source memberships and catalog references, then run its focused checks and affected native builds. Assemble the frozen deliveries in the coordinator's integration worktree and compare production source blobs with the reviewed owner snapshots. Record any deliberate composition, catalog, manifest or registry differences and repeat affected checks. A successful combined build does not establish that an individual delivery builds against its declared base.
 
 ## Merge and rollout gates
 
