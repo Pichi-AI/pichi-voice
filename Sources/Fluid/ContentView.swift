@@ -302,6 +302,9 @@ struct ContentView: View {
     @State private var promptModeOverrideText: String? // System prompt text to use when in prompt mode
     @State private var activeDictationShortcutSlot: SettingsStore.DictationShortcutSlot? = nil
     @State private var activeRecordingMode: ActiveRecordingMode = .none
+    @State private var privateCaptureStopID: UUID?
+    @State private var privateCaptureOutput: PrivateDictationCaptureOutput?
+    @State private var privateOutputOperations = PrivateProfileOperationOwner(registerForTransitions: true)
     @State private var pendingAIReprocessText: String? = nil
     @State private var activeShortcutRecordingTarget: ShortcutRecordingTarget? = nil
     @State private var currentRecordingModifierKeyCodes: Set<UInt16> = []
@@ -573,7 +576,12 @@ struct ContentView: View {
                 self.refreshInputDevices()
             }
             .onDisappear {
-                Task { await self.asr.stopWithoutTranscription() }
+                if let output = self.privateCaptureOutput, self.privateOutputOperations.isCurrent {
+                    Task {
+                        guard self.privateCaptureOutput?.id == output.id, output.isVisible else { return }
+                        await self.stopCaptureWithoutOutput()
+                    }
+                }
                 self.cancelPrewarmDictationIfNeeded()
                 // Note: Overlay lifecycle is now managed by MenuBarManager
                 // Note: NotchContentState handlers capture self (a struct value copy) and are
@@ -615,6 +623,22 @@ struct ContentView: View {
         view
             .onAppear {
                 self.handleContentAppear()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
+                self.isTranscriptionFocused = false
+                self.showsFluidIntelligenceDemo = false
+                self.showsReleaseHighlights = false
+                self.asr.showError = false
+                self.spokenSendAutoStopTask?.cancel()
+                self.spokenSendAutoStopTask = nil
+                self.cancelPrewarmDictationIfNeeded()
+                self.clearShortcutRecordingMode()
+                self.menuBarManager.hideRecordingOverlayImmediately(reason: "private_profile_transition")
+                NotchOverlayManager.shared.hideExpandedCommandOutput()
+                NotchContentState.shared.updateTranscription("")
+                NotchContentState.shared.clearCommandOutput()
+                NotchContentState.shared.clearTextDeliveryFailure()
+                NotchContentState.shared.clearAIProcessingFailure()
             }
             .onChange(of: self.accessibilityEnabled) { _, enabled in
                 if enabled {
@@ -688,7 +712,7 @@ struct ContentView: View {
 
             if self.activeRecordingMode == .promptMode {
                 if self.asr.isRunning {
-                    Task { await self.asr.stopWithoutTranscription() }
+                    Task { await self.stopCaptureWithoutOutput() }
                 }
                 self.cancelPrewarmDictationIfNeeded()
                 self.clearActiveRecordingMode()
@@ -708,7 +732,7 @@ struct ContentView: View {
 
             if self.activeRecordingMode == .command {
                 if self.asr.isRunning {
-                    Task { await self.asr.stopWithoutTranscription() }
+                    Task { await self.stopCaptureWithoutOutput() }
                 }
                 self.cancelPrewarmDictationIfNeeded()
                 self.clearActiveRecordingMode()
@@ -728,7 +752,7 @@ struct ContentView: View {
 
             if self.activeRecordingMode == .edit {
                 if self.asr.isRunning {
-                    Task { await self.asr.stopWithoutTranscription() }
+                    Task { await self.stopCaptureWithoutOutput() }
                 }
                 self.cancelPrewarmDictationIfNeeded()
                 self.clearActiveRecordingMode()
@@ -781,16 +805,17 @@ struct ContentView: View {
     }
 
     private func scheduleDelayedAudioInitialization() {
+        let privateProfile = PrivateProfileStorage.current
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             DebugLogger.shared.info("🚦 Startup delay complete, signaling UI ready...", source: "ContentView")
             self.appServices.signalUIReady()
-            self.menuBarManager.configure(
-                meetingCoordinator: self.appServices.meetingSessionCoordinator
-            )
-
             Task { @MainActor in
+                await self.appServices.restoreAccountBeforePrivateUI()
+                guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
+                self.menuBarManager.configure(meetingCoordinator: self.appServices.meetingSessionCoordinator)
                 await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled()
                 await AudioStartupGate.shared.waitUntilOpen()
+                guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
 
                 DebugLogger.shared.info("🔊 Starting gated audio initialization...", source: "ContentView")
                 self.audioObserver.startObserving()
@@ -2491,9 +2516,23 @@ struct ContentView: View {
         }
     }
 
-    private func captureRecordingContext() {
+    private func captureRecordingContext() -> Bool {
+        guard PrivateProfileStorage.acceptsNewWork, self.privateCaptureStopID == nil else { return false }
+        let id = UUID()
+        guard let output = try? PrivateDictationCaptureOutput(
+            id: id,
+            savesHistory: self.settings.saveTranscriptionHistory && !DictationPromptTestCoordinator.shared.isActive,
+            savesAudio: self.settings.saveAudioWithTranscriptionHistory,
+            transcriptionModel: self.currentTranscriptionModelInfo().model
+        ) else { return false }
+        self.privateCaptureStopID = id
+        self.privateCaptureOutput = output
+        PrivateProfileService.shared.installCaptureStopHandler(id: id) {
+            await self.stopAndProcessTranscription(route: .historyOnly)
+        }
         self.captureRecordingTargetContext()
         self.captureRecordingFormattingContextIfNeeded()
+        return true
     }
 
     private func captureDictationStopSnapshot(slot: SettingsStore.DictationShortcutSlot) -> DictationStopSnapshot {
@@ -3013,8 +3052,12 @@ struct ContentView: View {
     private func stopAndProcessTranscription(route: DictationOutputRoute = .normal, toggleStopRequestedAt: TimeInterval? = nil) async {
         guard self.processingDictationLifecycleID == nil else { return }
         let outputLifecycleID = self.overlayLifecycleID
+        let privateStopID = self.privateCaptureStopID
+        let privateOutput = self.privateCaptureOutput
         self.processingDictationLifecycleID = outputLifecycleID
         defer {
+            if let privateStopID { PrivateProfileService.shared.clearCaptureStopHandler(id: privateStopID) }
+            if self.privateCaptureStopID == privateStopID { self.privateCaptureStopID = nil }
             if self.processingDictationLifecycleID == outputLifecycleID {
                 self.processingDictationLifecycleID = nil
             }
@@ -3027,14 +3070,16 @@ struct ContentView: View {
         }
         let pipelineID = UUID().uuidString
         await DebugLogger.$pipelineID.withValue(pipelineID) {
-            await self.processStoppedTranscription(route: route, pipelineID: pipelineID, toggleStopRequestedAt: toggleStopRequestedAt)
+            await self.processStoppedTranscription(route: route, pipelineID: pipelineID, toggleStopRequestedAt: toggleStopRequestedAt, privateOutput: privateOutput)
         }
+        await privateOutput?.finish()
+        if self.privateCaptureOutput?.id == privateStopID { self.privateCaptureOutput = nil }
     }
 
     // Keep the ordered dictation delivery path intact during integration.
 
     // swiftlint:disable:next function_body_length
-    private func processStoppedTranscription(route: DictationOutputRoute, pipelineID: String, toggleStopRequestedAt: TimeInterval?) async {
+    private func processStoppedTranscription(route: DictationOutputRoute, pipelineID: String, toggleStopRequestedAt: TimeInterval?, privateOutput: PrivateDictationCaptureOutput?) async {
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             MeetingSummaryActivityCoordinator.presentBusyError()
             return
@@ -3126,6 +3171,20 @@ struct ContentView: View {
         }
 
         let cancelledAtASRStop = route == .historyOnly || self.cancelledOutputLifecycleID == expectedOverlayLifecycleID
+        func preserveConcealedCapture() -> Bool {
+            guard privateOutput?.isVisible != true else { return false }
+            if route.savesHistory, let privateOutput, let admission = privateOutput.admission {
+                let info = self.recordingAppInfo ?? (name: "", bundleId: "", windowTitle: "")
+                let timestamp = Date()
+                privateOutput.history.addEntry(timestamp: timestamp, rawText: transcribedText,
+                    processedText: transcribedText, appName: info.name, windowTitle: info.windowTitle,
+                    wasAIProcessed: false, transcriptionDurationMilliseconds: transcriptionDurationMilliseconds,
+                    parakeetProcessingDurationMilliseconds: parakeetProcessingDurationMilliseconds, admission: admission)
+                privateOutput.saveAudio(audioSnapshot, timestamp: timestamp, model: privateOutput.transcriptionModel)
+            }
+            return true
+        }
+        if preserveConcealedCapture() { return }
         if cancelledAtASRStop, promptTestSessionID != nil || route == .onboardingSandbox { return }
 
         // Prompt Test Mode: reroute dictation hotkey output into the prompt editor (no typing/clipboard/history).
@@ -3265,6 +3324,7 @@ struct ContentView: View {
         } else {
             finalText = normalizedTranscribedText
         }
+        if preserveConcealedCapture() { return }
 
         // Normalize literal command and mention syntax after AI cleanup and before final user preferences.
         finalText = ASRService.applyDictationLiteralFormatting(
@@ -3350,11 +3410,9 @@ struct ContentView: View {
             .map { $0.target?.pid == ProcessInfo.processInfo.processIdentifier } ?? (NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier)
 
         // Save to transcription history (transcription mode only, if enabled)
-        if shouldPersistOutputs, !sendsExistingDraft, SettingsStore.shared.saveTranscriptionHistory {
-            let historyEntryID = UUID()
+        if shouldPersistOutputs, !sendsExistingDraft, let privateOutput, let admission = privateOutput.admission {
             let historyTimestamp = Date()
-            TranscriptionHistoryStore.shared.addEntry(
-                id: historyEntryID,
+            privateOutput.history.addEntry(
                 timestamp: historyTimestamp,
                 rawText: outputRoute.deliversText && spokenSendParse.shouldSend ? normalizedTranscribedText : transcribedText,
                 processedText: finalText,
@@ -3366,11 +3424,11 @@ struct ContentView: View {
                 parakeetProcessingDurationMilliseconds: parakeetProcessingDurationMilliseconds,
                 aiProcessingDurationMilliseconds: aiProcessingDurationMilliseconds,
                 aiTokensPerSecond: aiTokensPerSecond,
-                aiProcessingError: aiFallbackReason
+                aiProcessingError: aiFallbackReason,
+                admission: admission
             )
-            self.persistDictationAudioIfNeeded(
+            privateOutput.saveAudio(
                 audioSnapshot,
-                entryID: historyEntryID,
                 timestamp: historyTimestamp,
                 model: transcriptionModelInfo.model
             )
@@ -3384,11 +3442,9 @@ struct ContentView: View {
         // Send-only stops normally have no History row. Recover their words if
         // Escape arrives after the output decision but before delivery completes.
         func saveCancelledSendOnlyHistory() {
-            guard sendsExistingDraft, self.settings.saveTranscriptionHistory else { return }
-            let id = UUID()
+            guard sendsExistingDraft, let privateOutput, let admission = privateOutput.admission else { return }
             let timestamp = Date()
-            TranscriptionHistoryStore.shared.addEntry(
-                id: id,
+            privateOutput.history.addEntry(
                 timestamp: timestamp,
                 rawText: transcribedText,
                 processedText: ASRService.applyGAAVFormatting(punctuationFormattedText),
@@ -3396,9 +3452,10 @@ struct ContentView: View {
                 windowTitle: appInfo.windowTitle,
                 wasAIProcessed: false,
                 processingModel: nil,
-                transcriptionDurationMilliseconds: transcriptionDurationMilliseconds
+                transcriptionDurationMilliseconds: transcriptionDurationMilliseconds,
+                admission: admission
             )
-            self.persistDictationAudioIfNeeded(audioSnapshot, entryID: id, timestamp: timestamp, model: transcriptionModelInfo.model)
+            privateOutput.saveAudio(audioSnapshot, timestamp: timestamp, model: transcriptionModelInfo.model)
         }
 
         var didTypeExternally = false
@@ -3440,10 +3497,10 @@ struct ContentView: View {
                 keepBackup: shouldCopyToClipboard,
                 snapshot: stopSnapshot,
                 needsRestoration: typingTarget.shouldRestoreOriginalFocus,
-                isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
+                isOutputValid: { privateOutput?.isVisible == true && self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
             )
             // Escape can arrive while focus restoration is suspended; History is already saved.
-            guard self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else {
+            guard privateOutput?.isVisible == true, self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else {
                 saveCancelledSendOnlyHistory()
                 return
             }
@@ -3467,7 +3524,7 @@ struct ContentView: View {
                     toggleStopRequestedAt: toggleStopRequestedAt,
                     preserveTranscriptOnClipboard: shouldCopyToClipboard,
                     stopSnapshot: stopSnapshot,
-                    isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
+                    isOutputValid: { privateOutput?.isVisible == true && self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
                 )
                 self.logPipelineCompletion(
                     outcome: String(describing: deliveryOutcome),
@@ -3491,7 +3548,7 @@ struct ContentView: View {
                     tracksDictionaryCorrections: true,
                     preserveTranscriptOnClipboard: shouldCopyToClipboard,
                     requiredFocusTarget: stopSnapshot?.focusTarget,
-                    isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
+                    isOutputValid: { privateOutput?.isVisible == true && self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
                 )
                 didTypeExternally = deliveryResult.wasDispatched
                 self.handleTypingDelivery(
@@ -3504,7 +3561,7 @@ struct ContentView: View {
                 )
             }
 
-            guard self.overlayLifecycleID == expectedOverlayLifecycleID, self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else {
+            guard privateOutput?.isVisible == true, self.overlayLifecycleID == expectedOverlayLifecycleID, self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else {
                 if self.cancelledOutputLifecycleID == expectedOverlayLifecycleID { saveCancelledSendOnlyHistory() }
                 self.appBench("delivery_ui_skipped reason=stale_recording")
                 return
@@ -3541,7 +3598,7 @@ struct ContentView: View {
         }
 
         if !shouldTypeExternally {
-            await PasteDeliveryCoordinator.shared.copyBackup(finalText, enabled: shouldCopyToClipboard, isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID })
+            await PasteDeliveryCoordinator.shared.copyBackup(finalText, enabled: shouldCopyToClipboard, isOutputValid: { privateOutput?.isVisible == true && self.cancelledOutputLifecycleID != expectedOverlayLifecycleID })
         }
 
         guard self.cancelledOutputLifecycleID != expectedOverlayLifecycleID || outputRoute == .historyOnly else { return }
@@ -4000,58 +4057,6 @@ struct ContentView: View {
         }
     }
 
-    private func persistDictationAudioIfNeeded(
-        _ snapshot: DictationAudioSnapshot?,
-        entryID: UUID,
-        timestamp: Date,
-        model: String
-    ) {
-        guard SettingsStore.shared.saveTranscriptionHistory,
-              SettingsStore.shared.saveAudioWithTranscriptionHistory,
-              let snapshot = snapshot
-        else {
-            return
-        }
-        guard PrivateProfileStorage.acceptsNewWork else { return }
-        let historyStore = TranscriptionHistoryStore.shared
-        let audioStore = DictationAudioHistoryStore.shared
-        let saveGeneration = historyStore.audioSaveGeneration
-        let workID = UUID()
-
-        let task = Task.detached(priority: .utility) {
-            let result: (metadata: DictationAudioMetadata?, error: String?) = {
-                do {
-                    let metadata = try audioStore.save(
-                        snapshot: snapshot,
-                        entryID: entryID,
-                        timestamp: timestamp,
-                        model: model
-                    )
-                    return (metadata, nil)
-                } catch {
-                    return (nil, error.localizedDescription)
-                }
-            }()
-
-            await MainActor.run {
-                if let metadata = result.metadata {
-                    historyStore.attachAudio(
-                        metadata,
-                        to: entryID,
-                        expectedSaveGeneration: saveGeneration
-                    )
-                } else if let error = result.error {
-                    DebugLogger.shared.error("Failed to save dictation audio: \(error)", source: "ContentView")
-                }
-            }
-            if let metadata = result.metadata {
-                audioStore.completePendingSave(fileName: metadata.fileName)
-            }
-            await PrivateProfileService.shared.finishPrivateWrite(id: workID)
-        }
-        PrivateProfileService.shared.retainPrivateWrite(task, id: workID)
-    }
-
     private var isOnboardingVoicePlaygroundStepActive: Bool {
         let onboardingPlaygroundStep = 4
         return !self.settings.onboardingCompleted &&
@@ -4137,56 +4142,61 @@ struct ContentView: View {
         }
 
         Task { @MainActor in
-            // Only one paste may be pending at a time. Because the paste waits for the modifier keys
-            // to release, a quick double/triple-tap of the chord would otherwise queue several Tasks
-            // that all insert at once on release. This collapses them to a single paste while still
-            // allowing a deliberate repeat (press, it lands, then press again).
-            guard !Self.isPasteLastInProgress else {
-                DebugLogger.shared.info("Actions: Paste skipped - a paste is already pending", source: "ContentView")
-                return
-            }
-            Self.isPasteLastInProgress = true
-            defer { Self.isPasteLastInProgress = false }
+            _ = try? await self.privateOutputOperations.perform {
+                let isOutputValid: @MainActor () -> Bool = { self.privateOutputOperations.isCurrent && !Task.isCancelled }
+                // Only one paste may be pending at a time. Because the paste waits for the modifier keys
+                // to release, a quick double/triple-tap of the chord would otherwise queue several Tasks
+                // that all insert at once on release. This collapses them to a single paste while still
+                // allowing a deliberate repeat (press, it lands, then press again).
+                guard !Self.isPasteLastInProgress else {
+                    DebugLogger.shared.info("Actions: Paste skipped - a paste is already pending", source: "ContentView")
+                    return
+                }
+                Self.isPasteLastInProgress = true
+                defer { Self.isPasteLastInProgress = false }
 
-            // The hotkey fires on key-down while its own modifier keys (e.g. ⌘⌃) are still
-            // physically held. Synthesizing text in that state makes the target app treat the
-            // characters as keyboard shortcuts and drop them, so the paste lands once the keys are
-            // released — effectively "paste when you let go". The timeout is generous so a normal
-            // hold (or a quick repeated press) still pastes on release; it only aborts if a modifier
-            // is genuinely stuck, rather than typing a corrupted/destructive shortcut sequence.
-            guard await Self.waitForHotkeyModifiersReleased(timeout: 5) else {
-                DebugLogger.shared.info("Actions: Paste aborted - modifier keys still held after timeout", source: "ContentView")
-                return
-            }
+                // The hotkey fires on key-down while its own modifier keys (e.g. ⌘⌃) are still
+                // physically held. Synthesizing text in that state makes the target app treat the
+                // characters as keyboard shortcuts and drop them, so the paste lands once the keys are
+                // released — effectively "paste when you let go". The timeout is generous so a normal
+                // hold (or a quick repeated press) still pastes on release; it only aborts if a modifier
+                // is genuinely stuck, rather than typing a corrupted/destructive shortcut sequence.
+                guard await Self.waitForHotkeyModifiersReleased(timeout: 5) else {
+                    DebugLogger.shared.info("Actions: Paste aborted - modifier keys still held after timeout", source: "ContentView")
+                    return
+                }
 
-            // Re-check here rather than only at the hotkey trigger: the overlay menu entry point
-            // has no pre-check, and the wait above may have elapsed since the trigger fired.
-            guard !self.asr.isRunning else {
-                DebugLogger.shared.info("Actions: Paste skipped - recording in progress", source: "ContentView")
-                return
-            }
+                // Re-check here rather than only at the hotkey trigger: the overlay menu entry point
+                // has no pre-check, and the wait above may have elapsed since the trigger fired.
+                guard isOutputValid(), !self.asr.isRunning else {
+                    DebugLogger.shared.info("Actions: Paste skipped - recording in progress", source: "ContentView")
+                    return
+                }
 
-            // Paste Last is a new insertion at the current cursor, independent of
-            // the previous recording's saved target. Never restore that older focus here.
-            guard let targetPID = TypingService.currentFocusedPID(), targetPID != ProcessInfo.processInfo.processIdentifier else {
-                DebugLogger.shared.info("Actions: Paste skipped - no external target field available", source: "ContentView")
-                return
-            }
-            let appInfo = self.getCurrentAppInfo()
-            let outputPlan = ASRService.makeDictationLiteralOutputPlan(
-                for: text,
-                appName: appInfo.name,
-                bundleID: appInfo.bundleId,
-                windowTitle: appInfo.windowTitle
-            )
-            let result = await self.asr.typeOutputPlanToActiveField(
-                outputPlan,
-                preferredTargetPID: targetPID
-            )
-            if case let .recoverableFailure(failure) = result {
-                self.showTextDeliveryFailure(failure, transcript: text)
-            } else {
-                DebugLogger.shared.info("Actions: Pasted latest transcription into focused field", source: "ContentView")
+                // Paste Last is a new insertion at the current cursor, independent of
+                // the previous recording's saved target. Never restore that older focus here.
+                guard let targetPID = TypingService.currentFocusedPID(), targetPID != ProcessInfo.processInfo.processIdentifier else {
+                    DebugLogger.shared.info("Actions: Paste skipped - no external target field available", source: "ContentView")
+                    return
+                }
+                let appInfo = self.getCurrentAppInfo()
+                let outputPlan = ASRService.makeDictationLiteralOutputPlan(
+                    for: text,
+                    appName: appInfo.name,
+                    bundleID: appInfo.bundleId,
+                    windowTitle: appInfo.windowTitle
+                )
+                let result = await self.asr.typeOutputPlanToActiveField(
+                    outputPlan,
+                    preferredTargetPID: targetPID,
+                    isOutputValid: isOutputValid
+                )
+                guard isOutputValid() else { return }
+                if case let .recoverableFailure(failure) = result {
+                    self.showTextDeliveryFailure(failure, transcript: text)
+                } else {
+                    DebugLogger.shared.info("Actions: Pasted latest transcription into focused field", source: "ContentView")
+                }
             }
         }
     }
@@ -4194,7 +4204,8 @@ struct ContentView: View {
     @MainActor
     private func retryTextDelivery(_ transcript: String, targetContext: TypingService.RecordingTargetContext?, fallbackTargetPID: pid_t?, lifecycleID: UInt64) async {
         guard !transcript.isEmpty else { return }
-        let isOutputValid: @MainActor () -> Bool = { self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
+        let privateProfile = PrivateProfileStorage.current
+        let isOutputValid: @MainActor () -> Bool = { PrivateProfileStorage.isReadable(privateProfile) && PrivateProfileStorage.acceptsNewWork && self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
         guard isOutputValid() else { return }
 
         self.menuBarManager.setProcessing(true)
@@ -4240,7 +4251,7 @@ struct ContentView: View {
     private static func waitForHotkeyModifiersReleased(timeout: TimeInterval) async -> Bool {
         let relevant: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift, .maskSecondaryFn]
         let start = Date()
-        while Date().timeIntervalSince(start) < timeout {
+        while !Task.isCancelled, Date().timeIntervalSince(start) < timeout {
             let flags = CGEventSource.flagsState(.combinedSessionState)
             if flags.isDisjoint(with: relevant) {
                 return true
@@ -4274,10 +4285,18 @@ struct ContentView: View {
     }
 
     private func applyHistoryTextOutput(_ text: String, saveToHistory: Bool) async {
+        _ = try? await privateOutputOperations.perform { await self.applyHistoryTextOutputBound(text, saveToHistory: saveToHistory) }
+    }
+
+    private func applyHistoryTextOutputBound(_ text: String, saveToHistory: Bool) async {
+        let history = TranscriptionHistoryStore.shared
+        let isOutputValid: @MainActor () -> Bool = { self.privateOutputOperations.isCurrent && !Task.isCancelled }
+        guard isOutputValid() else { return }
         // Keep hotkey/recording state deterministic before applying output text.
         if self.asr.isRunning {
             DebugLogger.shared.info("Actions: stopping active recording before history action output", source: "ContentView")
-            await self.asr.stopWithoutTranscription()
+            await self.stopCaptureWithoutOutput()
+            guard isOutputValid() else { return }
             self.cancelPrewarmDictationIfNeeded()
         }
 
@@ -4307,7 +4326,7 @@ struct ContentView: View {
         )
 
         if saveToHistory, SettingsStore.shared.saveTranscriptionHistory {
-            TranscriptionHistoryStore.shared.addEntry(
+            history.addEntry(
                 rawText: text,
                 processedText: finalText,
                 appName: appInfo.name,
@@ -4331,7 +4350,8 @@ struct ContentView: View {
                 return .init(pid: context.pid, window: context.window, element: element)
             }
             if typingTarget.shouldRestoreOriginalFocus {
-                guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard, targetContext: targetContext) else {
+                guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard, targetContext: targetContext, isOutputValid: isOutputValid) else {
+                    guard isOutputValid() else { return }
                     self.showTextDeliveryFailure(.targetRestoreFailed, transcript: finalText)
                     return
                 }
@@ -4340,23 +4360,33 @@ struct ContentView: View {
                 outputPlan,
                 preferredTargetPID: typingTarget.pid,
                 preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard,
-                requiredFocusTarget: focusTarget
+                requiredFocusTarget: focusTarget,
+                isOutputValid: isOutputValid
             )
+            guard isOutputValid() else { return }
             if case let .recoverableFailure(failure) = result {
                 self.showTextDeliveryFailure(failure, transcript: finalText)
             }
         } else {
-            await PasteDeliveryCoordinator.shared.copyBackup(finalText, enabled: SettingsStore.shared.copyTranscriptionToClipboard)
+            await PasteDeliveryCoordinator.shared.copyBackup(finalText, enabled: SettingsStore.shared.copyTranscriptionToClipboard, isOutputValid: isOutputValid)
         }
     }
 
     private func reprocessDictationText(_ transcribedText: String) async {
+        _ = try? await privateOutputOperations.perform { await self.reprocessDictationTextBound(transcribedText) }
+    }
+
+    private func reprocessDictationTextBound(_ transcribedText: String) async {
+        let history = TranscriptionHistoryStore.shared
+        let isOutputValid: @MainActor () -> Bool = { self.privateOutputOperations.isCurrent && !Task.isCancelled }
+        guard isOutputValid() else { return }
         // If live recording is still active, stop it first so reprocess does not
         // leave ASR running in the background (which causes the next hotkey press
         // to behave like a stop instead of start).
         if self.asr.isRunning {
             DebugLogger.shared.info("Actions: stopping active recording before reprocess", source: "ContentView")
-            await self.asr.stopWithoutTranscription()
+            await self.stopCaptureWithoutOutput()
+            guard isOutputValid() else { return }
             self.cancelPrewarmDictationIfNeeded()
         }
 
@@ -4389,9 +4419,11 @@ struct ContentView: View {
                     normalizedTranscribedText,
                     dictationSlot: .primary
                 )
+                guard isOutputValid() else { return }
                 finalText = result.text
                 aiTokensPerSecond = result.tokensPerSecond
             } catch {
+                guard isOutputValid() else { return }
                 DebugLogger.shared.error(
                     "AI reprocess failed, falling back to raw transcription: \(error.localizedDescription)",
                     source: "ContentView"
@@ -4405,6 +4437,7 @@ struct ContentView: View {
             )
         }
 
+        guard isOutputValid() else { return }
         finalText = ASRService.applyDictationLiteralFormatting(
             finalText,
             appName: appInfo.name,
@@ -4431,7 +4464,7 @@ struct ContentView: View {
         )
 
         if SettingsStore.shared.saveTranscriptionHistory {
-            TranscriptionHistoryStore.shared.addEntry(
+            history.addEntry(
                 rawText: transcribedText,
                 processedText: finalText,
                 appName: appInfo.name,
@@ -4465,7 +4498,8 @@ struct ContentView: View {
                 return .init(pid: context.pid, window: context.window, element: element)
             }
             if typingTarget.shouldRestoreOriginalFocus {
-                guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard, targetContext: targetContext) else {
+                guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard, targetContext: targetContext, isOutputValid: isOutputValid) else {
+                    guard isOutputValid() else { return }
                     self.showTextDeliveryFailure(.targetRestoreFailed, transcript: finalText)
                     return
                 }
@@ -4474,16 +4508,19 @@ struct ContentView: View {
                 outputPlan,
                 preferredTargetPID: typingTarget.pid,
                 preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard,
-                requiredFocusTarget: focusTarget
+                requiredFocusTarget: focusTarget,
+                isOutputValid: isOutputValid
             )
+            guard isOutputValid() else { return }
             if case let .recoverableFailure(failure) = result {
                 self.showTextDeliveryFailure(failure, transcript: finalText)
                 return
             }
         } else {
-            await PasteDeliveryCoordinator.shared.copyBackup(finalText, enabled: SettingsStore.shared.copyTranscriptionToClipboard)
+            await PasteDeliveryCoordinator.shared.copyBackup(finalText, enabled: SettingsStore.shared.copyTranscriptionToClipboard, isOutputValid: isOutputValid)
         }
 
+        guard isOutputValid() else { return }
         NotchOverlayManager.shared.updateTranscriptionText("")
         if shouldShowAIProcessingFailure {
             self.pendingAIReprocessText = transcribedText
@@ -4506,7 +4543,8 @@ struct ContentView: View {
         appInfo: (name: String, bundleId: String, windowTitle: String),
         lifecycleID: UInt64
     ) async {
-        let isOutputValid: @MainActor () -> Bool = { self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
+        let privateProfile = PrivateProfileStorage.current
+        let isOutputValid: @MainActor () -> Bool = { PrivateProfileStorage.isReadable(privateProfile) && PrivateProfileStorage.acceptsNewWork && self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
         guard isOutputValid() else { return }
         let targetContext = NotchContentState.shared.recordingTargetContext
         let fallbackTargetPID = NotchContentState.shared.recordingTargetPID
@@ -4663,7 +4701,8 @@ struct ContentView: View {
     // MARK: - Command Mode Voice Processing
 
     private func processCommandWithVoice(_ command: String, lifecycleID: UInt64) async {
-        let isOutputValid: @MainActor () -> Bool = { self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
+        let privateProfile = PrivateProfileStorage.current
+        let isOutputValid: @MainActor () -> Bool = { PrivateProfileStorage.isReadable(privateProfile) && PrivateProfileStorage.acceptsNewWork && self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
         guard isOutputValid() else { return }
         DebugLogger.shared.info("Processing voice command (\(command.count) chars)", source: "ContentView")
 
@@ -4726,11 +4765,14 @@ struct ContentView: View {
                 self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: .dictate)
                 return
             }
+            guard self.captureRecordingContext() else {
+                self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: self.activeRecordingMode)
+                return
+            }
             let startOutcome = await self.asr.start(onCaptureStarted: {
                 if shouldPlayStartSound {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
-                self.captureRecordingContext()
                 self.prewarmAIDictationIfNeeded(for: .primary)
                 DebugLogger.shared.benchmark(
                     "APP_BENCH",
@@ -4743,6 +4785,7 @@ struct ContentView: View {
                 return
             }
             if startOutcome == .failed {
+                self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: self.activeRecordingMode)
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
             }
         }
@@ -4778,7 +4821,26 @@ struct ContentView: View {
         else { return }
         self.cancelPrewarmDictationIfNeeded()
         self.clearActiveRecordingMode()
+        let output = self.privateCaptureOutput
+        let id = self.privateCaptureStopID
+        Task { await self.finishCancelledCaptureOutput(output, id: id) }
         self.menuBarManager.hideRecordingOverlayImmediately(reason: "capture_start_cancelled")
+    }
+
+    private func finishCancelledCaptureOutput(_ output: PrivateDictationCaptureOutput?, id: UUID?) async {
+        await output?.finish()
+        if self.privateCaptureStopID == id {
+            self.privateCaptureOutput = nil
+            self.privateCaptureStopID = nil
+        }
+        if let id { PrivateProfileService.shared.clearCaptureStopHandler(id: id) }
+    }
+
+    private func stopCaptureWithoutOutput() async {
+        let output = self.privateCaptureOutput
+        let id = self.privateCaptureStopID
+        await self.asr.stopWithoutTranscription()
+        await self.finishCancelledCaptureOutput(output, id: id)
     }
 
     private func presentExclusiveActivityBlockIfNeeded() -> Bool {
@@ -4803,7 +4865,7 @@ struct ContentView: View {
     }
 
     private func prewarmAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot, localOnly: Bool = false) {
-        guard !localOnly || self.appServices.isUIReady else { return }
+        guard self.privateOutputOperations.isCurrent, !localOnly || self.appServices.isUIReady else { return }
         let appBundleID = self.asr.isRunningOrStarting ? self.recordingAppInfo?.bundleId : DictationAppSession.shared.appID
         let settings = SettingsStore.shared
         let route = DictationProviderRoute.resolve(
@@ -4843,7 +4905,10 @@ struct ContentView: View {
                 "ContentView: AI dictation prewarm started slot=\(slot.rawValue)",
                 source: "ContentView"
             )
-            await PrivateAIIntegrationService.shared.prewarmDictation(localOnly: localOnly)
+            _ = try? await self.privateOutputOperations.perform {
+                await PrivateAIIntegrationService.shared.prewarmDictation(localOnly: localOnly)
+            }
+            guard self.privateOutputOperations.isCurrent, !Task.isCancelled else { return }
             DebugLogger.shared.debug(
                 "AI dictation prewarm complete slot=\(slot.rawValue)",
                 source: "ContentView"
@@ -5046,9 +5111,8 @@ struct ContentView: View {
                 await self.awaitCaptureStart(self.beginDictationRecording(for: selection, mode: .promptMode))
             },
             commandModeCallback: {
-                guard !self.presentExclusiveActivityBlockIfNeeded() else { return }
+                guard self.privateOutputOperations.isCurrent, !self.isSavingCancelledRecording, self.processingDictationLifecycleID == nil, !self.presentExclusiveActivityBlockIfNeeded() else { return }
                 DebugLogger.shared.info("Command mode triggered", source: "ContentView")
-                self.captureRecordingContext()
 
                 // Set flag so stopAndProcessTranscription knows to process as command
                 self.setActiveRecordingMode(.command)
@@ -5071,6 +5135,10 @@ struct ContentView: View {
                         self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: .command)
                         return
                     }
+                    guard self.captureRecordingContext() else {
+                        self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: self.activeRecordingMode)
+                        return
+                    }
                     let startOutcome = await self.asr.start(onCaptureStarted: {
                         TranscriptionSoundPlayer.shared.playStartSound()
                         self.appBench("overlay_phase phase=recording trigger=first_pcm mode=command")
@@ -5080,6 +5148,7 @@ struct ContentView: View {
                         return
                     }
                     if startOutcome == .failed {
+                        self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: .command)
                         self.menuBarManager.hideRecordingOverlayImmediately(
                             reason: "command_asr_start_failed"
                         )
@@ -5088,9 +5157,8 @@ struct ContentView: View {
                 await self.awaitCaptureStart(captureTask)
             },
             rewriteModeCallback: {
-                guard !self.presentExclusiveActivityBlockIfNeeded() else { return }
+                guard self.privateOutputOperations.isCurrent, !self.isSavingCancelledRecording, self.processingDictationLifecycleID == nil, !self.presentExclusiveActivityBlockIfNeeded() else { return }
 
-                self.captureRecordingContext()
 
                 // Try to capture text first while still in the other app
                 let captured = self.rewriteModeService.captureSelectedText()
@@ -5127,6 +5195,10 @@ struct ContentView: View {
                         self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: .edit)
                         return
                     }
+                    guard self.captureRecordingContext() else {
+                        self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: self.activeRecordingMode)
+                        return
+                    }
                     let startOutcome = await self.asr.start(onCaptureStarted: {
                         TranscriptionSoundPlayer.shared.playStartSound()
                         self.appBench("overlay_phase phase=recording trigger=first_pcm mode=edit")
@@ -5136,6 +5208,7 @@ struct ContentView: View {
                         return
                     }
                     if startOutcome == .failed {
+                        self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: .edit)
                         self.menuBarManager.hideRecordingOverlayImmediately(
                             reason: "edit_asr_start_failed"
                         )
@@ -5253,7 +5326,7 @@ struct ContentView: View {
             } else {
                 let isOnboardingTryout = self.isOnboardingVoicePlaygroundStepActive
                 Task {
-                    await self.asr.stopWithoutTranscription()
+                    await self.stopCaptureWithoutOutput()
                     if isOnboardingTryout {
                         AnalyticsService.shared.recordOnboardingTryoutAttemptResult(outcome: .cancelled)
                     }
@@ -5469,7 +5542,7 @@ extension ContentView {
     }
 
     private func canBeginDictationRecording() -> Bool {
-        guard !self.isSavingCancelledRecording, self.processingDictationLifecycleID == nil else { return false }
+        guard PrivateProfileStorage.acceptsNewWork, !self.isSavingCancelledRecording, self.processingDictationLifecycleID == nil else { return false }
         if self.canSwitchActiveDictationCaptureMode { return true }
         guard !self.presentExclusiveActivityBlockIfNeeded() else { return false }
         return !self.asr.isRunningOrStarting && !self.asr.isDictionaryTrainingCaptureActive
@@ -5532,11 +5605,14 @@ extension ContentView {
             }
             let asrStartStartedAt = ProcessInfo.processInfo.systemUptime
             DebugLogger.shared.benchmark("APP_BENCH", message: "asr_start_call", source: "AppBenchmark")
+            guard self.captureRecordingContext() else {
+                self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: self.activeRecordingMode)
+                return
+            }
             let startOutcome = await self.asr.start(onCaptureStarted: {
                 if SettingsStore.shared.enableTranscriptionSounds {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
-                self.captureRecordingContext()
                 self.prewarmAIDictationIfNeeded(for: slot)
                 self.appBench("overlay_phase phase=recording trigger=first_pcm")
             })
@@ -5545,6 +5621,7 @@ extension ContentView {
                 return
             }
             if startOutcome == .failed {
+                self.clearCancelledCaptureStart(lifecycleID: captureOverlayLifecycleID, mode: self.activeRecordingMode)
                 self.menuBarManager.hideRecordingOverlayImmediately(reason: "asr_start_failed")
                 if isOnboardingTryout {
                     AnalyticsService.shared.recordOnboardingTryoutAttemptResult(

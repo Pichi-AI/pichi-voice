@@ -20,7 +20,7 @@ final class StatsSnapshotStore: ObservableObject {
 
     init(history: TranscriptionHistoryStore) {
         self.history = history
-        history.$entries.sink { [weak self] entries in
+        history.entriesPublisher.sink { [weak self] entries in
             guard let self else { return }
             self.revision &+= 1
             self.task?.cancel()

@@ -81,12 +81,14 @@ struct FluidApp: App {
 
     private var applicationContent: some View {
         AdaptiveAppTheme(accent: self.settings.accentColor) {
-            ContentView()
+            PrivateProfileRoot(services: AppServices.shared, profiles: AppServices.shared.privateProfiles) {
+                ContentView()
                 .environmentObject(self.menuBarManager)
                 // Resolve the singleton only when the normal application content branch is built.
                 // The DEBUG C2 autorun branch returns Color.clear before this view is evaluated.
                 .environmentObject(AppServices.shared)
                 .environment(\.locale, PichiLocalization.locale)
+            }
         }
     }
 }

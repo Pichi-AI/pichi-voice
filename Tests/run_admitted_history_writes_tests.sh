@@ -34,6 +34,7 @@ xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version 5 
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Account/PrivateProfileDefaults.swift \
+    Sources/Fluid/Account/PrivateDictationCaptureOutput.swift \
     Sources/Fluid/Persistence/DictationAudioHistoryStore.swift \
     Sources/Fluid/Persistence/TranscriptionHistoryDatabase.swift Sources/Fluid/Persistence/TranscriptionHistoryStore.swift \
     Sources/Fluid/Persistence/ChatHistoryStore.swift Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift \
@@ -43,7 +44,7 @@ xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version 5 
     Sources/Fluid/Services/DictionaryExperimentalMatcher.swift Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingOwnerVoiceProfile.swift Sources/Fluid/Services/TranscriptionExecutor.swift \
     "$task_test_dir/CorrectionPolicy.swift" Tests/Support/PrivateProfileStoresSupport.swift \
-    Tests/AdmittedHistoryWritesTests.swift -lsqlite3 -o "$task_test_dir/tests" > "$task_evidence_dir/compile.log" 2>&1 || {
+    Tests/AdmittedHistoryWritesTests.swift Tests/PrivateDictationCaptureOutputTests.swift -lsqlite3 -o "$task_test_dir/tests" > "$task_evidence_dir/compile.log" 2>&1 || {
         cat "$task_evidence_dir/compile.log"; exit 1;
     }
 "$task_test_dir/tests" "$task_test_dir/fixtures" "$task_test_dir/owned-domains.json" > "$task_evidence_dir/run.log" 2>&1 || {

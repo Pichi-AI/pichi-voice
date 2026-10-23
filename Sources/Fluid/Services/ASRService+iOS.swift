@@ -104,6 +104,9 @@ final class ASRService: ObservableObject {
     }
 
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+        guard PrivateProfileStorage.acceptsNewWork || activity == .settingsRestore else {
+            throw ASRActivityError.settingsRestoreUnavailable
+        }
         guard !self.isTerminating else { throw MeetingModelResidencyError.terminating }
         guard self.activityLease == nil else {
             throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? activity)
@@ -112,6 +115,25 @@ final class ASRService: ObservableObject {
         self.activityLease = lease
         self.activeExclusiveActivity = activity
         return lease
+    }
+
+    var canBeginPrivateProfileTransition: Bool {
+        !isTerminating && activityLease == nil && modelOperation == nil
+            && !scope.isActive && !preparationOwner.isClaimed && !preparationOwner.isDraining
+            && !residency.isExclusive
+    }
+
+    func beginSettingsBackupRestore() throws -> ASRActivityLease {
+        guard canBeginPrivateProfileTransition else { throw ASRActivityError.settingsRestoreUnavailable }
+        return try acquireExclusiveActivity(.settingsRestore)
+    }
+
+    func reconcilePrivateProfileSelection() async throws {
+        guard canBeginPrivateProfileTransition else { throw ASRActivityError.settingsRestoreUnavailable }
+        await executor.cancelAndAwaitPending()
+        await releaseResidentProvider()
+        isAsrReady = false
+        modelsExistOnDisk = installedModelExists(settings.selectedSpeechModel)
     }
 
     func releaseExclusiveActivity(_ lease: ASRActivityLease) {

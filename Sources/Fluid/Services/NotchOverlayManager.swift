@@ -149,6 +149,7 @@ final class NotchOverlayManager {
     }
 
     func show(audioLevelPublisher: AnyPublisher<CGFloat, Never>, mode: OverlayMode) {
+        guard PrivateProfileStorage.acceptsNewWork else { self.hideImmediately(); return }
         self.refreshNotchPresentationPolicy()
         Self.overlayBench("show_called mode=\(mode.rawValue) state=\(self.state) commandExpanded=\(self.isCommandOutputExpanded)")
         self.cancelInFlightHideForNewPresentation()
@@ -520,6 +521,11 @@ final class NotchOverlayManager {
     }
 
     func updateTranscriptionText(_ text: String) {
+        guard PrivateProfileStorage.current.isReadable else {
+            NotchContentState.shared.updateTranscription("")
+            self.hideImmediately()
+            return
+        }
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedText.isEmpty || Self.transientOverlayStatusTexts.contains(trimmedText) {
             Self.overlayBench("text_update status=\(trimmedText.isEmpty ? "empty" : trimmedText)")
@@ -576,6 +582,8 @@ final class NotchOverlayManager {
 
     /// Show expanded command output notch
     func showExpandedCommandOutput() {
+        let privateProfile = PrivateProfileStorage.current
+        guard PrivateProfileStorage.acceptsNewWork else { return }
         guard self.canShowExpandedCommandOutput else { return }
 
         // Hide regular notch first if visible
@@ -586,6 +594,7 @@ final class NotchOverlayManager {
         // Wait a bit for cleanup
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
             await self?.showExpandedCommandOutputInternal()
         }
     }
