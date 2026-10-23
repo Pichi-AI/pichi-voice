@@ -220,7 +220,12 @@ final class Provider {
         return ASRTranscriptionResult(text: "file result", confidence: 0.8)
     }
 }
+enum PrivateProfileStorage { static let acceptsNewWork = true }
 @MainActor final class ASRService {
+    var isTerminating = false
+    var privateProfileResetInProgress = false
+    struct AdmittedProbe { let lease: ASRActivityLease }
+    var admittedTranscription: AdmittedProbe?
     var activeActivityLease: ASRActivityLease?
     var activeExclusiveActivity: ASRExclusiveActivity?
     var deferredMeetingActivityLeaseRelease: ASRActivityLease?

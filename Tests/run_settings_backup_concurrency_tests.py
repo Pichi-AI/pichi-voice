@@ -354,6 +354,8 @@ def main() -> None:
     lease_path = repo / "Sources/Fluid/Services/ASRActivityLease.swift"
     lease_source = lease_path.read_text() if lease_path.exists() else asr_source
     asr_admission = declaration(asr_source, "    func beginSettingsBackupRestore()")
+    if "    var canBeginPrivateProfileTransition:" in asr_source:
+        asr_admission = declaration(asr_source, "    var canBeginPrivateProfileTransition:") + "\n" + asr_admission
     asr_activity = declaration(lease_source, "enum ASRExclusiveActivity:")
     asr_lease = declaration(lease_source, "struct ASRActivityLease:")
     asr_error = declaration(lease_source, "enum ASRActivityError:")
@@ -484,6 +486,8 @@ ASR_LEASE
 @MainActor final class ResidencyProbe { var isExclusive = false }
 @MainActor final class ASRService {
     var isTerminating = false
+    struct AdmittedProbe { let lease: ASRActivityLease }
+    var admittedTranscription: AdmittedProbe?
     var activeActivityLease: ASRActivityLease?
     var activeExclusiveActivity: ASRExclusiveActivity?
     var isRunning = false, isStarting = false, isStoppingFinalTranscription = false
