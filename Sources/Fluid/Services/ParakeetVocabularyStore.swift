@@ -203,8 +203,23 @@ import FluidAudio
         (try? self.loadResolvedConfig())?.terms.isEmpty == false
     }
 
-    func loadResolvedConfig() throws -> ResolvedConfig {
-        let rawJSON = try self.loadRawJSON()
+    func loadResolvedConfig(maximumBytes: Int? = nil) throws -> ResolvedConfig {
+        let rawJSON: String
+        if let maximumBytes {
+            try self.requireAccess()
+            let url = self.rootDirectory.appendingPathComponent(self.fileName)
+            if let file = try DictionaryCaptureEvidenceFile(url: url, maximumBytes: maximumBytes, profile: self.profile) {
+                defer { file.close() }
+                rawJSON = try file.read { String(decoding: $0, as: UTF8.self) }
+            } else if let bundled = Bundle.main.url(forResource: "parakeet_custom_vocabulary.default", withExtension: "json"),
+                      let text = try? String(contentsOf: bundled, encoding: .utf8) {
+                rawJSON = try Self.brandedFactoryDefaultJSON(text)
+            } else {
+                rawJSON = Self.defaultTemplateJSON()
+            }
+        } else {
+            rawJSON = try self.loadRawJSON()
+        }
         let parsed = (try? self.validateJSON(rawJSON)) ?? VocabularyConfig(
             alpha: nil,
             minCtcScore: nil,
@@ -353,9 +368,11 @@ extension Notification.Name {
 extension ParakeetVocabularyStore {
     /// Creates tokenized vocabulary + CTC models for FluidAudio vocabulary boosting.
     func loadTokenizedVocabularyBundle(
-        maxTerms: Int = 256
+        maxTerms: Int = 256,
+        resolvedConfig: ResolvedConfig? = nil
     ) async throws -> (vocabulary: CustomVocabularyContext, ctcModels: CtcModels)? {
-        let resolved = try self.loadResolvedConfig()
+        // An admitted provider supplies its immutable visible-profile configuration.
+        let resolved = try resolvedConfig ?? self.loadResolvedConfig()
         DebugLogger.shared.debug("ParakeetVocabularyStore: resolved vocabulary term count=\(resolved.terms.count)", source: "ParakeetVocabularyStore")
         guard !resolved.terms.isEmpty else {
             DebugLogger.shared.debug("ParakeetVocabularyStore: no resolved terms; returning nil bundle", source: "ParakeetVocabularyStore")

@@ -17,6 +17,7 @@ import Foundation
     private var installed = false
     private var isBusy: @MainActor () -> Bool = { true }
     private var prepareSources: @MainActor () async throws -> Void = {}
+    private var concealSources: @MainActor () async throws -> Void = {}
     private var activateSources: @MainActor (PrivateProfileSnapshot) async throws -> Void = { _ in }
     private var pendingWrites: [UUID: Task<Void, Never>] = [:]
     private var captureStopHandler: (id: UUID, stop: @MainActor () async -> Void)?
@@ -30,9 +31,11 @@ import Foundation
     /// Called once by the app composition after every concrete private store hook is installed.
     func configure(isBusy: @escaping @MainActor () -> Bool,
                    prepare: @escaping @MainActor () async throws -> Void,
-                   activate: @escaping @MainActor (PrivateProfileSnapshot) async throws -> Void) throws {
+                   activate: @escaping @MainActor (PrivateProfileSnapshot) async throws -> Void,
+                   conceal: @escaping @MainActor () async throws -> Void = {}) throws {
         guard !installed else { throw AccountError.busy }
         self.isBusy = isBusy; self.prepareSources = prepare; self.activateSources = activate
+        self.concealSources = conceal
         installed = true
     }
 
@@ -44,13 +47,22 @@ import Foundation
 
     func retainPrivateWrite(_ task: Task<Void, Never>, id: UUID) { pendingWrites[id] = task }
     func finishPrivateWrite(id: UUID) { pendingWrites.removeValue(forKey: id) }
-    func installCaptureStopHandler(id: UUID, stop: @escaping @MainActor () async -> Void) {
+    @discardableResult
+    func installCaptureStopHandler(id: UUID, stop: @escaping @MainActor () async -> Void) -> Bool {
+        guard captureStopHandler == nil || captureStopHandler?.id == id else { return false }
         captureStopHandler = (id, stop)
+        return true
     }
     func clearCaptureStopHandler(id: UUID) {
         if captureStopHandler?.id == id { captureStopHandler = nil }
     }
+    var hasRetainedCaptureStopHandler: Bool { captureStopHandler != nil }
+    var captureStopHandlerID: UUID? { captureStopHandler?.id }
     func requestCaptureStop() async { await captureStopHandler?.stop() }
+    func requestCaptureStop(id: UUID) async {
+        guard let handler = captureStopHandler, handler.id == id else { return }
+        await handler.stop()
+    }
     private func joinPrivateWrites() async {
         while !pendingWrites.isEmpty {
             for task in Array(pendingWrites.values) { await task.value }
@@ -71,15 +83,13 @@ import Foundation
             if to == nil {
                 // Offline logout still clears N1's credentials. Keep the old admitted writer,
                 // hide every private projection and require cleanup retry after capture drains.
+                isTransitioning = true
+                defer { isTransitioning = false }
                 PrivateProfileStorage.closeAdmission()
                 isPrivateDataVisible = false; projectionRevision = UUID()
                 PrivateProfileStorage.conceal(generation: generation)
                 NotificationCenter.default.post(name: Self.willConceal, object: nil)
-                try persistHiddenMarker(generation: generation)
-                await joinPrivateWrites()
-                for participant in participants.compactMap(\.value) {
-                    try await participant.prepareForPrivateProfileTransition()
-                }
+                try await joinConcealedOperations(generation: generation)
             }
             throw AccountError.busy
         }
@@ -89,12 +99,14 @@ import Foundation
         do {
             PrivateProfileStorage.conceal(generation: generation)
             NotificationCenter.default.post(name: Self.willConceal, object: nil)
-            try persistHiddenMarker(generation: generation)
-            await joinPrivateWrites()
-            for participant in participants.compactMap(\.value) {
-                try await participant.prepareForPrivateProfileTransition()
-            }
-            try await prepareSources()
+            var firstFailure: (any Error)?
+            do { try await joinConcealedOperations(generation: generation) }
+            catch { firstFailure = error }
+            // Concrete source cleanup owns private workers outside the window registry.
+            // Join those too before returning an earlier marker or participant failure.
+            do { try await prepareSources() }
+            catch { if firstFailure == nil { firstFailure = error } }
+            if let firstFailure { throw firstFailure }
             guard !isBusy() else { throw AccountError.busy }
             PrivateProfileStorage.conceal(generation: generation)
             await PrivateProfileMeetingStore.shared.finishProfileTransition()
@@ -118,6 +130,24 @@ import Foundation
             try? PrivateProfileStorage.persistAccessMarker(PrivateProfileStorage.current)
             throw error
         }
+    }
+
+    /// A failed marker or reader cannot let the credential owner return before other admitted
+    /// work has joined. Preserve the first failure and leave the old scope concealed for retry.
+    private func joinConcealedOperations(generation: UUID) async throws {
+        var firstFailure: (any Error)?
+        do { try persistHiddenMarker(generation: generation) }
+        catch { firstFailure = error }
+        // Retire private readers/transfers even when an admitted recorder must remain alive.
+        // Capture-sensitive source retirement is still reserved for the quiescent path.
+        do { try await concealSources() }
+        catch { if firstFailure == nil { firstFailure = error } }
+        await joinPrivateWrites()
+        for participant in participants.compactMap(\.value) {
+            do { try await participant.prepareForPrivateProfileTransition() }
+            catch { if firstFailure == nil { firstFailure = error } }
+        }
+        if let firstFailure { throw firstFailure }
     }
 
     private func persistHiddenMarker(generation: UUID) throws {

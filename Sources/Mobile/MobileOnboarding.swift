@@ -5,6 +5,7 @@ import SwiftUI
 /// portable brand mark, text roles, local model metadata and progressive preparation semantics.
 struct MobileOnboarding: View {
     @ObservedObject var accountSession: AccountSessionService = AppServices.shared.accountSession
+    var cloudPublication: PichiCloudPublicationService? = nil
     @ObservedObject private var privateProfile = PrivateProfileService.shared
     @ObservedObject var asr: ASRService
     @ObservedObject var required: MobileRequiredResources
@@ -54,7 +55,7 @@ struct MobileOnboarding: View {
     @ViewBuilder private var content: some View {
         switch step {
         case 0:
-            Text(PichiLocalization.text("Record conversations, follow the transcript as people speak, and return to any moment later. Everything is processed on this device."))
+            Text(PichiLocalization.text("cloud.onboarding.localRecognition"))
                 .font(theme.typography.body)
             Label(PichiLocalization.text("Live meeting transcripts"), systemImage: "waveform")
             Label(PichiLocalization.text("Automatic speaker labels"), systemImage: "person.2")
@@ -120,7 +121,7 @@ struct MobileOnboarding: View {
                 .font(theme.typography.body)
             if accountSession.configuration != nil {
                 MobileAccountOnboarding(session: accountSession, continueAsGuest: next,
-                    actionChanged: { accountActionIsActive = $0 })
+                    actionChanged: { accountActionIsActive = $0 }, cloudPublication: cloudPublication)
             }
             if advancing && asr.modelPreparationPhase == nil {
                 ProgressView(PichiLocalization.text("Checking setup…"))

@@ -2,14 +2,6 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-// Standalone persistence dependencies never access the installed application's data.
-@MainActor final class UserDefaults {
-    static let standard = UserDefaults()
-    private var values: [String: Any] = [:]
-    func data(forKey key: String) -> Data? { self.values[key] as? Data }
-    func set(_ value: Any?, forKey key: String) { self.values[key] = value }
-}
-
 @MainActor final class DebugLogger {
     static let shared = DebugLogger()
     func debug(_: String, source _: String) {}

@@ -17,6 +17,8 @@ struct MobileMeetingRoot: View {
     @ObservedObject private var privateProfile = PrivateProfileService.shared
     @StateObject private var privatePresentation = MobilePrivatePresentationState()
     @StateObject private var accountInteraction: MobileAccountInteraction
+    @StateObject private var cloudInteraction: MobileCloudInteraction
+    let cloudPublication: PichiCloudPublicationService?
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -31,8 +33,7 @@ struct MobileMeetingRoot: View {
         nonmutating set { privatePresentation.settingsPath = newValue }
     }
     @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @StateObject private var privateSources: MobilePrivateSourceReaders
-    private var historySnapshot: MeetingHistorySnapshot { privateSources.historySnapshot }
+    @StateObject private var historySnapshot: MeetingHistorySnapshot
     private var sessions: [MeetingSession] { historySnapshot.sessions }
     // The snapshot owns committed sessions; History's own path keeps only pushed identities.
     private var historyPath: [MeetingSessionID] {
@@ -96,7 +97,7 @@ struct MobileMeetingRoot: View {
     }
     private var presentationLoader: MobilePresentationLoader { privatePresentation.presentationLoader }
     @State private var recordingScreenAwakeToken: UUID?
-    private var playback: MeetingSegmentPlayback { privateSources.playback }
+    @StateObject private var playback = MeetingSegmentPlayback()
     // Projection is independent of microphone meters, pending audio, playback progress
     // and other frequent view invalidations. Keep one result for the visible transcript.
     private var transcriptReadingSource: MeetingTranscriptExporter.ReadingInput? {
@@ -114,11 +115,14 @@ struct MobileMeetingRoot: View {
          privacy: PichiTranscriptPrivacyService,
          required: MobileRequiredResources, privacyActivation: MobilePrivacyActivation,
          accountSession: AccountSessionService? = nil,
+         cloudPublication: PichiCloudPublicationService? = nil,
          microphones: @escaping @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot) {
         self.coordinator = coordinator; self.asr = asr; self.store = store
         self.privacy = privacy; self.microphones = microphones
         self.required = required; self.privacyActivation = privacyActivation
-        self._privateSources = StateObject(wrappedValue: MobilePrivateSourceReaders(store: store))
+        self.cloudPublication = cloudPublication
+        self._cloudInteraction = StateObject(wrappedValue: MobileCloudInteraction(session: accountSession ?? AppServices.shared.accountSession))
+        self._historySnapshot = StateObject(wrappedValue: MeetingHistorySnapshot(load: { try await store.loadAll() }))
         self._accountInteraction = StateObject(wrappedValue: MobileAccountInteraction(
             session: accountSession ?? AppServices.shared.accountSession,
             requireTransitionAdmission: { try PrivateProfileService.shared.requireTransitionAdmission() }))
@@ -264,15 +268,6 @@ struct MobileMeetingRoot: View {
         }
         // The app's UI-ready signal owns the launch sweep; its committed deletions reload History.
         .onChange(of: coordinator.retentionSweepRevision) { _, _ in Task { await refreshHistory() } }
-        // N2 advances this only after successful activation. Replace the two
-        // immutable private readers without replacing capture, UI or awake owners.
-        .onChange(of: privateProfile.sourceRevision) { _, _ in
-            privateSources.replaceAfterActivation()
-            Task {
-                await privatePresentation.waitForPendingRetirement()
-                await refreshHistory()
-            }
-        }
         .onChange(of: coordinator.state) { _, state in
             if coordinator.isRecording { playback.stop() }
             updateRecordingScreenAwake()
@@ -402,6 +397,7 @@ struct MobileMeetingRoot: View {
                 if privateProfile.isPrivateDataVisible { history } else { concealedPrivateData }
             case .settings:
                 MobileSettingsRoot(accountSession: accountInteraction.session, accountInteraction: accountInteraction,
+                    cloudPublication: cloudPublication, cloudInteraction: cloudInteraction,
                     asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
                     required: required, privacyActivation: privacyActivation, reportError: report)
             }
@@ -654,6 +650,9 @@ struct MobileMeetingRoot: View {
                 VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
                     Text(session.displayTitle).font(theme.typography.bodyStrong)
                     Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    if let cloudPublication {
+                        MobileCloudRecordingStatus(service: cloudPublication, interaction: cloudInteraction, recordingID: session.id)
+                    }
                 }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
@@ -709,6 +708,11 @@ struct MobileMeetingRoot: View {
                         Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
                         Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
                     }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    if let cloudPublication {
+                        MobileCloudRecordingStatus(service: cloudPublication, interaction: cloudInteraction,
+                            recordingID: session.id, showsActions: true)
+                            .padding(.vertical, theme.metrics.spacing.sm)
+                    }
                     HStack {
                         // The desktop transcript's copy confirmation.
                         let copied = copiedSessionID == session.id
@@ -1083,35 +1087,6 @@ struct MobileMeetingRoot: View {
 }
 
 
-/// Only these readers freeze the selected profile. Their existing N2 participants
-/// have joined before sourceRevision advances; the recording owner stays mounted.
-@MainActor
-private final class MobilePrivateSourceReaders: ObservableObject {
-    @Published private(set) var historySnapshot: MeetingHistorySnapshot
-    @Published private(set) var playback: MeetingSegmentPlayback
-    private let store: any MeetingSessionStoring
-    private var observers = Set<AnyCancellable>()
-
-    init(store: any MeetingSessionStoring) {
-        self.store = store
-        historySnapshot = MeetingHistorySnapshot(load: { try await store.loadAll() })
-        playback = MeetingSegmentPlayback()
-        observeReaders()
-    }
-
-    func replaceAfterActivation() {
-        historySnapshot = MeetingHistorySnapshot(load: { [store] in try await store.loadAll() })
-        playback = MeetingSegmentPlayback()
-        observeReaders()
-    }
-
-    private func observeReaders() {
-        observers.removeAll()
-        historySnapshot.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observers)
-        playback.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observers)
-    }
-}
-
 /// Per-window private UI values and publication jobs. N2 owns profile selection;
 /// this participant only retires transient readers/payloads before replacement.
 @MainActor
@@ -1201,7 +1176,6 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
         await cleanupTask?.value
     }
 
-    func waitForPendingRetirement() async { await cleanupTask?.value }
 
     private func clear() {
         // Retain the safe account host during its own service-driven concealment.

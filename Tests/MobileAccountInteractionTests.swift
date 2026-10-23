@@ -19,6 +19,8 @@ private actor SyntheticAccountTransport: AccountTransporting {
     var holdRefresh = false
     var waiting = false
     var refreshGate: CheckedContinuation<Void, Never>?
+    var initialTokenLifetime: TimeInterval = 3600
+    var rejectRefresh = false
     let snapshot = AccountSnapshot(schemaVersion: 1,
         account: .init(id: "synthetic-user", displayName: "Ёжик Synthetic", email: nil),
         identity: .init(issuer: "https://identity.example/realms/test", subject: "synthetic-subject"),
@@ -31,15 +33,17 @@ private actor SyntheticAccountTransport: AccountTransporting {
     }
     func exchange(code: String, verifier: String, nonce: String) -> AccountTokenResponse {
         .init(accessToken: "synthetic-access", refreshToken: "synthetic-refresh",
-              expiresAt: Date().addingTimeInterval(3600), subject: "synthetic-subject")
+              expiresAt: Date().addingTimeInterval(initialTokenLifetime), subject: "synthetic-subject")
     }
-    func refresh(_ grant: AccountGrant) async -> AccountTokenResponse {
+    func refresh(_ grant: AccountGrant) async throws -> AccountTokenResponse {
         if holdRefresh { waiting = true; await withCheckedContinuation { refreshGate = $0 }; waiting = false }
+        if rejectRefresh { throw AccountError.networkUnavailable }
         return .init(accessToken: "synthetic-rotated", refreshToken: "synthetic-rotated-refresh",
               expiresAt: Date().addingTimeInterval(3600), subject: "synthetic-subject")
     }
     func suspendRefresh() { holdRefresh = true }
     func releaseRefresh() { holdRefresh = false; refreshGate?.resume(); refreshGate = nil }
+    func prepareHeldRefreshFailure() { initialTokenLifetime = 30; holdRefresh = true; rejectRefresh = true }
     func account(accessToken: String) -> AccountSnapshot { snapshot }
     func revoke(refreshToken: String) {}
 }
@@ -270,7 +274,53 @@ private actor SyntheticAccountTransport: AccountTransporting {
             let text = MobileAccountCopy.error(error, language: .english)
             expect(!text.isEmpty && !text.hasPrefix("account.error."), "Every service error has safe fallback copy")
         }
+        await initialCloudStatusReadinessTest()
         try await privatePublicationTests()
         print("PASS: \(assertions) focused synthetic mobile account interaction assertions")
+    }
+
+    @MainActor private static func initialCloudStatusReadinessTest() async {
+        let fixture = SyntheticAccountUIFixture()
+        await fixture.transport.prepareHeldRefreshFailure()
+        fixture.ui.signIn(); await fixture.ui.waitUntilIdle()
+        let context = fixture.session.context!, generation = fixture.session.generation
+        let source = MobilePrivatePublicationContext(profile: .init(id: "synthetic-status-a", context: context,
+            generation: generation, rootDirectory: URL(fileURLWithPath: "/synthetic-unused"),
+            legacyRootDirectory: URL(fileURLWithPath: "/synthetic-unused"), isReadable: true), projectionRevision: UUID())
+        let refresh = Task { try? await fixture.session.authorizedAccess(for: context) }
+        await until { await fixture.transport.waiting }
+        let priorTransitions = fixture.lifecycle.transitions
+        let workspace = Task { () -> AccountError? in
+            do { try await fixture.session.selectWorkspace(organizationID: "org-b", workspaceID: "same-id"); return nil }
+            catch { return error as? AccountError }
+        }
+        await until { !fixture.session.isCurrent(context) }
+        let jobs = MobilePrivatePublicationTasks(capture: {
+            fixture.session.isCurrent(context) ? source : nil
+        }, validate: { $0 == source && fixture.session.isCurrent(context) })
+        var waits = 0, reads = 0, reports = 0
+        let interaction = MobileCloudInteraction(publications: jobs, statusSource: {
+            fixture.session.context == context && fixture.session.generation == generation
+                && fixture.session.state == .signedIn ? source : nil
+        }, readinessDelay: { waits += 1; await Task.yield() })
+        let request = interaction.readStatus(presentationID: UUID(), report: { _ in reports += 1 }) { admission in
+            expect(jobs.canPublish(admission) && fixture.session.isCurrent(context), "The deferred status read still uses actual N1 admission")
+            reads += 1
+            return true
+        }
+        await until { waits > 0 }
+        expect(request != nil && interaction.pendingStatusReadCount == 1 && jobs.admit() == nil && reads == 0,
+               "An initial known-record read is retained while the real N1 workspace command holds its slot")
+        await fixture.transport.releaseRefresh()
+        _ = await refresh.value
+        let workspaceFailure = await workspace.value
+        expect(workspaceFailure == .networkUnavailable && fixture.lifecycle.transitions == priorTransitions,
+               "Workspace selection fails on the held refresh before any profile transition begins")
+        expect(fixture.session.context == context && fixture.session.generation == generation && fixture.session.isCurrent(context),
+               "A failed refresh joined by workspace selection leaves the same source and generation current")
+        await request?.value
+        expect(reads == 1 && reports == 0 && interaction.pendingStatusReadCount == 0,
+               "The same-source initial status read runs once after the failed N1 command joins without a task-key change")
+        interaction.invalidate(); await interaction.waitUntilFinished(); await fixture.shutdown()
     }
 }

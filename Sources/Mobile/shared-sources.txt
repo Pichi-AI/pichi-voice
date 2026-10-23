@@ -12,6 +12,9 @@ Sources/Fluid/Account/PrivateProfileStorage.swift
 Sources/Fluid/Account/PrivateProfileMeetingStore.swift
 Sources/Fluid/Account/PrivateProfileService.swift
 Sources/Fluid/Account/PrivateProfileAuxiliaryServices.swift
+Sources/Fluid/Account/PrivateProfileOperationOwner.swift
+Sources/Fluid/Account/PrivateProfileRoot.swift
+Sources/Fluid/Account/PrivateProfileSources.swift
 Sources/Fluid/Branding/AppBrand.swift
 Sources/Fluid/Branding/AppModelPaths.swift
 Sources/Fluid/Branding/BrandDistribution.swift
@@ -188,3 +191,14 @@ Sources/Fluid/Services/Privacy/TranscriptSensitiveDictionary.swift
 Sources/Fluid/Persistence/SettingsStore+SensitiveDataDictionary.swift
 
 Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift
+
+# Protected publication uses the shared account/profile composition.
+Sources/Fluid/Services/CloudPublication/PichiCloudPublicationActivation.swift
+Sources/Fluid/Services/CloudPublication/PichiCloudPublicationService.swift
+Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift
+Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationSource.swift
+Sources/Fluid/Services/CloudPublication/PichiPublicationConsentStore.swift
+Sources/Fluid/Services/CloudPublication/PichiPublicationHTTPClient.swift
+Sources/Fluid/Services/CloudPublication/PichiPublicationOutboxStore.swift
+Sources/Fluid/Services/CloudPublication/PichiPublicationRetryPolicy.swift
+Sources/Fluid/Services/CloudPublication/PichiPublicationWire.swift

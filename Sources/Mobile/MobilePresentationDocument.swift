@@ -47,6 +47,7 @@ final class MobilePrivatePublicationTasks: ObservableObject {
     @discardableResult
     func start(affectsBusy: Bool = true,
                report: @escaping @MainActor (Error) -> Void = { _ in },
+               finished: @escaping @MainActor () -> Void = {},
                operation: @escaping @MainActor (Admission) async throws -> Void) -> Task<Void, Never>? {
         guard let admission = admit() else { return nil }
         let id = UUID()
@@ -55,6 +56,9 @@ final class MobilePrivatePublicationTasks: ObservableObject {
             defer {
                 self.jobs.removeValue(forKey: id)
                 if affectsBusy { self.busyCount -= 1 }
+                // Callers can own a command lock before the operation is entered.
+                // Cancellation at admission must release it too.
+                finished()
             }
             do {
                 guard self.canPublish(admission) else { return }

@@ -189,6 +189,14 @@ protocol TranscriptionProvider {
     /// Download/prepare models for transcription.
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws
 
+    /// Freeze provider-owned transcription options before the admitted operation first suspends.
+    /// The caller retains this same provider until all streaming/final work has joined.
+    /// Admission is atomic: on failure the provider releases any partially acquired options.
+    @MainActor func beginAdmittedTranscription(leaseID: UUID) throws
+
+    /// Release only the matching operation's immutable private options after its work joins.
+    @MainActor func endAdmittedTranscription(leaseID: UUID) async
+
     /// Transcribe audio samples
     /// - Parameter samples: 16kHz mono PCM float samples
     /// - Returns: Transcription result with text and confidence
@@ -244,6 +252,8 @@ protocol TranscriptionProvider {
 
 // Default implementation for optional methods
 extension TranscriptionProvider {
+    @MainActor func beginAdmittedTranscription(leaseID: UUID) throws {}
+    @MainActor func endAdmittedTranscription(leaseID: UUID) async {}
     func modelsExistOnDisk() -> Bool { return false }
     func clearCache() async throws {}
     /// Legacy providers with no pooled runtime retain their existing reference-owned teardown.

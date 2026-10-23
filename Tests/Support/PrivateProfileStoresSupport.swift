@@ -6,6 +6,7 @@ nonisolated final class DebugLogger: Sendable {
     static let diagnosticsEnabled = false
     func debug(_ message: String, source: String) {}
     func info(_ message: String, source: String) {}
+    func error(_ message: String, source: String) {}
 }
 
 @MainActor final class SettingsStore {

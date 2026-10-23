@@ -10,6 +10,8 @@ enum MobileSettingsDestination: Hashable {
 struct MobileSettingsRoot: View {
     @ObservedObject var accountSession: AccountSessionService = AppServices.shared.accountSession
     var accountInteraction: MobileAccountInteraction? = nil
+    var cloudPublication: PichiCloudPublicationService? = nil
+    var cloudInteraction: MobileCloudInteraction? = nil
     @ObservedObject var asr: ASRService
     let privacy: PichiTranscriptPrivacyService
     let microphones: [MeetingMicrophoneIdentity]
@@ -50,7 +52,8 @@ struct MobileSettingsRoot: View {
         }.listStyle(.insetGrouped).accessibilityIdentifier("settings.root")
             .navigationDestination(for: MobileSettingsDestination.self) { destination in
                 if destination == .account {
-                    MobileAccountSettings(session: accountSession, interaction: accountInteraction)
+                    MobileAccountSettings(session: accountSession, interaction: accountInteraction,
+                        cloudPublication: cloudPublication, cloudInteraction: cloudInteraction)
                 } else if !privateProfile.isPrivateDataVisible {
                     Text(PichiLocalization.text("account.profile.unavailable"))
                 } else {

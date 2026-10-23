@@ -2,7 +2,8 @@ import Combine
 import Foundation
 
 @MainActor
-final class CommandModeService: ObservableObject {
+final class CommandModeService: ObservableObject, PrivateProfileTransitionParticipant {
+    private let privateOperations = PrivateProfileOperationOwner()
     @Published var conversationHistory: [Message] = []
     @Published var isProcessing = false
     @Published var pendingCommand: PendingCommand? = nil
@@ -33,10 +34,11 @@ final class CommandModeService: ObservableObject {
         self.llmClient = llmClient
         // Load current chat from store
         self.loadCurrentChatFromStore()
+        PrivateProfileService.shared.register(self)
     }
 
     private var shouldSyncCommandNotchState: Bool {
-        self.enableNotchOutput && NotchOverlayManager.shared.shouldSyncCommandConversationToNotch
+        self.privateOperations.isCurrent && self.enableNotchOutput && NotchOverlayManager.shared.shouldSyncCommandConversationToNotch
     }
 
     private func loadCurrentChatFromStore() {
@@ -364,6 +366,13 @@ final class CommandModeService: ObservableObject {
 
     /// Process user voice/text command
     func processUserCommand(_ text: String, notifyInvalidRequest: Bool = false, isOutputValid: (@MainActor () -> Bool)? = nil) async {
+        _ = try? await privateOperations.perform {
+            await self.processUserCommandBound(text, notifyInvalidRequest: notifyInvalidRequest,
+                isOutputValid: { self.privateOperations.isCurrent && (isOutputValid?() ?? true) })
+        }
+    }
+
+    private func processUserCommandBound(_ text: String, notifyInvalidRequest: Bool, isOutputValid: (@MainActor () -> Bool)?) async {
         let voiceOutputValidity = isOutputValid
         let isOutputValid: @MainActor () -> Bool = voiceOutputValidity ?? { true }
         guard isOutputValid(), !self.isProcessing, self.pendingCommand == nil else { return }
@@ -416,6 +425,10 @@ final class CommandModeService: ObservableObject {
     /// Process follow-up command from notch input
     @discardableResult
     func processFollowUpCommand(_ text: String) async -> Bool {
+        (try? await privateOperations.perform { await self.processFollowUpCommandBound(text) }) ?? false
+    }
+
+    private func processFollowUpCommandBound(_ text: String) async -> Bool {
         guard !self.isProcessing, self.pendingCommand == nil else { return false }
         self.pendingVoiceCommandCancellation = nil
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
@@ -445,12 +458,17 @@ final class CommandModeService: ObservableObject {
             NotchContentState.shared.setCommandProcessing(true)
         }
 
-        await self.processNextTurn()
+        await self.processNextTurn(isOutputValid: { self.privateOperations.isCurrent })
         return true
     }
 
     /// Execute pending command (after user confirmation)
     func confirmAndExecute() async {
+        _ = try? await privateOperations.perform { await self.confirmAndExecuteBound() }
+    }
+
+    private func confirmAndExecuteBound() async {
+        guard privateOperations.isCurrent else { return }
         guard !self.isProcessing else { return }
         guard !self.cancelInvalidPendingCommand() else { return }
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
@@ -464,7 +482,16 @@ final class CommandModeService: ObservableObject {
         self.pendingVoiceCommandCancellation = nil
         self.isProcessing = true
 
-        await self.executeCommand(pending.command, workingDirectory: pending.workingDirectory, callId: pending.id)
+        await self.executeCommand(pending.command, workingDirectory: pending.workingDirectory, callId: pending.id,
+            isOutputValid: { self.privateOperations.isCurrent && !Task.isCancelled })
+    }
+
+    func prepareForPrivateProfileTransition() async throws {
+        await privateOperations.retireAndJoin()
+        pendingCommand = nil; pendingVoiceCommandCancellation = nil
+        conversationHistory = []; currentChatID = nil; currentStep = nil
+        streamingText = ""; streamingThinkingText = ""; streamingBuffer = []; thinkingBuffer = []
+        isProcessing = false
     }
 
     /// Cancel pending command

@@ -20,26 +20,45 @@ final class MeetingRecordingPillController: ObservableObject {
     private var reducer = MeetingOverlayPresentationReducer()
     private var visibleAnchor: MeetingOverlayVisibleAnchor?
     private var stateSubscription: AnyCancellable?
+    private var profileSubscription: AnyCancellable?
     private var screenParametersObserver: NSObjectProtocol?
     private var windowMoveObserver: NSObjectProtocol?
     private var transitionGeneration = 0
     private var inFlightTransitionGeneration: Int?
     private var isApplyingProgrammaticFrame = false
 
-    private init() {}
+    private init() {
+        self.profileSubscription = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.concealPrivatePresentation() }
+            }
+    }
+
+    private func concealPrivatePresentation() {
+        self.hideOverlay()
+        self.panel?.contentView = nil
+        self.panel = nil
+        self.visibleAnchor = nil
+        if let windowMoveObserver = self.windowMoveObserver {
+            NotificationCenter.default.removeObserver(windowMoveObserver)
+            self.windowMoveObserver = nil
+        }
+    }
 
     func activate(coordinator: MeetingSessionCoordinator) {
         guard self.stateSubscription == nil else { return }
         self.stateSubscription = coordinator.$state
             .receive(on: DispatchQueue.main)
-            .sink { [weak self, weak coordinator] state in
+            .sink { [weak self, weak coordinator] _ in
                 guard let self, let coordinator else { return }
-                self.handleCoordinatorState(state, coordinator: coordinator)
+                // Queued deliveries must use the live state, never an earlier profile's recording.
+                self.handleCoordinatorState(coordinator.state, coordinator: coordinator)
             }
     }
 
     /// Collapses back to the smallest pill.
     func collapse() {
+        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         guard self.reducer.presentation == .captions else { return }
         self.reducer.apply(.toggleRequested)
         self.setPresentation(self.reducer.presentation ?? .pill)
@@ -47,6 +66,7 @@ final class MeetingRecordingPillController: ObservableObject {
 
     /// Grows the pill into the captions box; a no-op when already expanded or not recording.
     func expand() {
+        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         guard self.reducer.presentation == .pill else { return }
         self.reducer.apply(.toggleRequested)
         self.setPresentation(self.reducer.presentation ?? .captions)
@@ -59,6 +79,7 @@ final class MeetingRecordingPillController: ObservableObject {
     }
 
     private func handleCoordinatorState(_ state: MeetingCoordinatorState, coordinator: MeetingSessionCoordinator) {
+        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         switch state {
         case let .recording(sessionID), let .recordingDegraded(sessionID):
             if self.reducer.sessionID != sessionID {
@@ -78,6 +99,7 @@ final class MeetingRecordingPillController: ObservableObject {
     /// `.pill` is the small capsule; `.captions` is the separate scrollable, resizable window.
     /// Exactly one of them is on screen while recording.
     private func show(coordinator: MeetingSessionCoordinator, resetFrameToPresentation: Bool) {
+        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         // Resolve the first frame before showing the cached panel. A drag belongs to this
         // meeting only; an old panel frame or saved position must not pick the next screen.
         if resetFrameToPresentation {
@@ -106,6 +128,7 @@ final class MeetingRecordingPillController: ObservableObject {
     }
 
     private func setPresentation(_ presentation: MeetingOverlayPresentation) {
+        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         guard self.presentation != presentation, let panel else {
             self.presentation = presentation
             return

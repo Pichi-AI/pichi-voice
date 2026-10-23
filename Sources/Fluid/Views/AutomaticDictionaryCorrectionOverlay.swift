@@ -14,6 +14,7 @@ final class DictionaryCorrectionOverlayController {
 
     private var panel: NSPanel?
     private var hostingView: NSHostingView<PichiLocalizedContent<AutomaticDictionaryCorrectionOverlayView>>?
+    private var profileCancellable: AnyCancellable?
     private var languageCancellable: AnyCancellable?
     private var session: AutomaticDictionaryTrainingSession?
     private var sessionCancellable: AnyCancellable?
@@ -21,7 +22,25 @@ final class DictionaryCorrectionOverlayController {
     private var outcomeHandler: ((AutomaticDictionarySuggestionOutcome) -> Void)?
     private var generation: UInt64 = 0
 
-    private init() {}
+    private init() {
+        profileCancellable = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.concealPrivatePresentation() }
+            }
+    }
+
+    /// Hide the independent panel synchronously without cancelling its admitted recorder.
+    private func concealPrivatePresentation() {
+        generation &+= 1
+        dismissTask?.cancel(); dismissTask = nil
+        session?.onInteraction = nil; session?.onSuccess = nil
+        outcomeHandler = nil
+        sessionCancellable?.cancel(); sessionCancellable = nil
+        languageCancellable?.cancel(); languageCancellable = nil
+        panel?.orderOut(nil)
+        panel?.contentView = nil
+        hostingView = nil; panel = nil
+    }
 
     var isPresented: Bool {
         self.panel?.isVisible == true
@@ -36,6 +55,8 @@ final class DictionaryCorrectionOverlayController {
         candidate: AutomaticDictionaryCorrectionCandidate,
         onOutcome: @escaping (AutomaticDictionarySuggestionOutcome) -> Void
     ) {
+        let profile = PrivateProfileStorage.current
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
         self.generation &+= 1
         self.dismissTask?.cancel()
         self.session?.cancel()
@@ -65,10 +86,12 @@ final class DictionaryCorrectionOverlayController {
                 self?.hide()
             },
             onFrequencyChange: { [weak self] frequency in
+                guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
                 SettingsStore.shared.automaticDictionarySuggestionFrequency = frequency
                 self?.scheduleChoiceDismissal()
             },
             onDisableSuggestions: { [weak self] in
+                guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
                 SettingsStore.shared.automaticDictionaryLearningEnabled = false
                 self?.hide()
             }

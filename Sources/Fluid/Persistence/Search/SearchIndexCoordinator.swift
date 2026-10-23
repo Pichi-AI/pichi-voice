@@ -105,7 +105,7 @@ final class SearchIndexCoordinator {
         historyStore.loadedEntriesPublisher
             .sink { [weak self] in self?.submit(.history($0)) }
             .store(in: &self.cancellables)
-        FileTranscriptionHistoryStore.shared.$entries
+        FileTranscriptionHistoryStore.shared.entriesPublisher
             .sink { [weak self] in self?.submit(.transcripts($0)) }
             .store(in: &self.cancellables)
         ChatHistoryStore.shared.$sessions
