@@ -640,7 +640,8 @@ final class ASRService: ObservableObject {
     }
 
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
-        guard PrivateProfileStorage.acceptsNewWork || activity == .settingsRestore else {
+        guard PrivateProfileStorage.acceptsNewWork || activity == .settingsRestore
+            || (privateProfileResetInProgress && activity == .modelMaintenance) else {
             throw ASRActivityError.settingsRestoreUnavailable
         }
         guard let activeActivityLease = self.activeActivityLease else {
@@ -653,19 +654,23 @@ final class ASRService: ObservableObject {
         throw ASRActivityError.activityInProgress(activeActivityLease.activity)
     }
 
+    var canBeginPrivateProfileTransition: Bool {
+        !self.isTerminating && self.activeActivityLease == nil
+            && !self.isRunning && !self.isStarting && !self.isStoppingFinalTranscription
+            && !self.recordingBufferHandoffGate.isRecovering
+            && !self.isMicrophonePreviewRequested && !self.isMicrophonePreviewActive
+            && !self.hasActiveModelDownload && !self.hasActiveModelPreparation
+            && self.deletingModelID == nil && self.providerResetDrain == nil
+            && !self.isCancellingModelPreparation && !self.isCancellingModelDownload
+            && !self.meetingModelResidency.isExclusive
+            && (self.isAsrReady || (!self.isDownloadingModel && !self.isLoadingModel))
+    }
+
     /// Reject before any backup writes, then reserve admission across its actor hop.
     /// Keep the whole import together instead of changing the current capture's settings.
     func beginSettingsBackupRestore() throws -> ASRActivityLease {
         try Task.checkCancellation()
-        guard !self.isTerminating, self.activeActivityLease == nil,
-              !self.isRunning, !self.isStarting, !self.isStoppingFinalTranscription,
-              !self.recordingBufferHandoffGate.isRecovering,
-              !self.isMicrophonePreviewRequested, !self.isMicrophonePreviewActive,
-              !self.hasActiveModelDownload, !self.hasActiveModelPreparation,
-              self.deletingModelID == nil, self.providerResetDrain == nil,
-              !self.isCancellingModelPreparation, !self.isCancellingModelDownload,
-              !self.meetingModelResidency.isExclusive,
-              self.isAsrReady || (!self.isDownloadingModel && !self.isLoadingModel)
+        guard self.canBeginPrivateProfileTransition
         else { throw ASRActivityError.settingsRestoreUnavailable }
         return try self.acquireExclusiveActivity(.settingsRestore)
     }
@@ -1611,6 +1616,23 @@ final class ASRService: ObservableObject {
         // preparation and resource-release hooks complete. ensureAsrReady and imports join it.
     }
 
+    /// Reuse the existing provider retirement owner after a joined profile switch. This does not
+    /// prepare/download models, and it cannot run over an admitted recording or finalization.
+    func reconcilePrivateProfileSelection() async throws {
+        guard canBeginPrivateProfileTransition else { throw ASRActivityError.settingsRestoreUnavailable }
+        privateProfileResetInProgress = true
+        defer { privateProfileResetInProgress = false }
+        resetTranscriptionProvider()
+        await providerResetDrain?.task.value
+        let expiry = dictionaryLearningExpiryTask
+        expiry?.cancel(); await expiry?.value
+        dictionaryLearningExpiryTask = nil; lastDictionaryLearningRecording = nil
+        lastCompletedAudioSnapshot = nil; lastDictionaryTrainingResult = nil
+        lastStopOutcome = .empty; finalText = ""; partialTranscription = ""; previousFullTranscription = ""
+        audioBuffer.clear(); audioCapturePipeline.clearPreroll()
+        errorMessage = ""; showError = false
+    }
+
     // CRITICAL FIX (launch-time crash mitigation):
     // Combine's default ObservableObject.objectWillChange implementation uses Swift reflection to walk *stored*
     // properties. If we store an AVFoundation ObjC class type (like AVAudioEngine) directly, the reflection
@@ -2167,6 +2189,7 @@ final class ASRService: ObservableObject {
     /// Scoped meeting ASR work; drained independently of the shared legacy executor.
     private let meetingTranscriptionExecutor = TranscriptionExecutor()
     private var providerResetDrain: (id: UUID, task: Task<Void, Never>)?
+    private var privateProfileResetInProgress = false
     private var engineConfigurationChangeObserver: NSObjectProtocol?
     private let audioEngineRetirementDrain = AudioEngineRetirementDrain()
     private var audioRouteRecoveryTask: Task<Void, Never>?

@@ -8,6 +8,7 @@ import UIKit
 final class AppServices: ObservableObject {
     static let shared = AppServices()
     let accountSession: AccountSessionService
+    let privateProfiles: PrivateProfileService
     let asr: ASRService
     let meetingSessionCoordinator: MeetingSessionCoordinator
     let meetingProcessingPipeline: MeetingProcessingPipeline
@@ -19,6 +20,8 @@ final class AppServices: ObservableObject {
     let privacyActivation: MobilePrivacyActivation
     private var requiredPreparationTask: Task<Void, Never>?
     @Published private(set) var isUIReady = false
+    @Published private(set) var hasRestoredAccount = false
+    private var accountRestorationTask: Task<Void, Never>?
     private static var didCleanExportStaging = false
     private let settings: SettingsStore
     private var idlePreparationObservers: Set<AnyCancellable> = []
@@ -53,6 +56,7 @@ final class AppServices: ObservableObject {
          capture injectedCapture: (any MeetingCaptureControlling)? = nil,
          settings: SettingsStore? = nil,
          accountSession: AccountSessionService? = nil,
+         privateProfiles: PrivateProfileService? = nil,
          privacy: PichiTranscriptPrivacyService? = nil,
          privacyRedactor: (any TranscriptTextRedacting)? = nil,
          microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil) {
@@ -63,6 +67,7 @@ final class AppServices: ObservableObject {
             Self.didCleanExportStaging = true
         }
         self.accountSession = accountSession ?? .production()
+        self.privateProfiles = privateProfiles ?? ((store == nil && settings == nil && accountSession == nil) ? .shared : .init())
         let settings = settings ?? SettingsStore.shared
         self.settings = settings
         self.meetingLocation = MeetingLocationService(settings: settings)
@@ -159,11 +164,33 @@ final class AppServices: ObservableObject {
             Task { @MainActor in await self?.idleResourcesChanged() }
         }.store(in: &idlePreparationObservers)
         observeIdleResourceStores()
+        do {
+            try self.privateProfiles.configure(isBusy: { [weak self] in
+                guard let self else { return true }
+                return !self.meetingSessionCoordinator.isQuiescent || !self.asr.canBeginPrivateProfileTransition
+            }, prepare: { [weak self] in
+                guard let self else { throw AccountError.isolationRequired }
+                self.requiredPreparationTask?.cancel(); await self.requiredPreparationTask?.value
+                self.requiredPreparationTask = nil
+                await self.updateIdlePreparation()
+                try await PrivateProfileSources.prepare(coordinator: self.meetingSessionCoordinator, asr: self.asr)
+            }, activate: { [weak self] profile in
+                guard let self else { throw AccountError.isolationRequired }
+                try await PrivateProfileSources.activate(profile, asr: self.asr)
+                self.privacyActivation.restore()
+            })
+            try self.accountSession.installLifecycle(self.privateProfiles)
+            if store == nil, settings == nil, accountSession == nil { PrivateProfileStorage.closeAdmission() }
+        } catch {
+            DebugLogger.shared.warning("Private profile lifecycle unavailable", source: "MobileAppServices")
+        }
     }
 
     func signalUIReady() async {
         guard !isUIReady else { return }
         isUIReady = true
+        await restoreAccountBeforePrivateUI()
+        guard PrivateProfileStorage.acceptsNewWork else { return }
         await meetingSessionCoordinator.ensureRestored()
         await meetingSessionCoordinator.sweepExpiredAudio()
         hasRestoredInitialState = true
@@ -177,6 +204,23 @@ final class AppServices: ObservableObject {
         await updateIdlePreparation()
     }
 
+    func restoreAccountBeforePrivateUI() async {
+        if accountRestorationTask == nil {
+            accountRestorationTask = Task { @MainActor in
+                await accountSession.restore()
+                guard !Task.isCancelled else { return }
+                let current = PrivateProfileStorage.current
+                if current.isReadable { PrivateProfileStorage.select(current) }
+                hasRestoredAccount = true
+            }
+        }
+        await accountRestorationTask?.value
+    }
+    func restorePrivateSourcesAfterCommit() async {
+        guard PrivateProfileStorage.acceptsNewWork else { return }
+        await meetingSessionCoordinator.ensureRestored()
+    }
+
     func setSceneActive(_ active: Bool) async {
         isSceneActive = active
         await updateIdlePreparation()
@@ -187,11 +231,20 @@ final class AppServices: ObservableObject {
     }
 
     func shutdownForTermination() async {
+        accountRestorationTask?.cancel(); await accountRestorationTask?.value
+        accountRestorationTask = nil
         await accountSession.shutdown()
         await idlePreparation.shutdown()
         await meetingSessionCoordinator.shutdownForTermination()
         await asr.shutdownForTermination()
     }
+
+    var hasActivePrivateCapture: Bool { meetingSessionCoordinator.isRecording }
+    func stopPrivateCaptureAndLogout() async {
+        if meetingSessionCoordinator.isRecording { _ = try? await meetingSessionCoordinator.stopAndTranscribe() }
+        await accountSession.logout()
+    }
+    func retryPrivateProfileCleanupAndLogout() async { await accountSession.logout() }
 
     private func updateIdlePreparation() async {
         observeIdleResourceStores()
@@ -222,7 +275,7 @@ final class AppServices: ObservableObject {
                 MeetingTimelineTrace.shared?.record("idle_preparation_decision", fields: decision)
             }
         }
-        await idlePreparation.update(.init(isSceneActive: isSceneActive, isUIReady: isUIReady && hasRestoredInitialState,
+        await idlePreparation.update(.init(isSceneActive: isSceneActive, isUIReady: isUIReady && hasRestoredInitialState && PrivateProfileStorage.acceptsNewWork,
             preparationEnabled: enabled, configurationIdentity: identity,
             hasRecordingActivity: meetingActivity, hasOtherModelWork: otherWork, resourceRevision: idleResourceRevision))
     }
@@ -315,6 +368,10 @@ struct PichiVoiceMobileApp: App {
     }
 
     @ViewBuilder private var meetingRoot: some View {
+        PrivateProfileRoot(services: services, profiles: services.privateProfiles) { privateMeetingContent }
+    }
+
+    @ViewBuilder private var privateMeetingContent: some View {
         if !settings.mobileSetupCompleted {
             MobileOnboarding(asr: services.asr, required: services.requiredResources, privacy: services.privacyActivation,
                 audioArbiter: services.meetingAudioActivityArbiter)

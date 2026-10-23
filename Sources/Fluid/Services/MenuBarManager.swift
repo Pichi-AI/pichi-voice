@@ -517,6 +517,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     func showRecordingOverlayImmediately() {
+        guard PrivateProfileStorage.acceptsNewWork else { return }
         AutomaticDictionaryCorrectionTracker.shared.cancel()
 
         guard let asrService else {

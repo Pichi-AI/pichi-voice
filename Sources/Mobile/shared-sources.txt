@@ -12,6 +12,9 @@ Sources/Fluid/Account/PrivateProfileStorage.swift
 Sources/Fluid/Account/PrivateProfileMeetingStore.swift
 Sources/Fluid/Account/PrivateProfileService.swift
 Sources/Fluid/Account/PrivateProfileAuxiliaryServices.swift
+Sources/Fluid/Account/PrivateProfileOperationOwner.swift
+Sources/Fluid/Account/PrivateProfileRoot.swift
+Sources/Fluid/Account/PrivateProfileSources.swift
 Sources/Fluid/Branding/AppBrand.swift
 Sources/Fluid/Branding/AppModelPaths.swift
 Sources/Fluid/Branding/BrandDistribution.swift

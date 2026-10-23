@@ -6,6 +6,10 @@ import Foundation
 nonisolated final class PrivateProfileDefaults: UserDefaults, @unchecked Sendable {
     static let shared = PrivateProfileDefaults()
     static let sharedDeviceKeys: Set<String> = [
+        // Installation wizard gates survive sign-in, including an explicit replay.
+        // Model, provider, privacy and speech-language choices remain private.
+        "OnboardingCompleted", "OnboardingCurrentStep", "ManualOnboardingResetRequested",
+        "ManualOnboardingResetRequestedAt", "MobileSetupVersion",
         "PichiInterfaceLanguage", "AppleLanguages", "ThemePreference", "AccentColorOption",
         "ShowInDock", "IntendedDockVisibility", "ShowMainWindowAtLoginLaunch", "LaunchAtStartup",
         "LaunchAtStartupCompatibilityFallback", "AutoUpdateCheckEnabled", "ShowUpdatePopups",

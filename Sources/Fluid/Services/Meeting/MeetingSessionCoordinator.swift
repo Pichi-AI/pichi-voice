@@ -208,6 +208,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private var sweepPending = false
     private var isReadingRetentionSessions = false
+    private var retentionReadWaiters: [CheckedContinuation<Void, Never>] = []
     private var retentionTimerTask: Task<Void, Never>?
 
     /// Only fields changed by participant reassignment, retained once per selected member.
@@ -1698,6 +1699,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// A request that arrived while manifests were being read runs once this read is finished.
     private func finishRetentionRead() {
         self.isReadingRetentionSessions = false
+        let waiters = self.retentionReadWaiters
+        self.retentionReadWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
         guard self.sweepPending, !self.isMutatingSession else { return }
         self.sweepPending = false
         guard self.terminationTask == nil else { return }
@@ -1892,6 +1896,25 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.restoreTask = task
         await task.value
+    }
+
+    /// Clears only in-memory private projections. Stored recovery offers remain unchanged in
+    /// their original profile; changing accounts must not dismiss or delete an unfinished meeting.
+    func prepareForPrivateProfileTransition() async throws {
+        guard isQuiescent else { throw MeetingCoordinatorError.activityInProgress }
+        let timer = retentionTimerTask
+        timer?.cancel(); await timer?.value; retentionTimerTask = nil; sweepPending = false
+        if isReadingRetentionSessions {
+            await withCheckedContinuation { retentionReadWaiters.append($0) }
+        }
+        locationTask?.cancel(); await locationTask?.value; locationTask = nil
+        await restoreTask?.value
+        await flushQueuedPersistence()
+        guard isQuiescent else { throw MeetingCoordinatorError.activityInProgress }
+        restoreTask = nil; activeSession = nil; latestCompletedSession = nil
+        trackHealth = [:]; liveTranscript = .empty; pendingSpeech = .empty
+        correctionUndoStacks.removeAll(); lastLiveSpeechAt = nil; captureStopHandoff = nil
+        state = .idle
     }
 
     private func restoreRecoverableSessionIfNeeded() async {

@@ -51,6 +51,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Account/PrivateProfileMeetingStore.swift \
     Sources/Fluid/Account/PrivateProfileService.swift \
+    Sources/Fluid/Account/PrivateProfileOperationOwner.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift \
     Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     "$task_test_dir/ApplicationSupport.swift" Tests/MeetingSessionStoreCheckpointTests.swift \
@@ -59,5 +60,6 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Tests/PichiProtectedPublicationSourceTests.swift \
     Tests/PrivateProfileMeetingStoreTests.swift \
     Tests/PrivateProfileLifecycleTests.swift \
+    Tests/PrivateProfileOperationOwnerTests.swift \
     -o "$task_test_dir/checkpoint-tests"
 "$task_test_dir/checkpoint-tests" "$task_test_dir/fixtures-$(uuidgen)" "$@"

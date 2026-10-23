@@ -72,6 +72,18 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         defaults.set("guest-prompt", forKey: "PrivatePrompt")
         defaults.set(["name": "guest-only"], forKey: "Dictionary")
         defaults.set("dark", forKey: "ThemePreference")
+        defaults.set(true, forKey: "OnboardingCompleted")
+        defaults.set(1, forKey: "MobileSetupVersion")
+        defaults.set(7, forKey: "OnboardingCurrentStep")
+        let privateSetupValues: [String: Any] = [
+            "OnboardingAISkipped": true,
+            "OnboardingPlaygroundValidated": true, "OnboardingSelectedLanguageID": "ru",
+            "MobileSetupStep": 5, "MobileSetupSelectedModel": "guest-model",
+            "MobileMeetingBehaviorVersion": 1, "SelectedSpeechModel": "guest-model",
+            "SelectedProviderID": "guest-provider", "MeetingPIIRedactionEnabled": true,
+            "MeetingPIIRedactionRequested": true,
+        ]
+        for (key, value) in privateSetupValues { defaults.set(value, forKey: key) }
         expect(guestDefaults.string(forKey: "PrivatePrompt") == "guest-prompt", "guest delegates legacy defaults")
         defaults.register(defaults: ["PublicProductDefault": "default", "PrivatePrompt": "registered"])
         PrivateProfileStorage.select(a)
@@ -79,6 +91,13 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         expect(defaults.dictionary(forKey: "Dictionary") == nil, "guest dictionary not copied")
         expect(defaults.string(forKey: "PublicProductDefault") == "default", "product registration retained")
         expect(defaults.string(forKey: "ThemePreference") == "dark", "explicit device preference shared")
+        expect(defaults.bool(forKey: "OnboardingCompleted"), "desktop installation stays complete in A")
+        expect(defaults.integer(forKey: "MobileSetupVersion") == 1, "mobile installation stays complete in A")
+        expect(defaults.integer(forKey: "OnboardingCurrentStep") == 7, "optional desktop account step survives sign-in")
+        for key in privateSetupValues.keys {
+            expect(!PrivateProfileDefaults.sharedDeviceKeys.contains(key), "\(key) remains outside device allowlist")
+            expect(defaults.object(forKey: key) == nil, "\(key) is not copied from guest into A")
+        }
         defaults.set("A-prompt", forKey: "PrivatePrompt")
         defaults.set(Data([1, 2, 3]), forKey: "PrivateData")
         defaults.set(["one", "two"], forKey: "PrivateArray")
@@ -95,6 +114,26 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         let frozen = PrivateProfileDefaults(profile: a, guestDefaults: guestDefaults)
         expect(frozen.string(forKey: "PrivatePrompt") == "A-prompt", "bound operation starts at A")
         PrivateProfileStorage.select(b)
+        expect(defaults.bool(forKey: "OnboardingCompleted"), "desktop installation stays complete in B")
+        expect(defaults.integer(forKey: "MobileSetupVersion") == 1, "mobile installation stays complete in B")
+        expect(defaults.dictionaryRepresentation()["MobileSetupSelectedModel"] == nil, "device completion does not expose guest wizard model")
+        defaults.set(false, forKey: "OnboardingCompleted")
+        defaults.set(0, forKey: "MobileSetupVersion")
+        defaults.set(true, forKey: "ManualOnboardingResetRequested")
+        let replayAt = Date(timeIntervalSince1970: 123456)
+        defaults.set(replayAt, forKey: "ManualOnboardingResetRequestedAt")
+        defaults.set(0, forKey: "OnboardingCurrentStep")
+        PrivateProfileStorage.select(a)
+        expect(!defaults.bool(forKey: "OnboardingCompleted"), "explicit desktop replay applies to this installation")
+        expect(defaults.integer(forKey: "MobileSetupVersion") == 0, "explicit mobile replay applies to this installation")
+        expect(defaults.bool(forKey: "ManualOnboardingResetRequested") && defaults.object(forKey: "ManualOnboardingResetRequestedAt") as? Date == replayAt,
+               "manual desktop replay remains protected from legacy repair across profiles")
+        expect(defaults.integer(forKey: "OnboardingCurrentStep") == 0, "desktop replay progress stays with installation")
+        defaults.set(true, forKey: "OnboardingCompleted")
+        defaults.set(1, forKey: "MobileSetupVersion")
+        defaults.removeObject(forKey: "ManualOnboardingResetRequested")
+        defaults.removeObject(forKey: "ManualOnboardingResetRequestedAt")
+        PrivateProfileStorage.select(b)
         expect(defaults.data(forKey: "PrivateData") == nil, "B cannot see A")
         expect(defaults.dictionaryRepresentation()["Dictionary"] == nil, "enumeration cannot see guest")
         expect(frozen.string(forKey: "PrivatePrompt") == nil, "old bound reader masked")
@@ -109,11 +148,17 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         expect(defaults.string(forKey: "PrivatePrompt") == nil, "concealed private reads masked")
         defaults.set("concealed-write", forKey: "PrivatePrompt")
         expect(defaults.string(forKey: "ThemePreference") == "dark", "concealment retains explicit device behavior")
+        expect(defaults.bool(forKey: "OnboardingCompleted"), "concealment retains desktop completion gate")
+        expect(defaults.integer(forKey: "MobileSetupVersion") == 1, "concealment retains mobile completion gate")
         PrivateProfileStorage.select(a)
         expect(defaults.string(forKey: "PrivatePrompt") == "A-prompt", "concealed write ignored")
         PrivateProfileStorage.select(guest)
         expect(defaults.string(forKey: "PrivatePrompt") == "guest-prompt", "legacy guest prompt preserved")
         expect(defaults.dictionary(forKey: "Dictionary")? ["name"] as? String == "guest-only", "legacy dictionary preserved")
+        expect(defaults.bool(forKey: "OnboardingCompleted") && defaults.integer(forKey: "MobileSetupVersion") == 1,
+               "guest completion survives account A/B and replay completion")
+        expect(defaults.string(forKey: "MobileSetupSelectedModel") == "guest-model", "guest wizard model preserved privately")
+        expect(defaults.bool(forKey: "MeetingPIIRedactionRequested"), "guest privacy choice preserved privately")
 
         // Exact desktop production property; existing steps keep their saved IDs.
         PrivateProfileStorage.select(guest)

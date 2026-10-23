@@ -18,8 +18,8 @@ assert 'Text(PichiLocalization.formattedStreakUnit(days: self.streak))' in hero
 assert 'PichiLocalization.formattedStreakUnit(days: self.content.currentStreak)' in share
 # Use real value types, never production disk/defaults history/audio stores.
 for source, marker, name in [
-    ('Sources/Fluid/Persistence/TranscriptionHistoryStore.swift', '\n@MainActor\nfinal class TranscriptionHistoryStore:', 'HistoryValue.swift'),
-    ('Sources/Fluid/Persistence/DictationAudioHistoryStore.swift', '\nfinal nonisolated class DictationAudioHistoryStore:', 'AudioValue.swift'),
+    ('Sources/Fluid/Persistence/TranscriptionHistoryStore.swift', '\n@MainActor final class DictationHistoryWriteAdmission {', 'HistoryValue.swift'),
+    ('Sources/Fluid/Persistence/DictationAudioHistoryStore.swift', '\nnonisolated final class DictationAudioSaveAdmission:', 'AudioValue.swift'),
     ('Sources/Fluid/Branding/BrandPackage.swift', 'nonisolated final class BrandPackageStore:', 'BrandPackageTypes.swift'),
 ]:
     text = Path(source).read_text()

@@ -363,7 +363,8 @@ nonisolated enum FileTranscriptionStatus: Equatable, Sendable {
 /// Service for transcribing complete audio/video files with optional speaker diarization
 /// NOTE: This service shares the ASR models with ASRService to avoid duplicate memory usage
 @MainActor
-final class FileTranscriptionService: ObservableObject {
+final class FileTranscriptionService: ObservableObject, PrivateProfileTransitionParticipant {
+    private let privateOperations = PrivateProfileOperationOwner()
     @Published private(set) var currentFileURL: URL?
     @Published var isTranscribing: Bool = false
     @Published var progress: Double = 0.0
@@ -403,6 +404,13 @@ final class FileTranscriptionService: ObservableObject {
 
     init(asrService: ASRService) {
         self.asrService = asrService
+        PrivateProfileService.shared.register(self)
+    }
+
+    func prepareForPrivateProfileTransition() async throws {
+        await privateOperations.retireAndJoin()
+        currentFileURL = nil; result = nil; error = nil; fallbackNotice = nil
+        progress = 0; status = .idle
     }
 
     enum TranscriptionError: LocalizedError {
@@ -449,6 +457,10 @@ final class FileTranscriptionService: ObservableObject {
     /// - Parameters:
     ///   - fileURL: URL to the audio/video file
     func transcribeFile(_ fileURL: URL) async throws -> TranscriptionResult {
+        try await privateOperations.perform { try await self.transcribeFileBound(fileURL) }
+    }
+
+    private func transcribeFileBound(_ fileURL: URL) async throws -> TranscriptionResult {
         guard !self.isTranscribing else {
             throw TranscriptionError.activityInProgress(PichiLocalization.text("This file is already being transcribed."))
         }
