@@ -55,17 +55,15 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
         }
         let a = try profile("A"), b = try profile("B"), secondWorkspace = try profile("A", workspace: "other")
         let domains = [a, b, secondWorkspace].map { AppBrand.storageNamespace + ".private-profile." + $0.id }
+        if let path = ProcessInfo.processInfo.environment["PICHI_PRIVATE_SETTINGS_DOMAIN_MANIFEST"] {
+            try JSONEncoder().encode(domains + [guestName]).write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
         defer {
             for name in domains + [guestName] {
                 let suite = UserDefaults(suiteName: name)!
                 suite.removePersistentDomain(forName: name)
                 precondition(suite.synchronize(), "Synthetic domain cleanup must persist")
-                let file = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-                    .appendingPathComponent("Preferences").appendingPathComponent(name + ".plist")
-                if let data = try? Data(contentsOf: file),
-                   let values = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any], values.isEmpty {
-                    try! FileManager.default.removeItem(at: file)
-                }
+
             }
             PrivateProfileStorage.select(original)
         }

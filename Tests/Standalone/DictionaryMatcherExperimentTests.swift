@@ -28,17 +28,16 @@ enum PronunciationDictionaryStoreError: Error { case inconsistentEnrollment, sta
             subject: UUID().uuidString, internalUserID: "matcher-test"), organizationID: nil, workspaceID: nil, generation: generation),
             generation: generation, legacyRootDirectory: FileManager.default.temporaryDirectory)
         PrivateProfileStorage.select(profile)
+        if let path = ProcessInfo.processInfo.environment["PICHI_DICTIONARY_TEST_PROFILE_MANIFEST"] {
+            try JSONEncoder().encode([AppBrand.storageNamespace + ".private-profile." + profile.id])
+                .write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
         defer {
             let name = AppBrand.storageNamespace + ".private-profile." + profile.id
             let suite = UserDefaults(suiteName: name)!
             suite.removePersistentDomain(forName: name)
             precondition(suite.synchronize(), "Synthetic domain cleanup must persist")
-            let file = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("Preferences").appendingPathComponent(name + ".plist")
-            if let data = try? Data(contentsOf: file),
-               let values = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any], values.isEmpty {
-                try! FileManager.default.removeItem(at: file)
-            }
+
             PrivateProfileStorage.select(original)
         }
         let keys = [

@@ -38,7 +38,8 @@ run_case() {
         Sources/Fluid/Services/ModelTemperatureSupport.swift Sources/Fluid/UI/AISettings/ProviderModelVerificationStore.swift \
         "$task_test_dir/Synthetic.swift" "$task_test_dir/DesktopOnboardingStepProjection.swift" \
         Tests/Standalone/PrivateProfileDefaultsTests.swift -o "$task_test_dir/$task_case/tests"
-    "$task_test_dir/$task_case/tests"
+    PICHI_PRIVATE_SETTINGS_DOMAIN_MANIFEST="$task_test_dir/$task_case/domains.json" "$task_test_dir/$task_case/tests"
+    python3 -S Tests/Support/remove_empty_synthetic_preferences.py "$task_test_dir/$task_case/domains.json"
 }
 run_case default
 if xcrun swiftc -help | rg -q -- '-default-isolation'; then
