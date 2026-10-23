@@ -119,7 +119,7 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
 }
 
 @MainActor
-final class MeetingSummaryController: ObservableObject {
+final class MeetingSummaryController: ObservableObject, PrivateProfileTransitionParticipant {
     @Published private(set) var installed = false
     @Published private(set) var checking = true
     @Published private(set) var downloading = false
@@ -379,5 +379,12 @@ final class MeetingSummaryController: ObservableObject {
 
     func cancel() {
         self.operation?.cancel()
+    }
+
+    func prepareForPrivateProfileTransition() async throws {
+        generation = UUID()
+        let task = operation; task?.cancel()
+        await task?.value
+        operation = nil; output = ""; outputProvenance = ""; error = nil; checking = false
     }
 }

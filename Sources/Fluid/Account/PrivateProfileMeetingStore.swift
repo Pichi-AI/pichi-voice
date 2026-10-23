@@ -1,6 +1,6 @@
 import Foundation
 
-extension MeetingProfileOwnership {
+nonisolated extension MeetingProfileOwnership {
     init(profile: PrivateProfileSnapshot) {
         profileID = profile.id; issuer = profile.context?.identity.issuer
         subject = profile.context?.identity.subject; internalUserID = profile.context?.identity.internalUserID
@@ -33,6 +33,8 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
         return .init(profile: profile)
     }
 
+    func captureOwnership() async throws -> MeetingProfileOwnership? { try admission().ownership }
+
     func create(_ source: MeetingSession) async throws {
         let admitted = try admission()
         guard admissions[source.id] == nil else { throw MeetingSessionStoreError.sessionAlreadyExists }
@@ -54,6 +56,7 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
             else { throw AccountError.staleOperation }
             try checkReadable(profile)
         }
+        guard profile.isGuest || source.profileOwnership != nil else { throw AccountError.staleOperation }
         if let owner = source.profileOwnership, !owner.matches(profile) { throw AccountError.staleOperation }
         var session = source
         // Older guest manifests gain only an explicit guest marker, never the next login's owner.

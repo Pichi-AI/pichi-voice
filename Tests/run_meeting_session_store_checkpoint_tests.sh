@@ -8,7 +8,12 @@ mkdir -p "$task_test_dir"
 # of linking inference/runtime orchestration or launching the application.
 cat > "$task_test_dir/ApplicationSupport.swift" <<'SWIFT'
 import Foundation
-nonisolated enum AppBrand { static let storageNamespace = "unused-standalone-test-namespace" }
+nonisolated enum AppBrand {
+    static let storageNamespace = "unused-standalone-test-namespace"
+    static let keychainService = "unused-standalone-test-credentials"
+    static let applicationSupportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("unused-profile-" + UUID().uuidString)
+}
+nonisolated enum BrandDistribution { struct AccountConfiguration: Sendable {} }
 nonisolated final class DebugLogger: @unchecked Sendable {
     static let shared = DebugLogger()
     func info(_ message: String, source: String) {}
@@ -40,10 +45,14 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    Sources/Fluid/Account/AccountDomain.swift \
+    Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileMeetingStore.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift \
     Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     "$task_test_dir/ApplicationSupport.swift" Tests/MeetingSessionStoreCheckpointTests.swift \
     Tests/MeetingTranscriptReadingContractTests.swift \
     Tests/MeetingProtectedTranscriptExportTests.swift \
+    Tests/PrivateProfileMeetingStoreTests.swift \
     -o "$task_test_dir/checkpoint-tests"
 "$task_test_dir/checkpoint-tests" "$task_test_dir/fixtures-$(uuidgen)" "$@"
