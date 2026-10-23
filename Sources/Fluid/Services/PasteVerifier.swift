@@ -40,8 +40,9 @@ enum PasteVerifier {
     private static let maxReadableCharacters = 60_000
 
     nonisolated static func capture() -> Snapshot? {
-        guard AXIsProcessTrusted() else { return nil }
+        guard !Task.isCancelled, AXIsProcessTrusted() else { return nil }
         var focusedRef: CFTypeRef?
+        guard !Task.isCancelled else { return nil }
         let result = AXUIElementCopyAttributeValue(
             AXUIElementCreateSystemWide(),
             kAXFocusedUIElementAttribute as CFString,
@@ -50,6 +51,7 @@ enum PasteVerifier {
         guard result == .success, let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return nil }
         let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
         var pid: pid_t = 0
+        guard !Task.isCancelled else { return nil }
         AXUIElementGetPid(element, &pid)
         let role = self.string(element, kAXRoleAttribute as CFString) ?? "unknown"
         let count = self.number(element, kAXNumberOfCharactersAttribute as CFString)
@@ -90,20 +92,25 @@ enum PasteVerifier {
 
     /// Call off the main thread after the paste command was posted.
     nonisolated static func verify(before: Snapshot, pastedText: String) async -> Verdict {
+        guard !Task.isCancelled else { return .unknown(reason: "cancelled") }
         let needle = self.normalize(pastedText)
         guard !needle.isEmpty else { return .unknown(reason: "empty_text") }
         guard before.value != nil || before.characterCount != nil || before.caret != nil else {
             return .unknown(reason: "before_unreadable")
         }
 
-        try? await Task.sleep(nanoseconds: UInt64(self.firstCheckDelay * 1_000_000_000))
+        do { try await Task.sleep(nanoseconds: UInt64(self.firstCheckDelay * 1_000_000_000)) }
+        catch { return .unknown(reason: "cancelled") }
+        guard !Task.isCancelled else { return .unknown(reason: "cancelled") }
         guard let first = self.capture() else { return .unknown(reason: "after_unreadable") }
         guard CFEqual(first.element, before.element) else { return .unknown(reason: "focus_moved") }
 
         if let verdict = self.confirmation(before: before, after: first, needle: needle) { return verdict }
 
         // Nothing changed yet. Give slow apps a second chance before deciding.
-        try? await Task.sleep(nanoseconds: UInt64(self.secondCheckDelay * 1_000_000_000))
+        do { try await Task.sleep(nanoseconds: UInt64(self.secondCheckDelay * 1_000_000_000)) }
+        catch { return .unknown(reason: "cancelled") }
+        guard !Task.isCancelled else { return .unknown(reason: "cancelled") }
         guard let second = self.capture(), CFEqual(second.element, before.element) else {
             return .unknown(reason: "focus_moved_late")
         }
@@ -112,7 +119,9 @@ enum PasteVerifier {
 
         // Still unchanged. A failure card is disruptive, so wait once more for
         // apps that apply Cmd+V on a later run-loop turn before deciding.
-        try? await Task.sleep(nanoseconds: UInt64(self.finalCheckDelay * 1_000_000_000))
+        do { try await Task.sleep(nanoseconds: UInt64(self.finalCheckDelay * 1_000_000_000)) }
+        catch { return .unknown(reason: "cancelled") }
+        guard !Task.isCancelled else { return .unknown(reason: "cancelled") }
         guard let final = self.capture(), CFEqual(final.element, before.element) else {
             return .unknown(reason: "focus_moved_final")
         }
@@ -167,24 +176,27 @@ enum PasteVerifier {
     }
 
     private nonisolated static func string(_ element: AXUIElement, _ attribute: CFString) -> String? {
+        guard !Task.isCancelled else { return nil }
         var ref: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &ref) == .success else { return nil }
         return ref as? String
     }
 
     private nonisolated static func number(_ element: AXUIElement, _ attribute: CFString) -> Int? {
+        guard !Task.isCancelled else { return nil }
         var ref: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &ref) == .success else { return nil }
         return (ref as? NSNumber)?.intValue
     }
 
     private nonisolated static func range(_ element: AXUIElement, _ attribute: CFString) -> CFRange? {
+        guard !Task.isCancelled else { return nil }
         var ref: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &ref) == .success, let ref,
               CFGetTypeID(ref) == AXValueGetTypeID()
         else { return nil }
         var range = CFRange()
-        guard AXValueGetValue(unsafeBitCast(ref, to: AXValue.self), .cfRange, &range) else { return nil }
+        guard !Task.isCancelled, AXValueGetValue(unsafeBitCast(ref, to: AXValue.self), .cfRange, &range) else { return nil }
         return range
     }
 }

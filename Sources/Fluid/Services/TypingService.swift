@@ -740,28 +740,45 @@ final class TypingService {
     private func verifyPasteLanded(_ text: String, before: PasteVerifier.Snapshot,
                                    profile: PrivateProfileSnapshot,
                                    isOutputValid: @escaping @MainActor () -> Bool) -> Task<Void, Never>? {
-        guard isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return nil }
-        return Task.detached(priority: .utility) {
-            let startedAt = ProcessInfo.processInfo.systemUptime
-            var verdict = await PasteVerifier.verify(before: before, pastedText: text)
-            if case .notLanded = verdict, PasteVerifier.userActedAfterPaste(
-                secondsSinceLastInput: PasteVerifier.secondsSinceLastUserInput(),
-                secondsSincePaste: ProcessInfo.processInfo.systemUptime - startedAt
-            ) {
-                verdict = .unknown(reason: "user_input_after_paste")
-            }
-            let app = NSRunningApplication(processIdentifier: before.pid)?.bundleIdentifier ?? "pid\(before.pid)"
-            let completedVerdict = verdict
-            await MainActor.run {
-                guard isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
-                DebugLogger.shared.info(
-                    "PASTE_VERIFY \(completedVerdict.logDescription) app=\(app) before[\(before.summary)] " +
-                        "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
-                    source: "TypingService"
-                )
-                guard case .notLanded = completedVerdict else { return }
-                NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil,
-                    userInfo: ["transcript": text, "privateProfile": profile])
+        guard !Task.isCancelled, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return nil }
+        // Register before queueing so retirement also closes a verifier that has not started.
+        let owner = PrivateProfileOperationOwner(registerForTransitions: true)
+        return Task { @MainActor in
+            guard owner.isCurrent, !Task.isCancelled, isOutputValid() else { return }
+            try? await owner.perform {
+                guard owner.isCurrent, !Task.isCancelled, isOutputValid() else { throw CancellationError() }
+                let worker = Task.detached(priority: .utility) {
+                    guard !Task.isCancelled else { return }
+                    let startedAt = ProcessInfo.processInfo.systemUptime
+                    var verdict = await PasteVerifier.verify(before: before, pastedText: text)
+                    guard !Task.isCancelled else { return }
+                    if case .notLanded = verdict, PasteVerifier.userActedAfterPaste(
+                        secondsSinceLastInput: PasteVerifier.secondsSinceLastUserInput(),
+                        secondsSincePaste: ProcessInfo.processInfo.systemUptime - startedAt
+                    ) {
+                        verdict = .unknown(reason: "user_input_after_paste")
+                    }
+                    let app = NSRunningApplication(processIdentifier: before.pid)?.bundleIdentifier ?? "pid\(before.pid)"
+                    let completedVerdict = verdict
+                    await MainActor.run {
+                        guard !Task.isCancelled, owner.isCurrent, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
+                        DebugLogger.shared.info(
+                            "PASTE_VERIFY \(completedVerdict.logDescription) app=\(app) before[\(before.summary)] " +
+                                "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
+                            source: "TypingService"
+                        )
+                        guard case .notLanded = completedVerdict else { return }
+                        NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil,
+                            userInfo: ["transcript": text, "privateProfile": profile])
+                    }
+                }
+                // Cancellation forwards to the actual reader and still waits for any AX call
+                // already in flight. A new profile cannot commit while that reader is alive.
+                await withTaskCancellationHandler {
+                    await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
             }
         }
     }

@@ -29,6 +29,9 @@ def main():
     parser.add_argument("--unguarded-discovery", action="store_true", help="Negative control for the actual held discovery/start path")
     parser.add_argument("--unjoined-discovery", action="store_true", help="Negative control for discovery transition registration")
     parser.add_argument("--unguarded-verifier", choices=["post", "presentation"], help="Negative control for retained paste feedback")
+    parser.add_argument("--unjoined-verifier", action="store_true", help="Negative control for actual reader transition registration")
+    parser.add_argument("--uncancelled-verifier", action="store_true", help="Negative control for detached reader cancellation forwarding")
+    parser.add_argument("--unchecked-readback", action="store_true", help="Negative control for real verifier cancellation checks")
     args = parser.parse_args()
     source_path = "Sources/Fluid/ContentView.swift"
     content = (subprocess.check_output(["git", "show", f"{args.baseline_ref}:{source_path}"], cwd=ROOT, text=True)
@@ -82,9 +85,31 @@ def main():
     assert "callerIsOutputValid() && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork" in delivery
     assert "self.verifyPasteLanded(text, before: verificationBefore, profile: profile, isOutputValid: isOutputValid)" in delivery
     if args.unguarded_verifier == "post":
-        verifier = verifier.replace("                guard isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }", "", 1)
+        fence = "                        guard !Task.isCancelled, owner.isCurrent, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }"
+        assert verifier.count(fence) == 1
+        verifier = verifier.replace(fence, "", 1)
     elif args.unguarded_verifier == "presentation":
         paste_presentation = paste_presentation.replace("PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,", "", 1)
+    if args.unjoined_verifier:
+        assert verifier.count("PrivateProfileOperationOwner(registerForTransitions: true)") == 1
+        verifier = verifier.replace("PrivateProfileOperationOwner(registerForTransitions: true)", "PrivateProfileOperationOwner(registerForTransitions: false)")
+    if args.uncancelled_verifier:
+        assert verifier.count("worker.cancel()") == 1
+        verifier = verifier.replace("worker.cancel()", "// Negative control: reader cancellation omitted")
+    real_verifier = (ROOT / "Sources/Fluid/Services/PasteVerifier.swift").read_text()
+    real_verify_body = declaration(real_verifier, "    nonisolated static func verify(")
+    if args.unchecked_readback:
+        real_verify_body = real_verify_body.replace('catch { return .unknown(reason: "cancelled") }', 'catch {}')
+        real_verify_body = real_verify_body.replace('        guard !Task.isCancelled else { return .unknown(reason: "cancelled") }', '')
+    real_readback = "\n".join(declaration(real_verifier, marker) for marker in [
+        "    struct Snapshot {", "    enum Verdict: Equatable {", "    private nonisolated static func unchangedVerdict(",
+        "    private nonisolated static func confirmation(", "    private nonisolated static func normalize(",
+        "    private nonisolated static func occurrences("])
+    real_readback = real_readback.replace("let element: AXUIElement", "let element: NSObject")
+    for marker in ["    nonisolated static func capture()", "    private nonisolated static func string(",
+                   "    private nonisolated static func number(", "    private nonisolated static func range("]:
+        body = declaration(real_verifier, marker)
+        assert body.index("!Task.isCancelled") < body.index("AXUIElementCopyAttributeValue(")
     menu_types = "\n".join(declaration(menu, marker).replace("private ", "", 1) for marker in [
         "    private enum MeetingMenuActivity:", "    private struct MeetingMenuPresentation"])
     menu_methods = "\n".join(declaration(menu, marker).replace("@objc private func", "func", 1).replace("private func", "func", 1).replace("private var", "var", 1) for marker in [
@@ -101,7 +126,7 @@ def main():
         menu_methods = menu_methods.replace("} catch {\n            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }", "} catch {", 1)
     elif args.unguarded_menu == "queued-start":
         menu_methods = menu_methods.replace("Task { @MainActor in\n            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }", "Task { @MainActor in", 1)
-    generated = "import Foundation\nimport Combine\n" + buffer + "\n@MainActor\n" + schedule + "\n" + r'''
+    generated = "import Foundation\nimport CoreFoundation\nimport Combine\n" + buffer + "\n@MainActor\n" + schedule + "\n" + r'''
 @MainActor protocol AccountSessionLifecycle: AnyObject {
     var isAccountIsolationReady: Bool { get }
     func transition(from: AccountContext?, to: AccountContext?, generation: UUID) async throws
@@ -290,7 +315,10 @@ nonisolated enum PasteVerifier {
     enum Verdict: Sendable { case notLanded, unknown(reason: String); var logDescription: String { "synthetic verdict" } }
     nonisolated(unsafe) static var gate: PasteVerificationGate?
     static func verify(before: Snapshot, pastedText: String) async -> Verdict {
+        guard !Task.isCancelled else { return .unknown(reason: "cancelled") }
         await gate?.hold()
+        guard !Task.isCancelled else { return .unknown(reason: "cancelled") }
+        await gate?.recordFocusRead(profile: PrivateProfileStorage.current)
         return .notLanded
     }
     static func userActedAfterPaste(secondsSinceLastInput: Double, secondsSincePaste: Double) -> Bool { false }
@@ -299,6 +327,27 @@ nonisolated enum PasteVerifier {
 extension Notification.Name { static let fluidPasteNotLanded = Notification.Name("SyntheticPasteNotLanded") }
 @MainActor final class TypingService {
 ''' + verifier + r'''
+}
+''' + "\nnonisolated enum ActualPasteVerifierProbe {\n" + real_readback + "\n" + real_verify_body + r'''
+    static let firstCheckDelay: TimeInterval = 0.15
+    static let secondCheckDelay: TimeInterval = 0.35
+    static let finalCheckDelay: TimeInterval = 1.0
+    static func capture() -> Snapshot? { PasteReadbackDouble.shared.capture() }
+}
+nonisolated final class PasteReadbackDouble: @unchecked Sendable {
+    static let shared = PasteReadbackDouble()
+    private let lock = NSLock()
+    private var snapshots: [ActualPasteVerifierProbe.Snapshot] = []
+    private var reads = 0
+    func reset(_ snapshots: [ActualPasteVerifierProbe.Snapshot]) {
+        lock.lock(); defer { lock.unlock() }; self.snapshots = snapshots; reads = 0
+    }
+    var readCount: Int { lock.lock(); defer { lock.unlock() }; return reads }
+    func capture() -> ActualPasteVerifierProbe.Snapshot? {
+        lock.lock(); defer { lock.unlock() }
+        reads += 1
+        return snapshots.isEmpty ? nil : snapshots.removeFirst()
+    }
 }
 ''' + (ROOT / "Tests/PrivateCaptureFeedbackTests.swift").read_text()
     with tempfile.TemporaryDirectory(prefix="pichi-private-capture-feedback-") as directory:
@@ -319,7 +368,7 @@ extension Notification.Name { static let fluidPasteNotLanded = Notification.Name
     if not args.baseline_ref:
         subprocess.run(["xcrun", "swiftc", "-frontend", "-parse", source_path,
                         "Sources/Fluid/Services/MenuBarManager.swift",
-                        "Sources/Fluid/Services/TypingService.swift",
+                        "Sources/Fluid/Services/TypingService.swift", "Sources/Fluid/Services/PasteVerifier.swift",
                         "Sources/Fluid/Services/AppServices+MeetingMenuBar.swift"], cwd=ROOT, check=True)
     print("Private capture feedback and menu: 7 source-guard checks passed; actual-buffer, callback and selector regression passed in both isolation modes")
 

@@ -102,6 +102,8 @@
         try await checkDiscoveryAdmission(profileA: profileA, profileB: profileB)
         try await checkPasteVerification(profileA: profileA, profileB: profileB)
         try await checkJoinedDiscovery(profileA: profileA, profileB: profileB)
+        try await checkJoinedPasteVerification(profileA: profileA, profileB: profileB)
+        try await checkRealPasteReadbackCancellation()
         print("Private capture feedback: \(checks) actual-buffer and callback checks passed")
     }
 
@@ -344,6 +346,92 @@
         state.busy = false
         try await profiles.transition(from: nil, to: nil, generation: UUID())
     }
+
+    @MainActor private static func checkJoinedPasteVerification(profileA: PrivateProfileSnapshot, profileB: PrivateProfileSnapshot) async throws {
+        let profiles = PrivateProfileService.shared, typing = TypingService()
+        PrivateProfileStorage.select(profileA)
+        var notifications: [Notification] = []
+        let observer = NotificationCenter.default.publisher(for: .fluidPasteNotLanded).sink { notifications.append($0) }
+        defer { observer.cancel(); PasteVerifier.gate = nil }
+        let before = PasteVerifier.Snapshot(pid: 123, summary: "synthetic original A")
+        let logs = DebugLogger.shared.information.count
+        let gate = PasteVerificationGate()
+        PasteVerifier.gate = gate
+        let verifier = typing.verifyPasteLanded("SECRET A held reader", before: before, profile: profileA, isOutputValid: { true })!
+        await gate.waitUntilEntered()
+        let state = DiscoveryTransitionState()
+        let transition = Task {
+            defer { state.finished = true }
+            try await profiles.transition(from: nil, to: profileB.context, generation: profileB.generation)
+        }
+        while !profiles.isTransitioning && !state.finished { await Task.yield() }
+        for _ in 0..<20 { await Task.yield() }
+        check(!state.finished && profiles.isTransitioning && !PrivateProfileStorage.current.isReadable
+              && PrivateProfileStorage.current.generation == profileA.generation,
+              "B cannot commit while A's actual detached verifier worker is held")
+        await gate.open()
+        await verifier.value
+        try await transition.value
+        let cancelled = await gate.wasCancelled
+        let focusReads = await gate.focusReads
+        check(cancelled, "Profile retirement forwards cancellation to the detached reader that ignored it while held")
+        check(state.finished && PrivateProfileStorage.current.context == profileB.context,
+              "B commits after the cancelled verifier worker has actually joined")
+        check(focusReads.isEmpty, "A's cancelled verifier performs no later focus read under B")
+        check(notifications.isEmpty && DebugLogger.shared.information.count == logs,
+              "A's joined verifier publishes neither private feedback nor logs")
+
+        // There is no MainActor yield between admission and transition. The registered
+        // owner must close even when the outer Task has not created its worker yet.
+        PrivateProfileStorage.select(profileA)
+        let queuedGate = PasteVerificationGate()
+        PasteVerifier.gate = queuedGate
+        let queued = typing.verifyPasteLanded("SECRET A queued reader", before: before, profile: profileA, isOutputValid: { true })!
+        try await profiles.transition(from: nil, to: profileB.context, generation: UUID())
+        await queued.value
+        let queuedEntered = await queuedGate.hasEntered
+        let queuedReads = await queuedGate.focusReads
+        check(!queuedEntered && queuedReads.isEmpty, "A queued verifier retired before execution never launches its reader")
+        check(notifications.isEmpty && DebugLogger.shared.information.count == logs,
+              "The queued retired A verifier cannot publish into B")
+
+        PrivateProfileStorage.select(profileA)
+        PasteVerifier.gate = nil
+        let valid = typing.verifyPasteLanded("valid A paste", before: before, profile: profileA, isOutputValid: { true })!
+        await valid.value
+        check(notifications.last?.userInfo?["privateProfile"] as? PrivateProfileSnapshot == profileA
+              && notifications.last?.userInfo?["transcript"] as? String == "valid A paste",
+              "Fresh A verification retains its normal failure feedback and original profile")
+    }
+
+    @MainActor private static func checkRealPasteReadbackCancellation() async throws {
+        let element = NSObject()
+        let before = ActualPasteVerifierProbe.Snapshot(element: element, pid: 123, role: "synthetic",
+            value: "before", characterCount: 6, caret: CFRange(location: 6, length: 0))
+        let readback = PasteReadbackDouble.shared
+        for completedReads in 0...2 {
+            readback.reset([before, before, before])
+            let worker = Task.detached { await ActualPasteVerifierProbe.verify(before: before, pastedText: "new") }
+            if completedReads == 0 {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            } else {
+                while readback.readCount < completedReads { await Task.yield() }
+            }
+            worker.cancel()
+            let verdict = await worker.value
+            check(verdict == .unknown(reason: "cancelled"), "Real verifier returns a silent cancelled verdict during delay \(completedReads + 1)")
+            check(readback.readCount == completedReads, "Real verifier performs no AX read after cancellation during delay \(completedReads + 1)")
+        }
+        readback.reset([.init(element: element, pid: 123, role: "synthetic", value: "before new",
+                              characterCount: 10, caret: CFRange(location: 10, length: 0))])
+        let confirmed = await Task.detached { await ActualPasteVerifierProbe.verify(before: before, pastedText: "new") }.value
+        check(confirmed == .confirmed(method: "value") && readback.readCount == 1,
+              "Actual verifier retains successful current-owner value confirmation")
+        readback.reset([before, before, before])
+        let unchanged = await Task.detached { await ActualPasteVerifierProbe.verify(before: before, pastedText: "new") }.value
+        check(unchanged == .notLanded(reason: "value_count_caret_unchanged") && readback.readCount == 3,
+              "Actual verifier still requires all three unchanged reads for failure feedback")
+    }
 }
 
 @MainActor final class MenuStartGate {
@@ -364,14 +452,19 @@ actor PasteVerificationGate {
     private var entered = false
     private var entryWaiters: [CheckedContinuation<Void, Never>] = []
     private var releaseWaiter: CheckedContinuation<Void, Never>?
+    private(set) var wasCancelled = false
+    private(set) var focusReads: [PrivateProfileSnapshot] = []
+    var hasEntered: Bool { entered }
     func hold() async {
         entered = true
         for waiter in entryWaiters { waiter.resume() }
         entryWaiters.removeAll()
         await withCheckedContinuation { releaseWaiter = $0 }
+        wasCancelled = Task.isCancelled
     }
     func waitUntilEntered() async {
         if !entered { await withCheckedContinuation { entryWaiters.append($0) } }
     }
     func open() { releaseWaiter?.resume(); releaseWaiter = nil }
+    func recordFocusRead(profile: PrivateProfileSnapshot) { focusReads.append(profile) }
 }
