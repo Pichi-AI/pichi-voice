@@ -50,6 +50,7 @@ There are 15 direct `MeetingSessionStore.shared` references in eight production 
 | `Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift:1894` | Recovery load | Discover only the current profile; preserve former account's unfinished recording |
 | `Sources/Fluid/Services/Meeting/MeetingSessionPersistenceQueue.swift:29` | Background snapshot save | Never resolve ownership using current selection at dequeue time |
 | `Sources/Fluid/Services/AppServices.swift:155` | Retains active summary controllers | Cancel and join former-profile summaries; remove retained source/document projections |
+| `Sources/FVServe/main.swift:35` | Standalone helper directly resolves legacy root, global sharing consent and custom prompt | Use an authorized profile boundary or fail closed in account mode; this path bypasses the application store injection |
 
 Auth failure and logout must not stop local capture or erase meetings. If recording remains active across logout, it continues writing only to its frozen profile. Its transcript and controls must not be exposed as the next account's recording. Presentation needs an explicit policy/handoff from N1/N3/N4; clearing the storage list alone is insufficient.
 
@@ -78,6 +79,9 @@ The profile inventory includes raw text, prompts, audio evidence, credentials an
 | `Sources/Fluid/Persistence/SettingsStore+CommandMode.swift:10` | Direct `.standard` reads/writes | Same profile boundary |
 | `Sources/Fluid/Services/ASRService.swift:7703` | Static compiled private dictionary patterns | Invalidate cached patterns at profile change using the existing invalidation hook at line 7777 |
 | `Sources/Fluid/Services/DictionaryAudioLearningService.swift:12` | Queued private text/PCM; cancellation can retry at lines 110-120 | Joined profile cancellation must not requeue a former account's learning work |
+| `Sources/Fluid/Services/DictionaryNegativeExamples.swift:62` | `<namespace>/dictionary-negative-examples-v1.plist`; acoustic frame features read by matcher | Reuse existing URL injection with a private profile root, preserve legacy guest data and invalidate admitted correction generations |
+| `Sources/Fluid/Services/AutomaticDictionaryCorrectionTracker.swift:25` | Heard/corrected text in `AutomaticDictionarySuggestionPolicyStateV1`, plus retained observation/evidence tasks at lines 192-195 | Reuse defaults injection, cancel and join old observations/training before showing another profile |
+| `Sources/Fluid/Services/DictionaryPronunciationExperiment.swift:68` | Optional `DictionaryDebug` archive contains PCM, transcripts, profiles and inspection/training evidence | Reuse directory injection with private profile root; preserve existing guest archive; never let profile cleanup trim another profile's evidence |
 | `Sources/Fluid/Services/DictionaryTransferService.swift:240` | Export/restore uses shared settings/vocabulary | Pin source/target profile across the complete operation |
 | `Sources/Fluid/Persistence/BackupService.swift:216` | Shared settings/prompts/pronunciation/dictation-history export | Pin source profile and validate generation after actor hops |
 | `Sources/Fluid/Persistence/BackupService.swift:261` | Multi-stage restore into shared stores | Pin restore target; never continue into the next account |
@@ -155,6 +159,8 @@ Use the existing production-code standalone probes and native integration target
 Baseline probe on the unchanged native revision: `bash Tests/run_meeting_session_store_checkpoint_tests.sh` passed 931 checks using the production persisted codecs, store, reading projection and protected exporter with synthetic data. It compiled with the existing Swift 5-mode `ExportedTranscript: Encodable` isolation warning at exporter line 1028. This is baseline evidence only; it does not validate account isolation, outbox transport, native targets or live server behavior.
 
 The existing policy-only probe, `PICHI_PII_POLICY_ONLY=1 bash Tests/run_meeting_privacy_context_tests.sh`, also passed on the unchanged native sources. It uses actual segments/evidence and dictionary/redaction policy with synthetic inputs and deliberately does not fetch/build the native inference dependency or load a privacy model. These results do not establish model-based redaction accuracy.
+
+Portable repository checks passed with `bash scripts/dev/check.sh`. Independent architecture/security review of inventory revision `1c299fb894c65e163adbe2d1915b169c56588518` confirmed the direct-store reference count and identified the standalone helper plus auxiliary dictionary state as missing. Both were added to this inventory. That review was static documentation/source analysis, not runtime verification of the proposed implementation.
 
 Extend the existing `Tests/TranscriptSensitiveDictionaryTests.swift:70` isolated-defaults/admitted-redactor probe, `Tests/FluidDictationIntegrationTests/MeetingOwnerVoiceProfileTests.swift:127` temporary-store and stale-draft cases, `Tests/FluidDictationIntegrationTests/DictationE2ETests.swift:3559` injected pronunciation/learning fixture, and `Tests/FluidDictationIntegrationTests/SearchIndexTests.swift:409` isolated writer/defaults/index fixture. No generic test framework is needed.
 
