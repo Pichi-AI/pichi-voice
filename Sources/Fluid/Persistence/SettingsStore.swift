@@ -3523,7 +3523,6 @@ final class SettingsStore: ObservableObject {
             returnDictationToStartingField: self.returnDictationToStartingField,
             showHistoryPerformanceMetrics: self.showHistoryPerformanceMetrics,
             skipSilentRecordingsEnabled: self.skipSilentRecordingsEnabled,
-            localAPIEnabled: self.localAPIEnabled,
             enableAIStreaming: self.enableAIStreaming,
             copyTranscriptionToClipboard: self.copyTranscriptionToClipboard,
             textInsertionMode: self.textInsertionMode,
@@ -3691,9 +3690,6 @@ final class SettingsStore: ObservableObject {
         }
         if let skipSilentRecordingsEnabled = payload.skipSilentRecordingsEnabled {
             self.skipSilentRecordingsEnabled = skipSilentRecordingsEnabled
-        }
-        if let localAPIEnabled = payload.localAPIEnabled {
-            self.localAPIEnabled = localAPIEnabled
         }
         self.enableAIStreaming = payload.enableAIStreaming
         self.copyTranscriptionToClipboard = payload.copyTranscriptionToClipboard
