@@ -17,6 +17,9 @@ xcrun swiftc -D DICTIONARY_EXPERIMENT_STANDALONE -O -parse-as-library \
     "$task_test_dir/BrandPackageTypes.swift" \
     "$task_repo_dir/Tests/Support/StandaloneBrandPackageStore.swift" \
     "$task_repo_dir/Sources/Fluid/Branding/BrandDistribution.swift" \
+    "$task_repo_dir/Sources/Fluid/Account/AccountDomain.swift" \
+    "$task_repo_dir/Sources/Fluid/Account/PrivateProfileStorage.swift" \
+    "$task_repo_dir/Sources/Fluid/Account/PrivateProfileDefaults.swift" \
     "$task_repo_dir/Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift" \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift" \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryExperimentalMatcher.swift" \
@@ -24,4 +27,5 @@ xcrun swiftc -D DICTIONARY_EXPERIMENT_STANDALONE -O -parse-as-library \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryLearningEvidence.swift" \
     "$task_repo_dir/Tests/Standalone/DictionaryMatcherExperimentTests.swift" \
     -o "$task_test_dir/tests"
-"$task_test_dir/tests" "$@"
+PICHI_DICTIONARY_TEST_PROFILE_MANIFEST="$task_test_dir/domains.json" "$task_test_dir/tests" "$@"
+python3 -S "$task_repo_dir/Tests/Support/remove_empty_synthetic_preferences.py" "$task_test_dir/domains.json"

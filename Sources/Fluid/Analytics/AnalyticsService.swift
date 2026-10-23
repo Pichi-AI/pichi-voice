@@ -6,6 +6,8 @@ final class AnalyticsService {
 
     private let detailedConsentGate: DetailedAnalyticsConsentGate
     private let core: AnalyticsCore
+    private var suspended = false
+    private var submissions: [UUID: Task<Void, Never>] = [:]
 
     private init() {
         let detailedConsentGate = DetailedAnalyticsConsentGate()
@@ -25,7 +27,8 @@ final class AnalyticsService {
             detailedAnalyticsEnabled: enabled,
             detailedConsentGeneration: consentGeneration
         )
-        Task.detached(priority: .background) { [core] in
+        guard !self.suspended, context.profile.isReadable else { return }
+        self.enqueue(context: context) { core, context in
             await core.setDetailedAnalyticsEnabled(context: context)
         }
     }
@@ -213,10 +216,32 @@ final class AnalyticsService {
             detailedAnalyticsEnabled: SettingsStore.shared.shareDetailedAnalytics,
             detailedConsentGeneration: self.detailedConsentGate.currentGeneration
         )
-        Task.detached(priority: .background) { [core] in
+        guard !self.suspended, context.profile.isReadable else { return }
+        self.enqueue(context: context, operation: operation)
+    }
+
+    private func enqueue(context: AnalyticsContext,
+                         operation: @escaping @Sendable (AnalyticsCore, AnalyticsContext) async -> Void) {
+        let id = UUID()
+        self.submissions[id] = Task(priority: .background) { [weak self, core] in
+            defer { self?.submissions[id] = nil }
+            guard !Task.isCancelled else { return }
             await operation(core, context)
         }
     }
+
+    /// Cancel and join the transport and every admitted local write before releasing its DB.
+    /// Legacy guest databases are retained in place and never copied to the next profile.
+    func suspendForProfileTransition() async {
+        self.suspended = true
+        _ = self.detailedConsentGate.advance()
+        let tasks = Array(self.submissions.values)
+        for task in tasks { task.cancel() }
+        await self.core.suspendForProfileTransition()
+        for task in tasks { await task.value }
+    }
+
+    func activateCurrentProfile() { self.suspended = false }
 
     private static func context(
         detailedAnalyticsEnabled: Bool,
@@ -224,6 +249,7 @@ final class AnalyticsService {
     ) -> AnalyticsContext {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
         return AnalyticsContext(
+            profile: PrivateProfileStorage.current,
             detailedAnalyticsEnabled: detailedAnalyticsEnabled,
             detailedConsentGeneration: detailedConsentGeneration,
             config: AnalyticsConfig.fromBundle(),
@@ -235,7 +261,8 @@ final class AnalyticsService {
     }
 }
 
-private struct AnalyticsContext {
+private struct AnalyticsContext: Sendable {
+    let profile: PrivateProfileSnapshot
     let detailedAnalyticsEnabled: Bool
     let detailedConsentGeneration: UInt64
     let config: AnalyticsConfig
@@ -268,6 +295,8 @@ private actor AnalyticsCore {
     private var context: AnalyticsContext?
     private let detailedConsentGate: DetailedAnalyticsConsentGate
     private var database: AnalyticsDatabase?
+    private var databaseProfile: PrivateProfileSnapshot?
+    private var retiredFlushTasks: [Task<Void, Never>] = []
     private var flushTask: Task<Void, Never>?
     private var activeUploadTask: Task<Int, Error>?
     private var isFlushing = false
@@ -276,6 +305,27 @@ private actor AnalyticsCore {
 
     init(detailedConsentGate: DetailedAnalyticsConsentGate) {
         self.detailedConsentGate = detailedConsentGate
+    }
+
+    func suspendForProfileTransition() async {
+        self.stopFlushLoop()
+        let retired = self.retiredFlushTasks
+        self.retiredFlushTasks.removeAll()
+        let uploadTask = self.activeUploadTask
+        uploadTask?.cancel()
+        if let uploadTask { _ = try? await uploadTask.value }
+        for task in retired { await task.value }
+        self.activeUploadTask = nil
+        self.database = nil
+        self.databaseProfile = nil
+        self.context = nil
+    }
+
+    private func accepts(_ context: AnalyticsContext) -> Bool {
+        let current = PrivateProfileStorage.current
+        return current.isReadable && current.id == context.profile.id
+            && current.generation == context.profile.generation
+            && self.detailedConsentGate.accepts(context.detailedConsentGeneration)
     }
 
     func bootstrap(context: AnalyticsContext) async {
@@ -342,7 +392,7 @@ private actor AnalyticsCore {
         tokensPerSecond: Double?,
         context: AnalyticsContext
     ) async {
-        guard context.collectsBetaPerformance,
+        guard self.apply(context), context.collectsBetaPerformance,
               context.config.isConfigured
         else { return }
         do {
@@ -500,7 +550,7 @@ private actor AnalyticsCore {
         context: AnalyticsContext,
         operation: (AnalyticsDatabase, Date) throws -> Void
     ) async {
-        guard context.config.isConfigured else { return }
+        guard self.apply(context), context.config.isConfigured else { return }
         do {
             let database = try self.database(for: context)
             try operation(database, Date())
@@ -515,8 +565,8 @@ private actor AnalyticsCore {
         fallbackActivity: AnalyticsActivityKind? = nil,
         operation: (AnalyticsDatabase, Date) throws -> Void
     ) async {
-        let mayRecordDetails = self.apply(context) && context.detailedAnalyticsEnabled
-        guard context.config.isConfigured else { return }
+        guard self.apply(context), context.config.isConfigured else { return }
+        let mayRecordDetails = context.detailedAnalyticsEnabled
         guard mayRecordDetails || fallbackActivity != nil else { return }
         do {
             let database = try self.database(for: context)
@@ -533,43 +583,39 @@ private actor AnalyticsCore {
     }
 
     private func apply(_ context: AnalyticsContext) -> Bool {
-        guard self.detailedConsentGate.accepts(context.detailedConsentGeneration) else { return false }
+        guard self.accepts(context) else { return false }
         self.context = context
         return true
     }
 
     private func database(for context: AnalyticsContext) throws -> AnalyticsDatabase {
-        if let database { return database }
-        let url = try self.databaseURL()
+        guard self.accepts(context) else { throw CancellationError() }
+        if let database {
+            guard self.databaseProfile == context.profile else { throw CancellationError() }
+            return database
+        }
+        let url = self.databaseURL(profile: context.profile)
         let database = try AnalyticsDatabase(
             url: url,
             distinctID: context.distinctID,
             appVersion: context.appVersion
         )
         self.database = database
+        self.databaseProfile = context.profile
         return database
     }
 
-    private func databaseURL() throws -> URL {
-        let applicationSupport = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let directoryName = AppBrand.storageNamespace
-        return applicationSupport
-            .appendingPathComponent(directoryName, isDirectory: true)
-            .appendingPathComponent("Analytics", isDirectory: true)
-            .appendingPathComponent("analytics-v2.sqlite3")
+    private func databaseURL(profile: PrivateProfileSnapshot) -> URL {
+        profile.directory("Analytics").appendingPathComponent("analytics-v2.sqlite3")
     }
 
     private func purgeStoredDetailedAnalyticsIfPresent(context: AnalyticsContext) throws {
         if let database {
+            guard self.databaseProfile == context.profile else { throw CancellationError() }
             try database.purgeDetailedAnalytics()
             return
         }
-        let url = try self.databaseURL()
+        let url = self.databaseURL(profile: context.profile)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         let existingDatabase = try AnalyticsDatabase(
             url: url,
@@ -582,7 +628,7 @@ private actor AnalyticsCore {
     private func startFlushLoopIfNeeded() {
         guard self.flushTask == nil,
               let context,
-              self.detailedConsentGate.accepts(context.detailedConsentGeneration),
+              self.accepts(context),
               context.config.isConfigured
         else { return }
         self.flushTask = Task { [weak self] in
@@ -595,14 +641,17 @@ private actor AnalyticsCore {
     }
 
     private func stopFlushLoop() {
-        self.flushTask?.cancel()
+        if let task = self.flushTask {
+            task.cancel()
+            self.retiredFlushTasks.append(task)
+        }
         self.flushTask = nil
     }
 
     private func flushIfNeeded() async {
         guard !self.isFlushing,
               let context,
-              self.detailedConsentGate.accepts(context.detailedConsentGeneration),
+              self.accepts(context),
               context.config.isConfigured,
               let database
         else { return }
@@ -621,11 +670,11 @@ private actor AnalyticsCore {
             return
         }
         guard !items.isEmpty else { return }
-        guard self.detailedConsentGate.accepts(context.detailedConsentGeneration) else { return }
+        guard self.accepts(context) else { return }
 
         let ids = items.map(\.id)
         let uploadTask = Task {
-            guard self.detailedConsentGate.accepts(context.detailedConsentGeneration) else {
+            guard self.accepts(context) else {
                 throw CancellationError()
             }
             return try await self.send(items: items, config: context.config)
@@ -636,11 +685,11 @@ private actor AnalyticsCore {
         do {
             status = try await uploadTask.value
         } catch {
-            guard self.detailedConsentGate.accepts(context.detailedConsentGeneration) else { return }
+            guard self.accepts(context) else { return }
             try? database.retry(ids: ids, at: Date())
             return
         }
-        guard self.detailedConsentGate.accepts(context.detailedConsentGeneration) else { return }
+        guard self.accepts(context) else { return }
 
         switch status {
         case 200..<300:

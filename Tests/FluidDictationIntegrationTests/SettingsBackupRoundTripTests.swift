@@ -19,10 +19,12 @@ final class SettingsBackupRoundTripTests: XCTestCase {
         let reloaded = SettingsStore(defaults: defaults)
         XCTAssertEqual(reloaded.onboardingCurrentStep, 6, "The optional location step must survive relaunch")
         XCTAssertFalse(reloaded.onboardingCompleted)
+        reloaded.onboardingCurrentStep = 7
+        XCTAssertEqual(reloaded.onboardingCurrentStep, 7, "The optional account step must survive relaunch")
         reloaded.onboardingCurrentStep = Int.max
-        XCTAssertEqual(reloaded.onboardingCurrentStep, 6)
+        XCTAssertEqual(reloaded.onboardingCurrentStep, 7)
         defaults.set(Int.max, forKey: "OnboardingCurrentStep")
-        XCTAssertEqual(reloaded.onboardingCurrentStep, 6)
+        XCTAssertEqual(reloaded.onboardingCurrentStep, 7)
         reloaded.onboardingCurrentStep = -1
         XCTAssertEqual(reloaded.onboardingCurrentStep, 0)
     }

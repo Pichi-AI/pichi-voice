@@ -61,7 +61,7 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     init(directory: URL? = nil, downloadDescriptor: GigaAMModelDescriptor = GigaAMModelCatalog.downloadableModel,
          importDescriptors: [GigaAMModelDescriptor] = GigaAMModelCatalog.models,
-         preferences: UserDefaults = .standard,
+         preferences: UserDefaults = PrivateProfileDefaults.shared,
          environment: [String: String] = ProcessInfo.processInfo.environment,
          download: @escaping Download = { source, maximumBytes, progress in
              try await PichiGigaAMModelStore.downloadArtifact(source, maximumBytes: maximumBytes, progress: progress)

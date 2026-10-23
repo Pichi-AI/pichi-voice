@@ -20,7 +20,12 @@ enum AutomaticDictionarySuggestionOutcome {
 
 @MainActor
 final class AutomaticDictionarySuggestionPolicy {
-    static let shared = AutomaticDictionarySuggestionPolicy()
+    static var shared: AutomaticDictionarySuggestionPolicy {
+        PrivateProfileObjectCache.value(key: "AutomaticDictionarySuggestionPolicy") {
+            let profile = PrivateProfileStorage.current
+            return AutomaticDictionarySuggestionPolicy(defaults: PrivateProfileDefaults.bound(to: profile), profile: profile)
+        }
+    }
 
     private struct PairRecord: Codable {
         var heardText: String
@@ -39,13 +44,26 @@ final class AutomaticDictionarySuggestionPolicy {
 
     private let defaults: UserDefaults
     private let configuration: DictionarySuggestionPolicyConfig
+    private let profile: PrivateProfileSnapshot?
+    private var retired = false
+    private var canAccess: Bool { !self.retired && self.profile.map(PrivateProfileStorage.isReadable) != false }
+
+    func prepareForProfileTransition() {
+        self.retired = true
+        self.state = PersistedState()
+        self.sessionIgnoreCount = 0
+    }
     private var state: PersistedState
     private var sessionIgnoreCount = 0
 
     init(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults? = nil,
+        profile: PrivateProfileSnapshot? = nil,
         configuration: DictionarySuggestionPolicyConfig = .init()
     ) {
+        let selected = profile ?? (defaults == nil ? PrivateProfileStorage.current : nil)
+        let defaults = defaults ?? PrivateProfileDefaults.bound(to: selected!)
+        self.profile = selected
         self.defaults = defaults
         self.configuration = configuration
         if let data = defaults.data(forKey: Self.defaultsKey),
@@ -62,6 +80,7 @@ final class AutomaticDictionarySuggestionPolicy {
         requiredOccurrences: Int? = nil,
         now: Date = Date()
     ) -> Bool {
+        guard self.canAccess else { return false }
         self.prune(now: now)
         let key = self.key(for: candidate)
         var record = self.state.records[key] ?? PairRecord(
@@ -90,6 +109,7 @@ final class AutomaticDictionarySuggestionPolicy {
     }
 
     func markShown(_ candidate: AutomaticDictionaryCorrectionCandidate, now: Date = Date()) {
+        guard self.canAccess else { return }
         let key = self.key(for: candidate)
         guard var record = self.state.records[key] else { return }
         record.lastShownAt = now
@@ -102,6 +122,7 @@ final class AutomaticDictionarySuggestionPolicy {
         for candidate: AutomaticDictionaryCorrectionCandidate,
         now: Date = Date()
     ) {
+        guard self.canAccess else { return }
         let key = self.key(for: candidate)
         guard var record = self.state.records[key] else { return }
         switch outcome {
@@ -151,7 +172,9 @@ final class AutomaticDictionarySuggestionPolicy {
 
 @MainActor
 final class AutomaticDictionaryCorrectionTracker {
-    static let shared = AutomaticDictionaryCorrectionTracker()
+    static var shared: AutomaticDictionaryCorrectionTracker {
+        PrivateProfileObjectCache.value(key: "AutomaticDictionaryCorrectionTracker") { AutomaticDictionaryCorrectionTracker() }
+    }
 
     private struct InsertionSeed {
         let element: AXUIElement
@@ -194,12 +217,14 @@ final class AutomaticDictionaryCorrectionTracker {
     private var debounceTask: Task<Void, Never>?
     private var evidencePreparationTask: Task<Void, Never>?
     private var suggestionGeneration = UUID()
+    private let profile = PrivateProfileStorage.current
 
     private init() {}
 
     func beginObservingInsertion(
         _ insertedText: String, targetPID: pid_t?, learningRecording: DictionaryLearningRecording? = nil
     ) {
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
         self.cancel()
         guard SettingsStore.shared.automaticDictionaryLearningEnabled || DictionaryMatcherExperiment.collectNegatives,
               !insertedText.isEmpty
@@ -240,6 +265,12 @@ final class AutomaticDictionaryCorrectionTracker {
         self.removeObserver()
         self.session = nil
         DictionaryCorrectionOverlayController.shared.hide()
+    }
+
+    func prepareForPrivateProfileTransition() async {
+        let tasks = [evidencePreparationTask, verificationTask, timeoutTask, debounceTask]
+        cancel()
+        for task in tasks { await task?.value }
     }
 
     func handleObservedValueChange() {

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct DictionaryMatcherExperimentSettings: View {
     @Environment(\.theme) private var theme
-    @AppStorage("DictionarySharedFeatureMatcherEnabled") private var enabled = false
+    @AppStorage("DictionarySharedFeatureMatcherEnabled", store: PrivateProfileDefaults.shared) private var enabled = false
 
     var body: some View {
         HStack {

@@ -4,7 +4,9 @@ import Combine
 /// Only aggregates while Stats is visible; keeps one small result for subsequent visits.
 @MainActor
 final class StatsSnapshotStore: ObservableObject {
-    static let shared = StatsSnapshotStore(history: .shared)
+    static var shared: StatsSnapshotStore {
+        PrivateProfileObjectCache.value(key: "StatsSnapshotStore") { StatsSnapshotStore(history: .shared) }
+    }
 
     @Published private(set) var snapshot: StatsSnapshot?
     @Published private(set) var isUpdating = false
@@ -45,6 +47,14 @@ final class StatsSnapshotStore: ObservableObject {
     func activate(_ owner: UUID) {
         self.owners.insert(owner)
         self.refreshIfNeeded()
+    }
+
+    func prepareForPrivateProfileTransition() async {
+        revision &+= 1
+        let current = task; current?.cancel()
+        await current?.value
+        task = nil; subscriptions.removeAll(); owners.removeAll()
+        snapshot = nil; isUpdating = false; completedRevision = nil; completedDay = nil
     }
 
     func deactivate(_ owner: UUID) {

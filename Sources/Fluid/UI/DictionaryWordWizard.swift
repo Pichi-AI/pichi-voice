@@ -787,7 +787,7 @@ struct DictionaryWordPlayground: View {
     @Environment(\.theme) private var theme
     @FocusState private var editorFocused: Bool
     @State private var test = DictionaryShortcutTestState()
-    @AppStorage("DictionaryPronunciationDebugCapture") private var debugCapture = false
+    @AppStorage("DictionaryPronunciationDebugCapture", store: PrivateProfileDefaults.shared) private var debugCapture = false
 
     private var shortcut: String {
         let value = SettingsStore.shared.primaryDictationShortcutDisplayString

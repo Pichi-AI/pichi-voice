@@ -25,7 +25,7 @@ struct CommandModeView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var onClose: (() -> Void)?
 
-    @AppStorage("CommandHistoryInspectorVisible") private var prefersHistoryVisible = true
+    @AppStorage("CommandHistoryInspectorVisible", store: PrivateProfileDefaults.shared) private var prefersHistoryVisible = true
     @State private var compactHistoryPresented = false
     @State private var drafts = CommandSessionDrafts()
     @State private var showingArchiveLimit = false
