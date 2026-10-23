@@ -31,7 +31,7 @@ No provider hierarchy, model-specific coordinator factory or parallel audio pipe
 
 ## Verification
 
-The final compiled source is `9e4602a4f5f03c384bd202a966b54198814bbc1e`. Later report and pure-projection changes do not alter application code, native test sources, resources, package pins or build configuration.
+The initial full-suite compiled source is `9e4602a4f5f03c384bd202a966b54198814bbc1e`. The acceptance follow-up below records the later two-source picker fix and its affected checks separately.
 
 | Check | Actual result and scope |
 | --- | --- |
@@ -66,9 +66,42 @@ Logs, xcresults, source projections, initial failures, negative controls and has
 
 The full native run exercises automatic synthetic/public fixtures. It does not establish microphone or Accessibility grants, real audio routes, cloud credentials, private Fluid Intelligence runtime behavior, default-model summary quality, or visual acceptance of the full app. Previously accepted summary semantic limitations remain limitations. The final xcresult retains 163 runtime warning records, including state changes during view updates and thread/QoS warnings; they are not silently suppressed.
 
-Mobile changes still require simulator UI validation on both form factors with native screenshots, user review, and only then physical-device checks under the repository's capture/signing rules. No simulator, physical device, microphone or foreground UI was claimed by this task.
+At initial publication, mobile simulator UI, user review and subsequent physical-device checks were still pending. The acceptance follow-up below supersedes that initial status with the checks actually completed.
 
-The installed application and active user capture remain untouched. The update is published only as a draft PR for review. No automatic merge to main, installation or replacement is performed.
+The initial update was published as a draft PR. The user subsequently requested completion of acceptance and a manual merge after passing checks, and separately requested delivery of the merged Release to the iPad. The existing macOS installation and active user capture remain protected throughout.
+
+## PR #46 acceptance follow-up
+
+The application candidate is `0d44a14be4acdce066e2938968b0eccd1e305d8b`. Native simulator acceptance exposed a pre-existing correction-picker bug: the visible `readableSpeakers` roster omitted known participants without readable fragments, preventing manual assignment to them. Desktop and mobile correction targets now use the existing `activeSpeakers` contract. Visible rosters keep their existing filtering; merged identities remain excluded and desktop excludes the current participant. Existing domain operations still own validation, persistence and atomic Undo.
+
+The mobile test adapters now identify paragraph speaker captions through the actual native button and its exact label. Toggle actions preserve native row/control ownership and require hittability, a valid binary state and a state change; footer checks require full window containment. Correction-scope, word preservation, persistence and Undo assertions remain intact.
+
+| Check | Actual result and provenance |
+| --- | --- |
+| Portable repository checks | Fresh PASS at `0d44a14b`, 22.812s, with only this acceptance report changed in the working tree. |
+| macOS Debug build-for-testing | Fresh PASS at `0d44a14b`, 144.443s. |
+| Normally signed macOS Debug build-for-testing | Fresh PASS at `0d44a14b`, 96.281s. The new frozen copy preserves all 19 Xcode effective entitlement keys, including Audio Input; strict signatures pass. |
+| macOS Release arm64 | Fresh PASS at `0d44a14b`, 392.265s. |
+| macOS Release x86_64 | Fresh PASS at `0d44a14b`, 394.492s. Physical Intel runtime remains unverified. |
+| Mobile simulator build-for-testing | Fresh PASS at `0d44a14b`, 35.201s. |
+| Signed iOS device Release build | Fresh PASS at `0d44a14b`. Compilation and signing only; not physical-device acceptance or the final merged-main delivery. |
+| Targeted native corrections/recovery | Fresh PASS at `0d44a14b`: 201 passed, 0 failed, 2 skipped, 65.107s. No microphone capture. The saved-transcript presentation class belongs to the mobile target and is not claimed as part of this native result. |
+| Real GigaAM and S1-mini | Four tests passed at compiled source `9e4602a4`, 20.660s: synthetic default chain, provider/files/API/meeting flow, bilingual cleanup and long Russian dictation. Reused for `0d44a14b` because inference, services, pinned model inputs, native model tests, resources and package pins are unchanged. These tests use synthetic speech, not the microphone. |
+| Earlier full native suite | Retained result at `9e4602a4`: 3150 passed, 0 failed, 80 skipped. This is not a fresh full-suite result for `0d44a14b`; affected correction behavior has the fresh targeted result above. |
+| macOS non-audio UI | Frozen source `9e4602a4` passed bounded English/Russian and light/dark settings, dictionary add/edit/delete including Ё/ё, wizard navigation/cancel, transcript edit/Undo, batch rename/Undo and SHA-verified Markdown export. The new frozen `0d44a14b` passed unused-participant menu visibility, current-speaker exclusion, reassignment, confirmed merge, both Undo operations and quit/reopen. All five original segment objects and speaker objects equal the committed synthetic fixture after Undo. |
+| Mobile correction UI | Fresh PASS at `0d44a14b` on both simulators, 1 selector each with 0 failures/skips: iPhone 1621.39s, iPad 1300.61s. Both English/light and Russian/dark exercise whole-fragment and single-member changes, Undo, owner reassignment, actual restart/reopen and restoration through normal UI. Times include gated visual review and are not app latency measurements. |
+| Mobile hosted presentation tests | Fresh PASS at `0d44a14b`: 46 passed, 0 failed/skipped, 6.123s across `MeetingLiveCaptionPresentationTests` and `MeetingSavedTranscriptPresentationTests`. The earlier separate five-class run remains 44 passed, 0 failed, 1 physical-only skip at its original pinned source. |
+| Independent source and architecture review | GO at exact `0d44a14b`, no P1/P2 findings, including existing extension contracts, roster separation, correction ownership, merged/current identity exclusion and native UI assertions. A separate coordinating session independently reached the same static result. |
+
+Passing mobile saved-session scopes also include privacy/orientation/footer navigation, Russian dark model settings, localized location settings, and address/history titles on both iPad and iPhone simulators. Their per-scope provenance and unchanged method-body/app-input proofs are retained; later production changes only affect the two correction target collections. All final correction and focused hosted jobs joined before subsequent checks. The user reviewed the actual native participant-picker frames for both form factors and explicitly accepted their appearance.
+
+Earlier failed and interrupted attempts remain evidence. A first real-model launch was interrupted before any case ran; only the later four-test run establishes success. Initial mobile failures exposed native control/label assumptions and then the real missing correction target; none are reclassified as passing. An overlapping/orphaned simulator attempt is invalid acceptance evidence. Unexpected media found in an owned simulator was preserved with a complete independently hash-verified container copy, without listening, decoding or transcription. First-use or empty-cache loader behavior is not established by saved-session UI checks.
+
+Permission preflight also exposed a local test-artifact preparation error. The first freezer rebuilt entitlements from `Fluid.entitlements` and lost Xcode's expanded Hardened Runtime capabilities. The project already enables Audio Input for Debug and Release, as does the downstream baseline. macOS explicitly denied the malformed frozen copy's microphone request before any system prompt. This is not evidence of a missing production capability. The repair follows the existing PR archive workflow: obtain Xcode's normally signed effective entitlements, preserve every key before framework normalization/re-signing, validate Audio Input and Hardened Runtime, then freeze a new copy for permission/audio checks. No private entitlement, permission-database reset or weaker signing policy is used.
+
+The repaired frozen copy passed strict signatures with all 19 Xcode effective entitlement keys preserved. The normal microphone request was invoked. Manual OS permission approval remains pending because the computer-use controller rejects access to the protected system permission dialog for safety reasons. No alternate automation path is used to bypass that restriction.
+
+Remaining acceptance gates are microphone/Accessibility delivery, meeting audio capture, active caption dragging and physical-device checks. The participant-picker simulator user review is complete. Live cloud requests and the unavailable proprietary Fluid Intelligence runtime remain unverified. Previously accepted summary semantic limitations remain unchanged. A minor dictionary playground confirmation label can remain stale after editing/deleting while the saved dictionary and drawer update correctly. Initial native runtime warnings and one targeted main-thread responsiveness warning are retained.
 
 ## Initial textual conflicts
 
