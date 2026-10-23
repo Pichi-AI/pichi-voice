@@ -73,6 +73,159 @@ extension MeetingSessionStoreCheckpointTests {
                 && failedMarker.sourceRevision == priorRevision,
                 "Failed busy-logout marker cannot leave memory readable or commit another source")
         }
+
+        for busy in [false, true] {
+            for blockedMarker in [false, true] {
+                try await checkPrivateProfileFailureJoins(root: root, context: context,
+                    busy: busy, blockedMarker: blockedMarker, check: check)
+            }
+        }
+        try await checkPrivateProfileCancelledJoins(root: root, context: context, check: check)
+    }
+
+    @MainActor private static func checkPrivateProfileFailureJoins(root: URL, context: AccountContext,
+        busy: Bool, blockedMarker: Bool, check: (Bool, String) -> Void) async throws {
+        let directory = root.appendingPathComponent("failure-joins-\(busy)-\(blockedMarker)")
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: directory)
+        PrivateProfileStorage.select(guest)
+        let markerDirectory = directory.appendingPathComponent("Profiles")
+        var expectedMarkerFailure: NSError?
+        if blockedMarker {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data("synthetic marker obstruction".utf8).write(to: markerDirectory)
+            do { try PrivateProfileStorage.persistAccessMarker(guest) }
+            catch { expectedMarkerFailure = error as NSError }
+            check(expectedMarkerFailure != nil, "Synthetic marker obstruction must exercise a real persistence failure")
+        }
+        let state = SyntheticProfileState()
+        state.busy = busy
+        let service = PrivateProfileService()
+        try service.configure(isBusy: { state.busy }, prepare: { state.preparations += 1 },
+            activate: { _ in state.activations += 1 })
+        let first = SyntheticProfileParticipant {
+            state.events.append("first")
+            if state.failParticipants { throw AccountError.permissionDenied }
+        }
+        let participantGate = SyntheticProfileGate()
+        let second = SyntheticProfileParticipant {
+            state.events.append("second")
+            if state.gateParticipants { await participantGate.wait() }
+            state.events.append("second-joined")
+            if state.failParticipants { throw AccountError.invalidResponse }
+        }
+        service.register(first)
+        service.register(second)
+        let stopID = UUID()
+        service.installCaptureStopHandler(id: stopID) { state.stopRequests += 1 }
+        let writeGate = SyntheticProfileGate()
+        let workID = UUID()
+        let write = Task {
+            await writeGate.wait()
+            state.writeFinished = true
+            service.finishPrivateWrite(id: workID)
+        }
+        service.retainPrivateWrite(write, id: workID)
+        await writeGate.waitUntilEntered()
+        let sourceRevision = service.sourceRevision
+        let transition = Task {
+            defer { state.transitionFinished = true }
+            try await service.transition(from: nil, to: busy ? nil : context, generation: UUID())
+        }
+        while PrivateProfileStorage.current.isReadable && !state.transitionFinished { await Task.yield() }
+        check(!state.transitionFinished && !state.writeFinished && state.events.isEmpty,
+            "A marker failure cannot return or start reader retirement before the retained write joins")
+        check(service.isTransitioning && !service.isPrivateDataVisible && !PrivateProfileStorage.acceptsNewWork,
+            "Normal transition and busy logout both close visibility, admission and overlapping cleanup")
+        check(PrivateProfileStorage.current.id == guest.id && PrivateProfileStorage.current.generation == guest.generation
+            && service.sourceRevision == sourceRevision,
+            "Held cleanup cannot replace the original writer generation or publish another source")
+        do {
+            try await service.transition(from: nil, to: nil, generation: UUID())
+            check(false, "A second transition cannot overlap a retained cleanup")
+        } catch {
+            check(error as? AccountError == .busy, "An overlapping cleanup is rejected by transition admission")
+        }
+        if busy { transition.cancel() }
+        await writeGate.release()
+        await participantGate.waitUntilEntered()
+        check(!state.transitionFinished && state.writeFinished && state.events == ["first", "second"],
+            "The first throwing participant cannot skip or outlive a later admitted reader join")
+        await participantGate.release()
+        do { try await transition.value; check(false, "Joined cleanup must preserve its first failure") }
+        catch {
+            if let expectedMarkerFailure {
+                let actual = error as NSError
+                check(actual.domain == expectedMarkerFailure.domain && actual.code == expectedMarkerFailure.code,
+                    "Marker failure stays authoritative after every participant is attempted")
+            } else {
+                check(error as? AccountError == .permissionDenied,
+                    "The first participant failure stays authoritative after later participant failure")
+            }
+        }
+        check(state.events == ["first", "second", "second-joined"] && !service.isTransitioning
+            && !service.isPrivateDataVisible && !PrivateProfileStorage.current.isReadable
+            && service.hasRetainedCaptureStopHandler
+            && service.sourceRevision == sourceRevision && state.preparations == 0 && state.activations == 0,
+            "Failed joined cleanup cannot prepare, activate, publish or reopen a private source")
+        await service.requestCaptureStop()
+        check(state.stopRequests == 1, "Failed cleanup retains the original local capture stop owner")
+        if blockedMarker { try FileManager.default.removeItem(at: markerDirectory) }
+        state.busy = false
+        state.failParticipants = false
+        state.gateParticipants = false
+        try await service.transition(from: nil, to: nil, generation: UUID())
+        check(service.isPrivateDataVisible && PrivateProfileStorage.current.isGuest
+            && PrivateProfileStorage.acceptsNewWork && service.sourceRevision != sourceRevision
+            && state.preparations == 1 && state.activations == 1 && first.calls == 2 && second.calls == 2,
+            "An explicit retry rejoins the same readers and commits guest only after every failure is resolved")
+        await service.requestCaptureStop()
+        check(state.stopRequests == 1 && !service.hasRetainedCaptureStopHandler,
+            "Only a successful source replacement releases the original capture stop owner")
+    }
+
+    @MainActor private static func checkPrivateProfileCancelledJoins(root: URL, context: AccountContext,
+        check: (Bool, String) -> Void) async throws {
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(),
+            legacyRootDirectory: root.appendingPathComponent("cancelled-joins"))
+        PrivateProfileStorage.select(guest)
+        let state = SyntheticProfileState()
+        let service = PrivateProfileService()
+        try service.configure(isBusy: { false }, prepare: { state.preparations += 1 },
+            activate: { _ in state.activations += 1 })
+        let writeGate = SyntheticProfileGate()
+        let participantGate = SyntheticProfileGate()
+        let participant = SyntheticProfileParticipant {
+            if state.gateParticipants { await participantGate.wait() }
+            state.events.append("joined")
+        }
+        service.register(participant)
+        let workID = UUID()
+        let write = Task { await writeGate.wait(); state.writeFinished = true; service.finishPrivateWrite(id: workID) }
+        service.retainPrivateWrite(write, id: workID)
+        await writeGate.waitUntilEntered()
+        let sourceRevision = service.sourceRevision
+        let transition = Task {
+            defer { state.transitionFinished = true }
+            try await service.transition(from: nil, to: context, generation: UUID())
+        }
+        while PrivateProfileStorage.current.isReadable && !state.transitionFinished { await Task.yield() }
+        transition.cancel()
+        check(!state.transitionFinished && !state.writeFinished && !PrivateProfileStorage.current.isReadable,
+            "Cancellation cannot return before the retained original write joins")
+        await writeGate.release()
+        await participantGate.waitUntilEntered()
+        check(!state.transitionFinished && state.writeFinished,
+            "Cancellation cannot skip a participant that ignores cancellation until its reader joins")
+        await participantGate.release()
+        do { try await transition.value; check(false, "A canceled account transition cannot commit a source") }
+        catch { check(error is CancellationError, "Joined cancellation preserves the cancellation failure") }
+        check(state.events == ["joined"] && state.activations == 0 && !service.isPrivateDataVisible
+            && !PrivateProfileStorage.current.isReadable && service.sourceRevision == sourceRevision,
+            "Canceled joined cleanup stays concealed and does not publish or activate the next source")
+        state.gateParticipants = false
+        try await service.transition(from: nil, to: nil, generation: UUID())
+        check(service.isPrivateDataVisible && PrivateProfileStorage.current.isGuest && participant.calls == 2,
+            "A canceled transition permits an explicit joined guest cleanup retry")
     }
 }
 
@@ -80,6 +233,22 @@ extension MeetingSessionStoreCheckpointTests {
     var busy = false
     var preparations = 0
     var activations = 0
+    var failParticipants = true
+    var gateParticipants = true
+    var transitionFinished = false
+    var writeFinished = false
+    var stopRequests = 0
+    var events: [String] = []
+}
+
+@MainActor private final class SyntheticProfileParticipant: PrivateProfileTransitionParticipant {
+    private let action: @MainActor () async throws -> Void
+    private(set) var calls = 0
+    init(action: @escaping @MainActor () async throws -> Void) { self.action = action }
+    func prepareForPrivateProfileTransition() async throws {
+        calls += 1
+        try await action()
+    }
 }
 
 private actor SyntheticProfileGate {

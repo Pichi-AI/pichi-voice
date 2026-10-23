@@ -50,6 +50,7 @@ import Foundation
     func clearCaptureStopHandler(id: UUID) {
         if captureStopHandler?.id == id { captureStopHandler = nil }
     }
+    var hasRetainedCaptureStopHandler: Bool { captureStopHandler != nil }
     func requestCaptureStop() async { await captureStopHandler?.stop() }
     private func joinPrivateWrites() async {
         while !pendingWrites.isEmpty {
@@ -71,15 +72,13 @@ import Foundation
             if to == nil {
                 // Offline logout still clears N1's credentials. Keep the old admitted writer,
                 // hide every private projection and require cleanup retry after capture drains.
+                isTransitioning = true
+                defer { isTransitioning = false }
                 PrivateProfileStorage.closeAdmission()
                 isPrivateDataVisible = false; projectionRevision = UUID()
                 PrivateProfileStorage.conceal(generation: generation)
                 NotificationCenter.default.post(name: Self.willConceal, object: nil)
-                try persistHiddenMarker(generation: generation)
-                await joinPrivateWrites()
-                for participant in participants.compactMap(\.value) {
-                    try await participant.prepareForPrivateProfileTransition()
-                }
+                try await joinConcealedOperations(generation: generation)
             }
             throw AccountError.busy
         }
@@ -89,11 +88,7 @@ import Foundation
         do {
             PrivateProfileStorage.conceal(generation: generation)
             NotificationCenter.default.post(name: Self.willConceal, object: nil)
-            try persistHiddenMarker(generation: generation)
-            await joinPrivateWrites()
-            for participant in participants.compactMap(\.value) {
-                try await participant.prepareForPrivateProfileTransition()
-            }
+            try await joinConcealedOperations(generation: generation)
             try await prepareSources()
             guard !isBusy() else { throw AccountError.busy }
             PrivateProfileStorage.conceal(generation: generation)
@@ -118,6 +113,20 @@ import Foundation
             try? PrivateProfileStorage.persistAccessMarker(PrivateProfileStorage.current)
             throw error
         }
+    }
+
+    /// A failed marker or reader cannot let the credential owner return before other admitted
+    /// work has joined. Preserve the first failure and leave the old scope concealed for retry.
+    private func joinConcealedOperations(generation: UUID) async throws {
+        var firstFailure: (any Error)?
+        do { try persistHiddenMarker(generation: generation) }
+        catch { firstFailure = error }
+        await joinPrivateWrites()
+        for participant in participants.compactMap(\.value) {
+            do { try await participant.prepareForPrivateProfileTransition() }
+            catch { if firstFailure == nil { firstFailure = error } }
+        }
+        if let firstFailure { throw firstFailure }
     }
 
     private func persistHiddenMarker(generation: UUID) throws {
