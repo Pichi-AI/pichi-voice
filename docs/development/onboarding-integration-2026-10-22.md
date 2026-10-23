@@ -37,9 +37,19 @@ Physical acceptance retained 16 frames with 5 unique decoded images, one missed 
 
 ## Remaining delivery gates
 
-The changed macOS onboarding still requires a bounded native visual smoke on its frozen signed copy. PR 46 microphone insertion/cancellation and active-caption movement are recorded separately in the upstream report. A successful candidate installation does not establish final-main installation: after reviewed merges, rebuild and freeze the exact fetched main with its source stamp, repeat the idle guard, preserve current data, install in place and verify ordinary launch/readback.
+The bounded native smoke at frozen desktop source `4c430cda` covered English/light replay through the existing-model and permission screens, practice Skip, AI Skip and location Not now, plus Russian/dark welcome, language and engine cards. Native frames were inspected after each action. This exposed the inherited inactive-window AI Enable contrast issue described below. The corrected button still needs a new signed/frozen native check. PR 46 microphone insertion/cancellation and active-caption movement are recorded separately in the upstream report. A successful candidate installation does not establish final-main installation: after reviewed merges, rebuild and freeze the exact fetched main with its source stamp, repeat the idle guard, preserve current data, install in place and verify ordinary launch/readback.
 
 Cloud account calls, the unavailable proprietary Fluid Intelligence runtime, physical Intel runtime and previously accepted summary semantic limitations are not converted into passes by these local checks. No personal recordings, transcripts, profiles, model weights, private paths, credentials or signing identities are committed.
+
+## October 23 diagnostic and contrast follow-up
+
+Application/test source `2657662ee8ef9114c3fd0ee9535bbdbf8e2a381d` adds a one-line macOS contrast repair and explicit Debug shortcut diagnostics. The AI Enable label previously forced white text inside a shared glass style that correctly chooses primary text for an inactive window. Removing that inner override lets the existing style own active/inactive label color. The ordinary pill-button branch is unchanged. The defect exists in PR 46's source as well and was not introduced by the original onboarding PR.
+
+The actual physical C cancellation trial failed, including duplicated inserted text, and remains a merge blocker. Diagnostics do not change cancellation behavior. Only Debug builds with an explicit `PICHI_SHORTCUT_TRACE_KEY_CODES` selection of at most two physical keys emit event/result metadata. The normal Command+C/X/V audit is unchanged. Missing or malformed selection disables collection; no Unicode text or clipboard payload is included. Receipt is observed before synthesized-event filtering, and a matched cancel callback records its result through the same gate. Release recording is compiled out.
+
+Five native tests were added for exact Control+Option+Shift+C routing, neighboring modifier rejection, opt-in bounds, event filtering, Unicode exclusion and event immutability. Native execution is pending the coordinated build slot. Portable checks passed at `2657662e` in 20.660s, and an independent read-only source/architecture review found no P1/P2 findings in the complete delta from `e8817991`. Neither static review nor these pending tests establish delivery of a physical key event.
+
+The project and all mobile source/resource memberships are unchanged. All five changed Swift files belong only to the desktop app/integration tests and are absent from the explicit mobile target memberships. Previous mobile evidence therefore retains its original `e8817991` provenance; it is not described as a fresh run of this desktop follow-up. Both coding-agent worktrees were archived after recoverable commits, with no ignored artifacts or background resources left behind. The parent keeps the two integration worktrees and immutable evidence while finishing the required runtime gates.
 
 ## Resource ownership and evidence
 
