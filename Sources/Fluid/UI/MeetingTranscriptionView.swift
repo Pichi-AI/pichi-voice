@@ -197,10 +197,110 @@ struct MeetingSetupReadiness: Equatable {
     )
 }
 
+/// Owns only this view's transient payloads and readers, never the capture/coordinator lifetime.
+@MainActor
+private final class MeetingViewPrivateProjection: ObservableObject, PrivateProfileTransitionParticipant {
+    struct Stamp {
+        let profile: PrivateProfileSnapshot
+        let revision: UUID
+        let epoch: UUID
+    }
+
+    @Published var setupDraft = MeetingTranscriptionSetupDraft(settings: .shared)
+    @Published var setupDraftBeforeEditing = MeetingTranscriptionSetupDraft(settings: .shared)
+    @Published var pendingBackupSetupRefresh = false
+    @Published var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
+    @Published var isShowingMeetingSettings = false
+    @Published var actionErrorMessage: String?
+    @Published var selectedHistorySessionID: MeetingSessionID?
+    @Published var resumedSummarySession: MeetingSession?
+    @Published var pendingDeleteSessionID: MeetingSessionID?
+    @Published var pendingDeleteAudioSessionID: MeetingSessionID?
+    @Published var renameSessionID: MeetingSessionID?
+    @Published var renameDraft = ""
+    @Published var searchText = ""
+    private var epoch = UUID()
+    private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var panel: NSSavePanel?
+
+    init() { PrivateProfileService.shared.register(self) }
+
+    func capture() -> Stamp? {
+        let service = PrivateProfileService.shared
+        let profile = PrivateProfileStorage.current
+        guard service.isPrivateDataVisible, !service.isTransitioning,
+              PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(profile) else { return nil }
+        return Stamp(profile: profile, revision: service.projectionRevision, epoch: epoch)
+    }
+
+    func accepts(_ stamp: Stamp?) -> Bool {
+        guard let stamp, !Task.isCancelled else { return false }
+        let service = PrivateProfileService.shared
+        return stamp.epoch == epoch && stamp.revision == service.projectionRevision &&
+            service.isPrivateDataVisible && !service.isTransitioning &&
+            PrivateProfileStorage.acceptsNewWork && PrivateProfileStorage.isReadable(stamp.profile) &&
+            PrivateProfileStorage.current == stamp.profile
+    }
+
+    func run(_ operation: @escaping @MainActor (Stamp) async -> Void) {
+        guard let stamp = capture() else { return }
+        let id = UUID()
+        tasks[id] = Task { @MainActor in
+            defer { self.tasks.removeValue(forKey: id) }
+            guard self.accepts(stamp) else { return }
+            await operation(stamp)
+        }
+    }
+
+    func result(_ operation: @escaping @MainActor (Stamp) async -> String?) async -> String? {
+        guard let stamp = capture() else { return nil }
+        let id = UUID()
+        let task = Task { @MainActor in
+            guard self.accepts(stamp) else { return Optional<String>.none }
+            return await operation(stamp)
+        }
+        // The wrapper propagates cancellation and joins the typed child before source replacement.
+        tasks[id] = Task {
+            await withTaskCancellationHandler { _ = await task.value } onCancel: { task.cancel() }
+        }
+        defer { tasks.removeValue(forKey: id) }
+        let value = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        return accepts(stamp) ? value : nil
+    }
+
+    func retainPanel(_ panel: NSSavePanel) { self.panel = panel }
+    func releasePanel() { panel = nil }
+
+    func clearPayloads() {
+        selectedHistorySessionID = nil; resumedSummarySession = nil
+        pendingDeleteSessionID = nil; pendingDeleteAudioSessionID = nil
+        renameSessionID = nil; renameDraft = ""; searchText = ""; actionErrorMessage = nil
+        isShowingMeetingSettings = false; pendingBackupSetupRefresh = false
+        draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
+        // Clear private titles and unsaved settings without writing into any profile's defaults.
+        setupDraft = MeetingTranscriptionSetupDraft(settings: .shared)
+        setupDraft.title = MeetingTranscriptionSetupDraft.defaultTitle(mode: setupDraft.mode, applicationDisplayName: nil)
+        setupDraft.titleWasEdited = false
+        setupDraftBeforeEditing = setupDraft
+    }
+
+    func prepareForPrivateProfileTransition() async throws {
+        epoch = UUID()
+        panel?.cancel(nil); panel = nil
+        clearPayloads()
+        let owned = Array(tasks.values)
+        for task in owned { task.cancel() }
+        for task in owned { await task.value }
+        clearPayloads()
+    }
+}
+
 struct MeetingTranscriptionView: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
     @ObservedObject var asrService: ASRService
     @ObservedObject private var appServices = AppServices.shared
+    @StateObject private var privateState = MeetingViewPrivateProjection()
+    @ObservedObject private var profileService = PrivateProfileService.shared
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var summaryActivity = MeetingSummaryActivityCoordinator.shared
     let onOpenVoiceEngine: () -> Void
@@ -209,11 +309,7 @@ struct MeetingTranscriptionView: View {
     @Environment(\.locale) private var interfaceLocale
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
-    @State private var setupDraft: MeetingTranscriptionSetupDraft
-    @State private var setupDraftBeforeEditing: MeetingTranscriptionSetupDraft
-    @State private var pendingBackupSetupRefresh = false
     @State private var cachedSystemDefaultMicrophoneUID: String?
-    @State private var isShowingMeetingSettings: Bool
     /// Which tab the settings sheet opens on; set just before it is shown.
     @State private var meetingSettingsInitialSection: MeetingSettingsSection = .recording
     @State private var applications: [MeetingApplicationOption] = []
@@ -222,7 +318,6 @@ struct MeetingTranscriptionView: View {
     @State private var isStarting = false
     @State private var isStopping = false
     @State private var isRetrying = false
-    @State private var actionErrorMessage: String?
     @State private var cachedMicrophoneStatus: AVAuthorizationStatus = .notDetermined
     @State private var cachedScreenCaptureAccess = false
     @State private var cachedModelReady = false
@@ -231,11 +326,6 @@ struct MeetingTranscriptionView: View {
     @State private var cachedStorageStatus: MeetingStorageStatus = .checking
     @State private var cachedStorageReady = false
     @ObservedObject var historySnapshot: MeetingHistorySnapshot
-    @State private var selectedHistorySessionID: MeetingSessionID?
-    @State private var resumedSummarySession: MeetingSession?
-    @State private var pendingDeleteSessionID: MeetingSessionID?
-    @State private var pendingDeleteAudioSessionID: MeetingSessionID?
-    @State private var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
     // Reopen history on each visit; narrow-window selection must not hide it permanently.
     @State private var isMeetingHistoryVisible = true
 
@@ -249,50 +339,55 @@ struct MeetingTranscriptionView: View {
         self.asrService = asrService
         self.historySnapshot = historySnapshot
         self.onOpenVoiceEngine = onOpenVoiceEngine
-
-        let initialDraft = MeetingTranscriptionSetupDraft(settings: .shared)
-        self._setupDraft = State(initialValue: initialDraft)
-        self._setupDraftBeforeEditing = State(initialValue: initialDraft)
-        self._isShowingMeetingSettings = State(initialValue: false)
     }
 
     var body: some View {
+        let projection = self.privateState.capture()
+        let activeSessionID = self.coordinator.activeSession?.id
         VStack(spacing: 0) {
             GeometryReader { geometry in
                 ZStack(alignment: .trailing) {
                     MeetingTranscriptionCanvas(
-                        setupDraft: self.$setupDraft,
+                        setupDraft: self.$privateState.setupDraft,
                         state: self.canvasState,
-                        pendingSpeech: self.coordinator.pendingSpeech,
+                        pendingSpeech: self.profileService.isPrivateDataVisible ? self.coordinator.pendingSpeech : .empty,
                         applications: self.applications,
                         microphones: self.microphones,
                         readiness: self.readiness,
-                        errorMessage: self.actionErrorMessage,
-                        onStart: self.startRecording,
-                        onStop: self.stopAndTranscribe,
-                        onRetrySession: { self.retryProcessingSession(id: $0.id) },
-                        onRestartSession: { self.retryProcessingSession(id: $0.id, restarting: true) },
-                        onRevealAudio: self.revealCapturedAudio,
-                        onRecordAgain: self.recordAgain,
-                        onCopyTranscript: self.copyTranscript,
-                        onExportTranscript: self.exportTranscript,
-                        onReassignSegment: self.reassignSegment,
-                        onEditTranscriptSegment: self.editTranscriptSegment,
-                        onNameUnknownSegment: self.nameUnknownSegment,
-                        onRenameSpeaker: self.renameSpeaker,
-                        onMergeSpeakers: self.mergeSpeakers,
-                        onUndoCorrection: self.undoTranscriptCorrection,
-                        onRenameSession: self.renameMeetingSession,
-                        onAssignSpeakers: self.assignSpeakers,
+                        errorMessage: self.privateState.actionErrorMessage,
+                        onStart: { if self.privateState.accepts(projection) { self.startRecording() } },
+                        onStop: { self.stopAndTranscribe(expectedSessionID: activeSessionID) },
+                        onRetrySession: { if self.privateState.accepts(projection) { self.retryProcessingSession(id: $0.id) } },
+                        onRestartSession: { if self.privateState.accepts(projection) { self.retryProcessingSession(id: $0.id, restarting: true) } },
+                        onRevealAudio: { if self.privateState.accepts(projection) { self.revealCapturedAudio($0) } },
+                        onRecordAgain: { if self.privateState.accepts(projection) { self.recordAgain($0) } },
+                        onCopyTranscript: { if self.privateState.accepts(projection) { self.copyTranscript($0, includeEchoes: $1) } },
+                        onExportTranscript: { if self.privateState.accepts(projection) { self.exportTranscript($0, format: $1, includeEchoes: $2) } },
+                        onReassignSegment: { if self.privateState.accepts(projection) { self.reassignSegment(sessionID: $0, segmentID: $1, to: $2) } },
+                        onEditTranscriptSegment: { sessionID, segmentID, text, revision in
+                            guard self.privateState.accepts(projection) else { return nil }
+                            return await self.editTranscriptSegment(sessionID: sessionID, segmentID: segmentID, text: text, revision: revision)
+                        },
+                        onNameUnknownSegment: { if self.privateState.accepts(projection) { self.nameUnknownSegment(sessionID: $0, segmentID: $1, displayName: $2) } },
+                        onRenameSpeaker: { if self.privateState.accepts(projection) { self.renameSpeaker(sessionID: $0, speakerID: $1, to: $2) } },
+                        onMergeSpeakers: { if self.privateState.accepts(projection) { self.mergeSpeakers(sessionID: $0, source: $1, into: $2) } },
+                        onUndoCorrection: { if self.privateState.accepts(projection) { self.undoTranscriptCorrection(sessionID: $0) } },
+                        onRenameSession: { if self.privateState.accepts(projection) { self.renameMeetingSession(sessionID: $0, to: $1) } },
+                        onAssignSpeakers: { sessionID, names in
+                            guard self.privateState.accepts(projection) else { return nil }
+                            return await self.assignSpeakers(sessionID: sessionID, names: names)
+                        },
                         canUndoCorrection: { self.coordinator.canUndoCorrection(sessionID: $0) },
                         isQuiescent: self.coordinator.isQuiescent && self.summaryActivity.selectionLock == nil,
                         onRepairSetup: self.repairRecordingSetup,
                         onEditSetup: self.openMeetingSettings,
                         isRetrying: self.isRetrying,
-                        onCloseSelection: self.closeCanvasAction,
+                        onCloseSelection: self.closeCanvasAction.map { action in
+                            { if self.privateState.accepts(projection) { action() } }
+                        },
                         summaryASRService: self.asrService,
                         onOpenIntegrations: self.openMeetingIntegrations,
-                        onSetLocalUserSpeaker: self.setLocalUserSpeaker
+                        onSetLocalUserSpeaker: { if self.privateState.accepts(projection) { self.setLocalUserSpeaker(sessionID: $0, speakerID: $1) } }
                     )
                     .padding(.trailing, self.isMeetingHistoryVisible && geometry.size.width >= 900 ? 272 : 0)
                     .allowsHitTesting(!self.isMeetingHistoryVisible || geometry.size.width >= 900)
@@ -309,12 +404,13 @@ struct MeetingTranscriptionView: View {
                             .accessibilityLabel("Close meeting history")
                         }
                         MeetingHistoryInspector(
-                            sessions: self.historySnapshot.sessions,
+                            privateState: self.privateState,
+                            sessions: self.profileService.isPrivateDataVisible ? self.historySnapshot.sessions : [],
                             selectedSessionID: Binding(
-                                get: { self.selectedHistorySessionID },
+                                get: { self.privateState.selectedHistorySessionID },
                                 set: {
-                                    if self.canBrowseMeetingHistory, self.summaryActivity.selectionLock == nil {
-                                        self.selectedHistorySessionID = $0
+                                    if self.privateState.accepts(projection), self.canBrowseMeetingHistory, self.summaryActivity.selectionLock == nil {
+                                        self.privateState.selectedHistorySessionID = $0
                                         if geometry.size.width < 900 { self.isMeetingHistoryVisible = false }
                                     }
                                 }
@@ -322,15 +418,15 @@ struct MeetingTranscriptionView: View {
                             errorMessage: self.historySnapshot.errorMessage,
                             isLoading: !self.historySnapshot.hasLoaded,
                             isQuiescent: self.coordinator.isQuiescent,
-                            onRefresh: { Task { await self.loadMeetingHistory() } },
-                            onRetry: { self.retryProcessingSession(id: $0) },
-                            onRevealAudio: self.revealCapturedAudio,
-                            onExportAudio: self.exportAudio,
-                            onExportTranscript: { self.exportTranscript($0, format: $1, includeEchoes: false) },
-                            onDeleteAudioRequest: { self.pendingDeleteAudioSessionID = $0 },
-                            onDeleteRequest: { self.pendingDeleteSessionID = $0 },
-                            onRename: { self.renameMeetingSession(sessionID: $0, to: $1) },
-                            onRecordAgain: self.recordAgain,
+                            onRefresh: { self.privateState.run { _ in await self.loadMeetingHistory() } },
+                            onRetry: { if self.privateState.accepts(projection) { self.retryProcessingSession(id: $0) } },
+                            onRevealAudio: { if self.privateState.accepts(projection) { self.revealCapturedAudio($0) } },
+                            onExportAudio: { if self.privateState.accepts(projection) { self.exportAudio($0) } },
+                            onExportTranscript: { if self.privateState.accepts(projection) { self.exportTranscript($0, format: $1, includeEchoes: false) } },
+                            onDeleteAudioRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteAudioSessionID = $0 } },
+                            onDeleteRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteSessionID = $0 } },
+                            onRename: { if self.privateState.accepts(projection) { self.renameMeetingSession(sessionID: $0, to: $1) } },
+                            onRecordAgain: { if self.privateState.accepts(projection) { self.recordAgain($0) } },
                             onOpenIntegrations: self.openMeetingIntegrations
                         )
                         .frame(width: min(272, geometry.size.width))
@@ -347,77 +443,54 @@ struct MeetingTranscriptionView: View {
                     }
                 }
             }
-        }
-        .background(self.theme.palette.contentBackground)
-        .fluidPageActions {
-            MeetingTranscriptionHeader(
-                state: self.canvasState,
-                isMeetingHistoryVisible: self.isMeetingHistoryVisible,
-                onNewMeeting: self.startNewMeeting,
-                onOpenMeetingSettings: self.openMeetingSettings,
-                onToggleMeetingHistory: {
-                    let willShowHistory = !self.isMeetingHistoryVisible
-                    withAnimation(self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                        self.isMeetingHistoryVisible.toggle()
-                    }
-                    if willShowHistory, self.historySnapshot.sessions.isEmpty {
-                        Task { await self.loadMeetingHistory() }
+            .opacity(self.profileService.isPrivateDataVisible ? 1 : 0)
+            .allowsHitTesting(self.profileService.isPrivateDataVisible)
+            .disabled(!self.profileService.isPrivateDataVisible)
+            .accessibilityHidden(!self.profileService.isPrivateDataVisible)
+            .overlay {
+                if !self.profileService.isPrivateDataVisible {
+                    // Conceal transcript and history while the admitted recording keeps its
+                    // original writer. Its stop control must survive logout without private text.
+                    switch self.coordinator.state {
+                    case .recording, .recordingDegraded:
+                        Button("Stop & Transcribe") { self.stopAndTranscribe(expectedSessionID: activeSessionID) }
+                            .font(self.theme.typography.body)
+                            .disabled(self.isStopping)
+                    default:
+                        EmptyView()
                     }
                 }
-            )
+            }
+        }
+        .background(self.theme.palette.contentBackground)
+        .onChange(of: self.profileService.projectionRevision) { _, _ in self.privateState.clearPayloads() }
+        .fluidPageActions {
+            if self.profileService.isPrivateDataVisible {
+                MeetingTranscriptionHeader(
+                    state: self.canvasState,
+                    isMeetingHistoryVisible: self.isMeetingHistoryVisible,
+                    onNewMeeting: { if self.privateState.accepts(projection) { self.startNewMeeting() } },
+                    onOpenMeetingSettings: self.openMeetingSettings,
+                    onToggleMeetingHistory: {
+                        let willShowHistory = !self.isMeetingHistoryVisible
+                        withAnimation(self.accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                            self.isMeetingHistoryVisible.toggle()
+                        }
+                        if willShowHistory, self.historySnapshot.sessions.isEmpty {
+                            self.privateState.run { _ in await self.loadMeetingHistory() }
+                        }
+                    }
+                )
+            }
         }
         .clipped()
         .onAppear { self.reattachActiveSummary() }
         .onChange(of: self.appServices.activeMeetingSummarySession?.id) { _, _ in self.reattachActiveSummary() }
         .task {
-            if CPUArchitecture.isAppleSilicon && !self.isRegisteredMeetingProviderSelected {
-                MeetingDiarizationModelStore.shared.prepareInBackground()
-            }
-            async let sources: Void = self.refreshSources(requestPermissions: false)
-            if self.isMeetingHistoryVisible {
-                await self.loadMeetingHistory()
-            }
-            await sources
-        }
-        .onChange(of: self.settings.selectedSpeechModel) { _, _ in
-            if self.settings.meetingRecordingDefaults.languageCode == nil, self.coordinator.isQuiescent {
-                self.setupDraft.languageCode = PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru"
-            }
-            Task { await self.refreshModelReadiness() }
-        }
-        .onChange(of: self.setupDraft.mode) { _, _ in
-            Task { await self.refreshSources(requestPermissions: false) }
-            self.regenerateDefaultTitleIfNeeded()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore)) { _ in
-            self.pendingBackupSetupRefresh = true
-            self.applyPendingBackupSetupRefresh()
-        }
-        .onChange(of: self.canRefreshSetupAfterBackupRestore) { _, canRefresh in
-            if canRefresh { self.applyPendingBackupSetupRefresh() }
-        }
-        .onChange(of: self.setupDraft.selectedApplicationID) { _, _ in
-            self.regenerateDefaultTitleIfNeeded()
-        }
-        .onChange(of: self.setupDraft.applicationAudioScope) { _, _ in
-            self.selectPreferredApplication(from: self.applications.map(\.identity))
-            self.regenerateDefaultTitleIfNeeded()
-        }
-        .onChange(of: self.setupDraft.usesAutomaticApplication) { _, automatic in
-            guard automatic, self.setupDraft.applicationAudioScope == .selectedApplication else { return }
-            self.selectPreferredApplication(from: self.applications.map(\.identity))
-        }
-        .onChange(of: self.appServices.meetingAutomaticTarget) { _, _ in
-            guard self.setupDraft.applicationAudioScope == .selectedApplication, self.setupDraft.usesAutomaticApplication, !self.isShowingMeetingSettings,
-                  self.coordinator.isQuiescent, !self.isStarting else { return }
-            self.selectPreferredApplication(from: self.applications.map(\.identity))
-            Task { await self.refreshSources(requestPermissions: false) }
-        }
-        .onChange(of: self.coordinator.latestCompletedSession?.id) { _, _ in
-            Task { await self.loadMeetingHistory() }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task {
+            self.privateState.run { _ in
+                if CPUArchitecture.isAppleSilicon && !self.isRegisteredMeetingProviderSelected {
+                    MeetingDiarizationModelStore.shared.prepareInBackground()
+                }
                 async let sources: Void = self.refreshSources(requestPermissions: false)
                 if self.isMeetingHistoryVisible {
                     await self.loadMeetingHistory()
@@ -425,10 +498,58 @@ struct MeetingTranscriptionView: View {
                 await sources
             }
         }
-        .sheet(isPresented: self.$isShowingMeetingSettings) {
+        .onChange(of: self.settings.selectedSpeechModel) { _, _ in
+            guard self.privateState.capture() != nil else { return }
+            if self.settings.meetingRecordingDefaults.languageCode == nil, self.coordinator.isQuiescent {
+                self.privateState.setupDraft.languageCode = PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru"
+            }
+            self.privateState.run { _ in await self.refreshModelReadiness() }
+        }
+        .onChange(of: self.privateState.setupDraft.mode) { _, _ in
+            self.privateState.run { _ in await self.refreshSources(requestPermissions: false) }
+            self.regenerateDefaultTitleIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .settingsBackupDidRestore)) { _ in
+            guard self.privateState.capture() != nil else { return }
+            self.privateState.pendingBackupSetupRefresh = true
+            self.applyPendingBackupSetupRefresh()
+        }
+        .onChange(of: self.canRefreshSetupAfterBackupRestore) { _, canRefresh in
+            if canRefresh { self.applyPendingBackupSetupRefresh() }
+        }
+        .onChange(of: self.privateState.setupDraft.selectedApplicationID) { _, _ in
+            self.regenerateDefaultTitleIfNeeded()
+        }
+        .onChange(of: self.privateState.setupDraft.applicationAudioScope) { _, _ in
+            self.selectPreferredApplication(from: self.applications.map(\.identity))
+            self.regenerateDefaultTitleIfNeeded()
+        }
+        .onChange(of: self.privateState.setupDraft.usesAutomaticApplication) { _, automatic in
+            guard automatic, self.privateState.setupDraft.applicationAudioScope == .selectedApplication else { return }
+            self.selectPreferredApplication(from: self.applications.map(\.identity))
+        }
+        .onChange(of: self.appServices.meetingAutomaticTarget) { _, _ in
+            guard self.privateState.setupDraft.applicationAudioScope == .selectedApplication, self.privateState.setupDraft.usesAutomaticApplication, !self.privateState.isShowingMeetingSettings,
+                  self.coordinator.isQuiescent, !self.isStarting else { return }
+            self.selectPreferredApplication(from: self.applications.map(\.identity))
+            self.privateState.run { _ in await self.refreshSources(requestPermissions: false) }
+        }
+        .onChange(of: self.coordinator.latestCompletedSession?.id) { _, _ in
+            self.privateState.run { _ in await self.loadMeetingHistory() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            self.privateState.run { _ in
+                async let sources: Void = self.refreshSources(requestPermissions: false)
+                if self.isMeetingHistoryVisible {
+                    await self.loadMeetingHistory()
+                }
+                await sources
+            }
+        }
+        .sheet(isPresented: self.$privateState.isShowingMeetingSettings) {
             MeetingRecordingSettingsSheet(
-                draft: self.$setupDraft,
-                retentionPolicy: self.$draftMeetingAudioRetentionPolicy,
+                draft: self.$privateState.setupDraft,
+                retentionPolicy: self.$privateState.draftMeetingAudioRetentionPolicy,
                 applications: self.applications,
                 microphones: self.microphones,
                 readiness: self.readiness,
@@ -438,8 +559,8 @@ struct MeetingTranscriptionView: View {
                 onOpenScreenRecordingSettings: { self.openScreenRecordingSettings() },
                 onOpenVoiceEngine: self.onOpenVoiceEngine,
                 onCancel: self.cancelMeetingSettings,
-                onSave: self.saveMeetingSettings,
-                onModelImported: { Task { await self.refreshModelReadiness() } },
+                onSave: { if self.privateState.accepts(projection) { self.saveMeetingSettings() } },
+                onModelImported: { self.privateState.run { _ in await self.refreshModelReadiness() } },
                 initialSection: self.meetingSettingsInitialSection
             )
             .background(FluidSheetOutsideDismiss(onCancel: self.cancelMeetingSettings))
@@ -448,13 +569,13 @@ struct MeetingTranscriptionView: View {
         .alert(
             "Delete Meeting?",
             isPresented: Binding(
-                get: { self.pendingDeleteSessionID != nil },
-                set: { if !$0 { self.pendingDeleteSessionID = nil } }
+                get: { self.privateState.pendingDeleteSessionID != nil },
+                set: { if !$0 { self.privateState.pendingDeleteSessionID = nil } }
             )
         ) {
-            Button("Cancel", role: .cancel) { self.pendingDeleteSessionID = nil }
+            Button("Cancel", role: .cancel) { self.privateState.pendingDeleteSessionID = nil }
             Button("Delete", role: .destructive) {
-                if let id = self.pendingDeleteSessionID { self.deleteSession(id: id) }
+                if self.privateState.accepts(projection), let id = self.privateState.pendingDeleteSessionID { self.deleteSession(id: id) }
             }
         } message: {
             Text("The recording and transcript will be permanently deleted from this Mac.")
@@ -462,13 +583,13 @@ struct MeetingTranscriptionView: View {
         .alert(
             "Delete Audio?",
             isPresented: Binding(
-                get: { self.pendingDeleteAudioSessionID != nil },
-                set: { if !$0 { self.pendingDeleteAudioSessionID = nil } }
+                get: { self.privateState.pendingDeleteAudioSessionID != nil },
+                set: { if !$0 { self.privateState.pendingDeleteAudioSessionID = nil } }
             )
         ) {
-            Button("Cancel", role: .cancel) { self.pendingDeleteAudioSessionID = nil }
+            Button("Cancel", role: .cancel) { self.privateState.pendingDeleteAudioSessionID = nil }
             Button("Delete Audio", role: .destructive) {
-                if let id = self.pendingDeleteAudioSessionID { self.deleteAudio(id: id) }
+                if self.privateState.accepts(projection), let id = self.privateState.pendingDeleteAudioSessionID { self.deleteAudio(id: id) }
             }
         } message: {
             Text("The transcript stays; the audio files are deleted from this Mac.")
@@ -476,6 +597,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private var canvasState: MeetingTranscriptionCanvasState {
+        guard self.profileService.isPrivateDataVisible else { return .setup(isStarting: false, recentSession: nil) }
         // A live summary owns a frozen session even when history has not loaded yet.
         // Reopening Meet must expose its progress and cancellation despite the lock.
         if let active = self.appServices.activeMeetingSummarySession { return .result(active) }
@@ -546,14 +668,15 @@ struct MeetingTranscriptionView: View {
 
     private var selectedHistorySession: MeetingSession? {
         Self.summarySessionSelection(active: self.appServices.activeMeetingSummarySession,
-            selectedID: self.selectedHistorySessionID, history: self.historySnapshot.sessions,
-            resumed: self.resumedSummarySession)
+            selectedID: self.privateState.selectedHistorySessionID, history: self.historySnapshot.sessions,
+            resumed: self.privateState.resumedSummarySession)
     }
 
     private func reattachActiveSummary() {
+        guard self.privateState.capture() != nil else { return }
         guard let session = self.appServices.activeMeetingSummarySession else { return }
-        self.resumedSummarySession = session
-        self.selectedHistorySessionID = session.id
+        self.privateState.resumedSummarySession = session
+        self.privateState.selectedHistorySessionID = session.id
         self.isMeetingHistoryVisible = false
     }
 
@@ -561,10 +684,10 @@ struct MeetingTranscriptionView: View {
     /// meeting's own result/failure returns to the new-meeting screen.
     private var closeCanvasAction: (() -> Void)? {
         guard self.summaryActivity.selectionLock == nil else { return nil }
-        if self.selectedHistorySessionID != nil {
+        if self.privateState.selectedHistorySessionID != nil {
             return {
                 guard self.summaryActivity.selectionLock == nil else { return }
-                self.selectedHistorySessionID = nil
+                self.privateState.selectedHistorySessionID = nil
             }
         }
         switch self.coordinator.state {
@@ -585,17 +708,17 @@ struct MeetingTranscriptionView: View {
     }
 
     private var effectiveCaptureMode: MeetingCaptureMode {
-        self.setupDraft.mode
+        self.privateState.setupDraft.mode
     }
 
     private var readiness: MeetingSetupReadiness {
         let microphoneStatus = self.cachedMicrophoneStatus
         let microphoneReady = microphoneStatus == .authorized
-        let applicationResolved = self.setupDraft.applicationAudioScope == .systemAudio || (try? self.setupDraft.resolvedRecordingApplication(
+        let applicationResolved = self.privateState.setupDraft.applicationAudioScope == .systemAudio || (try? self.privateState.setupDraft.resolvedRecordingApplication(
             from: self.applications.map(\.identity),
             automaticTarget: self.appServices.meetingAutomaticTarget
         )) != nil
-        let meetingAudioReady = self.setupDraft.mode == .inRoom || (applicationResolved && self.cachedScreenCaptureAccess)
+        let meetingAudioReady = self.privateState.setupDraft.mode == .inRoom || (applicationResolved && self.cachedScreenCaptureAccess)
         let modelReady = self.cachedModelReady
         let conflictingActivity = self.asrService.activeExclusiveActivity
         let activityReady = conflictingActivity == nil
@@ -625,10 +748,10 @@ struct MeetingTranscriptionView: View {
             blockingMessage = PichiLocalization.text("Allow microphone access, then refresh sources.")
         } else if self.microphones.isEmpty {
             blockingMessage = PichiLocalization.text("Connect a microphone, then refresh sources.")
-        } else if self.setupDraft.mode == .onlineCall && !self.cachedScreenCaptureAccess {
+        } else if self.privateState.setupDraft.mode == .onlineCall && !self.cachedScreenCaptureAccess {
             blockingMessage = PichiLocalization.text("Allow Screen & System Audio access, then refresh sources.")
-        } else if self.setupDraft.mode == .onlineCall && !applicationResolved {
-            blockingMessage = self.setupDraft.usesAutomaticApplication
+        } else if self.privateState.setupDraft.mode == .onlineCall && !applicationResolved {
+            blockingMessage = self.privateState.setupDraft.usesAutomaticApplication
                 ? PichiLocalization.text("No call was detected. Choose its app under Change, or choose In person for microphone-only recording.")
                 : PichiLocalization.text("The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change.")
         } else if !self.cachedStorageReady {
@@ -661,7 +784,7 @@ struct MeetingTranscriptionView: View {
             activityStatus: conflictingActivity.map { PichiLocalization.format("Wait for %@", PichiLocalization.text($0.displayName)) } ?? PichiLocalization.text("Ready"),
             activityReady: activityReady,
             showMicrophoneSettingsAction: microphoneStatus == .denied,
-            showScreenRecordingSettingsAction: self.setupDraft.mode == .onlineCall && !self.cachedScreenCaptureAccess,
+            showScreenRecordingSettingsAction: self.privateState.setupDraft.mode == .onlineCall && !self.cachedScreenCaptureAccess,
             blockingMessage: blockingMessage
         )
     }
@@ -671,11 +794,12 @@ struct MeetingTranscriptionView: View {
     }
 
     private func refreshSourcesFromUserAction() {
-        Task { await self.refreshSources(requestPermissions: true) }
+        self.privateState.run { _ in await self.refreshSources(requestPermissions: true) }
     }
 
     @MainActor
     private func refreshModelReadiness() async {
+        guard let stamp = self.privateState.capture() else { return }
         self.modelReadinessRevision += 1
         let revision = self.modelReadinessRevision
         let selectedModelID = self.settings.selectedSpeechModel.rawValue
@@ -687,7 +811,7 @@ struct MeetingTranscriptionView: View {
             return (providerReady && (!requiresAppleSilicon || CPUArchitecture.isAppleSilicon), speakerReady)
         }.value
         // An older check must not overwrite an import completion's newer result.
-        guard self.modelReadinessRevision == revision,
+        guard self.privateState.accepts(stamp), self.modelReadinessRevision == revision,
               self.settings.selectedSpeechModel.rawValue == selectedModelID else { return }
         self.cachedModelReady = ready
         self.cachedSpeakerModelReady = speakerReady
@@ -695,33 +819,37 @@ struct MeetingTranscriptionView: View {
 
     @MainActor
     private func refreshSources(requestPermissions: Bool) async {
+        guard let stamp = self.privateState.capture() else { return }
         guard !self.isRefreshingSources else { return }
         self.isRefreshingSources = true
         await self.refreshModelReadiness()
+        guard self.privateState.accepts(stamp) else { self.isRefreshingSources = false; return }
         self.refreshCachedReadiness()
         defer {
             self.refreshCachedReadiness()
             self.isRefreshingSources = false
         }
 
-        self.actionErrorMessage = nil
+        self.privateState.actionErrorMessage = nil
 
         if requestPermissions, AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
             _ = await Self.requestMicrophoneAccess()
+            guard self.privateState.accepts(stamp) else { return }
         }
 
         if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
             let snapshot = await MeetingCaptureSourceCatalog.microphoneSnapshot()
+            guard self.privateState.accepts(stamp) else { return }
             let identities = snapshot.identities
             self.cachedSystemDefaultMicrophoneUID = snapshot.defaultCoreAudioUID
             self.microphones = identities.map(MeetingMicrophoneOption.init)
             self.selectPreferredMicrophone(from: identities, systemDefaultUID: snapshot.defaultCoreAudioUID)
         } else {
             self.microphones = []
-            self.setupDraft.selectedMicrophoneID = nil
+            self.privateState.setupDraft.selectedMicrophoneID = nil
         }
 
-        guard self.setupDraft.mode == .onlineCall else { return }
+        guard self.privateState.setupDraft.mode == .onlineCall else { return }
 
         if requestPermissions, !CGPreflightScreenCaptureAccess() {
             _ = CGRequestScreenCaptureAccess()
@@ -729,33 +857,36 @@ struct MeetingTranscriptionView: View {
 
         guard CGPreflightScreenCaptureAccess() else {
             self.applications = []
-            self.setupDraft.selectedApplicationID = nil
+            self.privateState.setupDraft.selectedApplicationID = nil
             return
         }
 
         do {
             let identities = try await MeetingCaptureSourceCatalog.availableApplications()
+            guard self.privateState.accepts(stamp) else { return }
             self.applications = identities.map(MeetingApplicationOption.init)
             self.selectPreferredApplication(from: identities)
         } catch {
+            guard self.privateState.accepts(stamp) else { return }
             self.applications = []
-            self.setupDraft.selectedApplicationID = nil
-            self.actionErrorMessage = error.localizedDescription
+            self.privateState.setupDraft.selectedApplicationID = nil
+            self.privateState.actionErrorMessage = error.localizedDescription
         }
     }
 
     /// Keeps the title following the selected app/mode until the user types their own.
     private func regenerateDefaultTitleIfNeeded() {
-        guard !self.setupDraft.titleWasEdited else { return }
-        let applicationName = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })?.identity.displayName
-        self.setupDraft.title = MeetingTranscriptionSetupDraft.defaultTitle(
-            mode: self.setupDraft.mode,
+        guard self.privateState.capture() != nil else { return }
+        guard !self.privateState.setupDraft.titleWasEdited else { return }
+        let applicationName = self.applications.first(where: { $0.id == self.privateState.setupDraft.selectedApplicationID })?.identity.displayName
+        self.privateState.setupDraft.title = MeetingTranscriptionSetupDraft.defaultTitle(
+            mode: self.privateState.setupDraft.mode,
             applicationDisplayName: applicationName
         )
     }
 
     private func resetDraftTitleToDefault() {
-        self.setupDraft.titleWasEdited = false
+        self.privateState.setupDraft.titleWasEdited = false
         self.regenerateDefaultTitleIfNeeded()
     }
 
@@ -763,7 +894,7 @@ struct MeetingTranscriptionView: View {
         from identities: [MeetingMicrophoneIdentity],
         systemDefaultUID: String?
     ) {
-        if let selectedID = setupDraft.selectedMicrophoneID,
+        if let selectedID = self.privateState.setupDraft.selectedMicrophoneID,
            identities.contains(where: { $0.captureDeviceID == selectedID })
         {
             return
@@ -781,14 +912,15 @@ struct MeetingTranscriptionView: View {
             preferredInputUID: preferredInputUID,
             systemDefaultCaptureID: nil
         )
-        self.setupDraft.selectedMicrophoneID = selection.deviceID
+        self.privateState.setupDraft.selectedMicrophoneID = selection.deviceID
     }
 
     private func selectPreferredApplication(from identities: [MeetingApplicationIdentity]) {
-        self.setupDraft.refreshApplicationSelection(from: identities, automaticTarget: self.appServices.meetingAutomaticTarget)
+        self.privateState.setupDraft.refreshApplicationSelection(from: identities, automaticTarget: self.appServices.meetingAutomaticTarget)
     }
 
     private func startRecording() {
+        guard let stamp = self.privateState.capture() else { return }
         guard !self.isStarting else { return }
         let readiness = self.readiness
         guard readiness.activityReady,
@@ -796,36 +928,39 @@ struct MeetingTranscriptionView: View {
               readiness.microphoneReady,
               readiness.meetingAudioReady,
               let configuration = self.captureConfiguration,
-              let recordingDefaults = try? self.setupDraft.recordingDefaults(
+              let recordingDefaults = try? self.privateState.setupDraft.recordingDefaults(
                   microphone: configuration.microphone,
                   applications: self.applications.map(\.identity)
               )
         else {
-            self.actionErrorMessage = readiness.blockingMessage.map(PichiLocalization.text) ?? PichiLocalization.text("Finish meeting setup before recording.")
+            self.privateState.actionErrorMessage = readiness.blockingMessage.map(PichiLocalization.text) ?? PichiLocalization.text("Finish meeting setup before recording.")
             return
         }
         self.isStarting = true
-        self.actionErrorMessage = nil
+        self.privateState.actionErrorMessage = nil
         let defaultsBeforeStart = self.settings.meetingRecordingDefaults
 
         Task {
             defer { self.isStarting = false }
+            guard self.privateState.accepts(stamp) else { return }
             do {
                 _ = try await self.coordinator.startRecording(configuration: configuration)
+                guard self.privateState.accepts(stamp) else { return }
                 // A restore or another window's settings change supersedes this older start.
-                if !self.pendingBackupSetupRefresh, self.settings.meetingRecordingDefaults == defaultsBeforeStart {
+                if !self.privateState.pendingBackupSetupRefresh, self.settings.meetingRecordingDefaults == defaultsBeforeStart {
                     self.settings.meetingRecordingDefaults = recordingDefaults
                 }
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
         }
     }
 
     private var captureConfiguration: MeetingCaptureConfiguration? {
-        let title = self.setupDraft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = self.privateState.setupDraft.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty,
-              let microphoneOption = self.microphones.first(where: { $0.id == self.setupDraft.selectedMicrophoneID })
+              let microphoneOption = self.microphones.first(where: { $0.id == self.privateState.setupDraft.selectedMicrophoneID })
         else {
             return nil
         }
@@ -835,49 +970,55 @@ struct MeetingTranscriptionView: View {
 
         let application: MeetingApplicationIdentity?
         do {
-            application = try self.setupDraft.resolvedRecordingApplication(
+            application = try self.privateState.setupDraft.resolvedRecordingApplication(
                 from: self.applications.map(\.identity),
                 automaticTarget: self.appServices.meetingAutomaticTarget
             )
         } catch { return nil }
 
         return MeetingCaptureConfiguration(
-            mode: self.setupDraft.mode,
+            mode: self.privateState.setupDraft.mode,
             title: title,
-            languageCode: self.setupDraft.languageCode,
+            languageCode: self.privateState.setupDraft.languageCode,
             platform: application.map {
                 MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName)
             },
             application: application,
-            applicationAudioScope: self.setupDraft.mode == .onlineCall ? self.setupDraft.applicationAudioScope : nil,
+            applicationAudioScope: self.privateState.setupDraft.mode == .onlineCall ? self.privateState.setupDraft.applicationAudioScope : nil,
             microphone: microphone,
-            timestampDefaultTitle: !self.setupDraft.titleWasEdited
+            timestampDefaultTitle: !self.privateState.setupDraft.titleWasEdited
         )
     }
 
-    private func stopAndTranscribe() {
+    private func stopAndTranscribe(expectedSessionID: MeetingSessionID?) {
+        guard let expectedSessionID, self.coordinator.activeSession?.id == expectedSessionID else { return }
+        let stamp = self.privateState.capture()
         guard !self.isStopping else { return }
         self.isStopping = true
-        self.actionErrorMessage = nil
-        // Stop is an explicit "show me my meeting" — a stale sidebar pick must not hijack the outcome.
-        self.selectedHistorySessionID = nil
+        self.privateState.actionErrorMessage = nil
+        // Stop is an explicit "show me my meeting"; a stale sidebar pick must not hijack the outcome.
+        self.privateState.selectedHistorySessionID = nil
         Task {
             defer { self.isStopping = false }
+            guard self.coordinator.activeSession?.id == expectedSessionID else { return }
             do {
                 _ = try await self.coordinator.stopAndTranscribe()
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
         }
     }
 
     private func retryProcessingSession(id: MeetingSessionID, restarting: Bool = false) {
+        guard let stamp = self.privateState.capture() else { return }
         guard !self.isRetrying, self.summaryActivity.selectionLock == nil else { return }
         self.isRetrying = true
-        self.actionErrorMessage = nil
-        self.selectedHistorySessionID = nil
+        self.privateState.actionErrorMessage = nil
+        self.privateState.selectedHistorySessionID = nil
         Task {
             defer { self.isRetrying = false }
+            guard self.privateState.accepts(stamp) else { return }
             do {
                 if restarting {
                     _ = try await self.coordinator.restartProcessing(sessionID: id)
@@ -885,33 +1026,39 @@ struct MeetingTranscriptionView: View {
                     _ = try await self.coordinator.retryProcessing(sessionID: id)
                 }
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
+            guard self.privateState.accepts(stamp) else { return }
             await self.loadMeetingHistory()
         }
     }
 
     private func reassignSegment(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, to speakerID: SessionSpeakerID) {
-        self.actionErrorMessage = nil
-        Task {
+        self.privateState.actionErrorMessage = nil
+        self.privateState.run { stamp in
             do {
                 _ = try await self.coordinator.reassignSegment(sessionID: sessionID, segmentID: segmentID, to: speakerID)
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
+            guard self.privateState.accepts(stamp) else { return }
             await self.loadMeetingHistory()
         }
     }
 
     private func setLocalUserSpeaker(sessionID: MeetingSessionID, speakerID: SessionSpeakerID?) {
         guard self.coordinator.isQuiescent, self.summaryActivity.selectionLock == nil else { return }
-        self.actionErrorMessage = nil
-        Task {
+        self.privateState.actionErrorMessage = nil
+        self.privateState.run { stamp in
             do {
                 _ = try await self.coordinator.setLocalUserSpeaker(sessionID: sessionID, speakerID: speakerID)
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
+            guard self.privateState.accepts(stamp) else { return }
             await self.loadMeetingHistory()
         }
     }
@@ -921,8 +1068,8 @@ struct MeetingTranscriptionView: View {
         segmentID: MeetingTranscriptSegmentID,
         displayName: String
     ) {
-        self.actionErrorMessage = nil
-        Task {
+        self.privateState.actionErrorMessage = nil
+        self.privateState.run { stamp in
             do {
                 _ = try await self.coordinator.nameUnknownSegment(
                     sessionID: sessionID,
@@ -930,130 +1077,155 @@ struct MeetingTranscriptionView: View {
                     displayName: displayName
                 )
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
+            guard self.privateState.accepts(stamp) else { return }
             await self.loadMeetingHistory()
         }
     }
 
     private func renameSpeaker(sessionID: MeetingSessionID, speakerID: SessionSpeakerID, to displayName: String) {
-        self.actionErrorMessage = nil
-        Task {
+        self.privateState.actionErrorMessage = nil
+        self.privateState.run { stamp in
             do {
                 _ = try await self.coordinator.renameSpeaker(sessionID: sessionID, speakerID: speakerID, to: displayName)
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
+            guard self.privateState.accepts(stamp) else { return }
             await self.loadMeetingHistory()
         }
     }
 
     private func editTranscriptSegment(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, text: String, revision: Int) async -> String? {
-        do {
-            _ = try await self.coordinator.editTranscriptText(sessionID: sessionID, segmentID: segmentID, text: text, expectedRevision: revision)
-            await self.loadMeetingHistory()
-            return nil
-        } catch {
-            return error.localizedDescription
+        await self.privateState.result { stamp in
+            do {
+                _ = try await self.coordinator.editTranscriptText(sessionID: sessionID, segmentID: segmentID, text: text, expectedRevision: revision)
+                guard self.privateState.accepts(stamp) else { return nil }
+                await self.loadMeetingHistory()
+                return nil
+            } catch {
+                return self.privateState.accepts(stamp) ? error.localizedDescription : nil
+            }
         }
     }
 
     private func assignSpeakers(sessionID: MeetingSessionID, names: [SessionSpeakerID: String]) async -> String? {
-        self.actionErrorMessage = nil
-        var errorMessage: String?
-        do {
-            _ = try await self.coordinator.renameSpeakers(sessionID: sessionID, names: names)
-        } catch {
-            errorMessage = error.localizedDescription
+        await self.privateState.result { stamp in
+            self.privateState.actionErrorMessage = nil
+            var errorMessage: String?
+            do {
+                _ = try await self.coordinator.renameSpeakers(sessionID: sessionID, names: names)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            guard self.privateState.accepts(stamp) else { return nil }
+            await self.loadMeetingHistory()
+            return self.privateState.accepts(stamp) ? errorMessage : nil
         }
-        await self.loadMeetingHistory()
-        return errorMessage
     }
 
     private func mergeSpeakers(sessionID: MeetingSessionID, source: SessionSpeakerID, into targetID: SessionSpeakerID) {
-        self.actionErrorMessage = nil
-        Task {
+        self.privateState.actionErrorMessage = nil
+        self.privateState.run { stamp in
             do {
                 _ = try await self.coordinator.mergeSpeakers(sessionID: sessionID, source: source, into: targetID)
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
+            guard self.privateState.accepts(stamp) else { return }
             await self.loadMeetingHistory()
         }
     }
 
     private func renameMeetingSession(sessionID: MeetingSessionID, to title: String) {
-        self.actionErrorMessage = nil
-        Task {
+        self.privateState.actionErrorMessage = nil
+        self.privateState.run { stamp in
             do {
                 _ = try await self.coordinator.renameSession(sessionID: sessionID, to: title)
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
+            guard self.privateState.accepts(stamp) else { return }
             await self.loadMeetingHistory()
         }
     }
 
     private func undoTranscriptCorrection(sessionID: MeetingSessionID) {
-        self.actionErrorMessage = nil
-        Task {
+        self.privateState.actionErrorMessage = nil
+        self.privateState.run { stamp in
             do {
                 _ = try await self.coordinator.undoTranscriptCorrection(sessionID: sessionID)
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
+            guard self.privateState.accepts(stamp) else { return }
             await self.loadMeetingHistory()
         }
     }
 
     private func deleteSession(id: MeetingSessionID) {
         guard self.summaryActivity.selectionLock == nil else { return }
-        self.pendingDeleteSessionID = nil
-        self.actionErrorMessage = nil
-        Task {
+        self.privateState.pendingDeleteSessionID = nil
+        self.privateState.actionErrorMessage = nil
+        self.privateState.run { stamp in
             do {
                 try await self.coordinator.deleteSession(id: id)
-                if self.selectedHistorySessionID == id { self.selectedHistorySessionID = nil }
+                guard self.privateState.accepts(stamp) else { return }
+                if self.privateState.selectedHistorySessionID == id { self.privateState.selectedHistorySessionID = nil }
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
+            guard self.privateState.accepts(stamp) else { return }
             await self.loadMeetingHistory()
         }
     }
 
     private func deleteAudio(id: MeetingSessionID) {
         guard self.summaryActivity.selectionLock == nil else { return }
-        self.pendingDeleteAudioSessionID = nil
-        self.actionErrorMessage = nil
-        Task {
+        self.privateState.pendingDeleteAudioSessionID = nil
+        self.privateState.actionErrorMessage = nil
+        self.privateState.run { stamp in
             do {
                 _ = try await self.coordinator.deleteAudio(sessionID: id)
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
+            guard self.privateState.accepts(stamp) else { return }
             await self.loadMeetingHistory()
         }
     }
 
     private func recordAgain(_ session: MeetingSession) {
+        guard let stamp = self.privateState.capture() else { return }
         guard self.summaryActivity.selectionLock == nil else { return }
         guard let configuration = self.recordAgainConfiguration(from: session) else { return }
-        self.actionErrorMessage = nil
+        self.privateState.actionErrorMessage = nil
         Task {
+            guard self.privateState.accepts(stamp) else { return }
             do {
                 _ = try await self.coordinator.recordAgain(from: session.id, configuration: configuration)
-                self.selectedHistorySessionID = nil
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.selectedHistorySessionID = nil
                 self.resetDraftTitleToDefault()
                 await self.loadMeetingHistory()
             } catch {
-                self.actionErrorMessage = error.localizedDescription
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = error.localizedDescription
             }
         }
     }
 
     private func recordAgainConfiguration(from session: MeetingSession) -> MeetingCaptureConfiguration? {
         guard let microphone = self.resolvedMicrophone(for: session) else {
-            self.actionErrorMessage = PichiLocalization.text("microphone unavailable")
+            self.privateState.actionErrorMessage = PichiLocalization.text("microphone unavailable")
             return nil
         }
         var application: MeetingApplicationIdentity?
@@ -1061,7 +1233,7 @@ struct MeetingTranscriptionView: View {
             guard let bundleIdentifier = session.capturedApplication?.bundleIdentifier,
                   let resolved = self.applications.first(where: { $0.identity.bundleIdentifier == bundleIdentifier })
             else {
-                self.actionErrorMessage = PichiLocalization.text("app not running")
+                self.privateState.actionErrorMessage = PichiLocalization.text("app not running")
                 return nil
             }
             application = resolved.identity
@@ -1095,66 +1267,85 @@ struct MeetingTranscriptionView: View {
     }
 
     private func revealCapturedAudio(_ session: MeetingSession) {
-        Task {
+        self.privateState.run { stamp in
             do {
                 // Reload fresh: the passed-in session may predate a since-completed audio deletion.
-                guard let freshSession = try await MeetingSessionStore.shared.load(id: session.id) else {
-                    self.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
+                let loaded = try await MeetingSessionStore.shared.load(id: session.id)
+                guard self.privateState.accepts(stamp) else { return }
+                guard let freshSession = loaded else {
+                    self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
                     return
                 }
                 guard freshSession.retention.audioDeletedAt == nil,
                       freshSession.hasFinalizedAudio
                 else {
-                    self.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: audio for this recording has been deleted.")
+                    self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: audio for this recording has been deleted.")
                     return
                 }
-                guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id) else {
-                    self.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
+                let resolvedDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id)
+                guard self.privateState.accepts(stamp) else { return }
+                guard let directory = resolvedDirectory else {
+                    self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
                     return
                 }
                 guard let firstAudioURL = MeetingAudioPresentation.firstPlaybackURL(
                     in: freshSession,
                     directory: directory
                 ) else {
-                    self.actionErrorMessage = PichiLocalization.text("Captured audio is still preparing or is no longer available on disk.")
+                    self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio is still preparing or is no longer available on disk.")
                     return
                 }
                 NSWorkspace.shared.activateFileViewerSelecting([firstAudioURL])
             } catch {
-                self.actionErrorMessage = PichiLocalization.format("Captured audio could not be revealed: %@", error.localizedDescription)
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = PichiLocalization.format("Captured audio could not be revealed: %@", error.localizedDescription)
             }
         }
     }
 
     private func exportAudio(_ session: MeetingSession) {
+        guard let projection = self.privateState.capture() else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = PichiLocalization.text("Choose")
-        guard panel.runModal() == .OK, let destinationFolder = panel.url else { return }
+        self.privateState.retainPanel(panel)
+        defer { self.privateState.releasePanel() }
+        guard panel.runModal() == .OK, self.privateState.accepts(projection), let destinationFolder = panel.url else { return }
 
-        self.actionErrorMessage = nil
-        Task {
+        self.privateState.actionErrorMessage = nil
+        self.privateState.run { stamp in
             do {
                 // Reload fresh: the passed-in session may predate a since-completed audio deletion.
-                guard let freshSession = try await MeetingSessionStore.shared.load(id: session.id) else {
-                    self.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
+                let loaded = try await MeetingSessionStore.shared.load(id: session.id)
+                guard self.privateState.accepts(stamp) else { return }
+                guard let freshSession = loaded else {
+                    self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
                     return
                 }
                 guard freshSession.retention.audioDeletedAt == nil,
                       freshSession.hasFinalizedAudio
                 else {
-                    self.actionErrorMessage = PichiLocalization.text("Export failed: audio for this recording has been deleted.")
+                    self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: audio for this recording has been deleted.")
                     return
                 }
-                guard let sourceDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id) else {
-                    self.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
+                let resolvedDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id)
+                guard self.privateState.accepts(stamp) else { return }
+                guard let sourceDirectory = resolvedDirectory else {
+                    self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
                     return
                 }
-                try await Self.exportAudioFiles(of: freshSession, from: sourceDirectory, into: destinationFolder)
+                let profile = stamp.profile
+                // The shared exporter is joined, including its detached worker. Its final move
+                // currently has no cancellation gate; per-file reads still refuse a concealed owner.
+                try await Self.exportAudioFiles(of: freshSession, from: sourceDirectory, into: destinationFolder) { source, destination in
+                    guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.current == profile else { throw CancellationError() }
+                    try FileManager.default.copyItem(at: source, to: destination)
+                }
             } catch {
-                self.actionErrorMessage = PichiLocalization.format("Export failed: %@", error.localizedDescription)
+                guard self.privateState.accepts(stamp) else { return }
+                self.privateState.actionErrorMessage = PichiLocalization.format("Export failed: %@", error.localizedDescription)
             }
         }
     }
@@ -1171,27 +1362,29 @@ struct MeetingTranscriptionView: View {
     }
 
     private func startNewMeeting() {
+        guard self.privateState.capture() != nil else { return }
         guard self.summaryActivity.selectionLock == nil else { return }
         do {
             try self.coordinator.resetForNewMeeting()
-            self.selectedHistorySessionID = nil
+            self.privateState.selectedHistorySessionID = nil
             self.selectPreferredApplication(from: self.applications.map(\.identity))
             self.resetDraftTitleToDefault()
-            self.actionErrorMessage = nil
+            self.privateState.actionErrorMessage = nil
         } catch {
-            self.actionErrorMessage = error.localizedDescription
+            self.privateState.actionErrorMessage = error.localizedDescription
         }
     }
 
     @MainActor
     private func loadMeetingHistory() async {
+        guard let stamp = self.privateState.capture() else { return }
         await self.historySnapshot.refresh()
-        guard self.historySnapshot.errorMessage == nil else { return }
-        if let selectedHistorySessionID,
+        guard self.privateState.accepts(stamp), self.historySnapshot.errorMessage == nil else { return }
+        if let selectedHistorySessionID = self.privateState.selectedHistorySessionID,
            !self.historySnapshot.sessions.contains(where: { $0.id == selectedHistorySessionID }),
-           self.resumedSummarySession?.id != selectedHistorySessionID
+           self.privateState.resumedSummarySession?.id != selectedHistorySessionID
         {
-            self.selectedHistorySessionID = nil
+            self.privateState.selectedHistorySessionID = nil
         }
     }
 
@@ -1199,33 +1392,33 @@ struct MeetingTranscriptionView: View {
     // keep their draft until the existing activity/dismissal events reach a safe point.
     private var canRefreshSetupAfterBackupRestore: Bool {
         self.coordinator.isQuiescent && !self.isStarting && !self.isStopping &&
-            !self.isRetrying && !self.isRefreshingSources && !self.isShowingMeetingSettings
+            !self.isRetrying && !self.isRefreshingSources && !self.privateState.isShowingMeetingSettings
     }
 
     private func applyPendingBackupSetupRefresh() {
-        guard self.pendingBackupSetupRefresh, self.canRefreshSetupAfterBackupRestore else { return }
-        self.pendingBackupSetupRefresh = false
+        guard self.privateState.pendingBackupSetupRefresh, self.canRefreshSetupAfterBackupRestore else { return }
+        self.privateState.pendingBackupSetupRefresh = false
         var restoredDraft = MeetingTranscriptionSetupDraft(settings: .shared)
-        if self.setupDraft.titleWasEdited {
-            restoredDraft.title = self.setupDraft.title
+        if self.privateState.setupDraft.titleWasEdited {
+            restoredDraft.title = self.privateState.setupDraft.title
             restoredDraft.titleWasEdited = true
         }
-        self.setupDraft = restoredDraft
+        self.privateState.setupDraft = restoredDraft
         self.selectPreferredMicrophone(
             from: self.microphones.map(\.identity),
             systemDefaultUID: self.cachedSystemDefaultMicrophoneUID
         )
         self.selectPreferredApplication(from: self.applications.map(\.identity))
         self.regenerateDefaultTitleIfNeeded()
-        self.setupDraftBeforeEditing = self.setupDraft
-        self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
+        self.privateState.setupDraftBeforeEditing = self.privateState.setupDraft
+        self.privateState.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
     }
 
     private func finishRestoredMeetingSettingsIfPending() -> Bool {
-        guard self.pendingBackupSetupRefresh else { return false }
+        guard self.privateState.pendingBackupSetupRefresh else { return false }
         // A backup imported in another window supersedes this older sheet. Closing
         // it must not write its stale language/mode over the restored preferences.
-        self.isShowingMeetingSettings = false
+        self.privateState.isShowingMeetingSettings = false
         self.applyPendingBackupSetupRefresh()
         return true
     }
@@ -1240,12 +1433,13 @@ struct MeetingTranscriptionView: View {
     }
 
     private func openMeetingSettings(section: MeetingSettingsSection) {
+        guard self.privateState.capture() != nil else { return }
         self.meetingSettingsInitialSection = section
-        self.setupDraft.autoDetectEnabled = SettingsStore.shared.meetingAutoDetectEnabled
-        self.setupDraft.browserDetectionEnabled = SettingsStore.shared.meetingAutoDetectBrowserEnabled
-        self.setupDraftBeforeEditing = self.setupDraft
-        self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
-        self.isShowingMeetingSettings = true
+        self.privateState.setupDraft.autoDetectEnabled = SettingsStore.shared.meetingAutoDetectEnabled
+        self.privateState.setupDraft.browserDetectionEnabled = SettingsStore.shared.meetingAutoDetectBrowserEnabled
+        self.privateState.setupDraftBeforeEditing = self.privateState.setupDraft
+        self.privateState.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
+        self.privateState.isShowingMeetingSettings = true
     }
 
     private func repairRecordingSetup() {
@@ -1260,49 +1454,50 @@ struct MeetingTranscriptionView: View {
 
     private func cancelMeetingSettings() {
         if self.finishRestoredMeetingSettingsIfPending() { return }
-        self.setupDraft = self.setupDraftBeforeEditing
-        self.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
-        self.isShowingMeetingSettings = false
-        Task { await self.refreshSources(requestPermissions: false) }
+        self.privateState.setupDraft = self.privateState.setupDraftBeforeEditing
+        self.privateState.draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
+        self.privateState.isShowingMeetingSettings = false
+        self.privateState.run { _ in await self.refreshSources(requestPermissions: false) }
     }
 
     private func saveMeetingSettings() {
         if self.finishRestoredMeetingSettingsIfPending() { return }
-        guard let microphone = self.microphones.first(where: { $0.id == self.setupDraft.selectedMicrophoneID }) else {
-            self.actionErrorMessage = PichiLocalization.text("Choose an available microphone before saving.")
+        guard let microphone = self.microphones.first(where: { $0.id == self.privateState.setupDraft.selectedMicrophoneID }) else {
+            self.privateState.actionErrorMessage = PichiLocalization.text("Choose an available microphone before saving.")
             return
         }
 
         // Persist explicit intent by stable bundle; Automatic clears the saved manual source.
         let settings = SettingsStore.shared
         do {
-            settings.meetingRecordingDefaults = try self.setupDraft.recordingDefaults(
+            settings.meetingRecordingDefaults = try self.privateState.setupDraft.recordingDefaults(
                 microphone: microphone.identity,
                 applications: self.applications.map(\.identity)
             )
         } catch {
-            self.actionErrorMessage = PichiLocalization.text("Choose an available audio source or Automatic before saving.")
+            self.privateState.actionErrorMessage = PichiLocalization.text("Choose an available audio source or Automatic before saving.")
             return
         }
 
         let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
-        settings.meetingAutoDetectEnabled = self.setupDraft.autoDetectEnabled
-        settings.meetingAutoDetectBrowserEnabled = self.setupDraft.browserDetectionEnabled
-        settings.meetingAudioRetentionPolicy = self.draftMeetingAudioRetentionPolicy
-        if previousRetentionPolicy != self.draftMeetingAudioRetentionPolicy {
-            Task { await self.coordinator.sweepExpiredAudio() }
+        settings.meetingAutoDetectEnabled = self.privateState.setupDraft.autoDetectEnabled
+        settings.meetingAutoDetectBrowserEnabled = self.privateState.setupDraft.browserDetectionEnabled
+        settings.meetingAudioRetentionPolicy = self.privateState.draftMeetingAudioRetentionPolicy
+        if previousRetentionPolicy != self.privateState.draftMeetingAudioRetentionPolicy {
+            self.privateState.run { _ in await self.coordinator.sweepExpiredAudio() }
         }
 
-        self.setupDraftBeforeEditing = self.setupDraft
-        self.actionErrorMessage = nil
-        self.isShowingMeetingSettings = false
+        self.privateState.setupDraftBeforeEditing = self.privateState.setupDraft
+        self.privateState.actionErrorMessage = nil
+        self.privateState.isShowingMeetingSettings = false
         self.selectPreferredApplication(from: self.applications.map(\.identity))
         // Import is applied immediately inside the sheet; Save must rediscover the installed
         // model even when no source selection changed and no app-activation event follows.
-        Task { await self.refreshSources(requestPermissions: false) }
+        self.privateState.run { _ in await self.refreshSources(requestPermissions: false) }
     }
 
     private func copyTranscript(_ session: MeetingSession, includeEchoes: Bool) {
+        guard self.privateState.capture() != nil else { return }
         let text = MeetingTranscriptExporter.text(for: session, includeEchoes: includeEchoes)
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
@@ -1310,11 +1505,14 @@ struct MeetingTranscriptionView: View {
     }
 
     private func exportTranscript(_ session: MeetingSession, format: MeetingTranscriptExportFormat, includeEchoes: Bool) {
+        guard let projection = self.privateState.capture() else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(Self.sanitizedExportName(session.displayTitle)).\(format.fileExtension)"
         panel.message = AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps.")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        self.actionErrorMessage = nil
+        self.privateState.retainPanel(panel)
+        defer { self.privateState.releasePanel() }
+        guard panel.runModal() == .OK, self.privateState.accepts(projection), let url = panel.url else { return }
+        self.privateState.actionErrorMessage = nil
         do {
             let data: Data
             switch format {
@@ -1323,7 +1521,7 @@ struct MeetingTranscriptionView: View {
             }
             try data.write(to: url, options: .atomic)
         } catch {
-            self.actionErrorMessage = PichiLocalization.format("Export failed: %@", error.localizedDescription)
+            self.privateState.actionErrorMessage = PichiLocalization.format("Export failed: %@", error.localizedDescription)
         }
     }
 
@@ -1350,7 +1548,7 @@ struct MeetingTranscriptionView: View {
             isGranted: { CGPreflightScreenCaptureAccess() },
             onGranted: { [self] in
                 self.refreshCachedReadiness()
-                Task { await self.refreshSources(requestPermissions: false) }
+                self.privateState.run { _ in await self.refreshSources(requestPermissions: false) }
             }
         )
     }
@@ -1528,6 +1726,9 @@ struct MeetingTranscriptionCanvas: View {
                 MeetingProcessingCanvas(session: session, stage: stage)
             case let .result(session):
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                    DesktopCloudRecordingStatusView(sessionID: session.id,
+                        publication: AppServices.shared.cloudPublication,
+                        account: AppServices.shared.accountSession, profiles: .shared)
                     if let errorMessage, !errorMessage.isEmpty {
                         Label(PichiLocalization.text(errorMessage), systemImage: "exclamationmark.triangle.fill")
                             .font(self.theme.typography.bodySmall)
@@ -1668,6 +1869,7 @@ private struct MeetingHeaderIconButton: View {
 }
 
 private struct MeetingHistoryInspector: View {
+    @ObservedObject var privateState: MeetingViewPrivateProjection
     let sessions: [MeetingSession]
     @Binding var selectedSessionID: MeetingSessionID?
     let errorMessage: String?
@@ -1684,15 +1886,12 @@ private struct MeetingHistoryInspector: View {
     let onRecordAgain: (MeetingSession) -> Void
     var onOpenIntegrations: (() -> Void)? = nil
 
-    @State private var renameSessionID: MeetingSessionID?
-    @State private var renameDraft = ""
 
     @Environment(\.theme) private var theme
-    @State private var searchText = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var filteredSessions: [MeetingSession] {
-        let query = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = self.privateState.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return self.sessions }
         return self.sessions.filter { session in
             session.displayTitle.localizedCaseInsensitiveContains(query) ||
@@ -1724,6 +1923,7 @@ private struct MeetingHistoryInspector: View {
     }
 
     var body: some View {
+        let projection = self.privateState.capture()
         VStack(spacing: 0) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Text("Meetings")
@@ -1746,9 +1946,9 @@ private struct MeetingHistoryInspector: View {
 
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(systemName: "magnifyingglass").foregroundStyle(self.theme.palette.secondaryText)
-                TextField("Search meetings", text: self.$searchText).textFieldStyle(.plain)
-                if !self.searchText.isEmpty {
-                    Button { self.searchText = "" } label: {
+                TextField("Search meetings", text: self.$privateState.searchText).textFieldStyle(.plain)
+                if !self.privateState.searchText.isEmpty {
+                    Button { self.privateState.searchText = "" } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(self.theme.palette.secondaryText)
                     }
                     .buttonStyle(.plain)
@@ -1781,9 +1981,9 @@ private struct MeetingHistoryInspector: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if self.filteredSessions.isEmpty {
                 ContentUnavailableView(
-                    self.searchText.isEmpty ? PichiLocalization.text("No meetings yet") : PichiLocalization.text("No matching meetings"),
-                    systemImage: self.searchText.isEmpty ? "person.2.wave.2" : "magnifyingglass",
-                    description: Text(self.searchText.isEmpty
+                    self.privateState.searchText.isEmpty ? PichiLocalization.text("No meetings yet") : PichiLocalization.text("No matching meetings"),
+                    systemImage: self.privateState.searchText.isEmpty ? "person.2.wave.2" : "magnifyingglass",
+                    description: Text(self.privateState.searchText.isEmpty
                         ? PichiLocalization.text("Completed meetings will appear here.")
                         : PichiLocalization.text("Try a different title, app, or speaker."))
                 )
@@ -1850,20 +2050,20 @@ private struct MeetingHistoryInspector: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background(self.theme.palette.sidebarBackground)
         .alert("Rename Meeting", isPresented: Binding(
-            get: { self.renameSessionID != nil },
-            set: { if !$0 { self.renameSessionID = nil } }
+            get: { self.privateState.renameSessionID != nil },
+            set: { if !$0 { self.privateState.renameSessionID = nil } }
         )) {
-            TextField("Meeting title", text: self.$renameDraft)
-            Button("Cancel", role: .cancel) { self.renameSessionID = nil }
+            TextField("Meeting title", text: self.$privateState.renameDraft)
+            Button("Cancel", role: .cancel) { self.privateState.renameSessionID = nil }
             Button("Rename") {
-                if self.isQuiescent, let id = self.renameSessionID,
+                if self.privateState.accepts(projection), self.isQuiescent, let id = self.privateState.renameSessionID,
                    self.sessions.contains(where: { $0.id == id })
                 {
-                    self.onRename(id, self.renameDraft)
+                    self.onRename(id, self.privateState.renameDraft)
                 }
-                self.renameSessionID = nil
+                self.privateState.renameSessionID = nil
             }
-            .disabled(!self.isQuiescent || self.renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(!self.isQuiescent || self.privateState.renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
@@ -1880,9 +2080,11 @@ private struct MeetingHistoryInspector: View {
 
     @ViewBuilder
     private func contextMenu(for session: MeetingSession) -> some View {
+        let projection = self.privateState.capture()
         Button("Rename…", systemImage: "pencil") {
-            self.renameDraft = session.displayTitle
-            self.renameSessionID = session.id
+            guard self.privateState.accepts(projection) else { return }
+            self.privateState.renameDraft = session.displayTitle
+            self.privateState.renameSessionID = session.id
         }
         .disabled(!self.isQuiescent)
         Divider()

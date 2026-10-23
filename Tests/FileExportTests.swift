@@ -2,6 +2,15 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+// Existing read-only profile seam for export value checks. Write admission and
+// profile transitions are exercised by their separate production-source probes.
+nonisolated struct PrivateProfileSnapshot: Sendable {}
+nonisolated enum PrivateProfileStorage {
+    static let current = PrivateProfileSnapshot()
+    static let acceptsNewWork = true
+    static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool { true }
+}
+
 @MainActor final class DebugLogger {
     static let shared = DebugLogger()
     func debug(_: String, source _: String) {}
@@ -102,11 +111,14 @@ struct FileExportTests {
         entry.customTitle = "Changed after export began"
         precondition(textDocument.defaultFilename == "Обзор 42_transcript.txt")
         precondition(jsonDocument.defaultFilename == "Обзор 42_transcript.json")
-        precondition(textDocument.fileWrapper().regularFileContents == Data(expectedText.utf8))
-        precondition(jsonDocument.fileWrapper().regularFileContents == json)
-        var detachedContents = textDocument.fileWrapper().regularFileContents!
+        let textWrapper = try textDocument.fileWrapper()
+        let jsonWrapper = try jsonDocument.fileWrapper()
+        precondition(textWrapper.regularFileContents == Data(expectedText.utf8))
+        precondition(jsonWrapper.regularFileContents == json)
+        var detachedContents = try textDocument.fileWrapper().regularFileContents!
         detachedContents[0] = 0
-        precondition(textDocument.fileWrapper().regularFileContents == Data(expectedText.utf8), "A caller's byte mutation cannot alter the immutable snapshot")
+        let unchangedWrapper = try textDocument.fileWrapper()
+        precondition(unchangedWrapper.regularFileContents == Data(expectedText.utf8), "A caller's byte mutation cannot alter the immutable snapshot")
         precondition(TranscriptionDocument.writableContentTypes.contains(.plainText) && TranscriptionDocument.writableContentTypes.contains(.json))
 
         let service = FileTranscriptionService()
@@ -118,7 +130,7 @@ struct FileExportTests {
                     let format: FileTranscriptionView.ExportFormat = index.isMultiple(of: 2) ? .text : .json
                     let document = try TranscriptionDocument(entry: entry, format: format)
                     let expected = format == .text ? item.textExportData : try item.jsonExportData()
-                    let wrapper = document.fileWrapper()
+                    let wrapper = try document.fileWrapper()
                     precondition(wrapper.isRegularFile && wrapper.regularFileContents == expected, "Parallel snapshots must never cross-contaminate")
                     let destination = directory.appendingPathComponent("parallel-\(index).\(format.fileExtension)")
                     if format == .text { try service.exportToText(item, to: destination) }

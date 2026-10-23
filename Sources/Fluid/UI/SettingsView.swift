@@ -223,7 +223,8 @@ struct SettingsView: View {
             VStack(spacing: 16) {
                 if self.selectedSection == .general, self.appServices.accountSession.configuration != nil {
                     ThemedCard(style: .standard) {
-                        DesktopAccountView(account: self.appServices.accountSession)
+                        DesktopAccountView(account: self.appServices.accountSession,
+                                           publication: self.appServices.cloudPublication)
                     }
                 }
                 // App Settings Card

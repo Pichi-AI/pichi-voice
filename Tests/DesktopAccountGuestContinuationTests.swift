@@ -3,14 +3,20 @@ import Foundation
 private actor GuestCredentials: AccountCredentialStoring {
     var grant: AccountGrant?
     var failClear = false
+    var blockClear = false
+    var clearGate: CheckedContinuation<Void, Never>?
     init(grant: AccountGrant? = nil) { self.grant = grant }
     func load() -> AccountGrant? { self.grant }
     func save(_ grant: AccountGrant) { self.grant = grant }
-    func clear() throws {
+    func clear() async throws {
+        if self.blockClear { await withCheckedContinuation { self.clearGate = $0 } }
         if self.failClear { throw AccountError.credentialsUnavailable }
         self.grant = nil
     }
     func rejectClear(_ value: Bool) { self.failClear = value }
+    func suspendClear() { self.blockClear = true }
+    var isClearWaiting: Bool { self.clearGate != nil }
+    func releaseClear() { self.blockClear = false; self.clearGate?.resume(); self.clearGate = nil }
 }
 
 @MainActor private final class GuestBrowser: AccountBrowserAuthenticating {
@@ -23,12 +29,18 @@ private actor GuestCredentials: AccountCredentialStoring {
 @MainActor private final class GuestLifecycle: AccountSessionLifecycle {
     var isAccountIsolationReady = true
     var failGuest = false
+    var failAccountTransition = false
+    var isPrivateDataVisible = true
     var guestTransitions = 0
     func transition(from: AccountContext?, to: AccountContext?, generation: UUID) async throws {
+        self.isPrivateDataVisible = false
         if to == nil {
             self.guestTransitions += 1
             if self.failGuest { throw AccountError.invalidState }
+        } else if self.failAccountTransition {
+            throw AccountError.invalidState
         }
+        self.isPrivateDataVisible = true
     }
 }
 
@@ -48,7 +60,10 @@ private actor GuestTransport: AccountTransporting {
     }
     func account(accessToken: String) -> AccountSnapshot {
         .init(schemaVersion: 1, account: .init(id: "synthetic-user", displayName: "Synthetic", email: nil),
-              identity: .init(issuer: "https://identity.example", subject: "synthetic-subject"), organizations: [])
+              identity: .init(issuer: "https://identity.example", subject: "synthetic-subject"),
+              organizations: [.init(id: "synthetic-org", name: "Synthetic", workspaces: [
+                .init(id: "synthetic-workspace", name: "Synthetic", capabilities: [])
+              ])])
     }
     func revoke(refreshToken: String) throws {
         if self.offlineRevocation { throw AccountError.networkUnavailable }
@@ -122,7 +137,36 @@ private struct DesktopAccountGuestContinuationTests {
         let offlineGuest = await DesktopAccountGuestContinuation.prepare(using: offline)
         precondition(offlineGuest != nil && offline.presentationError == .revocationUnavailable,
                      "Offline server revocation does not prevent verified local guest cleanup")
-        for service in [account, restoring, offline] { await service.shutdown() }
+        let rollbackCredentials = GuestCredentials(grant: grant), rollbackLifecycle = GuestLifecycle()
+        let rollback = AccountSessionService(configuration: configuration, browser: GuestBrowser(), transport: GuestTransport(),
+                                             credentials: rollbackCredentials, lifecycle: rollbackLifecycle)
+        await rollback.restore()
+        precondition(DesktopAccountProjection.isVisible(account: rollback, isPrivateDataVisible: true, isTransitioning: false))
+        precondition(!DesktopAccountProjection.isVisible(account: rollback, isPrivateDataVisible: false, isTransitioning: false))
+        precondition(!DesktopAccountProjection.isVisible(account: rollback, isPrivateDataVisible: true, isTransitioning: true))
+        let previousContext = rollback.context
+        rollbackLifecycle.failAccountTransition = true
+        await rollbackCredentials.suspendClear()
+        let failedWorkspace = Task {
+            try? await rollback.selectWorkspace(organizationID: "synthetic-org", workspaceID: "synthetic-workspace")
+        }
+        for _ in 0..<10000 {
+            if await rollbackCredentials.isClearWaiting { break }
+            await Task.yield()
+        }
+        let cleanupIsWaiting = await rollbackCredentials.isClearWaiting
+        precondition(cleanupIsWaiting && rollbackLifecycle.isPrivateDataVisible)
+        precondition(rollback.state == .signedIn && rollback.context == previousContext,
+                     "Regression fixture must retain the old account while guest rollback is visible")
+        precondition(rollback.context?.generation != rollback.generation)
+        precondition(!DesktopAccountProjection.isVisible(account: rollback,
+                      isPrivateDataVisible: rollbackLifecycle.isPrivateDataVisible, isTransitioning: false),
+                     "Previous identity and workspace must stay hidden during awaited cleanup")
+        await rollbackCredentials.releaseClear()
+        await failedWorkspace.value
+        precondition(!DesktopAccountProjection.isVisible(account: rollback, isPrivateDataVisible: true, isTransitioning: false))
+        for service in [account, restoring, offline, rollback] { await service.shutdown() }
         print("PASS: guest continuation joins real account service cleanup/restore, rejects credential/profile failures and stale generations, and permits offline local sign-out")
+        print("PASS: desktop account projection hides concealed/transitioning data and the previous identity during failed workspace rollback cleanup")
     }
 }

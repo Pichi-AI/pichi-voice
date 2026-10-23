@@ -2483,7 +2483,8 @@ private extension OnboardingFlowView {
                             .foregroundStyle(self.theme.palette.primaryText)
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
-                        DesktopAccountView(account: self.accountSession, onActivityChanged: { self.isAccountActionInProgress = $0 })
+                        DesktopAccountView(account: self.accountSession, publication: self.appServices.cloudPublication,
+                                           onActivityChanged: { self.isAccountActionInProgress = $0 })
                             .disabled(self.isLeavingAccountAsGuest)
                             .padding(self.theme.metrics.spacing.lg)
                             .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg))
