@@ -5,4 +5,7 @@ import Combine
 final class TranscriptionHistoryStore {
     static let shared = TranscriptionHistoryStore()
     @Published var entries: [TranscriptionHistoryEntry] = []
+    var entriesPublisher: AnyPublisher<[TranscriptionHistoryEntry], Never> {
+        self.$entries.eraseToAnyPublisher()
+    }
 }

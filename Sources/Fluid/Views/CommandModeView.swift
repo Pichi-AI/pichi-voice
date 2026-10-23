@@ -25,7 +25,7 @@ struct CommandModeView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var onClose: (() -> Void)?
 
-    @AppStorage("CommandHistoryInspectorVisible") private var prefersHistoryVisible = true
+    @AppStorage("CommandHistoryInspectorVisible", store: PrivateProfileDefaults.shared) private var prefersHistoryVisible = true
     @State private var compactHistoryPresented = false
     @State private var drafts = CommandSessionDrafts()
     @State private var showingArchiveLimit = false
@@ -34,6 +34,7 @@ struct CommandModeView: View {
     @State private var selectedModelProviderID = ""
     @State private var selectedModelID = ""
     @State private var ownsASRRecording = false
+    @State private var privateCapture: PrivateDirectDictationCapture?
     @State private var isASRStartPending = false
     @State private var isASRStopPending = false
     @State private var recordingSessionID: String?
@@ -111,6 +112,11 @@ struct CommandModeView: View {
         }
         .onDisappear { self.updatePresentationActivity(false) }
         .onChange(of: self.isActive) { _, active in self.updatePresentationActivity(active) }
+        .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
+            self.showModelPicker = false
+            self.compactHistoryPresented = false
+            self.composerFocused = false
+        }
         .onChange(of: self.compactHistoryPresented) { _, presented in
             if presented { self.composerFocused = false }
         }
@@ -537,9 +543,15 @@ struct CommandModeView: View {
         self.isPresentationActive = active
         self.service.enableNotchOutput = !active
         if active { self.refreshModelCatalog() }
-        guard !active, CommandModeRecordingOwnershipPolicy.shouldStopOnDeactivate(ownsRecording: self.ownsASRRecording, isRunning: self.asr.isRunning) else { return }
+        guard !active, self.privateCapture?.isVisible == true, CommandModeRecordingOwnershipPolicy.shouldStopOnDeactivate(ownsRecording: self.ownsASRRecording, isRunning: self.asr.isRunning) else { return }
         self.ownsASRRecording = false
-        Task { await self.asr.stopWithoutTranscription() }
+        Task {
+            guard let capture = self.privateCapture else { return }
+            _ = await capture.stop()
+            capture.acknowledgeVisibleResult()
+            await capture.complete()
+            if self.privateCapture?.output.id == capture.output.id { self.privateCapture = nil }
+        }
     }
 
     private func toggleRecording() {
@@ -548,30 +560,44 @@ struct CommandModeView: View {
             self.ownsASRRecording = false
             self.isASRStopPending = true
             let sessionID = self.recordingSessionID
+            guard let capture = self.privateCapture else { return }
             self.recordingSessionID = nil
             Task {
                 defer { self.isASRStopPending = false }
-                let command = await self.asr.stop().trimmingCharacters(in: .whitespacesAndNewlines)
-                _ = self.asr.consumeLastCompletedAudioSnapshot()
-                guard !command.isEmpty, let sessionID, self.chatStore.sessions.contains(where: { $0.id == sessionID }) else { return }
-                self.drafts.set(command, for: sessionID)
-                guard self.isPresentationActive, self.service.currentChatID == sessionID,
-                      !self.service.isProcessing, self.service.pendingCommand == nil,
-                      self.settings.commandModeReadinessIssue == nil else { return }
-                self.drafts.set("", for: sessionID)
-                self.followsLatestMessage = true
-                await self.service.processUserCommand(command)
+                let command = await capture.stop().trimmingCharacters(in: .whitespacesAndNewlines)
+                if capture.isVisible, !command.isEmpty, let sessionID,
+                   self.chatStore.sessions.contains(where: { $0.id == sessionID }) {
+                    self.drafts.set(command, for: sessionID)
+                    if self.isPresentationActive, self.service.currentChatID == sessionID,
+                       !self.service.isProcessing, self.service.pendingCommand == nil,
+                       self.settings.commandModeReadinessIssue == nil {
+                        self.drafts.set("", for: sessionID)
+                        self.followsLatestMessage = true
+                        await self.service.processUserCommand(command)
+                    }
+                }
+                capture.acknowledgeVisibleResult()
+                await capture.complete()
+                if self.privateCapture?.output.id == capture.output.id { self.privateCapture = nil }
             }
         } else {
             guard !self.isSubmissionPending, !self.isASRStartPending, !self.isASRStopPending, !self.service.isProcessing,
                   self.service.pendingCommand == nil else { return }
+            guard let capture = try? PrivateDirectDictationCapture(asr: self.asr,
+                savesHistory: self.settings.saveTranscriptionHistory,
+                savesAudio: self.settings.saveAudioWithTranscriptionHistory,
+                transcriptionModel: self.settings.selectedSpeechModel.displayName) else { return }
+            self.privateCapture = capture
             self.isASRStartPending = true
             self.recordingSessionID = self.service.currentChatID
             Task {
                 defer { self.isASRStartPending = false }
-                let outcome = await self.asr.start()
-                self.ownsASRRecording = CommandModeRecordingOwnershipPolicy.ownsRecording(after: outcome, isRunning: self.asr.isRunning)
-                if !self.ownsASRRecording { self.recordingSessionID = nil }
+                let outcome = await capture.start()
+                self.ownsASRRecording = !capture.isFinished && CommandModeRecordingOwnershipPolicy.ownsRecording(after: outcome, isRunning: self.asr.isRunning)
+                if !self.ownsASRRecording {
+                    self.recordingSessionID = nil
+                    if self.privateCapture?.output.id == capture.output.id { self.privateCapture = nil }
+                }
                 if CommandModeRecordingOwnershipPolicy.shouldStopAfterStart(ownsRecording: self.ownsASRRecording, isPresentationActive: self.isPresentationActive) {
                     self.updatePresentationActivity(false)
                 }

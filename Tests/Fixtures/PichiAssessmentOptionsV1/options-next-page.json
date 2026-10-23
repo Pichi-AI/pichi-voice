@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "context": {
+    "accountID": "123",
+    "organizationID": "17",
+    "workspaceID": "9"
+  },
+  "receipt": {
+    "schemaVersion": 1,
+    "importID": "synthetic-import-201",
+    "recordingID": "synthetic-recording-201",
+    "uploadState": "accepted",
+    "analysisState": "needsParticipant"
+  },
+  "participants": [
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "displayName": "Борис Ёлкин"
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "displayName": "Алёна Ёжик"
+    }
+  ],
+  "criteria": {
+    "data": [
+      {
+        "id": "33",
+        "name": "Synthetic criterion 33"
+      }
+    ],
+    "pagination": {
+      "limit": 2,
+      "cursor": "eyJ2ZXJzaW9uIjoxLCJraW5kIjoiY3JpdGVyaWEiLCJ1c2VySWQiOjEyMywib3JnYW5pemF0aW9uSWQiOjE3LCJ3b3Jrc3BhY2VJZCI6OSwiaW1wb3J0SUQiOiJzeW50aGV0aWMtaW1wb3J0LTIwMSIsImlkIjoiMzIifQ",
+      "next_cursor": null,
+      "has_more": false
+    }
+  },
+  "currentAssessment": {
+    "participantID": null,
+    "criteriaIDs": []
+  },
+  "canResolvePending": true
+}

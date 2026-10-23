@@ -9,7 +9,7 @@ enum LocalAPI {
         let port: UInt16
 
         static var current: Configuration {
-            let defaults = UserDefaults.standard
+            let defaults = PrivateProfileDefaults.shared
             let enabled: Bool
             if defaults.object(forKey: "LocalAPIEnabled") == nil {
                 enabled = false

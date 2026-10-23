@@ -7,7 +7,44 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AIEnhancementSettingsViewModel: ObservableObject {
-    private let modelVerifications = ProviderModelVerificationStore()
+    private let modelVerifications: ProviderModelVerificationStore
+    private var profileTransitionCancellable: AnyCancellable?
+    private final class WeakOwner {
+        weak var value: AIEnhancementSettingsViewModel?
+        init(_ value: AIEnhancementSettingsViewModel) { self.value = value }
+    }
+    private static var profileOwners: [WeakOwner] = []
+    private var privateRequests: [UUID: (cancel: () -> Void, join: () async -> Void)] = [:]
+    private var profileRetired = false
+
+    static func joinPrivateProfileRequests() async {
+        let owners = self.profileOwners.compactMap(\.value)
+        self.profileOwners.removeAll { $0.value == nil }
+        let requests = owners.flatMap { Array($0.privateRequests.values) }
+        for request in requests { request.cancel() }
+        for request in requests { await request.join() }
+    }
+
+    private func privateProfileRequest<Value: Sendable>(
+        _ operation: @escaping @MainActor @Sendable () async throws -> Value
+    ) async throws -> Value {
+        guard self.profileIsCurrent else { throw CancellationError() }
+        let id = UUID()
+        let task = Task { try await operation() }
+        self.privateRequests[id] = ({ task.cancel() }, { _ = await task.result })
+        defer { self.privateRequests.removeValue(forKey: id) }
+        let value = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        guard self.profileIsCurrent else { throw CancellationError() }
+        return value
+    }
+
+    var profileIsCurrent: Bool {
+        guard !self.profileRetired else { return false }
+        guard let scoped = self.settings.defaults as? PrivateProfileDefaults else { return true }
+        let profile = scoped.selectedProfile
+        let current = PrivateProfileStorage.current
+        return current.isReadable && profile.id == current.id && profile.generation == current.generation
+    }
     let settings: SettingsStore
     let menuBarManager: MenuBarManager
     let promptTest: DictationPromptTestCoordinator
@@ -147,16 +184,20 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     private var newPromptShortcutCancellable: AnyCancellable?
 
     init(settings: SettingsStore, menuBarManager: MenuBarManager, promptTest: DictationPromptTestCoordinator) {
-        self.settings = settings
+        self.settings = settings.boundToCurrentPrivateProfile()
+        self.modelVerifications = ProviderModelVerificationStore(defaults: self.settings.defaults)
         self.menuBarManager = menuBarManager
         self.promptTest = promptTest
         self.openAIBaseURL = ""
         self.selectedProviderID = settings.selectedProviderID
 
-        self.credentialChangeCancellable = settings.objectWillChange
+        Self.profileOwners.append(WeakOwner(self))
+        self.profileTransitionCancellable = NotificationCenter.default.publisher(for: SettingsStore.privateProfileWillChange)
+            .sink { [weak self] _ in self?.clearForPrivateProfileTransition() }
+        self.credentialChangeCancellable = self.settings.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in
-                guard let self else { return }
+                guard let self, self.profileIsCurrent else { return }
                 self.providerAPIKeyReadiness = self.settings.providerAPIKeyReadiness
                 if self.providerAPIKeyReadiness == .loaded {
                     self.mergeLoadedProviderAPIKeys(self.settings.providerAPIKeys)
@@ -165,7 +206,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.newPromptShortcutCancellable = NotificationCenter.default
             .publisher(for: .newPromptShortcutRecorded)
             .sink { [weak self] notification in
-                guard let self,
+                guard let self, self.profileIsCurrent,
                       let shortcut = notification.userInfo?["shortcut"] as? HotkeyShortcut
                 else { return }
                 var config = self.pendingNewPromptConfiguration ?? SettingsStore.DictationPromptConfiguration()
@@ -179,9 +220,89 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.loadSettings()
     }
 
+    private func clearForPrivateProfileTransition() {
+        self.profileRetired = true
+        self.persistsSelectedProvider = false
+        self.currentProvider = ""
+        self.selectedProviderID = ""
+        self.selectedModel = ""
+        self.managedOriginalKey = nil
+        self.managedProviderID = nil
+        self.knownProviderAPIKeys.removeAll()
+        self.unconfiguredProviderDraftIDs.removeAll()
+        self.modelDiscoveryByProvider.removeAll()
+        self.modelVerifications.clearInMemory()
+        self.appear = false
+        self.openAIBaseURL = ""
+        self.isDictationPromptOff = false
+        self.isEditPromptOff = false
+        self.availableModelsByProvider = [:]
+        self.selectedModelByProvider = [:]
+        self.availableModels = []
+        self.showingAddModel = false
+        self.newModelName = ""
+        self.isFetchingModels = false
+        self.refreshingProviderID = nil
+        self.fetchModelsError = nil
+        self.modelDiscoveryByProvider = [:]
+        self.showingReasoningConfig = false
+        self.editingReasoningParamName = ""
+        self.editingReasoningParamValue = ""
+        self.editingReasoningEnabled = false
+        self.providerAPIKeys = [:]
+        self.providerAPIKeyReadiness = .unavailable
+        self.isSavingProviderCredentials = false
+        self.promptTest.deactivate()
+        self.promptTest.lastTranscriptionText = ""
+        self.promptTest.lastOutputText = ""
+        self.promptTest.lastError = ""
+        self.savedProviders = []
+        self.isTestingConnection = false
+        self.connectionStatus = .unknown
+        self.connectionErrorMessage = ""
+        self.connectionStatusByProvider = [:]
+        self.connectionErrorMessageByProvider = [:]
+        self.fetchedModelsProviders = []
+        self.editingAPIKeyProviders = []
+        self.showHelp = false
+        self.showingSaveProvider = false
+        self.showAPIKeyEditor = false
+        self.showingEditProvider = false
+        self.newProviderName = ""
+        self.newProviderBaseURL = ""
+        self.newProviderApiKey = ""
+        self.newProviderModels = ""
+        self.editProviderName = ""
+        self.editProviderBaseURL = ""
+        self.editProviderApiKey = ""
+        self.showKeychainPermissionAlert = false
+        self.keychainPermissionMessage = ""
+        self.reasoningConfigVersion = 0
+        self.cachedProviderItems = []
+        self.cachedAddedProviderItems = []
+        self.cachedVerifiedProviderItems = []
+        self.cachedUnverifiedProviderItems = []
+        self.dictationPromptProfiles = []
+        self.appPromptBindings = []
+        self.appPromptBindingErrorMessage = ""
+        self.selectedDictationPromptID = nil
+        self.selectedEditPromptID = nil
+        self.promptEditorMode = nil
+        self.draftPromptName = ""
+        self.draftPromptText = ""
+        self.draftPromptMode = .dictate
+        self.draftIncludeContext = false
+        self.promptEditorSessionID = UUID()
+        self.pendingNewPromptConfiguration = nil
+        self.showingDeletePromptConfirm = false
+        self.pendingDeletePromptID = nil
+        self.pendingDeletePromptName = ""
+    }
+
     // MARK: - Load Settings
 
     func loadSettings() {
+        guard self.profileIsCurrent else { return }
         self.settings.reconcilePromptStateAfterProfileChanges()
         self.selectedProviderID = self.settings.selectedProviderID
 
@@ -330,7 +451,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.selectedModelByProvider[key] = selected
         self.settings.availableModelsByProvider = self.availableModelsByProvider
         self.settings.selectedModelByProvider = self.selectedModelByProvider
-        UserDefaults.standard.set(selected, forKey: PrivateAIIntegrationService.selectedModelDefaultsKey)
+        self.settings.defaults.set(selected, forKey: PrivateAIIntegrationService.selectedModelDefaultsKey)
     }
 
     func connectionStatus(for providerID: String) -> AIConnectionStatus {
@@ -399,7 +520,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     func verifyPrivateAIProvider(model: PrivateAIRegisteredModel) async -> Bool {
         let providerID = PrivateAIProviderFeature.shared.providerID
         let key = self.providerKey(for: providerID)
-        guard !self.isTestingConnection else { return false }
+        guard self.profileIsCurrent, !self.isTestingConnection else { return false }
         let currentModel = PrivateAIModelRegistry.model(id: model.id) ?? model
         let configuredModelID = PrivateAIIntegrationService.configuredModelID
         let fingerprint = self.privateAIFingerprint(for: currentModel.id)
@@ -407,7 +528,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         // Navigation may expose another settings owner while verification is awaiting the runtime.
         // Do not publish an old verification into a newly selected model/backend configuration.
         func configurationIsCurrent() -> Bool {
-            PrivateAIIntegrationService.configuredModelID == configuredModelID
+            self.profileIsCurrent && PrivateAIIntegrationService.configuredModelID == configuredModelID
                 && self.privateAIFingerprint(for: currentModel.id) == fingerprint
         }
 
@@ -425,9 +546,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         do {
-            let status = try await PrivateAIIntegrationService.shared.verifyModel(currentModel)
+            let status = try await self.privateProfileRequest { try await PrivateAIIntegrationService.shared.verifyModel(currentModel) }
             guard configurationIsCurrent() else {
-                self.updateConnectionStatus(.unknown, for: providerID)
+                if self.profileIsCurrent { self.updateConnectionStatus(.unknown, for: providerID) }
                 return false
             }
             switch status.state {
@@ -453,7 +574,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
         } catch {
             guard configurationIsCurrent() else {
-                self.updateConnectionStatus(.unknown, for: providerID)
+                if self.profileIsCurrent { self.updateConnectionStatus(.unknown, for: providerID) }
                 return false
             }
             self.updateConnectionStatus(.failed, for: providerID)
@@ -531,7 +652,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             if self.unconfiguredProviderDraftIDs.contains(providerID) {
                 self.managedOriginalKey = ""
             } else {
-                guard await self.ensureKeychainAccessForAPIKeyEdit(), self.selectedProviderID == providerID else { return false }
+                guard await self.ensureKeychainAccessForAPIKeyEdit(), self.profileIsCurrent, self.selectedProviderID == providerID else { return false }
             }
         }
         guard self.managedOriginalKey != nil else { return false }
@@ -541,7 +662,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             != current.trimmingCharacters(in: .whitespacesAndNewlines)
         else { return true }
         guard self.hasProviderAPIKeyDraft(for: providerID) else { return true }
-        guard await self.saveProviderAPIKeys(invalidating: providerID), self.selectedProviderID == providerID else { return false }
+        guard await self.saveProviderAPIKeys(invalidating: providerID), self.profileIsCurrent, self.selectedProviderID == providerID else { return false }
         self.managedOriginalKey = current
         return true
     }
@@ -555,7 +676,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     @discardableResult
     func saveProviderAPIKeys(invalidating providerID: String? = nil, removing providerIDs: [String] = []) async -> Bool {
-        guard !self.isSavingProviderCredentials else { return false }
+        guard self.profileIsCurrent, !self.isSavingProviderCredentials else { return false }
         self.isSavingProviderCredentials = true
         defer { self.isSavingProviderCredentials = false }
         let draft = self.providerAPIKeys
@@ -563,6 +684,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let invalidationTarget = providerID ?? self.selectedProviderID
         do {
             let persisted = try await self.settings.saveProviderAPIKeys(draft, replacing: known, removing: providerIDs)
+            guard self.profileIsCurrent else { return false }
             // Preserve any newer edit made while the OS handled authentication.
             var merged = persisted
             for id in draft.keys where self.providerAPIKeys[id] == nil { merged.removeValue(forKey: id) }
@@ -578,6 +700,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.invalidateVerificationIfNeeded(for: invalidationTarget)
             return true
         } catch {
+            guard self.profileIsCurrent else { return false }
             self.providerAPIKeyReadiness = self.settings.providerAPIKeyReadiness
             self.invalidateVerificationIfNeeded(for: invalidationTarget)
             self.showKeychainPersistenceFailure(error)
@@ -708,24 +831,26 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func handleAPIKeyButtonTapped() async {
         let providerID = self.selectedProviderID
-        guard await self.ensureKeychainAccessForAPIKeyEdit(), self.selectedProviderID == providerID else { return }
+        guard await self.ensureKeychainAccessForAPIKeyEdit(), self.profileIsCurrent, self.selectedProviderID == providerID else { return }
         self.newProviderApiKey = self.providerAPIKey(for: providerID)
         self.showAPIKeyEditor = true
     }
 
     @discardableResult
     func ensureKeychainAccessForAPIKeyEdit() async -> Bool {
-        guard !self.isSavingProviderCredentials else { return false }
+        guard self.profileIsCurrent, !self.isSavingProviderCredentials else { return false }
         self.isSavingProviderCredentials = true
         defer { self.isSavingProviderCredentials = false }
         do {
             let keys = try await self.settings.loadProviderAPIKeysForUserAction()
+            guard self.profileIsCurrent else { return false }
             // Preserve edits made before a cold load; untouched values come from
             // the authoritative aggregate rather than an empty UI snapshot.
             self.mergeLoadedProviderAPIKeys(keys)
             self.providerAPIKeyReadiness = .loaded
             return true
         } catch {
+            guard self.profileIsCurrent else { return false }
             self.providerAPIKeyReadiness = self.settings.providerAPIKeyReadiness
             self.showKeychainPersistenceFailure(error)
             return false
@@ -843,13 +968,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     // MARK: - API Connection Testing
 
     func testAPIConnection() async {
-        guard !self.isSavingProviderCredentials, !self.isTestingConnection else { return }
+        guard self.profileIsCurrent, !self.isSavingProviderCredentials, !self.isTestingConnection else { return }
 
         let providerID = self.selectedProviderID
         let providerName = ModelRepository.shared.displayName(for: providerID)
         let baseURL = self.providerBaseURL(for: providerID)
-        guard await self.prepareProviderCredentials(for: providerID, baseURL: baseURL), self.selectedProviderID == providerID else { return }
+        guard await self.prepareProviderCredentials(for: providerID, baseURL: baseURL), self.profileIsCurrent, self.selectedProviderID == providerID else { return }
         if self.hasProviderAPIKeyDraft(for: providerID), !(await self.saveProviderAPIKeys(invalidating: providerID)) {
+            guard self.profileIsCurrent else { return }
             self.updateConnectionStatus(.failed, for: providerID)
             self.setConnectionError("Could not save API key to Keychain. Grant access and try again.", for: providerID)
             return
@@ -861,6 +987,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         // Validate inputs with specific error messages
         if baseURL.isEmpty {
             await MainActor.run {
+                guard self.profileIsCurrent else { return }
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError("Base URL is required for \(providerName)", for: providerID)
             }
@@ -869,6 +996,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
         if !isLocal, apiKey.isEmpty {
             await MainActor.run {
+                guard self.profileIsCurrent else { return }
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError("API key is required for \(providerName). Enter your API key above.", for: providerID)
             }
@@ -878,6 +1006,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let trimmedModel = self.selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedModel.isEmpty else {
             await MainActor.run {
+                guard self.profileIsCurrent else { return }
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError("Select a model before verifying. You may need to add a model manually for \(providerName).", for: providerID)
             }
@@ -911,14 +1040,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 config.extraParameters["think"] = false
             }
             do {
-                _ = try await LLMClient.shared.call(config)
-                guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                let admittedConfig = config
+                _ = try await self.privateProfileRequest { try await LLMClient.shared.call(admittedConfig) }
+                guard self.profileIsCurrent, verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
                 self.modelVerifications.recordSuccess(verificationIdentity)
                 self.updateConnectionStatus(.success, for: providerID)
                 self.setEditingAPIKey(false, for: providerID)
                 self.storeVerificationFingerprint(for: providerID, baseURL: baseURL, apiKey: apiKey)
             } catch {
-                guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                guard self.profileIsCurrent, verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
                 self.modelVerifications.remove(verificationIdentity)
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError(error.localizedDescription, for: providerID)
@@ -949,6 +1079,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
         guard let url = URL(string: fullURL) else {
             await MainActor.run {
+                guard self.profileIsCurrent else { return }
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError("Invalid Base URL format: '\(endpoint)' could not be parsed as a URL", for: providerID)
             }
@@ -1027,6 +1158,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
         guard let jsonData = try? JSONSerialization.data(withJSONObject: requestDict, options: []) else {
             await MainActor.run {
+                guard self.profileIsCurrent else { return }
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError("Internal error: Failed to create test request payload", for: providerID)
             }
@@ -1036,9 +1168,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
         // Make the request
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let admittedRequest = request
+            let (data, response) = try await self.privateProfileRequest { try await URLSession.shared.data(for: admittedRequest) }
             // A late result must never label a different model or changed credentials.
-            guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+            guard self.profileIsCurrent, verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
 
             if let httpResponse = response as? HTTPURLResponse {
                 let statusCode = httpResponse.statusCode
@@ -1048,7 +1181,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
                 if statusCode >= 200, statusCode < 300, !hasAPIError {
                     await MainActor.run {
-                        guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                guard self.profileIsCurrent else { return }
+                        guard self.profileIsCurrent, verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
                         self.modelVerifications.recordSuccess(verificationIdentity)
                         self.updateConnectionStatus(.success, for: providerID)
                         self.setEditingAPIKey(false, for: providerID)
@@ -1065,7 +1199,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                         source: "AISettingsView"
                     )
                     await MainActor.run {
-                        guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                guard self.profileIsCurrent else { return }
+                        guard self.profileIsCurrent, verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
                         self.modelVerifications.remove(verificationIdentity)
                         self.updateConnectionStatus(.failed, for: providerID)
                         self.setConnectionError(errorMessage, for: providerID)
@@ -1073,14 +1208,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 }
             } else {
                 await MainActor.run {
-                    guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                guard self.profileIsCurrent else { return }
+                    guard self.profileIsCurrent, verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
                     self.modelVerifications.remove(verificationIdentity)
                     self.updateConnectionStatus(.failed, for: providerID)
                     self.setConnectionError("Unexpected response type from server", for: providerID)
                 }
             }
         } catch {
-            guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+            guard self.profileIsCurrent, verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
             self.modelVerifications.remove(verificationIdentity)
             let errorMessage = self.interpretNetworkError(error, providerID: providerID)
             DebugLogger.shared.error(
@@ -1088,7 +1224,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                 source: "AISettingsView"
             )
             await MainActor.run {
-                guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                guard self.profileIsCurrent else { return }
+                guard self.profileIsCurrent, verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
                 self.updateConnectionStatus(.failed, for: providerID)
                 self.setConnectionError(errorMessage, for: providerID)
             }
@@ -1218,12 +1355,12 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     @discardableResult
     func saveEditedProviderAPIKey() async -> Bool {
-        guard !self.isSavingProviderCredentials else { return false }
+        guard self.profileIsCurrent, !self.isSavingProviderCredentials else { return false }
         let providerID = self.selectedProviderID
         let previousAPIKeys = self.providerAPIKeys
         self.updateProviderAPIKey(self.editProviderApiKey, for: providerID)
         guard await self.saveProviderAPIKeys(invalidating: providerID) else {
-            self.providerAPIKeys = previousAPIKeys
+            if self.profileIsCurrent { self.providerAPIKeys = previousAPIKeys }
             return false
         }
         return self.selectedProviderID == providerID
@@ -1231,13 +1368,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     @discardableResult
     func deleteCurrentProvider() async -> Bool {
-        guard !self.isSavingProviderCredentials, !self.isFetchingModels, !self.isTestingConnection,
+        guard self.profileIsCurrent, !self.isSavingProviderCredentials, !self.isFetchingModels, !self.isTestingConnection,
               !self.selectedProviderID.isEmpty,
               self.selectedProviderID != PrivateAIProviderFeature.shared.providerID
         else { return false }
         let selectedID = self.selectedProviderID
         if self.settings.providerAPIKeyReadiness != .loaded, !self.unconfiguredProviderDraftIDs.contains(selectedID) {
-            guard await self.ensureKeychainAccessForAPIKeyEdit(), self.selectedProviderID == selectedID else { return false }
+            guard await self.ensureKeychainAccessForAPIKeyEdit(), self.profileIsCurrent, self.selectedProviderID == selectedID else { return false }
         }
         let deletedProviderID = selectedID
         let deletedDefaultProvider = self.settings.selectedProviderID == deletedProviderID
@@ -1250,14 +1387,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.providerAPIKeys.removeValue(forKey: deletedProviderID)
         }
         if hadPersistedKey, !(await self.saveProviderAPIKeys(invalidating: deletedProviderID, removing: [key, deletedProviderID])) {
-            self.providerAPIKeys = previousKeys
+            if self.profileIsCurrent { self.providerAPIKeys = previousKeys }
             return false
         }
+        guard self.profileIsCurrent else { return false }
         self.unconfiguredProviderDraftIDs.remove(deletedProviderID)
         self.settings.providerConnectionOptions.removeValue(forKey: deletedProviderID)
         self.clearProviderAssignments(for: deletedProviderID)
-        let remainingAddedIDs = (UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? []).filter { $0 != deletedProviderID }
-        UserDefaults.standard.set(remainingAddedIDs, forKey: Self.addedProviderIDsKey)
+        let remainingAddedIDs = (self.settings.defaults.stringArray(forKey: Self.addedProviderIDsKey) ?? []).filter { $0 != deletedProviderID }
+        self.settings.defaults.set(remainingAddedIDs, forKey: Self.addedProviderIDsKey)
         self.savedProviders.removeAll { $0.id == deletedProviderID }
         self.saveSavedProviders()
         self.availableModelsByProvider.removeValue(forKey: key)
@@ -1331,7 +1469,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func fetchModelsForCurrentProvider() async {
-        guard !self.isSavingProviderCredentials, !self.isFetchingModels, !self.isTestingConnection else { return }
+        guard self.profileIsCurrent, !self.isSavingProviderCredentials, !self.isFetchingModels, !self.isTestingConnection else { return }
         let providerID = self.selectedProviderID
         self.refreshingProviderID = providerID
         self.isFetchingModels = true
@@ -1342,10 +1480,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         let baseURL = self.openAIBaseURL
-        guard await self.prepareProviderCredentials(for: providerID, baseURL: baseURL), self.selectedProviderID == providerID else { return }
+        guard await self.prepareProviderCredentials(for: providerID, baseURL: baseURL), self.profileIsCurrent, self.selectedProviderID == providerID else { return }
         let key = self.providerKey(for: providerID)
         let shouldPersistKey = self.hasProviderAPIKeyDraft(for: providerID)
         if shouldPersistKey, !(await self.saveProviderAPIKeys(invalidating: providerID)) {
+            guard self.profileIsCurrent else { return }
             self.fetchModelsError = "Could not save API key to Keychain. Grant access and try again."
             return
         }
@@ -1353,15 +1492,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let connectionOptions = self.settings.providerConnectionOptions[providerID] ?? [:]
 
         do {
-            let models = try await ModelRepository.shared.fetchModels(
-                for: providerID,
-                baseURL: baseURL,
-                apiKey: apiKey, connectionOptions: connectionOptions
-            )
+            let models = try await self.privateProfileRequest {
+                try await ModelRepository.shared.fetchModels(for: providerID, baseURL: baseURL,
+                    apiKey: apiKey, connectionOptions: connectionOptions)
+            }
 
             // Update state on main thread
             await MainActor.run {
-                guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
+                guard self.profileIsCurrent else { return }
+                guard self.profileIsCurrent, self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
                       self.providerAPIKey(for: providerID) == apiKey,
                       (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
                 self.recordModelDiscovery(models, for: providerID, baseURL: baseURL, apiKey: apiKey)
@@ -1397,7 +1536,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
         } catch {
             await MainActor.run {
-                guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
+                guard self.profileIsCurrent else { return }
+                guard self.profileIsCurrent, self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
                       self.providerAPIKey(for: providerID) == apiKey,
                       (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
                 self.modelDiscoveryByProvider.removeValue(forKey: key)
@@ -1466,9 +1606,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func fetchModels(for providerID: String) async {
-        guard !self.isSavingProviderCredentials, !self.isFetchingModels, !self.isTestingConnection else { return }
+        guard self.profileIsCurrent, !self.isSavingProviderCredentials, !self.isFetchingModels, !self.isTestingConnection else { return }
         let baseURL = self.providerBaseURL(for: providerID)
-        guard await self.prepareProviderCredentials(for: providerID, baseURL: baseURL) else { return }
+        guard await self.prepareProviderCredentials(for: providerID, baseURL: baseURL), self.profileIsCurrent else { return }
         let key = self.providerKey(for: providerID)
         let shouldPersistKey = self.hasProviderAPIKeyDraft(for: providerID)
 
@@ -1481,6 +1621,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         if shouldPersistKey, !(await self.saveProviderAPIKeys(invalidating: providerID)) {
+            guard self.profileIsCurrent else { return }
             self.fetchModelsError = "Could not save API key to Keychain. Grant access and try again."
             return
         }
@@ -1489,14 +1630,14 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let connectionOptions = self.settings.providerConnectionOptions[providerID] ?? [:]
 
         do {
-            let models = try await ModelRepository.shared.fetchModels(
-                for: providerID,
-                baseURL: baseURL,
-                apiKey: apiKey, connectionOptions: connectionOptions
-            )
+            let models = try await self.privateProfileRequest {
+                try await ModelRepository.shared.fetchModels(for: providerID, baseURL: baseURL,
+                    apiKey: apiKey, connectionOptions: connectionOptions)
+            }
 
             await MainActor.run {
-                guard self.providerBaseURL(for: providerID) == baseURL,
+                guard self.profileIsCurrent else { return }
+                guard self.profileIsCurrent, self.providerBaseURL(for: providerID) == baseURL,
                       self.providerAPIKey(for: providerID) == apiKey,
                       (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
                 self.recordModelDiscovery(models, for: providerID, baseURL: baseURL, apiKey: apiKey)
@@ -1538,7 +1679,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
         } catch {
             await MainActor.run {
-                guard self.providerBaseURL(for: providerID) == baseURL,
+                guard self.profileIsCurrent else { return }
+                guard self.profileIsCurrent, self.providerBaseURL(for: providerID) == baseURL,
                       self.providerAPIKey(for: providerID) == apiKey,
                       (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
                 self.modelDiscoveryByProvider.removeValue(forKey: key)
@@ -1715,7 +1857,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func saveNewProvider() async {
-        guard !self.isSavingProviderCredentials else { return }
+        guard self.profileIsCurrent, !self.isSavingProviderCredentials else { return }
         let name = self.newProviderName.trimmingCharacters(in: .whitespacesAndNewlines)
         let base = self.newProviderBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let api = self.newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1731,7 +1873,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             let previousAPIKeys = self.providerAPIKeys
             self.providerAPIKeys = updatedAPIKeys
             guard await self.saveProviderAPIKeys(invalidating: newProvider.id) else {
-                self.providerAPIKeys = previousAPIKeys
+                if self.profileIsCurrent { self.providerAPIKeys = previousAPIKeys }
                 return
             }
         }

@@ -53,7 +53,7 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     /// A cheap catalog scan cannot distinguish an old file from an explicitly selected import.
     /// Freeze the chosen descriptor, directory and write ownership before an async operation.
-    private struct Selection: Sendable {
+    struct Selection: Sendable {
         let descriptor: GigaAMModelDescriptor
         let root: URL
         let allowsDownload: Bool
@@ -61,7 +61,7 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     init(directory: URL? = nil, downloadDescriptor: GigaAMModelDescriptor = GigaAMModelCatalog.downloadableModel,
          importDescriptors: [GigaAMModelDescriptor] = GigaAMModelCatalog.models,
-         preferences: UserDefaults = .standard,
+         preferences: UserDefaults = PrivateProfileDefaults.shared,
          environment: [String: String] = ProcessInfo.processInfo.environment,
          download: @escaping Download = { source, maximumBytes, progress in
              try await PichiGigaAMModelStore.downloadArtifact(source, maximumBytes: maximumBytes, progress: progress)
@@ -98,7 +98,7 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
         [self.downloadDescriptor] + self.importDescriptors.filter { $0.id != self.downloadDescriptor.id }
     }
 
-    private func selectedArtifact() throws -> Selection {
+    func selectedArtifact() throws -> Selection {
         let root = self.directory.standardizedFileURL
         // Saved meetings pass the exact installed artifact folder. This explicit reference is
         // independent of the user's current source preference and never starts a download.
@@ -127,10 +127,12 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     // Disk scans in the model picker remain cheap. Full digests are verified off the
     // main actor during import and preparation, never on a SwiftUI render.
-    func modelsExistOnDisk() -> Bool { (try? self.installedModel()) != nil }
+    func modelsExistOnDisk(selection admittedSelection: Selection? = nil) -> Bool {
+        (try? self.installedModel(selection: admittedSelection)) != nil
+    }
 
-    func installedModel() throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
-        let selection = try self.selectedArtifact()
+    func installedModel(selection admittedSelection: Selection? = nil) throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
+        let selection = try admittedSelection ?? self.selectedArtifact()
         guard let directory = Self.locate(selection.descriptor, in: selection.root) else {
             throw GigaAMError.missingModels(selection.root)
         }
@@ -153,9 +155,9 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     /// Preparation only downloads the pinned public source unless a verified import was
     /// explicitly selected. Existing private files are preserved, but do not select themselves.
-    func ensureInstalled(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
+    func ensureInstalled(selection admittedSelection: Selection? = nil, progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
         try Task.checkCancellation()
-        let selection = try self.selectedArtifact()
+        let selection = try admittedSelection ?? self.selectedArtifact()
         let destinationRoot = selection.root
         let descriptor = selection.descriptor
         if let installed = Self.locate(descriptor, in: destinationRoot) { return (descriptor, installed) }
@@ -293,8 +295,8 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     /// Remove only the selected owned artifact, retaining other downloaded/imported choices.
     /// Explicit external overrides are read-only even when they reference the owned path.
-    func removeOwnedModels() throws {
-        let selection = try self.selectedArtifact()
+    func removeOwnedModels(selection admittedSelection: Selection? = nil) throws {
+        let selection = try admittedSelection ?? self.selectedArtifact()
         let directory = selection.root.standardizedFileURL
         guard self.overriddenDirectory == nil,
               self.environment["PICHI_GIGAAM_MODEL_DIR"]?.isEmpty != false,
@@ -331,6 +333,26 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     private var preparationTask: Task<Void, Error>?
     private var lifecycleGeneration = 0
 
+    // MARK: - Admitted transcription configuration
+
+    private var admittedSource: (leaseID: UUID, selection: PichiGigaAMModelStore.Selection?)?
+
+    func beginAdmittedTranscription(leaseID: UUID) throws {
+        if let admitted = self.admittedSource {
+            guard admitted.leaseID == leaseID else { throw CancellationError() }
+            return
+        }
+        let selection = self.expectedModelFingerprint == nil ? try self.modelStore.selectedArtifact() : nil
+        self.admittedSource = (leaseID, selection)
+    }
+
+    func endAdmittedTranscription(leaseID: UUID) {
+        guard self.admittedSource?.leaseID == leaseID else { return }
+        self.admittedSource = nil
+    }
+
+    // MARK: - Provider lifecycle
+
     init(modelStore: PichiGigaAMModelStore = .shared, expectedModelFingerprint: String? = nil) {
         self.modelStore = modelStore
         self.expectedModelFingerprint = expectedModelFingerprint
@@ -348,6 +370,8 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             }
             return
         }
+        let admittedSelection = try self.admittedSource?.selection
+            ?? (self.expectedModelFingerprint == nil ? self.modelStore.selectedArtifact() : nil)
         let runtime = try GigaAMRuntime()
         self.lifecycleGeneration += 1
         let generation = self.lifecycleGeneration
@@ -356,7 +380,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             let model = if let expected = self.expectedModelFingerprint {
                 try self.modelStore.installedModel(matchingFingerprint: expected)
             } else {
-                try await self.modelStore.ensureInstalled(progressHandler: progressHandler)
+                try await self.modelStore.ensureInstalled(selection: admittedSelection, progressHandler: progressHandler)
             }
             let fingerprint = model.descriptor.fingerprint
             if let expected = self.expectedModelFingerprint, expected != fingerprint {
@@ -424,7 +448,9 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         )
     }
 
-    func modelsExistOnDisk() -> Bool { self.modelStore.modelsExistOnDisk() }
+    func modelsExistOnDisk() -> Bool {
+        self.modelStore.modelsExistOnDisk(selection: self.admittedSource?.selection)
+    }
 
     func unloadModel() async {
         // Invalidate ownership before suspending. An old prepare completion cannot
@@ -452,7 +478,10 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     }
 
     func clearCache() async throws {
+        // Recovery belongs to the admitted artifact even if preparation or unload
+        // suspends while the source profile is concealed or its lease is released.
+        let admittedSelection = self.admittedSource?.selection
         await self.unloadModel()
-        try self.modelStore.removeOwnedModels()
+        try self.modelStore.removeOwnedModels(selection: admittedSelection)
     }
 }

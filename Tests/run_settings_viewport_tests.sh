@@ -65,6 +65,7 @@ PY
 xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
     --output-directory "$task_bundle_dir/Contents/Resources" --language en --language ru
 cp Sources/Fluid/Branding/brand-package.json "$task_bundle_dir/Contents/Resources/brand-package.json"
+python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift"
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Branding/AppBrand.swift Sources/Fluid/Branding/BrandPackage.swift \
@@ -75,7 +76,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Theme/Components/ThemedCard.swift \
     Sources/Fluid/Theme/Components/WindowSizingComponents.swift \
     Sources/Fluid/Theme/Components/FluidPageLayout.swift \
-    Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift \
+    Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift \
     "$task_test_dir/Doubles.swift" "$task_test_dir/Scroll.swift" \
     "$task_test_dir/RealContent.swift" Tests/SettingsViewportTests.swift \
     -o "$task_bundle_dir/Contents/MacOS/probe"

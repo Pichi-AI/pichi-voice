@@ -8,7 +8,12 @@ mkdir -p "$task_test_dir"
 # of linking inference/runtime orchestration or launching the application.
 cat > "$task_test_dir/ApplicationSupport.swift" <<'SWIFT'
 import Foundation
-nonisolated enum AppBrand { static let storageNamespace = "unused-standalone-test-namespace" }
+nonisolated enum AppBrand {
+    static let storageNamespace = "unused-standalone-test-namespace"
+    static let keychainService = "unused-standalone-test-credentials"
+    static let applicationSupportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("unused-profile-" + UUID().uuidString)
+}
+nonisolated enum BrandDistribution { struct AccountConfiguration: Sendable {} }
 nonisolated final class DebugLogger: @unchecked Sendable {
     static let shared = DebugLogger()
     func info(_ message: String, source: String) {}
@@ -28,6 +33,32 @@ nonisolated struct MeetingResultSidecarStore {
 }
 SWIFT
 python3 Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift"
+python3 - "$task_test_dir/ContentCaptureCaller.swift" <<'PY_CALLER'
+from pathlib import Path
+import sys
+source = Path("Sources/Fluid/ContentView.swift").read_text()
+stop_start = source.index("    private func stopAndProcessTranscription(")
+stop_end = source.index("    // Keep the ordered dictation delivery path", stop_start)
+cleanup_start = source.index("    private func finishCancelledCaptureOutput(")
+cleanup_end = source.index("    private func stopCaptureWithoutOutputTask(", cleanup_start)
+methods = source[stop_start:stop_end] + source[cleanup_start:cleanup_end]
+methods = methods.replace("private func ", "func ").replace("PrivateProfileService.shared", "profiles")
+Path(sys.argv[1]).write_text("import Foundation\n@MainActor extension ContentCaptureCallerHarness {\n" + methods + "}\n")
+
+# These checks cover the large production processing method's original PCM handoff.
+# Its decoding, UI and delivery dependencies are deliberately not linked into this suite.
+processing_start = source.index("    private func processStoppedTranscription(", stop_end)
+preserve = source.index("        func preserveConcealedCapture() -> Bool", processing_start)
+preserve_call = source.index("        if preserveConcealedCapture() { return }", preserve)
+empty_guard = source.index("        guard transcribedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else", preserve_call)
+assert processing_start < preserve < preserve_call < empty_guard
+assert "privateOutput?.preserveLocalResult(text: transcribedText, audio: audioSnapshot)" in source[preserve:preserve_call]
+assert "if route.savesHistory" in source[preserve:preserve_call]
+empty_end = source.index("        let cancelledAtASRStop", empty_guard)
+assert 'if route.savesHistory { privateOutput?.preserveLocalResult(text: "", audio: audioSnapshot) }' in source[empty_guard:empty_end]
+assert source.index("let audioSnapshot = self.asr.consumeLastCompletedAudioSnapshot()", processing_start) < preserve
+print("Content capture PCM wiring: conceal preservation precedes the empty-result exit; original PCM reaches the existing output owner.")
+PY_CALLER
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O \
     -module-cache-path "$task_test_dir/module-cache" \
     Sources/Fluid/Localization/PichiLocalization.swift \
@@ -36,14 +67,26 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
+    Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationSource.swift \
+    Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    Sources/Fluid/Account/AccountDomain.swift \
+    Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileMeetingStore.swift \
+    Sources/Fluid/Account/PrivateProfileService.swift \
+    Sources/Fluid/Account/PrivateProfileOperationOwner.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift \
     Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     "$task_test_dir/ApplicationSupport.swift" Tests/MeetingSessionStoreCheckpointTests.swift \
     Tests/MeetingTranscriptReadingContractTests.swift \
     Tests/MeetingProtectedTranscriptExportTests.swift \
+    Tests/PichiProtectedPublicationSourceTests.swift \
+    Tests/PrivateProfileMeetingStoreTests.swift \
+    Tests/PrivateProfileLifecycleTests.swift \
+    Tests/PrivateCaptureCallerWiringTests.swift "$task_test_dir/ContentCaptureCaller.swift" \
+    Tests/PrivateProfileOperationOwnerTests.swift \
     -o "$task_test_dir/checkpoint-tests"
 "$task_test_dir/checkpoint-tests" "$task_test_dir/fixtures-$(uuidgen)" "$@"

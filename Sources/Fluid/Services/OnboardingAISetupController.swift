@@ -44,8 +44,35 @@ final class OnboardingAISetupController: ObservableObject {
     private var prefetchAfterRefresh = false
     private var retryTask: Task<Void, Never>?
     private var retryDelay: UInt64 = 30
+    private var privateProfileTransitionPending = false
+
+    /// Stop old activation closures and retry callbacks before preferences change.
+    func prepareForPrivateProfileTransition() async {
+        self.privateProfileTransitionPending = true
+        let admitted = self.task
+        let retry = self.retryTask
+        self.cancel()
+        retry?.cancel()
+        await admitted?.value
+        await retry?.value
+        self.operationID = UUID()
+        self.task = nil
+        self.retryTask = nil
+        self.model = nil
+        self.phase = .checking
+        self.progress = nil
+        self.errorMessage = nil
+        self.introductionFinished = false
+        self.pendingActivation = nil
+        self.activationRequested = false
+        self.isPrefetching = false
+    }
+
+    func privateProfileDidChange() { self.privateProfileTransitionPending = false }
+
 
     func resumePendingDownload() {
+        guard !self.privateProfileTransitionPending else { return }
         guard self.dependencies.readPendingDownload() else { return }
         self.prefetch()
     }
@@ -58,7 +85,7 @@ final class OnboardingAISetupController: ObservableObject {
     }
 
     private func schedulePendingRetry() {
-        guard self.dependencies.readPendingDownload(), self.retryTask == nil else { return }
+        guard !self.privateProfileTransitionPending, self.dependencies.readPendingDownload(), self.retryTask == nil else { return }
         let delay = self.retryDelay
         self.retryDelay = min(delay * 2, 300)
         self.retryTask = Task { @MainActor [weak self] in
@@ -70,7 +97,7 @@ final class OnboardingAISetupController: ObservableObject {
     }
 
     var canEnable: Bool {
-        !self.activationRequested && (self.phase == .offered || (self.isPrefetching && self.phase != .cancelling))
+        !self.privateProfileTransitionPending && !self.activationRequested && (self.phase == .offered || (self.isPrefetching && self.phase != .cancelling))
     }
 
     var showsPreparationProgress: Bool { self.activationRequested && self.isBusy }
@@ -82,6 +109,7 @@ final class OnboardingAISetupController: ObservableObject {
     }
 
     func refresh() {
+        guard !self.privateProfileTransitionPending else { return }
         guard self.task == nil, self.phase != .ready else { return }
         let operation = UUID()
         self.operationID = operation
@@ -113,6 +141,7 @@ final class OnboardingAISetupController: ObservableObject {
 
     /// Downloads the recommended model early without loading it or changing the user's settings.
     func prefetch() {
+        guard !self.privateProfileTransitionPending else { return }
         self.dependencies.writePendingDownload(true)
         self.retryTask?.cancel()
         self.retryTask = nil
@@ -192,6 +221,7 @@ final class OnboardingAISetupController: ObservableObject {
     }
 
     func enable(onReady: @escaping (Model) throws -> Void) {
+        guard !self.privateProfileTransitionPending else { return }
         if self.isPrefetching, self.canEnable {
             self.activationRequested = true
             self.pendingActivation = onReady
@@ -261,6 +291,7 @@ final class OnboardingAISetupController: ObservableObject {
     }
 
     func setUpLater() {
+        guard !self.privateProfileTransitionPending else { return }
         self.leavePage()
         if self.task == nil {
             self.prefetch()

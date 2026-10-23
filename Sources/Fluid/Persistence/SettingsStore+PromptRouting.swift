@@ -11,7 +11,7 @@ extension SettingsStore {
 
     var dictationPromptRoutingScope: PromptRoutingScope {
         get {
-            guard let rawValue = UserDefaults.standard.string(forKey: PromptRoutingKeys.dictation),
+            guard let rawValue = self.defaults.string(forKey: PromptRoutingKeys.dictation),
                   let scope = PromptRoutingScope(rawValue: rawValue)
             else {
                 return .allApps
@@ -20,13 +20,13 @@ extension SettingsStore {
         }
         set {
             objectWillChange.send()
-            UserDefaults.standard.set(newValue.rawValue, forKey: PromptRoutingKeys.dictation)
+            self.defaults.set(newValue.rawValue, forKey: PromptRoutingKeys.dictation)
         }
     }
 
     var editPromptRoutingScope: PromptRoutingScope {
         get {
-            guard let rawValue = UserDefaults.standard.string(forKey: PromptRoutingKeys.edit),
+            guard let rawValue = self.defaults.string(forKey: PromptRoutingKeys.edit),
                   let scope = PromptRoutingScope(rawValue: rawValue)
             else {
                 return .allApps
@@ -35,7 +35,7 @@ extension SettingsStore {
         }
         set {
             objectWillChange.send()
-            UserDefaults.standard.set(newValue.rawValue, forKey: PromptRoutingKeys.edit)
+            self.defaults.set(newValue.rawValue, forKey: PromptRoutingKeys.edit)
         }
     }
 

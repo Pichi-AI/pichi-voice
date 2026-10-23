@@ -19,7 +19,7 @@ struct MeetingSummaryView: View {
     var asrService: ASRService? = nil
     var isQuiescent = true
     @Environment(\.theme) private var theme
-    @AppStorage("MeetingSummaryWorkflow") private var workflow = MeetingSummaryWorkflow.grounded
+    @AppStorage("MeetingSummaryWorkflow", store: PrivateProfileDefaults.shared) private var workflow = MeetingSummaryWorkflow.grounded
     @StateObject private var templateController = MeetingSummaryController()
     @ObservedObject private var groundedController: PichiMeetingSummaryController
 

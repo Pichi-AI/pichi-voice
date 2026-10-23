@@ -157,19 +157,45 @@ nonisolated enum FluidServeMeetings {
             .appendingPathComponent("Meetings", isDirectory: true)
     }
 
+    /// This increment serves legacy guest data only. Missing marker preserves existing guest
+    /// installations; every malformed, concealed or account marker denies all private reads.
+    /// The bounded no-follow reader is shared with meeting manifests.
+    static func guestAccessToken(root: URL) throws -> Data {
+        struct Marker: Decodable {
+            let schemaVersion: Int
+            let profileID: String
+            let generation: UUID
+            let isReadable: Bool
+        }
+        let legacy: FluidServeFileBoundary.Directory
+        do { legacy = try .open(root.deletingLastPathComponent()) }
+        catch FluidServeFileBoundary.Rejection.missing { return Data() }
+        let profiles: FluidServeFileBoundary.Directory
+        do { profiles = try legacy.child("Profiles") }
+        catch FluidServeFileBoundary.Rejection.missing { return Data() }
+        guard let file = try profiles.read("active-profile-v1.json", maximumBytes: 4_096) else { return Data() }
+        guard let marker = try? JSONDecoder().decode(Marker.self, from: file.data),
+              marker.schemaVersion == 1, marker.profileID == "guest", marker.isReadable else {
+            throw ReadError.accessOff
+        }
+        return file.data
+    }
+
     /// Reads the switch the way the app itself sees it (including a value an administrator has forced),
     /// but through CFPreferences rather than `UserDefaults`, which would also honour a
     /// `-FluidServeMeetingAccessEnabled YES` argument and let a caller switch it on.
     /// This is a consent switch, not a lock: anything running as the user could read the files anyway.
     static func isAccessEnabled(bundleIdentifier: String) -> Bool {
-        (CFPreferencesCopyAppValue(self.accessDefaultsKey as CFString, bundleIdentifier as CFString) as? Bool) ?? false
+        guard (try? self.guestAccessToken(root: self.defaultRoot(storageNamespace: bundleIdentifier))) != nil else { return false }
+        return (CFPreferencesCopyAppValue(self.accessDefaultsKey as CFString, bundleIdentifier as CFString) as? Bool) ?? false
     }
 
     static let customSummaryPromptDefaultsKey = "MeetingSummaryCustomPrompt"
 
     /// The prompt in the app's custom-summary box, needed to tell whether a saved custom summary is still the current one.
     static func customSummaryPrompt(bundleIdentifier: String) -> String {
-        (CFPreferencesCopyAppValue(self.customSummaryPromptDefaultsKey as CFString, bundleIdentifier as CFString) as? String) ?? ""
+        guard (try? self.guestAccessToken(root: self.defaultRoot(storageNamespace: bundleIdentifier))) != nil else { return "" }
+        return (CFPreferencesCopyAppValue(self.customSummaryPromptDefaultsKey as CFString, bundleIdentifier as CFString) as? String) ?? ""
     }
 
     /// This Mac's time zone as the app sees it. A `TZ` variable in an agent's shell must not change
@@ -193,6 +219,7 @@ nonisolated enum FluidServeMeetings {
     }
 
     static func checkedEntries(root: URL, since: Date? = nil) throws -> [Entry] {
+        _ = try self.guestAccessToken(root: root)
         let owned: FluidServeFileBoundary.Directory
         do { owned = try .open(root) }
         catch FluidServeFileBoundary.Rejection.missing { return [] }
@@ -240,6 +267,7 @@ nonisolated enum FluidServeMeetings {
     }
 
     static func checkedSavedSummaries(for entry: Entry, customPrompt: String = "") throws -> [SavedSummary] {
+        _ = try self.guestAccessToken(root: entry.ownedRoot)
         guard entry.directory.deletingLastPathComponent().pathComponents == entry.ownedRoot.pathComponents,
               UUID(uuidString: entry.directory.lastPathComponent) == entry.meeting.id else { throw FluidServeFileBoundary.Rejection.unsafe }
         let root = try FluidServeFileBoundary.Directory.open(entry.ownedRoot)

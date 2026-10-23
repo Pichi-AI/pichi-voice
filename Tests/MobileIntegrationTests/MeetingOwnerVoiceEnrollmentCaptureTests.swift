@@ -96,6 +96,42 @@ final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
     }
 
     @MainActor
+    func testBusyConcealRetainsEnrollmentUntilRootStopJoins() async throws {
+        let original = PrivateProfileStorage.current
+        defer { PrivateProfileStorage.select(original) }
+        let residency = MeetingModelResidencyCoordinator()
+        let idleOwner = MeetingIdlePreparedResourceOwner(residency: residency)
+        let resource = EnrollmentIdleRetirementProbe()
+        let prepared = try await idleOwner.prepare(identity: resource.configurationIdentity) { resource }
+        let token = try XCTUnwrap(prepared)
+        let audio = EnrollmentAudioLeaseProbe(residency: residency)
+        var captureConstructions = 0
+        let model = MeetingOwnerVoiceEnrollmentModel(audioArbiter: audio, modelResidency: residency,
+            makeCapture: { captureConstructions += 1; throw EnrollmentCaptureProbeFailure.unexpectedHardware })
+        model.start(microphone: .init(captureDeviceID: "synthetic-unopened", displayName: "Synthetic"))
+        XCTAssertTrue(PrivateProfileService.shared.hasRetainedCaptureStopHandler)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !(await resource.cleanupStarted), ContinuousClock.now < deadline { await Task.yield() }
+        let cleanupStarted = await resource.cleanupStarted
+        XCTAssertTrue(cleanupStarted)
+        PrivateProfileStorage.conceal(generation: UUID())
+        try await model.prepareForPrivateProfileTransition()
+        XCTAssertEqual(model.phase, .preparing)
+        XCTAssertEqual(audio.releases, 0, "Logout retains the original enrollment owner")
+        let stop = Task { await PrivateProfileService.shared.requestCaptureStop() }
+        await Task.yield()
+        await resource.finishCleanup()
+        await stop.value
+        await idleOwner.cancel(token)
+        XCTAssertEqual(captureConstructions, 0, "Root Stop while preparing never opens microphone hardware")
+        XCTAssertEqual(audio.releases, 1)
+        XCTAssertFalse(PrivateProfileService.shared.hasRetainedCaptureStopHandler)
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertFalse(model.hasProfile)
+        XCTAssertNil(model.error)
+    }
+
+    @MainActor
     private func waitForEnrollmentCleanup(_ model: MeetingOwnerVoiceEnrollmentModel) async {
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         while model.isBusy, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(2)) }

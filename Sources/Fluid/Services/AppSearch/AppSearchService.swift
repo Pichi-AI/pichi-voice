@@ -83,12 +83,17 @@ final class AppSearchService: ObservableObject {
     @Published private(set) var isSearching = false
     @Published private(set) var searchError: String?
 
-    private let index: SearchIndex
+    private var index: SearchIndex
+    private var profile = PrivateProfileStorage.current
     private let prepareIndex: @MainActor () async throws -> Void
     private let retryPreparation: @MainActor () -> Void
     private let performSearch: (@MainActor (String) async -> [AppSearchGroup])?
     private let readVocabulary: @Sendable () async throws -> [ParakeetVocabularyStore.VocabularyConfig.Term]
     private var task: Task<Void, Never>?
+    private var activeTasks: [UUID: Task<Void, Never>] = [:]
+    private var activeSearches = 0
+    private var searchJoinWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationTasks: [UUID: Task<Void, Never>] = [:]
     private var token: ZeppelinCancellationToken?
     private var tokenID: UUID?
     private var chatAvailabilitySubscription: AnyCancellable?
@@ -113,6 +118,10 @@ final class AppSearchService: ObservableObject {
         self.retryPreparation = retryPreparation
         self.performSearch = performSearch
         self.readVocabulary = readVocabulary
+        self.subscribe(notificationCenter: notificationCenter)
+    }
+
+    private func subscribe(notificationCenter: NotificationCenter = .default) {
         self.vocabularySubscription = notificationCenter.publisher(for: .parakeetVocabularyDidChange)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -141,7 +150,7 @@ final class AppSearchService: ObservableObject {
 
     /// Explicit retries may reload failed history. Ordinary keystrokes never do.
     func retry() {
-        guard !self.stopped else { return }
+        guard self.acceptsProfile else { return }
         self.retryPreparation()
         self.schedule()
     }
@@ -150,21 +159,60 @@ final class AppSearchService: ObservableObject {
         self.stopped = true
         self.task?.cancel()
         self.task = nil
-        if let token = self.token { Task { try? await token.cancel() } }
+        if let token = self.token { self.cancel(token) }
         self.token = nil
         self.tokenID = nil
         self.groups = []
         self.isSearching = false
         self.searchError = nil
+        self.query = ""
+        self.chatAvailabilitySubscription = nil
+        self.vocabularySubscription = nil
+        self.vocabularyGeneration &+= 1
+        self.vocabularyTerms = []
+        self.hasVocabularySnapshot = false
+    }
+
+    private func cancel(_ token: ZeppelinCancellationToken) {
+        let id = UUID()
+        self.cancellationTasks[id] = Task { [weak self] in
+            defer { self?.cancellationTasks[id] = nil }
+            try? await token.cancel()
+        }
+    }
+
+    func stopAndJoinForProfileTransition() async {
+        self.stop()
+        let tasks = Array(self.activeTasks.values)
+        let cancellations = Array(self.cancellationTasks.values)
+        for task in tasks { task.cancel() }
+        for cancellation in cancellations { await cancellation.value }
+        for task in tasks { await task.value }
+        if self.activeSearches > 0 {
+            await withCheckedContinuation { self.searchJoinWaiters.append($0) }
+        }
+    }
+
+    /// Preserve the ObservableObject observed by open windows while replacing its private inputs.
+    func activateCurrentProfile() {
+        self.profile = PrivateProfileStorage.current
+        self.index = .shared
+        self.stopped = !self.profile.isReadable
+        if !self.stopped { self.subscribe() }
+    }
+
+    private var acceptsProfile: Bool {
+        let current = PrivateProfileStorage.current
+        return !self.stopped && current.isReadable && current.id == profile.id && current.generation == profile.generation
     }
 
     private func schedule() {
-        guard !self.stopped else { return }
+        guard self.acceptsProfile else { return }
         self.task?.cancel()
         if let token = self.token {
             self.token = nil
             self.tokenID = nil
-            Task { try? await token.cancel() }
+            self.cancel(token)
         }
         let query = self.query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
@@ -176,21 +224,33 @@ final class AppSearchService: ObservableObject {
         self.groups = []
         self.isSearching = true
         self.searchError = nil
+        let taskID = UUID()
         self.task = Task { [weak self] in
+            defer { self?.activeTasks[taskID] = nil }
             try? await Task.sleep(for: Self.debounce)
             guard !Task.isCancelled, let self else { return }
             let groups = await self.search(query)
             // A newer keystroke cancelled this task while it was waiting on the
             // index; its answer would overwrite a fresher one.
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self.acceptsProfile else { return }
             let availableIDs = Set(ChatHistoryStore.shared.sessions.filter { !$0.isArchived }.map(\.id))
             self.groups = Self.removingUnavailableChats(from: groups, availableIDs: availableIDs)
             self.isSearching = false
         }
+        self.activeTasks[taskID] = self.task
     }
 
     func search(_ query: String) async -> [AppSearchGroup] {
-        guard !self.stopped, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        guard self.acceptsProfile, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        self.activeSearches += 1
+        defer {
+            self.activeSearches -= 1
+            if self.activeSearches == 0 {
+                let waiters = self.searchJoinWaiters
+                self.searchJoinWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
+        }
         do {
             try await self.prepareIndex()
             try Task.checkCancellation()
@@ -202,10 +262,13 @@ final class AppSearchService: ObservableObject {
             }
             return []
         }
-        guard !self.stopped else { return [] }
-        if let performSearch = self.performSearch { return await performSearch(query) }
+        guard self.acceptsProfile else { return [] }
+        if let performSearch = self.performSearch {
+            let groups = await performSearch(query)
+            return self.acceptsProfile ? groups : []
+        }
         let token = try? await ZeppelinCancellationToken.create()
-        guard !Task.isCancelled, !self.stopped else {
+        guard !Task.isCancelled, self.acceptsProfile else {
             if let token { try? await token.cancel() }
             return []
         }
@@ -227,7 +290,7 @@ final class AppSearchService: ObservableObject {
             self.transcriptGroup(transcripts, query),
             self.chatGroup(chats, query),
         ]
-        guard !Task.isCancelled else { return [] }
+        guard !Task.isCancelled, self.acceptsProfile else { return [] }
         let vocabulary = await self.vocabularyGroup(query)
         let inMemory = [
             self.dictionaryGroup(query),
@@ -236,6 +299,7 @@ final class AppSearchService: ObservableObject {
             self.punctuationGroup(query),
             self.settingsGroup(query),
         ]
+        guard self.acceptsProfile else { return [] }
         return (indexed + inMemory).filter { !$0.hits.isEmpty }
     }
 
@@ -379,7 +443,7 @@ final class AppSearchService: ObservableObject {
         } else {
             do {
                 terms = try await self.readVocabulary()
-                if generation == self.vocabularyGeneration {
+                if self.acceptsProfile, generation == self.vocabularyGeneration {
                     self.vocabularyTerms = terms
                     self.hasVocabularySnapshot = true
                 }

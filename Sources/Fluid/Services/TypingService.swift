@@ -86,7 +86,7 @@ final class TypingService {
     private nonisolated static var isLoggingEnabled: Bool {
         guard DebugLogger.diagnosticsEnabled else { return false }
         if let env = ProcessInfo.processInfo.environment["FLUID_TYPING_LOGS"], env == "1" { return true }
-        return UserDefaults.standard.bool(forKey: "enableTypingLogs")
+        return PrivateProfileDefaults.shared.bool(forKey: "enableTypingLogs")
     }
 
     private nonisolated func log(_ message: @autoclosure () -> String) {
@@ -465,6 +465,11 @@ final class TypingService {
         requiredFocusTarget: CapturedFocusTarget? = nil,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
+        let profile = PrivateProfileStorage.current
+        let callerIsOutputValid = isOutputValid
+        let isOutputValid: @MainActor () -> Bool = {
+            callerIsOutputValid() && PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork
+        }
         guard isOutputValid() else { return .cancelled }
         let requestedAt = ProcessInfo.processInfo.systemUptime
         var closeTrace = OverlayCloseTrace("typing.delivery")
@@ -599,7 +604,7 @@ final class TypingService {
         if verifiesLanding, SettingsStore.shared.showPasteCheckAlerts,
            result == .commandPosted, deliveryPath != .direct, let verificationBefore
         {
-            self.verifyPasteLanded(text, before: verificationBefore)
+            self.verifyPasteLanded(text, before: verificationBefore, profile: profile, isOutputValid: isOutputValid)
         }
         // The caller starts correction tracking after completing delivery UI.
         return result
@@ -729,27 +734,51 @@ final class TypingService {
         )
     }
 
-    /// Off-main read-back after a paste. Logs every verdict; only a certain
+    /// Off-main read-back after a paste. Logs readable-owner verdicts; only a certain
     /// `notLanded` reaches the UI.
-    private func verifyPasteLanded(_ text: String, before: PasteVerifier.Snapshot) {
-        Task.detached(priority: .utility) {
-            let startedAt = ProcessInfo.processInfo.systemUptime
-            var verdict = await PasteVerifier.verify(before: before, pastedText: text)
-            if case .notLanded = verdict, PasteVerifier.userActedAfterPaste(
-                secondsSinceLastInput: PasteVerifier.secondsSinceLastUserInput(),
-                secondsSincePaste: ProcessInfo.processInfo.systemUptime - startedAt
-            ) {
-                verdict = .unknown(reason: "user_input_after_paste")
-            }
-            let app = NSRunningApplication(processIdentifier: before.pid)?.bundleIdentifier ?? "pid\(before.pid)"
-            DebugLogger.shared.info(
-                "PASTE_VERIFY \(verdict.logDescription) app=\(app) before[\(before.summary)] " +
-                    "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
-                source: "TypingService"
-            )
-            guard case .notLanded = verdict else { return }
-            await MainActor.run {
-                NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil, userInfo: ["transcript": text])
+    @MainActor @discardableResult
+    private func verifyPasteLanded(_ text: String, before: PasteVerifier.Snapshot,
+                                   profile: PrivateProfileSnapshot,
+                                   isOutputValid: @escaping @MainActor () -> Bool) -> Task<Void, Never>? {
+        guard !Task.isCancelled, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return nil }
+        // Register before queueing so retirement also closes a verifier that has not started.
+        let owner = PrivateProfileOperationOwner(registerForTransitions: true)
+        return Task { @MainActor in
+            guard owner.isCurrent, !Task.isCancelled, isOutputValid() else { return }
+            try? await owner.perform {
+                guard owner.isCurrent, !Task.isCancelled, isOutputValid() else { throw CancellationError() }
+                let worker = Task.detached(priority: .utility) {
+                    guard !Task.isCancelled else { return }
+                    let startedAt = ProcessInfo.processInfo.systemUptime
+                    var verdict = await PasteVerifier.verify(before: before, pastedText: text)
+                    guard !Task.isCancelled else { return }
+                    if case .notLanded = verdict, PasteVerifier.userActedAfterPaste(
+                        secondsSinceLastInput: PasteVerifier.secondsSinceLastUserInput(),
+                        secondsSincePaste: ProcessInfo.processInfo.systemUptime - startedAt
+                    ) {
+                        verdict = .unknown(reason: "user_input_after_paste")
+                    }
+                    let app = NSRunningApplication(processIdentifier: before.pid)?.bundleIdentifier ?? "pid\(before.pid)"
+                    let completedVerdict = verdict
+                    await MainActor.run {
+                        guard !Task.isCancelled, owner.isCurrent, isOutputValid(), PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
+                        DebugLogger.shared.info(
+                            "PASTE_VERIFY \(completedVerdict.logDescription) app=\(app) before[\(before.summary)] " +
+                                "elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - startedAt) * 1000).rounded()))",
+                            source: "TypingService"
+                        )
+                        guard case .notLanded = completedVerdict else { return }
+                        NotificationCenter.default.post(name: .fluidPasteNotLanded, object: nil,
+                            userInfo: ["transcript": text, "privateProfile": profile])
+                    }
+                }
+                // Cancellation forwards to the actual reader and still waits for any AX call
+                // already in flight. A new profile cannot commit while that reader is alive.
+                await withTaskCancellationHandler {
+                    await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
             }
         }
     }

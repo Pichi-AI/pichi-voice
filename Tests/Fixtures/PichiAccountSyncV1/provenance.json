@@ -1,0 +1,61 @@
+{
+  "repository": "Pichi-AI/web",
+  "commit": "128e1dc17b51f0f0877e00eafb1f73c13cadddf5",
+  "sourceDirectory": "packages/shared/fixtures/pichi-account-sync-v1",
+  "approval": "Coordinator source-only wire fixtures, runtime unimplemented",
+  "excluded": [
+    "own-read-slice-candidate.json is not an approved native transport dependency"
+  ],
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "5bffc654413261b255dc0d8348c0066539cfe9111e09815838ed82d35f1cd100",
+      "byteLength": 161
+    },
+    {
+      "path": "manifest.json",
+      "sha256": "d0ac9c79288a77605a5f3182aba28a17cfc5dbfd259bdc31f9362f9d13f69457",
+      "byteLength": 2323
+    },
+    {
+      "path": "protected-transcript.json",
+      "sha256": "69fe4361b0ac24d1ae904d23e79d21ec929aff6cd545399acd5f7785952cde10",
+      "byteLength": 1392
+    },
+    {
+      "path": "pending-criteria.multipart",
+      "sha256": "ca6407eff38f9b3873e857c26ff704a7f57fd0c6f9d8802347207101c0674931",
+      "byteLength": 2317
+    },
+    {
+      "path": "pending-participant.multipart",
+      "sha256": "f2ce79be1c8cb3e18c8f1d1f796779edda5d644ca2ee412dbe61e59b83b15072",
+      "byteLength": 2283
+    },
+    {
+      "path": "receipt-pending-criteria.json",
+      "sha256": "9516298ce9213572d98e610702de5e69c47283f5985ba02079334f72e9d53e15",
+      "byteLength": 172
+    },
+    {
+      "path": "receipt-pending-participant.json",
+      "sha256": "5474ddc610a4a25a756c22ad71b34f295cbd9df76b27bf54183b7b5ee22458b5",
+      "byteLength": 175
+    },
+    {
+      "path": "protocol-candidate.json",
+      "sha256": "20cc47072d75b25fb24cc624e5a66689a57492ebdf97cbdd49f99ab49065fbff",
+      "byteLength": 9102
+    },
+    {
+      "path": "resolution-cases.json",
+      "sha256": "1b69199feced20116a71ea34ce458c440120c514797baa42a11a687446bf68ee",
+      "byteLength": 1913
+    },
+    {
+      "path": "status-receipts.json",
+      "sha256": "f9ac719c801c83e2b8801a0335784437dfd58a7e2d65c1f4878dcaf6d2ab2496",
+      "byteLength": 1884
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "status": "approved-protocol-runtime-unimplemented",
+  "runtimeImplemented": false,
+  "standaloneFixtureWarning": "The alternative initial POST fixtures share one source/context. Run each in a fresh isolated namespace; sending different initial bindings to the same persisted source must conflict.",
+  "pendingParticipantInitial": {
+    "bodyFile": "pending-participant.multipart",
+    "idempotencyKey": "00000000-0000-4000-8000-000000000201",
+    "httpStatus": 202,
+    "receipt": {
+      "schemaVersion": 1,
+      "importID": "synthetic-import-201",
+      "recordingID": "synthetic-recording-201",
+      "uploadState": "accepted",
+      "analysisState": "needsParticipant"
+    }
+  },
+  "resolve": {
+    "method": "PATCH",
+    "path": "/api/v1/recordings/imports/synthetic-import-201/assessment",
+    "body": {
+      "participantID": "00000000-0000-4000-8000-000000000003",
+      "criteriaIDs": [
+        "31"
+      ]
+    },
+    "httpStatus": 202,
+    "receipt": {
+      "schemaVersion": 1,
+      "importID": "synthetic-import-201",
+      "recordingID": "synthetic-recording-201",
+      "uploadState": "accepted",
+      "analysisState": "queued"
+    }
+  },
+  "identicalEffectivePatchRetry": {
+    "httpStatus": 200,
+    "receipt": {
+      "schemaVersion": 1,
+      "importID": "synthetic-import-201",
+      "recordingID": "synthetic-recording-201",
+      "uploadState": "accepted",
+      "analysisState": "queued"
+    },
+    "additionalJobs": 0,
+    "additionalImportCharges": 0
+  },
+  "conflictingBoundPatch": {
+    "httpStatus": 409,
+    "code": "CONFLICT"
+  },
+  "originalPostAfterResolution": {
+    "httpStatus": 200,
+    "receipt": {
+      "schemaVersion": 1,
+      "importID": "synthetic-import-201",
+      "recordingID": "synthetic-recording-201",
+      "uploadState": "accepted",
+      "analysisState": "queued"
+    },
+    "immutableFingerprintChanged": false,
+    "additionalImportCharges": 0
+  }
+}

@@ -15,7 +15,7 @@ struct OnboardingAIEnhancementStepView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var settings = SettingsStore.shared.boundToCurrentPrivateProfile()
     @StateObject private var carouselAutoplay = OnboardingCarouselAutoplay()
     @State private var hoveredButtonID: String?
     @State private var showPractice = false
@@ -619,6 +619,6 @@ struct OnboardingAIEnhancementStepView: View {
         // Smart dictation selects FI independently of the global Edit/Command provider.
         self.settings.setDictationPromptSelection(.privateAI)
         self.settings.onboardingAISkipped = false
-        UserDefaults.standard.set(model.id, forKey: PrivateAIIntegrationService.selectedModelDefaultsKey)
+        self.settings.defaults.set(model.id, forKey: PrivateAIIntegrationService.selectedModelDefaultsKey)
     }
 }

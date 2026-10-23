@@ -20,7 +20,7 @@ nonisolated struct AudioBudgetMeasurementGate: Equatable, Sendable {
 
 // MARK: - Transcription History Entry Model
 
-struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
+nonisolated struct TranscriptionHistoryEntry: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     let timestamp: Date
     let rawText: String
@@ -245,13 +245,66 @@ nonisolated struct HistorySearchSelectionRequest: Equatable {
     let entryID: UUID
 }
 
+/// One recording's local output lifetime, frozen before capture starts. The only hidden
+/// write authority is the writer's unforgeable entry-scoped admission, never a visibility flag.
+@MainActor final class DictationHistoryWriteAdmission {
+    let entryID: UUID
+    fileprivate let history: TranscriptionHistoryStore
+    fileprivate let write: TranscriptionHistoryWriteAdmission
+    fileprivate var finishing = false
+    fileprivate var finished = false
+    fileprivate var revoked = false
+    fileprivate var entry: TranscriptionHistoryEntry?
+    fileprivate var audio: DictationAudioSaveAdmission?
+    fileprivate struct FailedAudioSave {
+        let snapshot: DictationAudioSnapshot
+        let timestamp: Date
+        let model: String?
+        let error: Error
+    }
+    fileprivate var failedAudioSave: FailedAudioSave?
+    fileprivate init(history: TranscriptionHistoryStore, write: TranscriptionHistoryWriteAdmission) {
+        self.history = history; self.write = write; self.entryID = write.entryID
+    }
+    func admitAudioSave(timestamp: Date) throws -> DictationAudioSaveAdmission {
+        try self.history.admitAudioSave(for: self, timestamp: timestamp)
+    }
+    func attachAudio(_ metadata: DictationAudioMetadata, from audio: DictationAudioSaveAdmission,
+                     audioRecoveryTimestamp: Date? = nil) throws {
+        try self.history.attachAudio(metadata, admission: self, from: audio,
+            audioRecoveryTimestamp: audioRecoveryTimestamp)
+    }
+    func retainFailedAudioSave(_ snapshot: DictationAudioSnapshot, timestamp: Date, model: String?,
+                              from audio: DictationAudioSaveAdmission, error: Error) {
+        self.history.retainFailedAudioSave(snapshot, timestamp: timestamp, model: model,
+            admission: self, from: audio, error: error)
+    }
+    func finish() async throws { try await self.history.finishRecordingWrite(self) }
+    func retryPersistence() async throws { try await self.history.retryRecordingWrite(self) }
+}
+
 // MARK: - Transcription History Store
 
 @MainActor
 final class TranscriptionHistoryStore: ObservableObject {
-    static let shared = TranscriptionHistoryStore()
+    static var shared: TranscriptionHistoryStore {
+        PrivateProfileObjectCache.value(key: "TranscriptionHistoryStore") {
+            TranscriptionHistoryStore(profile: PrivateProfileStorage.current)
+        }
+    }
 
     private let writer: TranscriptionHistoryWriter
+    private let profile: PrivateProfileSnapshot?
+    private let audioStore: DictationAudioHistoryStore
+    private var transitioning = false
+    private var retired = false
+    private var canAccess: Bool {
+        !self.transitioning && !self.retired && self.profile.map(PrivateProfileStorage.isReadable) != false
+    }
+    private var recordingWrites: [UUID: DictationHistoryWriteAdmission] = [:]
+    private var recordingJoinWaiters: [CheckedContinuation<Void, Never>] = []
+    var admittedRecordingWriteCount: Int { self.recordingWrites.count }
+    private var retainedEntries: [TranscriptionHistoryEntry] = []
     private var loadTask: Task<Void, Never>?
     @Published private var hasLoaded = false
     private var pendingUpserts: [UUID: TranscriptionHistoryEntry] = [:]
@@ -260,13 +313,23 @@ final class TranscriptionHistoryStore: ObservableObject {
     @Published private(set) var isLoading = true
     @Published private(set) var persistenceError: String?
 
-    @Published private(set) var entries: [TranscriptionHistoryEntry] = []
+    @Published private var visibleEntries: [TranscriptionHistoryEntry] = []
+    private(set) var entries: [TranscriptionHistoryEntry] {
+        get { self.canAccess ? self.visibleEntries : [] }
+        set {
+            self.retainedEntries = newValue
+            if self.canAccess { self.visibleEntries = newValue }
+        }
+    }
+    var entriesPublisher: AnyPublisher<[TranscriptionHistoryEntry], Never> {
+        self.$visibleEntries.map { [weak self] entries in self?.canAccess == true ? entries : [] }.eraseToAnyPublisher()
+    }
 
     /// Replays the current snapshot only after loading and merging pending edits succeed.
     /// An empty loaded history is authoritative; an unloaded or failed one is not.
     var loadedEntriesPublisher: AnyPublisher<[TranscriptionHistoryEntry], Never> {
-        self.$entries.combineLatest(self.$hasLoaded)
-            .compactMap { entries, hasLoaded in hasLoaded ? entries : nil }
+        self.$visibleEntries.combineLatest(self.$hasLoaded)
+            .compactMap { [weak self] entries, hasLoaded in hasLoaded && self?.canAccess == true ? entries : nil }
             .eraseToAnyPublisher()
     }
 
@@ -274,18 +337,29 @@ final class TranscriptionHistoryStore: ObservableObject {
     @Published private(set) var searchSelectionRequest: HistorySearchSelectionRequest?
 
     func selectEntryFromSearch(id: UUID) {
+        guard self.canAccess else { return }
         self.selectedEntryID = id
         self.searchSelectionRequest = HistorySearchSelectionRequest(entryID: id)
     }
 
     func consumeSearchSelectionRequest(_ request: HistorySearchSelectionRequest) {
+        guard self.canAccess else { return }
         guard self.searchSelectionRequest == request else { return }
         self.searchSelectionRequest = nil
     }
 
     /// Last completed snapshot while a coalesced background refresh is pending.
     /// Rendering must never scan history or schedule work.
-    @Published private(set) var todaySummary = TodaySummary(words: 0, transcriptions: 0)
+    @Published private var visibleTodaySummary = TodaySummary(words: 0, transcriptions: 0)
+    private(set) var todaySummary: TodaySummary {
+        get { self.canAccess ? self.visibleTodaySummary : TodaySummary(words: 0, transcriptions: 0) }
+        set { if self.canAccess { self.visibleTodaySummary = newValue } }
+    }
+    var todaySummaryPublisher: AnyPublisher<TodaySummary, Never> {
+        self.$visibleTodaySummary.map { [weak self] summary in
+            self?.canAccess == true ? summary : TodaySummary(words: 0, transcriptions: 0)
+        }.eraseToAnyPublisher()
+    }
     private var todaySummaryTask: Task<Void, Never>?
     private var todaySummaryRevision: UInt64 = 0
     private var todaySummaryDay: DateInterval?
@@ -298,22 +372,189 @@ final class TranscriptionHistoryStore: ObservableObject {
     private let deleteAllAudioFiles: () -> Void
 
     init(
-        writer: TranscriptionHistoryWriter = TranscriptionHistoryWriter(),
+        writer: TranscriptionHistoryWriter? = nil,
+        profile: PrivateProfileSnapshot? = nil,
+        audioStore: DictationAudioHistoryStore? = nil,
         summaryNow: @escaping () -> Date = Date.init,
         summaryCalendar: @escaping () -> Calendar = { Calendar.current },
-        deleteAllAudioFiles: @escaping () -> Void = { DictationAudioHistoryStore.shared.deleteAllAudioFiles() }
+        deleteAllAudioFiles: (() -> Void)? = nil
     ) {
-        self.writer = writer
+        let selected = profile ?? (writer == nil ? PrivateProfileStorage.current : nil)
+        let audioStore = audioStore ?? selected.map(DictationAudioHistoryStore.scoped)
+            ?? DictationAudioHistoryStore.shared
+        self.profile = selected
+        self.audioStore = audioStore
+        self.writer = writer ?? TranscriptionHistoryWriter(profile: selected)
         self.summaryNow = summaryNow
         self.summaryCalendar = summaryCalendar
-        self.deleteAllAudioFiles = deleteAllAudioFiles
+        self.deleteAllAudioFiles = deleteAllAudioFiles ?? { audioStore.deleteAllAudioFiles() }
         self.observeSummaryCalendarChanges()
         self.loadEntries()
     }
 
-    deinit {
+    isolated deinit {
         for observer in self.calendarObservers {
             NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    /// Parent calls immediately on conceal; retained durability state stays private for retry.
+    func concealPrivateProjections() {
+        self.visibleEntries = []
+        self.visibleTodaySummary = TodaySummary(words: 0, transcriptions: 0)
+        self.selectedEntryID = nil
+        self.searchSelectionRequest = nil
+        self.todaySummaryTask?.cancel()
+        self.automaticAudioBudgetTask?.cancel()
+    }
+
+    func admitRecordingWrite(entryID: UUID = UUID()) throws -> DictationHistoryWriteAdmission {
+        guard self.canAccess, PrivateProfileStorage.acceptsNewWork,
+              self.recordingWrites[entryID] == nil else { throw CancellationError() }
+        let write = try self.writer.admitRecordingWrite(entryID: entryID, saveGeneration: self.audioSaveGeneration)
+        let admission = DictationHistoryWriteAdmission(history: self, write: write)
+        self.recordingWrites[entryID] = admission
+        return admission
+    }
+
+    private func validates(_ admission: DictationHistoryWriteAdmission, allowFinishing: Bool = false) -> Bool {
+        admission.history === self && self.recordingWrites[admission.entryID] === admission
+            && !admission.finished && !admission.revoked && (allowFinishing || !admission.finishing)
+            && admission.write.isActiveForCurrentOwner
+    }
+
+    fileprivate func admitAudioSave(for admission: DictationHistoryWriteAdmission, timestamp: Date) throws -> DictationAudioSaveAdmission {
+        guard self.validates(admission), admission.audio == nil,
+              admission.write.saveGeneration == self.audioSaveGeneration else { throw CancellationError() }
+        let audio = try self.audioStore.admitSave(for: admission.write, timestamp: timestamp)
+        admission.audio = audio
+        return audio
+    }
+
+    fileprivate func attachAudio(_ metadata: DictationAudioMetadata, admission: DictationHistoryWriteAdmission,
+                                 from audio: DictationAudioSaveAdmission,
+                                 audioRecoveryTimestamp: Date? = nil) throws {
+        guard admission.history === self, admission.audio === audio else { throw CancellationError() }
+        defer { audio.complete() }
+        let existing = self.retainedEntries.first(where: { $0.id == admission.entryID }) ?? admission.entry
+        guard self.validates(admission, allowFinishing: true), admission.write.saveGeneration == self.audioSaveGeneration,
+              existing != nil || audioRecoveryTimestamp != nil,
+              self.audioStore.claimMetadata(metadata, from: audio, history: admission.write) else {
+            audio.discardUnattached()
+            throw CancellationError()
+        }
+        // An approved recording can have no recognized text. Create its existing history
+        // representation only after claiming the exact reserved WAV, without inventing text.
+        let entry = existing ?? TranscriptionHistoryEntry(id: admission.entryID,
+            timestamp: audioRecoveryTimestamp!, rawText: "", processedText: "", appName: "",
+            windowTitle: "", wasAIProcessed: false)
+        let updated = entry.replacingAudio(metadata)
+        admission.entry = updated
+        self.writeAdmitted(updated, admission: admission)
+    }
+
+    fileprivate func retainFailedAudioSave(_ snapshot: DictationAudioSnapshot, timestamp: Date, model: String?,
+                                           admission: DictationHistoryWriteAdmission,
+                                           from audio: DictationAudioSaveAdmission, error: Error) {
+        guard self.validates(admission, allowFinishing: true), admission.audio === audio,
+              admission.write.saveGeneration == self.audioSaveGeneration else { return }
+        audio.discardUnattached()
+        audio.complete()
+        admission.audio = nil
+        admission.failedAudioSave = .init(snapshot: snapshot, timestamp: timestamp, model: model, error: error)
+    }
+
+    fileprivate func finishRecordingWrite(_ admission: DictationHistoryWriteAdmission) async throws {
+        guard admission.history === self, !admission.finished else { return }
+        admission.finishing = true
+        // Canceled capture may never start its reserved worker. Started workers own their
+        // completion through metadata enqueue and must still be joined.
+        admission.audio?.abortIfUnstarted()
+        if admission.revoked {
+            admission.audio?.discardUnattached()
+            admission.audio?.complete()
+        }
+        await admission.audio?.waitUntilCompleted()
+        if let failed = admission.failedAudioSave {
+            admission.finishing = false
+            throw failed.error
+        }
+        await self.loadTask?.value
+        do { try await self.writer.finish(admission.write) }
+        catch {
+            if admission.finished { return }
+            admission.finishing = false
+            throw error
+        }
+        guard !admission.finished else { return }
+        admission.finished = true
+        if self.recordingWrites[admission.entryID] === admission {
+            self.recordingWrites.removeValue(forKey: admission.entryID)
+        }
+        if self.recordingWrites.isEmpty {
+            let waiters = self.recordingJoinWaiters; self.recordingJoinWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+    }
+
+    fileprivate func retryRecordingWrite(_ admission: DictationHistoryWriteAdmission) async throws {
+        guard admission.history === self else { throw CancellationError() }
+        if admission.finished { return }
+        if admission.revoked || admission.finishing {
+            try await self.finishRecordingWrite(admission)
+            return
+        }
+        guard self.validates(admission) else { throw CancellationError() }
+        if let failed = admission.failedAudioSave {
+            let audio = try self.admitAudioSave(for: admission, timestamp: failed.timestamp)
+            do {
+                let metadata = try await Task.detached(priority: .utility) {
+                    try audio.save(snapshot: failed.snapshot, model: failed.model)
+                }.value
+                try self.attachAudio(metadata, admission: admission, from: audio,
+                    audioRecoveryTimestamp: failed.timestamp)
+                admission.failedAudioSave = nil
+            } catch {
+                self.retainFailedAudioSave(failed.snapshot, timestamp: failed.timestamp, model: failed.model,
+                    admission: admission, from: audio, error: error)
+                audio.complete()
+                throw error
+            }
+        }
+        guard let entry = self.retainedEntries.first(where: { $0.id == admission.entryID }) ?? admission.entry else {
+            try await self.finishRecordingWrite(admission)
+            return
+        }
+        admission.entry = entry
+        self.writeAdmitted(entry, admission: admission)
+        try await self.finishRecordingWrite(admission)
+    }
+
+    /// Retries only retained failed recording payloads under their original capabilities.
+    func retryAdmittedRecordingWrites() async throws {
+        for admission in Array(self.recordingWrites.values) { try await self.retryRecordingWrite(admission) }
+    }
+
+    func joinAdmittedRecordingWrites() async {
+        guard !self.recordingWrites.isEmpty else { return }
+        await withCheckedContinuation { self.recordingJoinWaiters.append($0) }
+    }
+
+    private func writeAdmitted(_ entry: TranscriptionHistoryEntry, admission: DictationHistoryWriteAdmission) {
+        // Keep durability state current even while projection is concealed. Retry must
+        // not replace newly attached metadata with an older visible snapshot.
+        if let index = self.retainedEntries.firstIndex(where: { $0.id == entry.id }) { self.retainedEntries[index] = entry }
+        else { self.retainedEntries.insert(entry, at: 0) }
+        if self.canAccess {
+            self.visibleEntries = self.retainedEntries
+            self.refreshTodaySummary()
+            if entry.audio != nil { self.scheduleAutomaticAudioPruneToBudget() }
+        }
+        self.writer.write(entry, admission: admission.write) { error in
+            guard let error else { return }
+            Task { @MainActor in
+                if self.canAccess { self.persistenceError = error.localizedDescription }
+            }
         }
     }
 
@@ -321,17 +562,19 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     /// Get selected entry
     var selectedEntry: TranscriptionHistoryEntry? {
+        guard self.canAccess else { return nil }
         guard let id = selectedEntryID else { return nil }
         return self.entries.first(where: { $0.id == id })
     }
 
     var latestClipboardText: String? {
-        self.entries.first?.clipboardText
+        guard self.canAccess else { return nil }
+        return self.entries.first?.clipboardText
     }
 
     /// Add a new transcription entry
     func addEntry(
-        id: UUID = UUID(),
+        id: UUID? = nil,
         timestamp: Date = Date(),
         rawText: String,
         processedText: String,
@@ -344,8 +587,13 @@ final class TranscriptionHistoryStore: ObservableObject {
         aiProcessingDurationMilliseconds: Int? = nil,
         aiTokensPerSecond: Double? = nil,
         aiProcessingError: String? = nil,
-        audio: DictationAudioMetadata? = nil
+        audio: DictationAudioMetadata? = nil,
+        admission: DictationHistoryWriteAdmission? = nil
     ) {
+        let id = id ?? admission?.entryID ?? UUID()
+        if let admission {
+            guard self.validates(admission), admission.entryID == id else { return }
+        } else { guard self.canAccess else { return } }
         // Skip empty transcriptions
         guard !processedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
@@ -366,6 +614,11 @@ final class TranscriptionHistoryStore: ObservableObject {
             audio: audio
         )
 
+        if let admission {
+            admission.entry = entry
+            self.writeAdmitted(entry, admission: admission)
+            return
+        }
         // Insert at beginning (newest first)
         self.entries.insert(entry, at: 0)
         self.refreshTodaySummary()
@@ -379,16 +632,28 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     func toggleStar(id: UUID) {
+        guard self.canAccess else { return }
         guard let index = self.entries.firstIndex(where: { $0.id == id }) else { return }
         self.entries[index].isStarred.toggle()
         self.persist(upserts: [self.entries[index]])
     }
 
+    private func revokeRecordingWrite(for entryID: UUID) {
+        guard let admission = self.recordingWrites[entryID] else { return }
+        admission.revoked = true
+        admission.failedAudioSave = nil
+        self.writer.revoke(admission.write)
+        admission.audio?.discardUnattached()
+        admission.audio?.complete()
+    }
+
     /// Delete a specific entry
     func deleteEntry(id: UUID) {
+        guard self.canAccess else { return }
+        self.revokeRecordingWrite(for: id)
         self.invalidateAutomaticAudioBudgetMeasurement()
         if let audio = self.entries.first(where: { $0.id == id })?.audio {
-            DictationAudioHistoryStore.shared.deleteAudio(fileName: audio.fileName)
+            self.audioStore.deleteAudio(fileName: audio.fileName)
         }
         let previousCount = self.entries.count
         self.entries.removeAll { $0.id == id }
@@ -406,10 +671,12 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     /// Delete multiple entries
     func deleteEntries(ids: Set<UUID>) {
+        guard self.canAccess else { return }
+        for id in ids { self.revokeRecordingWrite(for: id) }
         self.invalidateAutomaticAudioBudgetMeasurement()
         for entry in self.entries where ids.contains(entry.id) {
             if let audio = entry.audio {
-                DictationAudioHistoryStore.shared.deleteAudio(fileName: audio.fileName)
+                self.audioStore.deleteAudio(fileName: audio.fileName)
             }
         }
         let previousCount = self.entries.count
@@ -427,6 +694,8 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     /// Clear all history
     func clearAllHistory() {
+        guard self.canAccess else { return }
+        for id in self.recordingWrites.keys { self.revokeRecordingWrite(for: id) }
         self.audioSaveGeneration &+= 1
         self.invalidateAutomaticAudioBudgetMeasurement()
         self.deleteAllAudioFiles()
@@ -440,6 +709,7 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     /// Search entries by text content
     func search(query: String, starredOnly: Bool = false, pinnedFirst: Bool = false) -> [TranscriptionHistoryEntry] {
+        guard self.canAccess else { return [] }
         let entries = starredOnly ? self.entries.filter(\.isStarred) : self.entries
         let matches: [TranscriptionHistoryEntry]
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -460,7 +730,8 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     /// Get entries filtered by date range
     func entriesInRange(from startDate: Date, to endDate: Date) -> [TranscriptionHistoryEntry] {
-        self.entries.filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
+        guard self.canAccess else { return [] }
+        return self.entries.filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
     }
 
     /// Get total character count across all entries
@@ -474,10 +745,13 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     func makeBackupPayload() -> [TranscriptionHistoryEntry] {
-        self.entries
+        guard self.canAccess else { return [] }
+        return self.entries
     }
 
     func restore(from payload: [TranscriptionHistoryEntry]) {
+        guard self.canAccess else { return }
+        for id in self.recordingWrites.keys { self.revokeRecordingWrite(for: id) }
         self.audioSaveGeneration &+= 1
         self.invalidateAutomaticAudioBudgetMeasurement()
         let indexed = Dictionary(self.entries.map { ($0.id, $0.searchRevision ?? 1) }) { first, _ in first }
@@ -498,12 +772,13 @@ final class TranscriptionHistoryStore: ObservableObject {
         to entryID: UUID,
         expectedSaveGeneration: UInt64? = nil
     ) {
+        guard self.canAccess else { return }
         if let expectedSaveGeneration, expectedSaveGeneration != self.audioSaveGeneration {
-            DictationAudioHistoryStore.shared.deleteAudio(fileName: audio.fileName)
+            self.audioStore.deleteAudio(fileName: audio.fileName)
             return
         }
         guard let index = self.entries.firstIndex(where: { $0.id == entryID }) else {
-            DictationAudioHistoryStore.shared.deleteAudio(fileName: audio.fileName)
+            self.audioStore.deleteAudio(fileName: audio.fileName)
             return
         }
         self.entries[index] = self.entries[index].replacingAudio(audio)
@@ -513,8 +788,14 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     @discardableResult
     func deleteAllSavedAudio() -> Int {
+        guard self.canAccess else { return 0 }
         guard self.hasLoaded else { return 0 }
         self.audioSaveGeneration &+= 1
+        for admission in self.recordingWrites.values {
+            admission.failedAudioSave = nil
+            admission.audio?.discardUnattached()
+            admission.audio?.complete()
+        }
         self.invalidateAutomaticAudioBudgetMeasurement()
         let removedCount = self.entries.filter { $0.audio != nil }.count
         self.deleteAllAudioFiles()
@@ -527,11 +808,12 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     @discardableResult
     func pruneAudioToBudget() -> Int {
+        guard self.canAccess else { return 0 }
         // An incomplete startup snapshot must never classify older recordings as orphaned.
         guard self.hasLoaded else { return 0 }
         self.invalidateAutomaticAudioBudgetMeasurement()
         let budgetBytes = SettingsStore.shared.audioHistoryBudgetBytes
-        let currentBytes = DictationAudioHistoryStore.shared.audioUsageBytes()
+        let currentBytes = self.audioStore.audioUsageBytes()
         return self.pruneAudioToBudget(currentBytes: currentBytes, budgetBytes: budgetBytes)
     }
 
@@ -545,7 +827,7 @@ final class TranscriptionHistoryStore: ObservableObject {
 
         var updatedEntries = self.entries
         let referencedFileNames = Set(updatedEntries.compactMap { $0.audio?.fileName })
-        let orphanedAudio = DictationAudioHistoryStore.shared.deleteUnreferencedAudioFiles(referencedFileNames: referencedFileNames)
+        let orphanedAudio = self.audioStore.deleteUnreferencedAudioFiles(referencedFileNames: referencedFileNames)
         if orphanedAudio.fileCount > 0 {
             currentBytes = max(0, currentBytes - orphanedAudio.byteCount)
             DebugLogger.shared.info("Pruned orphaned dictation audio (\(orphanedAudio.fileCount) files)", source: "TranscriptionHistoryStore")
@@ -556,7 +838,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         var changed: [TranscriptionHistoryEntry] = []
         for index in updatedEntries.indices.reversed() {
             guard let audio = updatedEntries[index].audio else { continue }
-            let removedBytes = DictationAudioHistoryStore.shared.deleteAudio(fileName: audio.fileName)
+            let removedBytes = self.audioStore.deleteAudio(fileName: audio.fileName)
             currentBytes = max(0, currentBytes - removedBytes)
             updatedEntries[index] = updatedEntries[index].replacingAudio(nil)
             changed.append(updatedEntries[index])
@@ -589,9 +871,12 @@ final class TranscriptionHistoryStore: ObservableObject {
                     revision: self.audioBudgetRevision,
                     budgetBytes: SettingsStore.shared.audioHistoryBudgetBytes
                 )
+                guard !Task.isCancelled else { self.automaticAudioBudgetTask = nil; return }
+                let audioStore = self.audioStore
                 let currentBytes = await Task.detached(priority: .utility) {
-                    DictationAudioHistoryStore.shared.audioUsageBytes()
+                    audioStore.audioUsageBytes()
                 }.value
+                guard !Task.isCancelled, self.canAccess else { self.automaticAudioBudgetTask = nil; return }
                 guard gate.accepts(
                     currentRevision: self.audioBudgetRevision,
                     currentBudgetBytes: SettingsStore.shared.audioHistoryBudgetBytes
@@ -616,10 +901,17 @@ final class TranscriptionHistoryStore: ObservableObject {
         self.loadTask = Task { @MainActor in
             do {
                 let loaded = try await self.writer.load()
-                var merged = self.pendingReplacement ? [] : loaded.filter { !self.pendingDeletes.contains($0.id) && self.pendingUpserts[$0.id] == nil }
-                merged.append(contentsOf: self.pendingUpserts.values)
+                var upserts = self.pendingUpserts
+                for admission in self.recordingWrites.values {
+                    if !admission.revoked, !self.pendingDeletes.contains(admission.entryID),
+                       let entry = admission.entry, upserts[entry.id] == nil {
+                        upserts[entry.id] = self.retainedEntries.first(where: { $0.id == entry.id }) ?? entry
+                    }
+                }
+                var merged = self.pendingReplacement ? [] : loaded.filter { !self.pendingDeletes.contains($0.id) && upserts[$0.id] == nil }
+                merged.append(contentsOf: upserts.values)
                 self.entries = merged.sorted { $0.timestamp > $1.timestamp }
-                self.refreshTodaySummary()
+                if self.canAccess { self.refreshTodaySummary() }
                 self.hasLoaded = true
                 self.persistenceError = nil
                 if self.pendingReplacement || !self.pendingUpserts.isEmpty || !self.pendingDeletes.isEmpty {
@@ -673,6 +965,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     func retryPersistence() {
+        guard self.canAccess else { return }
         guard !self.isLoading else { return }
         guard self.hasLoaded else {
             self.loadEntries()
@@ -686,7 +979,9 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     func waitUntilLoaded() async throws {
+        guard self.canAccess else { throw CancellationError() }
         await self.loadTask?.value
+        guard self.canAccess else { throw CancellationError() }
         guard self.hasLoaded else {
             throw NSError(domain: "HistoryPersistence", code: 1, userInfo: [NSLocalizedDescriptionKey: self.persistenceError ?? "History is unavailable."])
         }
@@ -694,9 +989,37 @@ final class TranscriptionHistoryStore: ObservableObject {
 
     func finishPendingWrites() async {
         await self.loadTask?.value
-        if let error = await self.writer.drain() {
+        await self.automaticAudioBudgetTask?.value
+        if let error = await self.writer.drain(), self.canAccess {
             self.persistenceError = AppBrand.format("History could not be saved. Keep FluidVoice open and retry. %@", error.localizedDescription)
         }
+    }
+
+    /// Join all admitted work before clearing the Published projections and replacing sources.
+    /// A persistence failure keeps this profile selected so the user can retry without data loss.
+    func prepareForProfileTransition() async throws {
+        guard !self.retired else { return }
+        guard self.recordingWrites.isEmpty else { throw AccountError.busy }
+        self.transitioning = true
+        self.todaySummaryTask?.cancel()
+        self.automaticAudioBudgetTask?.cancel()
+        await self.loadTask?.value
+        await self.todaySummaryTask?.value
+        await self.automaticAudioBudgetTask?.value
+        if let error = await self.writer.drain() {
+            self.transitioning = false
+            throw error
+        }
+        guard self.pendingUpserts.isEmpty, self.pendingDeletes.isEmpty, !self.pendingReplacement else {
+            self.transitioning = false
+            throw AccountError.busy
+        }
+        self.retired = true
+        self.audioSaveGeneration &+= 1
+        self.retainedEntries = []
+        self.concealPrivateProjections()
+        for observer in self.calendarObservers { NotificationCenter.default.removeObserver(observer) }
+        self.calendarObservers = []
     }
 
     // MARK: - Event-driven Today Snapshot
@@ -716,6 +1039,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     func refreshTodaySummaryForCalendarChange() {
+        guard self.canAccess else { return }
         let day = self.summaryCalendar().dateInterval(of: .day, for: self.summaryNow())
         guard day != self.todaySummaryDay else { return }
         self.refreshTodaySummary()
@@ -732,9 +1056,11 @@ final class TranscriptionHistoryStore: ObservableObject {
                 let revision = self.todaySummaryRevision
                 let day = self.summaryCalendar().dateInterval(of: .day, for: self.summaryNow())
                 let snapshot = self.entries
+                guard !Task.isCancelled else { self.todaySummaryTask = nil; return }
                 let summary = await Task.detached(priority: .utility) {
                     Self.calculateTodaySummary(entries: snapshot, day: day)
                 }.value
+                guard !Task.isCancelled else { self.todaySummaryTask = nil; return }
                 guard revision == self.todaySummaryRevision,
                       day == self.summaryCalendar().dateInterval(of: .day, for: self.summaryNow())
                 else { continue }

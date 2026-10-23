@@ -1,0 +1,455 @@
+import CryptoKit
+import CoreFoundation
+import Foundation
+
+nonisolated enum PichiPublicationWireFailure: String, Error, Sendable {
+    case invalidConfiguration, invalidRequest, invalidResponse, responseTooLarge
+}
+
+nonisolated enum PichiPublicationAnalysisState: String, Codable, CaseIterable, Sendable {
+    case queued, running, succeeded, failed, needsParticipant, needsCriteria
+}
+
+nonisolated struct PichiPublicationReceipt: Codable, Equatable, Sendable {
+    enum UploadState: String, Codable, Sendable { case accepted }
+    let schemaVersion: Int
+    let importID: String
+    let recordingID: String
+    let uploadState: UploadState
+    let analysisState: PichiPublicationAnalysisState
+
+    fileprivate func validate() throws {
+        guard self.schemaVersion == 1, PichiPublicationRequest.validID(self.importID),
+              PichiPublicationRequest.validID(self.recordingID) else { throw PichiPublicationWireFailure.invalidResponse }
+    }
+}
+
+/// Original POST binding and later PATCH selection are separate immutable values. No
+/// speaker label, name or isLocalUser flag supplies a default represented participant.
+nonisolated struct PichiPublicationAssessment: Equatable, Sendable {
+    let participantID: UUID?
+    let criteriaIDs: [String]
+
+    fileprivate func encoded(representedParticipants: Set<UUID>, requiresComplete: Bool) throws -> Data {
+        guard self.criteriaIDs.count <= 100, Set(self.criteriaIDs).count == self.criteriaIDs.count,
+              self.criteriaIDs.allSatisfy(PichiPublicationRequest.validID),
+              self.participantID.map({ representedParticipants.contains($0) }) != false,
+              !requiresComplete || (self.participantID != nil && !self.criteriaIDs.isEmpty) else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+        // Fixed key order matches the approved multipart fixture. Encode values with the
+        // JSON encoder, and preserve an explicit null rather than omitting the optional key.
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.withoutEscapingSlashes]
+        let participant = try self.participantID.map { try encoder.encode($0.uuidString) } ?? Data("null".utf8)
+        var result = Data("{\"participantID\":".utf8)
+        result.append(participant); result.append(Data(",\"criteriaIDs\":".utf8))
+        result.append(try encoder.encode(self.criteriaIDs)); result.append(Data("}".utf8))
+        return result
+    }
+}
+
+/// One authorized page for an existing accepted source. Names are display data, not
+/// employee identities or defaults. The caller chooses whether to request another page.
+nonisolated struct PichiPublicationAssessmentOptions: Equatable, Sendable {
+    struct Context: Equatable, Sendable {
+        let accountID: String
+        let organizationID: String
+        let workspaceID: String
+    }
+    struct Participant: Equatable, Sendable { let id: UUID; let displayName: String }
+    struct Criterion: Equatable, Sendable { let id: String; let name: String }
+    struct Pagination: Equatable, Sendable {
+        let limit: Int
+        let cursor: String?
+        let nextCursor: String?
+        let hasMore: Bool
+    }
+    struct Criteria: Equatable, Sendable { let data: [Criterion]; let pagination: Pagination }
+    let schemaVersion: Int
+    let context: Context
+    let receipt: PichiPublicationReceipt
+    let participants: [Participant]
+    let criteria: Criteria
+    let currentAssessment: PichiPublicationAssessment
+    let canResolvePending: Bool
+}
+
+nonisolated enum PichiPublicationRemoteAction: String, Codable, Sendable {
+    case stopAndShowValidation, pauseForReauthentication, pauseForAccountReview
+    case pauseForPermissionReview, pauseForReceiptReview, pauseForConflictReview, boundedRetry
+}
+
+nonisolated enum PichiPublicationRemoteCode: String, Codable, Sendable {
+    case invalidRequest = "INVALID_REQUEST"
+    case authenticationFailed = "AUTHENTICATION_FAILED"
+    case preconditionFailed = "PRECONDITION_FAILED"
+    case permissionDenied = "PERMISSION_DENIED"
+    case resourceNotFound = "RESOURCE_NOT_FOUND"
+    case conflict = "CONFLICT"
+    case rateLimited = "RATE_LIMITED"
+    case internalError = "INTERNAL_ERROR"
+}
+
+/// Server prose, arbitrary details and request IDs are intentionally absent. A billing
+/// reason example is not a complete safe allowlist, so 402 exposes only account review.
+nonisolated struct PichiPublicationRemoteFailure: Error, Equatable, Sendable {
+    let action: PichiPublicationRemoteAction
+    let httpStatus: Int
+    let code: PichiPublicationRemoteCode?
+    let retryAfter: PichiPublicationRetryAfter?
+}
+
+/// The HTTP executor must retain bounded status/body and Retry-After instead of using
+/// AccountHTTPRequesting, which deliberately collapses errors for the login boundary.
+nonisolated struct PichiPublicationHTTPResponse: Sendable {
+    let status: Int
+    let body: Data
+    let retryAfter: String?
+}
+
+/// Pure immutable wire operation. Runtime callers must obtain N1 authorizedAccess(for:)
+/// for this exact context, and recheck isCurrent after every request before applying it
+/// through N2's owner-bound store. This codec does not authenticate a profile or do I/O.
+nonisolated struct PichiPublicationRequest: Sendable {
+    enum Kind: Sendable { case importSource, status, assessment, assessmentOptions }
+    static let maximumResponseBytes = 65_536
+    static let maximumMultipartBytes = 1_048_576
+
+    let configuration: AccountConfiguration
+    let context: AccountContext
+    let kind: Kind
+    let unsignedRequest: URLRequest
+    private let expectedReceipt: PichiPublicationReceipt?
+    private struct OptionsPage: Sendable {
+        let represented: Set<UUID>
+        let limit: Int
+        let cursor: String?
+    }
+    private let optionsPage: OptionsPage?
+
+    private init(configuration: AccountConfiguration, context: AccountContext, kind: Kind,
+                 request: URLRequest, expectedReceipt: PichiPublicationReceipt?, optionsPage: OptionsPage? = nil) {
+        self.configuration = configuration; self.context = context; self.kind = kind
+        self.unsignedRequest = request; self.expectedReceipt = expectedReceipt
+        self.optionsPage = optionsPage
+    }
+
+    static func importSource(configuration: AccountConfiguration, context: AccountContext,
+        operationID: UUID, transcriptBytes: Data, sourceSHA256: String, assessment: PichiPublicationAssessment,
+        boundary: String = "pichi-import-" + UUID().uuidString) throws -> Self {
+        try Task.checkCancellation()
+        try self.validate(configuration: configuration, context: context)
+        let represented = try self.validateProtectedBytes(transcriptBytes)
+        guard sourceSHA256.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+              SHA256.hash(data: transcriptBytes).map({ String(format: "%02x", $0) }).joined() == sourceSHA256,
+              boundary.range(of: "^[A-Za-z0-9-]{1,70}$", options: .regularExpression) != nil else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+        let binding = try assessment.encoded(representedParticipants: represented, requiresComplete: false)
+        let fields: [(String, Data)] = [
+            ("schemaVersion", Data("1".utf8)), ("organizationID", Data(context.organizationID!.utf8)),
+            ("workspaceID", Data(context.workspaceID!.utf8)), ("sourceRevision", Data("1".utf8)),
+            ("sourceSHA256", Data(sourceSHA256.utf8)), ("assessment", binding)]
+        let delimiter = Data(("--" + boundary).utf8)
+        guard transcriptBytes.range(of: delimiter) == nil, fields.allSatisfy({ $0.1.range(of: delimiter) == nil }) else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+        var body = Data()
+        for (name, bytes) in fields {
+            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8))
+            body.append(bytes); body.append(Data("\r\n".utf8))
+        }
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"transcript\"; filename=\"protected-transcript.json\"\r\nContent-Type: application/json\r\n\r\n".utf8))
+        body.append(transcriptBytes); body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        guard body.count <= self.maximumMultipartBytes else { throw PichiPublicationWireFailure.invalidRequest }
+        var request = URLRequest(url: try self.url(configuration: configuration))
+        request.httpMethod = "POST"; request.httpBody = body
+        request.setValue(operationID.uuidString, forHTTPHeaderField: "Idempotency-Key")
+        request.setValue("multipart/form-data; boundary=" + boundary, forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        try Task.checkCancellation()
+        return Self(configuration: configuration, context: context, kind: .importSource,
+            request: request, expectedReceipt: nil)
+    }
+
+    static func status(configuration: AccountConfiguration, context: AccountContext,
+                       receipt: PichiPublicationReceipt) throws -> Self {
+        try Task.checkCancellation()
+        try self.validate(configuration: configuration, context: context); try receipt.validate()
+        var request = URLRequest(url: try self.url(configuration: configuration, importID: receipt.importID))
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return Self(configuration: configuration, context: context, kind: .status, request: request, expectedReceipt: receipt)
+    }
+
+    static func resolveAssessment(configuration: AccountConfiguration, context: AccountContext,
+        receipt: PichiPublicationReceipt, transcriptBytes: Data, assessment: PichiPublicationAssessment) throws -> Self {
+        try Task.checkCancellation()
+        try self.validate(configuration: configuration, context: context); try receipt.validate()
+        let represented = try self.validateProtectedBytes(transcriptBytes)
+        var request = URLRequest(url: try self.url(configuration: configuration, importID: receipt.importID, resource: "assessment"))
+        request.httpMethod = "PATCH"
+        request.httpBody = try assessment.encoded(representedParticipants: represented, requiresComplete: true)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        try Task.checkCancellation()
+        return Self(configuration: configuration, context: context, kind: .assessment, request: request, expectedReceipt: receipt)
+    }
+
+    /// Runtime access must come from the existing owner, including its trusted API/client
+    /// configuration. AccountContext alone does not bind a bearer to an API origin.
+    @MainActor func authorized(using account: AccountSessionService) async throws -> URLRequest {
+        guard account.configuration == self.configuration else { throw AccountError.invalidConfiguration }
+        let access = try await account.authorizedAccess(for: self.context)
+        try Task.checkCancellation()
+        guard account.isCurrent(self.context) else { throw AccountError.staleOperation }
+        return try self.authorized(using: access)
+    }
+
+    static func assessmentOptions(configuration: AccountConfiguration, context: AccountContext,
+        receipt: PichiPublicationReceipt, transcriptBytes: Data, cursor: String? = nil, limit: Int = 50) throws -> Self {
+        try Task.checkCancellation()
+        try self.validate(configuration: configuration, context: context); try receipt.validate()
+        let represented = try self.validateProtectedBytes(transcriptBytes)
+        let items = [URLQueryItem(name: "organizationID", value: context.organizationID!),
+            URLQueryItem(name: "workspaceID", value: context.workspaceID!),
+            URLQueryItem(name: "limit", value: String(limit))]
+            + (cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [])
+        guard self.validAssessmentOptionsQuery(items),
+              var parts = URLComponents(url: try self.url(configuration: configuration,
+                importID: receipt.importID, resource: "assessment-options"), resolvingAgainstBaseURL: false) else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+        // Query values are opaque. Encode '+' too, since the server's query parser
+        // otherwise treats that literal character as a space.
+        let safe = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        parts.percentEncodedQuery = try items.map { item in
+            guard let value = item.value?.addingPercentEncoding(withAllowedCharacters: safe) else { throw PichiPublicationWireFailure.invalidRequest }
+            return item.name + "=" + value
+        }.joined(separator: "&")
+        guard let url = parts.url, URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems == items else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+        var request = URLRequest(url: url); request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return .init(configuration: configuration, context: context, kind: .assessmentOptions,
+            request: request, expectedReceipt: receipt, optionsPage: .init(represented: represented, limit: limit, cursor: cursor))
+    }
+
+    /// The HTTP executor shares this narrow query allowlist with the immutable builder.
+    /// No other publication route may carry a query or accept these extra parameters.
+    static func validAssessmentOptionsQuery(_ items: [URLQueryItem]?) -> Bool {
+        guard let items, (3...4).contains(items.count), Set(items.map(\.name)).count == items.count,
+              Set(items.map(\.name)).isSubset(of: ["organizationID", "workspaceID", "limit", "cursor"]),
+              let organization = items.first(where: { $0.name == "organizationID" })?.value,
+              let workspace = items.first(where: { $0.name == "workspaceID" })?.value,
+              let limit = items.first(where: { $0.name == "limit" })?.value,
+              self.validID(organization), self.validID(workspace), (1...3).contains(limit.utf8.count),
+              limit.utf8.allSatisfy({ (48...57).contains($0) }), let count = Int(limit), (1...100).contains(count) else { return false }
+        if let cursor = items.first(where: { $0.name == "cursor" }) { return cursor.value.map(self.validCursor) == true }
+        return items.count == 3
+    }
+
+    private static func validCursor(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 2048
+            && value.utf8.allSatisfy { (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95 }
+    }
+
+    /// Called after the HTTP await and before any N2-owned durable or visible mutation.
+    /// N2 still must validate the capture/profile handle around its own awaited work.
+    @MainActor func receipt(from response: PichiPublicationHTTPResponse, account: AccountSessionService,
+                            now: Date = Date()) throws -> PichiPublicationReceipt {
+        guard account.configuration == self.configuration, account.isCurrent(self.context) else { throw AccountError.staleOperation }
+        return try self.receipt(from: response, now: now)
+    }
+
+    @MainActor func assessmentOptions(from response: PichiPublicationHTTPResponse, account: AccountSessionService,
+                                      now: Date = Date()) throws -> PichiPublicationAssessmentOptions {
+        guard account.configuration == self.configuration, account.isCurrent(self.context) else { throw AccountError.staleOperation }
+        return try self.assessmentOptions(from: response, now: now)
+    }
+
+    func assessmentOptions(from response: PichiPublicationHTTPResponse, now: Date = Date()) throws -> PichiPublicationAssessmentOptions {
+        try Task.checkCancellation()
+        guard self.kind == .assessmentOptions, let page = self.optionsPage, let expectedReceipt else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+        guard response.body.count <= Self.maximumResponseBytes else { throw PichiPublicationWireFailure.responseTooLarge }
+        guard response.status == 200 else { throw try self.remoteFailure(response, now: now) }
+        let root = try Self.responseObject(try? JSONSerialization.jsonObject(with: response.body),
+            keys: ["schemaVersion", "context", "receipt", "participants", "criteria", "currentAssessment", "canResolvePending"])
+        guard Self.responseInteger(root["schemaVersion"], range: 1...1) != nil else { throw PichiPublicationWireFailure.invalidResponse }
+        let destination = try Self.responseObject(root["context"], keys: ["accountID", "organizationID", "workspaceID"])
+        guard let account = destination["accountID"] as? String, account == self.context.identity.internalUserID,
+              let organization = destination["organizationID"] as? String, organization == self.context.organizationID,
+              let workspace = destination["workspaceID"] as? String, workspace == self.context.workspaceID,
+              [account, organization, workspace].allSatisfy(Self.validID) else { throw PichiPublicationWireFailure.invalidResponse }
+        let receiptObject = try Self.responseObject(root["receipt"], keys: ["schemaVersion", "importID", "recordingID", "uploadState", "analysisState"])
+        guard Self.responseInteger(receiptObject["schemaVersion"], range: 1...1) != nil,
+              receiptObject["importID"] as? String == expectedReceipt.importID,
+              receiptObject["recordingID"] as? String == expectedReceipt.recordingID,
+              receiptObject["uploadState"] as? String == "accepted",
+              let analysis = receiptObject["analysisState"] as? String, let state = PichiPublicationAnalysisState(rawValue: analysis) else {
+            throw PichiPublicationWireFailure.invalidResponse
+        }
+        let receipt = PichiPublicationReceipt(schemaVersion: 1, importID: expectedReceipt.importID,
+            recordingID: expectedReceipt.recordingID, uploadState: .accepted, analysisState: state)
+        guard let participants = root["participants"] as? [Any], participants.count <= 100 else { throw PichiPublicationWireFailure.invalidResponse }
+        var participantIDs = Set<UUID>()
+        let choices: [PichiPublicationAssessmentOptions.Participant] = try participants.map { raw in
+            try Task.checkCancellation()
+            let item = try Self.responseObject(raw, keys: ["id", "displayName"])
+            guard let rawID = item["id"] as? String, let id = UUID(uuidString: rawID),
+                  participantIDs.insert(id).inserted, page.represented.contains(id),
+                  let name = item["displayName"] as? String, name.utf16.count <= 200 else { throw PichiPublicationWireFailure.invalidResponse }
+            return .init(id: id, displayName: name)
+        }
+        guard participantIDs == page.represented else { throw PichiPublicationWireFailure.invalidResponse }
+        let criteria = try Self.responseObject(root["criteria"], keys: ["data", "pagination"])
+        let pagination = try Self.responseObject(criteria["pagination"], keys: ["limit", "cursor", "next_cursor", "has_more"])
+        guard Self.responseInteger(pagination["limit"], range: 1...100) == page.limit,
+              let hasMore = Self.responseBoolean(pagination["has_more"]),
+              let data = criteria["data"] as? [Any], data.count <= page.limit else { throw PichiPublicationWireFailure.invalidResponse }
+        let cursor = try Self.responseCursor(pagination["cursor"]), next = try Self.responseCursor(pagination["next_cursor"])
+        guard cursor == page.cursor, hasMore == (next != nil), next == nil || next != cursor,
+              !hasMore || data.count == page.limit else { throw PichiPublicationWireFailure.invalidResponse }
+        var criterionIDs = Set<String>()
+        let entries: [PichiPublicationAssessmentOptions.Criterion] = try data.map { raw in
+            try Task.checkCancellation()
+            let item = try Self.responseObject(raw, keys: ["id", "name"])
+            guard let id = item["id"] as? String, Self.validID(id), criterionIDs.insert(id).inserted,
+                  let name = item["name"] as? String else { throw PichiPublicationWireFailure.invalidResponse }
+            // W2 has no separate criterion-name length cap. The full response byte
+            // limit bounds every string without inventing a different server schema.
+            return .init(id: id, name: name)
+        }
+        let assessment = try Self.responseObject(root["currentAssessment"], keys: ["participantID", "criteriaIDs"])
+        let participantID: UUID?
+        if assessment["participantID"] is NSNull { participantID = nil }
+        else {
+            guard let raw = assessment["participantID"] as? String, let id = UUID(uuidString: raw), page.represented.contains(id) else {
+                throw PichiPublicationWireFailure.invalidResponse
+            }
+            participantID = id
+        }
+        guard let selectedCriteria = assessment["criteriaIDs"] as? [String], selectedCriteria.count <= 100,
+              selectedCriteria.allSatisfy(Self.validID), let canResolve = Self.responseBoolean(root["canResolvePending"]),
+              !canResolve || state == .needsParticipant || state == .needsCriteria else { throw PichiPublicationWireFailure.invalidResponse }
+        try Task.checkCancellation()
+        return .init(schemaVersion: 1, context: .init(accountID: account, organizationID: organization, workspaceID: workspace),
+            receipt: receipt, participants: choices, criteria: .init(data: entries,
+                pagination: .init(limit: page.limit, cursor: cursor, nextCursor: next, hasMore: hasMore)),
+            currentAssessment: .init(participantID: participantID, criteriaIDs: selectedCriteria), canResolvePending: canResolve)
+    }
+
+    private static func responseObject(_ value: Any?, keys: Set<String>) throws -> [String: Any] {
+        guard let object = value as? [String: Any], Set(object.keys) == keys else { throw PichiPublicationWireFailure.invalidResponse }
+        return object
+    }
+
+    private static func responseInteger(_ value: Any?, range: ClosedRange<Int>) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue,
+              number.doubleValue >= Double(range.lowerBound), number.doubleValue <= Double(range.upperBound) else { return nil }
+        return number.intValue
+    }
+
+    private static func responseBoolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+
+    private static func responseCursor(_ value: Any?) throws -> String? {
+        if value is NSNull { return nil }
+        guard let cursor = value as? String, self.validCursor(cursor) else { throw PichiPublicationWireFailure.invalidResponse }
+        return cursor
+    }
+
+    func authorized(using access: AccountAuthorizedAccess) throws -> URLRequest {
+        try Task.checkCancellation()
+        guard access.context == self.context else { throw AccountError.staleOperation }
+        guard !access.accessToken.isEmpty, access.accessToken.utf8.count <= 32_768,
+              access.accessToken.rangeOfCharacter(from: .controlCharacters) == nil else { throw AccountError.invalidToken }
+        var request = self.unsignedRequest
+        request.setValue("Bearer " + access.accessToken, forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    func receipt(from response: PichiPublicationHTTPResponse, now: Date = Date()) throws -> PichiPublicationReceipt {
+        try Task.checkCancellation()
+        guard self.kind != .assessmentOptions else { throw PichiPublicationWireFailure.invalidRequest }
+        guard response.body.count <= Self.maximumResponseBytes else { throw PichiPublicationWireFailure.responseTooLarge }
+        let success = response.status == 200 || ((self.kind == .importSource || self.kind == .assessment) && response.status == 202)
+        guard success else { throw try self.remoteFailure(response, now: now) }
+        guard let receipt = try? JSONDecoder().decode(PichiPublicationReceipt.self, from: response.body) else {
+            throw PichiPublicationWireFailure.invalidResponse
+        }
+        try receipt.validate()
+        if let expectedReceipt {
+            guard receipt.importID == expectedReceipt.importID, receipt.recordingID == expectedReceipt.recordingID else {
+                throw PichiPublicationWireFailure.invalidResponse
+            }
+        }
+        // The original POST may be replayed after PATCH resolution. Its returned analysis
+        // state is current, so it must not be compared to the initial pending binding.
+        try Task.checkCancellation()
+        return receipt
+    }
+
+    private func remoteFailure(_ response: PichiPublicationHTTPResponse, now: Date) throws -> PichiPublicationRemoteFailure {
+        struct Envelope: Decodable { struct Detail: Decodable { let code: String; let status: Int }; let error: Detail }
+        let parsed = try? JSONDecoder().decode(Envelope.self, from: response.body)
+        let code = parsed.flatMap { $0.error.status == response.status ? PichiPublicationRemoteCode(rawValue: $0.error.code) : nil }
+        let action: PichiPublicationRemoteAction
+        switch (response.status, code) {
+        case (400, .invalidRequest) where self.kind != .status: action = .stopAndShowValidation
+        case (413, .invalidRequest) where self.kind == .importSource: action = .stopAndShowValidation
+        case (401, .authenticationFailed): action = .pauseForReauthentication
+        case (402, .preconditionFailed) where self.kind == .importSource: action = .pauseForAccountReview
+        case (403, .permissionDenied): action = .pauseForPermissionReview
+        case (404, .resourceNotFound) where self.kind != .importSource: action = .pauseForReceiptReview
+        case (409, .conflict) where self.kind != .status: action = .pauseForConflictReview
+        case (429, .rateLimited), (500, .internalError), (503, .internalError): action = .boundedRetry
+        default: action = .pauseForReceiptReview
+        }
+        return PichiPublicationRemoteFailure(action: action, httpStatus: response.status, code: code,
+            retryAfter: action == .boundedRetry ? PichiPublicationRetryPolicy.parseRetryAfter(response.retryAfter, now: now) : nil)
+    }
+
+    fileprivate static func validID(_ value: String) -> Bool {
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && value.utf16.count <= 256 && value.utf8.count <= 512
+            && value.rangeOfCharacter(from: .controlCharacters) == nil
+    }
+
+    private static func validate(configuration: AccountConfiguration, context: AccountContext) throws {
+        do { try configuration.validate() } catch { throw PichiPublicationWireFailure.invalidConfiguration }
+        guard context.identity.issuer == configuration.issuer.absoluteString else { throw PichiPublicationWireFailure.invalidConfiguration }
+        guard let organization = context.organizationID, let workspace = context.workspaceID,
+              self.validID(organization), self.validID(workspace) else { throw PichiPublicationWireFailure.invalidRequest }
+    }
+
+    private static func url(configuration: AccountConfiguration, importID: String? = nil, resource: String? = nil) throws -> URL {
+        guard var parts = URLComponents(url: configuration.apiBaseURL, resolvingAgainstBaseURL: false) else {
+            throw PichiPublicationWireFailure.invalidConfiguration
+        }
+        let safe = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_~")
+        var path = parts.percentEncodedPath + "/api/v1/recordings/imports"
+        if let importID {
+            guard self.validID(importID), let encoded = importID.addingPercentEncoding(withAllowedCharacters: safe) else {
+                throw PichiPublicationWireFailure.invalidRequest
+            }
+            path += "/" + encoded
+        }
+        if let resource { path += "/" + resource }
+        parts.percentEncodedPath = path
+        guard let result = parts.url, URLComponents(url: result, resolvingAgainstBaseURL: false)?.percentEncodedPath == path else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+        return result
+    }
+
+    private static func validateProtectedBytes(_ data: Data) throws -> Set<UUID> {
+        do { return try PichiProtectedPublicationPayload.validate(data) }
+        catch is CancellationError { throw CancellationError() }
+        catch { throw PichiPublicationWireFailure.invalidRequest }
+    }
+}

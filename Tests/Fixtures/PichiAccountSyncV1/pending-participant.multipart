@@ -1,0 +1,78 @@
+--pichi-synthetic-protected-import-v1
+Content-Disposition: form-data; name="schemaVersion"
+
+1
+--pichi-synthetic-protected-import-v1
+Content-Disposition: form-data; name="organizationID"
+
+17
+--pichi-synthetic-protected-import-v1
+Content-Disposition: form-data; name="workspaceID"
+
+9
+--pichi-synthetic-protected-import-v1
+Content-Disposition: form-data; name="sourceRevision"
+
+1
+--pichi-synthetic-protected-import-v1
+Content-Disposition: form-data; name="sourceSHA256"
+
+69fe4361b0ac24d1ae904d23e79d21ec929aff6cd545399acd5f7785952cde10
+--pichi-synthetic-protected-import-v1
+Content-Disposition: form-data; name="assessment"
+
+{"participantID":null,"criteriaIDs":[]}
+--pichi-synthetic-protected-import-v1
+Content-Disposition: form-data; name="transcript"; filename="protected-transcript.json"
+Content-Type: application/json
+
+{
+  "durationSeconds" : 5,
+  "endedAt" : "2023-11-14T22:13:25Z",
+  "format" : "pichi-voice-transcript",
+  "languageCode" : "ru",
+  "privacy" : {
+    "includesAudio" : false,
+    "metadataMayContainPersonalData" : true,
+    "transcriptPIIRedacted" : true
+  },
+  "schemaVersion" : 1,
+  "segments" : [
+    {
+      "endSeconds" : 0.8,
+      "id" : "00000000-0000-4000-8000-000000000101",
+      "speakerID" : "00000000-0000-4000-8000-000000000002",
+      "startSeconds" : 0,
+      "text" : "Привет, обсудим проект."
+    },
+    {
+      "endSeconds" : 1.6,
+      "id" : "00000000-0000-4000-8000-000000000104",
+      "speakerID" : "00000000-0000-4000-8000-000000000003",
+      "startSeconds" : 1,
+      "text" : "Всё готово."
+    },
+    {
+      "endSeconds" : 3,
+      "id" : "00000000-0000-4000-8000-000000000106",
+      "startSeconds" : 2,
+      "text" : "Контакт: [PERSON]."
+    }
+  ],
+  "sessionID" : "00000000-0000-4000-8000-000000000001",
+  "speakers" : [
+    {
+      "displayName" : "Борис Ёлкин",
+      "id" : "00000000-0000-4000-8000-000000000002",
+      "isLocalUser" : true
+    },
+    {
+      "displayName" : "Алёна Ёжик",
+      "id" : "00000000-0000-4000-8000-000000000003",
+      "isLocalUser" : false
+    }
+  ],
+  "startedAt" : "2023-11-14T22:13:20Z",
+  "title" : "Обсуждение синтетического проекта"
+}
+--pichi-synthetic-protected-import-v1--

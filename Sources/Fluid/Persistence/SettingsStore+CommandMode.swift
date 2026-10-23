@@ -7,14 +7,14 @@ extension SettingsStore {
 
     var commandModeLinkedToGlobal: Bool {
         get {
-            if let value = UserDefaults.standard.object(forKey: self.commandModeLinkedToGlobalKey) as? Bool {
+            if let value = self.defaults.object(forKey: self.commandModeLinkedToGlobalKey) as? Bool {
                 return value
             }
             return true
         }
         set {
             objectWillChange.send()
-            UserDefaults.standard.set(newValue, forKey: self.commandModeLinkedToGlobalKey)
+            self.defaults.set(newValue, forKey: self.commandModeLinkedToGlobalKey)
         }
     }
 

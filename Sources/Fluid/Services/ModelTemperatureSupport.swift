@@ -7,17 +7,28 @@ import Foundation
 /// editing the name list in `SettingsStore.isTemperatureUnsupported`. Keyed by endpoint too:
 /// two providers can serve the same model ID (e.g. "llama3") with different parameter support.
 final nonisolated class ModelTemperatureSupport: @unchecked Sendable {
-    static let shared = ModelTemperatureSupport(defaults: .standard)
+    static let shared = ModelTemperatureSupport(defaults: PrivateProfileDefaults.shared)
 
     // Older case-folded keys could alias distinct paths/models and are not safe
     // to migrate into this exact capability namespace.
     private static let defaultsKey = "ModelTemperatureSupportByEndpointV2"
 
     private let defaults: UserDefaults
-    private let lock = NSLock()
+    private let lock: NSLock
 
     init(defaults: UserDefaults) {
         self.defaults = defaults
+        self.lock = NSLock()
+    }
+
+    private init(defaults: UserDefaults, lock: NSLock) {
+        self.defaults = defaults
+        self.lock = lock
+    }
+
+    func boundForOperation() -> ModelTemperatureSupport {
+        guard let scoped = self.defaults as? PrivateProfileDefaults else { return self }
+        return ModelTemperatureSupport(defaults: PrivateProfileDefaults.bound(to: scoped.selectedProfile), lock: self.lock)
     }
 
     /// `true` = accepts `temperature`, `false` = rejects it, `nil` = unknown.

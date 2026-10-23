@@ -220,6 +220,34 @@ struct OnboardingAISetupControllerTests {
             precondition(harness.commits == 1)
         }
 
+        let profileTransition = Harness()
+        profileTransition.pauseLoad = true
+        let profileController = profileTransition.controller()
+        profileController.refresh()
+        await self.waitUntil { profileController.phase == .offered }
+        profileController.enable { _ in preconditionFailure("A retired profile must not activate") }
+        await self.waitUntil { profileTransition.loadContinuation != nil }
+        var profileJoined = false
+        let join = Task { await profileController.prepareForPrivateProfileTransition(); profileJoined = true }
+        await self.waitUntil { profileController.phase == .cancelling }
+        precondition(!profileJoined, "Transition must join the admitted loader")
+        profileController.refresh()
+        profileController.prefetch()
+        profileController.enable { _ in preconditionFailure("Transition must close setup admission") }
+        precondition(!profileController.canEnable)
+        profileTransition.loadContinuation?.resume()
+        await join.value
+        precondition(profileJoined && profileTransition.commits == 0 && profileController.model == nil)
+        let previousReads = profileTransition.readCount
+        profileController.refresh()
+        precondition(profileTransition.readCount == previousReads, "Setup remains closed until profile selection")
+        await profileTransition.progressCallback?(.init(fraction: 0.9, status: "retired", bytes: nil))
+        precondition(profileController.progress == nil)
+        profileController.privateProfileDidChange()
+        profileController.refresh()
+        await self.waitUntil { profileController.phase == .offered }
+        precondition(profileTransition.readCount == previousReads + 1, "The new profile may prepare independently")
+
         let unavailable = Harness()
         unavailable.failRecommendation = true
         let missing = unavailable.controller()
@@ -233,7 +261,7 @@ struct OnboardingAISetupControllerTests {
         await self.waitUntil { missing.errorMessage != nil }
         precondition(missing.phase == .offered && unavailable.commits == 0)
         print(
-            "PASS: recommendation prefetch, fresh/cached activation, prefetch cancellation/retry, duplicate actions, cancellation during download/load, stale progress, failure/retry and commit rejection"
+            "PASS: recommendation prefetch, fresh/cached activation, prefetch cancellation/retry, duplicate actions, cancellation during download/load, stale progress, failure/retry, commit rejection and joined private-profile transition"
         )
     }
 }
