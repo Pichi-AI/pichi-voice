@@ -108,6 +108,12 @@ def cleanup(manifest, evidence):
         return metadata
 
     def api(mode):
+        if mode == "remove":
+            # A preferences daemon may recreate a different version between passes.
+            # Preserve the current bytes before every destructive API request.
+            for domain in domains:
+                preserve(domain)
+            save_json(audit, report)
         result = subprocess.run(["osascript", "-l", "JavaScript", "-e", API, str(owned_manifest), mode],
                                 capture_output=True, text=True, timeout=15, check=True)
         rows = json.loads(result.stdout)
@@ -118,10 +124,6 @@ def cleanup(manifest, evidence):
             raise RuntimeError("Preference caches did not synchronize to the empty domain state")
 
     try:
-        # Preserve original fixture bytes before changing the logical preference domain.
-        for domain in domains:
-            preserve(domain)
-        save_json(audit, report)
         api("remove")
         api("verify")
         for attempt in range(3):
