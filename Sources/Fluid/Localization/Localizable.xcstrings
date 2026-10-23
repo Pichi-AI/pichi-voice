@@ -460,6 +460,23 @@
         }
       }
     },
+    "account.profile.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account data is temporarily hidden. Finish the current recording or operation, then retry sign-out."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Данные аккаунта временно скрыты. Завершите текущую запись или операцию и повторите выход."
+          }
+        }
+      }
+    },
     "account.state.signingIn": {
       "extractionState": "manual",
       "localizations": {

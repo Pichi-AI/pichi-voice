@@ -10,10 +10,13 @@ final class MobileAccountInteraction: ObservableObject {
     @Published private(set) var action: Action?
     @Published private var selectionError: (generation: UUID, code: AccountError)?
     let session: AccountSessionService
+    private let requireTransitionAdmission: @MainActor () throws -> Void
     private var operation: Task<Void, Never>?
     private var operationID: UUID?
 
-    init(session: AccountSessionService) { self.session = session }
+    init(session: AccountSessionService, requireTransitionAdmission: @escaping @MainActor () throws -> Void) {
+        self.session = session; self.requireTransitionAdmission = requireTransitionAdmission
+    }
 
     var error: AccountError? {
         selectionError?.generation == session.generation ? selectionError?.code : nil
@@ -30,15 +33,25 @@ final class MobileAccountInteraction: ObservableObject {
     }
 
     func switchPerson() {
-        guard action == nil, session.state == .signedIn, session.isSignInAvailable else { return }
-        begin(.switchPerson) { await self.session.switchPerson() }
+        guard action == nil, session.state == .signedIn, session.isSignInAvailable,
+              let expected = session.context, session.isCurrent(expected) else { return }
+        begin(.switchPerson) {
+            guard self.session.isCurrent(expected) else { return }
+            do { try self.requireTransitionAdmission() }
+            catch { self.selectionError = (expected.generation, error as? AccountError ?? .busy); return }
+            await self.session.switchPerson()
+        }
     }
 
     func selectWorkspace(organizationID: String, workspaceID: String) {
         guard action == nil, session.state == .signedIn, session.isSignInAvailable,
               let expected = session.context, session.isCurrent(expected) else { return }
         begin(.workspace) {
-            do { try await self.session.selectWorkspace(organizationID: organizationID, workspaceID: workspaceID) }
+            guard self.session.isCurrent(expected) else { return }
+            do {
+                try self.requireTransitionAdmission()
+                try await self.session.selectWorkspace(organizationID: organizationID, workspaceID: workspaceID)
+            }
             catch {
                 // Validation may fail before the service publishes an error. A replaced
                 // account/generation must never acquire this former selection's error.
@@ -79,6 +92,8 @@ final class MobileAccountInteraction: ObservableObject {
     }
 
     func cancelOwnedSignInOnDisappear() { cancelSignIn() }
+
+    func privateProjectionDidChange() { selectionError = nil }
 
     /// Focused synthetic tests can join the actual command without polling view state.
     func waitUntilIdle() async {
@@ -157,6 +172,7 @@ struct MobileAccountOnboarding: View {
 /// No cloud controls are present until the shared N5 delivery API is released.
 private struct MobileAccountPanel: View {
     @ObservedObject var session: AccountSessionService
+    @ObservedObject private var privateProfile = PrivateProfileService.shared
     var continueAsGuest: (@MainActor () -> Void)?
     var actionChanged: (Bool) -> Void
     @StateObject private var interaction: MobileAccountInteraction
@@ -166,12 +182,24 @@ private struct MobileAccountPanel: View {
          actionChanged: @escaping (Bool) -> Void = { _ in }) {
         self.session = session; self.continueAsGuest = continueAsGuest
         self.actionChanged = actionChanged
-        self._interaction = StateObject(wrappedValue: MobileAccountInteraction(session: session))
+        self._interaction = StateObject(wrappedValue: MobileAccountInteraction(session: session,
+            requireTransitionAdmission: { try PrivateProfileService.shared.requireTransitionAdmission() }))
     }
 
     var body: some View {
         Group {
-            if session.state == .signedIn {
+            if !privateProfile.isPrivateDataVisible {
+                if privateProfile.isTransitioning {
+                    ProgressView(PichiLocalization.text("account.state.updating", defaultValue: "Updating account"))
+                        .accessibilityIdentifier("account.updating")
+                } else {
+                    Text(PichiLocalization.text("account.profile.unavailable", defaultValue: "Account data is temporarily hidden. Finish the current recording or operation, then retry sign-out."))
+                        .font(theme.typography.bodySmall).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("account.profile.hidden")
+                }
+                Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out")) { interaction.logout() }
+                    .disabled(interaction.action != nil).accessibilityIdentifier("account.signOut")
+            } else if session.state == .signedIn {
                 if let account = session.account, let context = session.context,
                    account.stableIdentity == context.identity, session.generation == context.generation {
                     signedIn(account, context: context)
@@ -190,6 +218,8 @@ private struct MobileAccountPanel: View {
             }
         }
         .onChange(of: interaction.action != nil) { _, active in actionChanged(active) }
+        .onChange(of: privateProfile.projectionRevision) { _, _ in interaction.privateProjectionDidChange() }
+        .onChange(of: privateProfile.isPrivateDataVisible) { _, _ in interaction.privateProjectionDidChange() }
         .onDisappear { interaction.cancelOwnedSignInOnDisappear() }
     }
 

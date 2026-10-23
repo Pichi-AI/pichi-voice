@@ -63,6 +63,7 @@ private actor SyntheticAccountTransport: AccountTransporting {
 
 @MainActor private final class SyntheticAccountLifecycle: AccountSessionLifecycle {
     var isAccountIsolationReady = true
+    var explicitTransitionsAllowed = true
     var holdWorkspace = false
     var waiting = false
     var transitions = 0
@@ -89,7 +90,10 @@ private actor SyntheticAccountTransport: AccountTransporting {
             apiAudience: "synthetic-api", bundleIdentifier: "ai.example.voice")
         session = AccountSessionService(configuration: configured ? configuration : nil,
             browser: browser, transport: transport, credentials: credentials, lifecycle: isolated ? lifecycle : nil)
-        ui = MobileAccountInteraction(session: session)
+        let admission = lifecycle
+        ui = MobileAccountInteraction(session: session, requireTransitionAdmission: {
+            if !admission.explicitTransitionsAllowed { throw AccountError.busy }
+        })
     }
     func shutdown() async { await ui.waitUntilIdle(); await session.shutdown() }
 }
@@ -138,6 +142,19 @@ private actor SyntheticAccountTransport: AccountTransporting {
 
         fixture.ui.signIn(); await fixture.ui.waitUntilIdle()
         expect(fixture.session.state == .signedIn && fixture.session.context?.workspaceID == nil, "Sign-in never selects a default workspace")
+        fixture.lifecycle.explicitTransitionsAllowed = false
+        let admitted = fixture.session.context!
+        let browserStarts = fixture.browser.starts
+        let transitions = fixture.lifecycle.transitions
+        fixture.ui.switchPerson(); await fixture.ui.waitUntilIdle()
+        expect(fixture.ui.error == .busy && fixture.browser.starts == browserStarts && fixture.session.context == admitted,
+               "Rejected person-switch admission preserves the account and starts no browser")
+        fixture.ui.selectWorkspace(organizationID: "org-b", workspaceID: "same-id"); await fixture.ui.waitUntilIdle()
+        expect(fixture.ui.error == .busy && fixture.lifecycle.transitions == transitions && fixture.session.context == admitted,
+               "Rejected workspace admission performs no profile transition")
+        fixture.ui.privateProjectionDidChange()
+        expect(fixture.ui.error == nil, "Profile revision clears transient selection errors")
+        fixture.lifecycle.explicitTransitionsAllowed = true
         fixture.lifecycle.holdWorkspace = true
         let priorContext = fixture.session.context!
         fixture.ui.selectWorkspace(organizationID: "org-b", workspaceID: "same-id")
@@ -153,8 +170,10 @@ private actor SyntheticAccountTransport: AccountTransporting {
         expect(fixture.ui.error == .workspaceUnavailable, "Validation failure has a safe visible error")
         await fixture.session.logout()
         expect(fixture.ui.error == nil, "External generation change suppresses a former account's local error")
+        fixture.lifecycle.explicitTransitionsAllowed = false
         fixture.ui.logout(); await fixture.ui.waitUntilIdle()
         expect(fixture.ui.error == nil && fixture.session.account == nil && fixture.session.context == nil, "Logout clears former account presentation")
+        fixture.lifecycle.explicitTransitionsAllowed = true
 
         fixture.ui.signIn(); await fixture.ui.waitUntilIdle()
         fixture.ui.switchPerson(); await fixture.ui.waitUntilIdle()
