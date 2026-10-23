@@ -602,6 +602,7 @@ struct MobileCloudSyncSettings: View {
                 if interaction.failed { cloudFailure }
             }
             .foregroundStyle(theme.palette.primaryText)
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("cloud.sync.settings")
         }
     }
@@ -679,6 +680,7 @@ struct MobileCloudRecordingStatus: View {
                             .foregroundStyle(theme.palette.warning)
                     }
                 }.foregroundStyle(theme.palette.secondaryText)
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("cloud.recording.\(recordingID)")
             }
         }
