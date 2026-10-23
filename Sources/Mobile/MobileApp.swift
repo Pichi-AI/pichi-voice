@@ -6,7 +6,8 @@ import UIKit
 /// the existing coordinator, pipeline, registry, settings, resource and storage owners.
 @MainActor
 final class AppServices: ObservableObject {
-    static let shared = AppServices()
+    /// Only the process composition shows a Live Activity; additional test compositions do not.
+    static let shared = AppServices(recordingActivity: MobileRecordingActivityOwner())
     let asr: ASRService
     let meetingSessionCoordinator: MeetingSessionCoordinator
     let meetingProcessingPipeline: MeetingProcessingPipeline
@@ -16,6 +17,7 @@ final class AppServices: ObservableObject {
     let transcriptPrivacy: PichiTranscriptPrivacyService
     let requiredResources: MobileRequiredResources
     let privacyActivation: MobilePrivacyActivation
+    let recordingActivity: MobileRecordingActivityOwner?
     private var requiredPreparationTask: Task<Void, Never>?
     @Published private(set) var isUIReady = false
     private static var didCleanExportStaging = false
@@ -53,7 +55,8 @@ final class AppServices: ObservableObject {
          settings: SettingsStore? = nil,
          privacy: PichiTranscriptPrivacyService? = nil,
          privacyRedactor: (any TranscriptTextRedacting)? = nil,
-         microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil) {
+         microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil,
+         recordingActivity: MobileRecordingActivityOwner? = nil) {
         // A cold-start operation only. Additional service compositions must not remove
         // files currently being used by an already-open native share sheet.
         if !Self.didCleanExportStaging {
@@ -78,6 +81,7 @@ final class AppServices: ObservableObject {
         let meetingRedactor: any TranscriptTextRedacting = privacyRedactor ?? privacy
         let resolveMicrophone = microphoneResolver ?? { try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: $0) }
         self.asr = asr; self.meetingStore = store; self.transcriptPrivacy = privacy
+        self.recordingActivity = recordingActivity
         self.requiredResources = MobileRequiredResources()
         self.privacyActivation = MobilePrivacyActivation(settings: settings, canPrepare: {
             asr.activeExclusiveActivity == nil && !asr.hasActiveModelPreparation
@@ -156,6 +160,7 @@ final class AppServices: ObservableObject {
             Task { @MainActor in await self?.idleResourcesChanged() }
         }.store(in: &idlePreparationObservers)
         observeIdleResourceStores()
+        recordingActivity?.observe(meetingSessionCoordinator)
     }
 
     func signalUIReady() async {
@@ -186,6 +191,7 @@ final class AppServices: ObservableObject {
     func shutdownForTermination() async {
         await idlePreparation.shutdown()
         await meetingSessionCoordinator.shutdownForTermination()
+        await recordingActivity?.shutdown()
         await asr.shutdownForTermination()
     }
 
@@ -290,6 +296,12 @@ struct PichiVoiceMobileApp: App {
                 // UI-test application runs in another process and retains real startup.
                 if NSClassFromString("XCTestCase") != nil { return }
                 if ProcessInfo.processInfo.environment["PICHI_UI_CAPTION_REVIEW"] == "1" { return }
+                // The production Live Activity request with a synthetic session, without a
+                // microphone, model preparation or stored meeting.
+                if ProcessInfo.processInfo.environment["PICHI_UI_LIVE_ACTIVITY_REVIEW"] == "1" {
+                    services.recordingActivity?.showReviewSample()
+                    return
+                }
                 #if targetEnvironment(simulator)
                 // Saved-meeting presentation tests use the normal root/store while
                 // skipping unrelated launch-time artifact installation and inference.
