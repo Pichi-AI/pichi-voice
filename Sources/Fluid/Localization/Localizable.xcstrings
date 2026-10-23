@@ -53719,6 +53719,57 @@
           }
         }
       }
+    },
+    "Enable Local API": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable Local API"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить локальный API"
+          }
+        }
+      }
+    },
+    "Expose a local HTTP endpoint on 127.0.0.1 so other apps on this Mac can send audio for transcription.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expose a local HTTP endpoint on 127.0.0.1 so other apps on this Mac can send audio for transcription."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть локальный HTTP-эндпоинт на 127.0.0.1, чтобы другие приложения на этом Mac могли отправлять аудио на распознавание."
+          }
+        }
+      }
+    },
+    "Changes take effect after you restart FluidVoice.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes take effect after you restart FluidVoice."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменения применяются после перезапуска FluidVoice."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
