@@ -9,6 +9,8 @@ final class AppServices: ObservableObject {
     static let shared = AppServices()
     let accountSession: AccountSessionService
     let privateProfiles: PrivateProfileService
+    private var cloudPublicationActivation: PichiCloudPublicationActivation?
+    var cloudPublication: PichiCloudPublicationService? { cloudPublicationActivation?.service }
     let asr: ASRService
     let meetingSessionCoordinator: MeetingSessionCoordinator
     let meetingProcessingPipeline: MeetingProcessingPipeline
@@ -57,9 +59,17 @@ final class AppServices: ObservableObject {
          settings: SettingsStore? = nil,
          accountSession: AccountSessionService? = nil,
          privateProfiles: PrivateProfileService? = nil,
+         publicationHTTP: (any PichiPublicationHTTPPerforming)? = nil,
          privacy: PichiTranscriptPrivacyService? = nil,
          privacyRedactor: (any TranscriptTextRedacting)? = nil,
          microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil) {
+        let isProductionComposition = store == nil && settings == nil && accountSession == nil
+            && privateProfiles == nil && injectedCapture == nil && privacy == nil && privacyRedactor == nil
+            && microphoneResolver == nil && publicationHTTP == nil
+        // Only a deliberate facade injection can install an observer in a fixture.
+        // A generic test store must never touch the global facade or production HTTP.
+        let publicationStore = isProductionComposition ? PrivateProfileMeetingStore.shared
+            : store as? PrivateProfileMeetingStore
         // A cold-start operation only. Additional service compositions must not remove
         // files currently being used by an already-open native share sheet.
         if !Self.didCleanExportStaging {
@@ -67,7 +77,7 @@ final class AppServices: ObservableObject {
             Self.didCleanExportStaging = true
         }
         self.accountSession = accountSession ?? .production()
-        self.privateProfiles = privateProfiles ?? ((store == nil && settings == nil && accountSession == nil) ? .shared : .init())
+        self.privateProfiles = privateProfiles ?? (isProductionComposition ? .shared : .init())
         let settings = settings ?? SettingsStore.shared
         self.settings = settings
         self.meetingLocation = MeetingLocationService(settings: settings)
@@ -167,7 +177,8 @@ final class AppServices: ObservableObject {
         do {
             try self.privateProfiles.configure(isBusy: { [weak self] in
                 guard let self else { return true }
-                return !self.meetingSessionCoordinator.isQuiescent || !self.asr.canBeginPrivateProfileTransition
+                return (publicationStore != nil && self.cloudPublicationActivation?.isInstalled != true)
+                    || !self.meetingSessionCoordinator.isQuiescent || !self.asr.canBeginPrivateProfileTransition
             }, prepare: { [weak self] in
                 guard let self else { throw AccountError.isolationRequired }
                 self.requiredPreparationTask?.cancel(); await self.requiredPreparationTask?.value
@@ -180,9 +191,18 @@ final class AppServices: ObservableObject {
                 self.privacyActivation.restore()
             })
             try self.accountSession.installLifecycle(self.privateProfiles)
-            if store == nil, settings == nil, accountSession == nil { PrivateProfileStorage.closeAdmission() }
+            if isProductionComposition { PrivateProfileStorage.closeAdmission() }
         } catch {
             DebugLogger.shared.warning("Private profile lifecycle unavailable", source: "MobileAppServices")
+        }
+        if let publicationStore {
+            let http: (any PichiPublicationHTTPPerforming)? = isProductionComposition
+                ? self.accountSession.configuration.flatMap { try? PichiPublicationHTTPClient(configuration: $0) }
+                : publicationHTTP
+            let service = PichiCloudPublicationService(account: self.accountSession, meetings: publicationStore,
+                profiles: self.privateProfiles, http: http)
+            self.cloudPublicationActivation = PichiCloudPublicationActivation(service: service,
+                account: self.accountSession, profiles: self.privateProfiles)
         }
     }
 
@@ -207,10 +227,20 @@ final class AppServices: ObservableObject {
     func restoreAccountBeforePrivateUI() async {
         if accountRestorationTask == nil {
             accountRestorationTask = Task { @MainActor in
+                if let publication = cloudPublicationActivation {
+                    do { try await publication.install() }
+                    catch {
+                        DebugLogger.shared.warning("Cloud publication composition unavailable", source: "MobileAppServices")
+                        return
+                    }
+                }
+                guard !Task.isCancelled else { return }
                 await accountSession.restore()
                 guard !Task.isCancelled else { return }
                 let current = PrivateProfileStorage.current
                 if current.isReadable { PrivateProfileStorage.select(current) }
+                await cloudPublicationActivation?.activateAfterAccountCommand()
+                guard !Task.isCancelled else { return }
                 hasRestoredAccount = true
             }
         }
@@ -219,6 +249,7 @@ final class AppServices: ObservableObject {
     func restorePrivateSourcesAfterCommit() async {
         guard PrivateProfileStorage.acceptsNewWork else { return }
         await meetingSessionCoordinator.ensureRestored()
+        await cloudPublicationActivation?.activateAfterAccountCommand()
     }
 
     func setSceneActive(_ active: Bool) async {
@@ -233,6 +264,7 @@ final class AppServices: ObservableObject {
     func shutdownForTermination() async {
         accountRestorationTask?.cancel(); await accountRestorationTask?.value
         accountRestorationTask = nil
+        await cloudPublicationActivation?.shutdown()
         await accountSession.shutdown()
         await idlePreparation.shutdown()
         await meetingSessionCoordinator.shutdownForTermination()

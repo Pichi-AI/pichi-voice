@@ -31,7 +31,8 @@ final class AppServices: ObservableObject {
         do {
             try profiles.configure(isBusy: { [weak self] in
                 guard let self else { return true }
-                return self._meetingSessionCoordinator?.isQuiescent == false
+                return self._cloudPublicationActivation?.isInstalled != true
+                    || self._meetingSessionCoordinator?.isQuiescent == false
                     || self._asr?.canBeginPrivateProfileTransition == false
                     || self._fileTranscriptionService?.isTranscribing == true
                     || PrivateProfileService.shared.hasRetainedCaptureStopHandler
@@ -64,17 +65,39 @@ final class AppServices: ObservableObject {
         catch { DebugLogger.shared.warning("Private profile lifecycle unavailable", source: "AppServices") }
         return service
     }()
+    private var _cloudPublicationActivation: PichiCloudPublicationActivation?
+    var cloudPublication: PichiCloudPublicationService {
+        cloudPublicationActivation.service
+    }
+    private var cloudPublicationActivation: PichiCloudPublicationActivation {
+        if let existing = _cloudPublicationActivation { return existing }
+        let account = accountSession
+        let http = account.configuration.flatMap { try? PichiPublicationHTTPClient(configuration: $0) }
+        let service = PichiCloudPublicationService(account: account, meetings: .shared,
+            profiles: privateProfiles, http: http)
+        let owner = PichiCloudPublicationActivation(service: service, account: account, profiles: privateProfiles)
+        _cloudPublicationActivation = owner
+        return owner
+    }
     private var accountRestorationTask: Task<Void, Never>?
     @Published private(set) var hasRestoredAccount = false
 
     func restoreAccountBeforePrivateUI() async {
         if accountRestorationTask == nil {
-            let session = accountSession
+            let session = accountSession, publication = cloudPublicationActivation
             accountRestorationTask = Task { @MainActor in
+                do { try await publication.install() }
+                catch {
+                    DebugLogger.shared.warning("Cloud publication composition unavailable", source: "AppServices")
+                    return
+                }
+                guard !Task.isCancelled, !isTerminating else { return }
                 await session.restore()
                 guard !Task.isCancelled else { return }
                 let current = PrivateProfileStorage.current
                 if current.isReadable { PrivateProfileStorage.select(current) }
+                await publication.activateAfterAccountCommand()
+                guard !Task.isCancelled, !isTerminating else { return }
                 hasRestoredAccount = true
             }
         }
@@ -84,6 +107,7 @@ final class AppServices: ObservableObject {
     func restorePrivateSourcesAfterCommit() async {
         guard !isTerminating, PrivateProfileStorage.acceptsNewWork else { return }
         await _meetingSessionCoordinator?.ensureRestored()
+        await _cloudPublicationActivation?.activateAfterAccountCommand()
     }
 
     var hasActivePrivateCapture: Bool {
@@ -526,6 +550,7 @@ final class AppServices: ObservableObject {
         self.accountRestorationTask?.cancel()
         await self.accountRestorationTask?.value
         self.accountRestorationTask = nil
+        await self._cloudPublicationActivation?.shutdown()
         await self.accountSession.shutdown()
         self.privateAIStartupWarmup?.cancel()
         await self.privateAIStartupWarmup?.value

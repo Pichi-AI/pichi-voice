@@ -264,3 +264,7 @@ preflight, owner isolation, request exclusion, held OFF/logout joins and no auto
 No valid HTTP request, native target build, simulator/device UI, live identity grant or
 production readiness was exercised. N2 still owns the final coalesced composition/provider
 configuration and source registration; N3/N4 consume this shared method and typed page.
+
+## Native common composition
+
+See [native protected publication composition](pichi-cloud-publication-composition.md) for the retained shared facade, observer-before-auth installation, bounded account readiness activation and fixture isolation.
