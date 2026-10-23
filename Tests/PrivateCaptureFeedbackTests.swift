@@ -202,6 +202,7 @@
         NotificationCenter.default.post(name: PrivateProfileService.willConceal, object: nil)
         PrivateProfileStorage.select(profileB)
         await drainMenuQueue()
+        while queuedStart.meetingStartRequested { await Task.yield() }
         check(AppServices.shared.starts == starts, "A queued A menu Start does not admit capture under B")
         let freshCapture = MenuStartGate()
         AppServices.shared.meetingSessionCoordinator.captureGate = freshCapture
