@@ -426,6 +426,23 @@
         }
       }
     },
+    "account.history.local": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing in does not upload existing recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вход не загружает существующие записи в облако."
+          }
+        }
+      }
+    },
     "account.onboarding.title": {
       "extractionState": "manual",
       "localizations": {
