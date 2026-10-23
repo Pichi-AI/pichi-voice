@@ -8,6 +8,11 @@ python3 -S - "$task_test_dir/Production.swift" <<'PY'
 from pathlib import Path
 import sys
 view = Path('Sources/Fluid/UI/FileTranscriptionView.swift').read_text()
+imports = '\n'.join(line for line in view.splitlines() if line.startswith('import ')) + '\n'
+fixture = Path('Tests/N4FilePrivateProjectionTests.swift').read_text()
+# Keep file-private drop assertions in the production translation unit while
+# importing only the production file's modules.
+fixture_body = '\n'.join(line for line in fixture.splitlines() if not line.startswith('import '))
 def section(start, end):
     assert view.count(start) == 1, start
     offset = view.index(start)
@@ -17,7 +22,7 @@ wrapper = section('/// Only profile-bound presentation', 'struct FileTranscripti
 format_type = section('    nonisolated enum ExportFormat:', '    private var selectedFileIsVideo:')
 document = section('nonisolated struct TranscriptionDocument:', '// MARK: - Preview')
 exporter = section('        .fileExporter(', '        .onReceive(self.fileHistoryStore.entriesPublisher)')
-Path(sys.argv[1]).write_text('import SwiftUI\nimport UniformTypeIdentifiers\n' + owner
+Path(sys.argv[1]).write_text(imports + owner
     + wrapper
     + 'struct FileTranscriptionProfileView: View {\n' + format_type
     + '    @ObservedObject var asrService: ASRService\n'
@@ -26,10 +31,11 @@ Path(sys.argv[1]).write_text('import SwiftUI\nimport UniformTypeIdentifiers\n' +
     + '    var body: some View { EmptyView() }\n}\n' + document
     + 'struct ExporterProbe: View {\n'
     + '    @StateObject private var privateProjection = FileTranscriptionPrivateProjection(clearReveal: {})\n'
-    + '    var body: some View { EmptyView()\n' + exporter + '\n    }\n}\n')
+    + '    var body: some View { EmptyView()\n' + exporter + '\n    }\n}\n'
+    + fixture_body + '\n')
 PY
-cat Tests/N4FilePrivateProjectionTests.swift >> "$task_test_dir/Production.swift"
 xcrun swiftc -swift-version 6 -default-isolation MainActor -parse-as-library \
+    -enable-upcoming-feature MemberImportVisibility \
     -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/Production.swift" \
     -o "$task_test_dir/tests"
