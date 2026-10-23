@@ -28,6 +28,20 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
     /// The required audio format for the analyzer
     private var analyzerFormat: AVAudioFormat?
     private var preparedLocale: Locale?
+    private var dictationCaptureLocale: (leaseID: UUID, locale: Locale)?
+
+    func beginAdmittedTranscription(leaseID: UUID) throws {
+        if let capture = self.dictationCaptureLocale {
+            guard capture.leaseID == leaseID else { throw CancellationError() }
+            return
+        }
+        self.dictationCaptureLocale = (leaseID, self.preparedLocale ?? self.selectedSpeechLocale())
+    }
+
+    func endAdmittedTranscription(leaseID: UUID) {
+        guard self.dictationCaptureLocale?.leaseID == leaseID else { return }
+        self.dictationCaptureLocale = nil
+    }
 
     /// Thread-safe cache for model installation status.
     /// Protected by `_cacheQueue` for thread-safe access from both sync and async contexts.
@@ -269,7 +283,7 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
     // MARK: - Helpers
 
     private func selectedSpeechLocale() -> Locale {
-        SettingsStore.shared.selectedAppleSpeechLocale
+        self.dictationCaptureLocale?.locale ?? SettingsStore.shared.selectedAppleSpeechLocale
     }
 
     private func normalizedIdentifier(for locale: Locale) -> String {

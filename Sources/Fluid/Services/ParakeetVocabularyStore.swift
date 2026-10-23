@@ -203,8 +203,17 @@ import FluidAudio
         (try? self.loadResolvedConfig())?.terms.isEmpty == false
     }
 
-    func loadResolvedConfig() throws -> ResolvedConfig {
-        let rawJSON = try self.loadRawJSON()
+    func loadResolvedConfig(maximumBytes: Int? = nil) throws -> ResolvedConfig {
+        let rawJSON: String
+        if let maximumBytes {
+            let handle = try FileHandle(forReadingFrom: self.ensureVocabularyFileExists())
+            defer { try? handle.close() }
+            let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
+            guard data.count <= maximumBytes else { throw StoreError.invalidJSON("Vocabulary file exceeds the capture limit.") }
+            rawJSON = String(decoding: data, as: UTF8.self)
+        } else {
+            rawJSON = try self.loadRawJSON()
+        }
         let parsed = (try? self.validateJSON(rawJSON)) ?? VocabularyConfig(
             alpha: nil,
             minCtcScore: nil,
@@ -353,9 +362,11 @@ extension Notification.Name {
 extension ParakeetVocabularyStore {
     /// Creates tokenized vocabulary + CTC models for FluidAudio vocabulary boosting.
     func loadTokenizedVocabularyBundle(
-        maxTerms: Int = 256
+        maxTerms: Int = 256,
+        resolvedConfig: ResolvedConfig? = nil
     ) async throws -> (vocabulary: CustomVocabularyContext, ctcModels: CtcModels)? {
-        let resolved = try self.loadResolvedConfig()
+        // An admitted provider supplies its immutable visible-profile configuration.
+        let resolved = try resolvedConfig ?? self.loadResolvedConfig()
         DebugLogger.shared.debug("ParakeetVocabularyStore: resolved vocabulary term count=\(resolved.terms.count)", source: "ParakeetVocabularyStore")
         guard !resolved.terms.isEmpty else {
             DebugLogger.shared.debug("ParakeetVocabularyStore: no resolved terms; returning nil bundle", source: "ParakeetVocabularyStore")

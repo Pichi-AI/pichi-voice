@@ -70,21 +70,21 @@ final class NemotronStreamingAsrManager {
         do {
             reset()
             let provider = WhisperProvider(), lease = UUID(), other = UUID()
-            try provider.beginDictationCapture(leaseID: lease)
+            try provider.beginAdmittedTranscription(leaseID: lease)
             settings.hidden = true
             check(provider.observedModel == .whisperTiny && provider.resolvedLanguageCode() == "ru", "Whisper retains admitted model/language after concealment")
             check(provider.observedDirectory.path == "/synthetic/caches/WhisperModels", "Whisper retains artifact directory")
-            rejects { try provider.beginDictationCapture(leaseID: other) }
-            try provider.beginDictationCapture(leaseID: lease)
-            provider.endDictationCapture(leaseID: other)
+            rejects { try provider.beginAdmittedTranscription(leaseID: other) }
+            try provider.beginAdmittedTranscription(leaseID: lease)
+            provider.endAdmittedTranscription(leaseID: other)
             check(provider.resolvedLanguageCode() == "ru", "Stale Whisper end and repeat admission cannot replace the snapshot")
-            provider.endDictationCapture(leaseID: lease)
+            provider.endAdmittedTranscription(leaseID: lease)
             check(provider.observedModel == .whisperSmall && provider.resolvedLanguageCode() == nil, "Matching Whisper end restores current settings")
             settings.hidden = false; settings.whisperLanguage = nil
-            try provider.beginDictationCapture(leaseID: other)
+            try provider.beginAdmittedTranscription(leaseID: other)
             settings.whisperLanguage = "de"
             check(provider.resolvedLanguageCode() == nil, "Admitted automatic Whisper language is a value, not a missing override")
-            provider.endDictationCapture(leaseID: other)
+            provider.endAdmittedTranscription(leaseID: other)
             check(provider.resolvedLanguageCode() == "de", "Automatic Whisper admission clears on matching end")
         }
         for automatic in [false, true] {
@@ -92,63 +92,63 @@ final class NemotronStreamingAsrManager {
             let directory = URL(fileURLWithPath: "/synthetic/meeting/whisper")
             let provider = WhisperProvider(model: .whisperTiny, language: "fr", automatic: automatic, directory: directory)
             let lease = UUID()
-            try provider.beginDictationCapture(leaseID: lease)
+            try provider.beginAdmittedTranscription(leaseID: lease)
             settings.hidden = true
             check(provider.observedModel == .whisperTiny && provider.observedDirectory == directory, "Explicit Whisper meeting artifact/model retain precedence")
             check(provider.resolvedLanguageCode() == (automatic ? nil : "fr"), "Explicit meeting language/automatic detection retain precedence")
             check(provider.resolvedLanguageCode(explicit: "de") == "de" && provider.resolvedLanguageCode(explicit: "auto") == nil, "Explicit per-call language retains existing precedence")
-            provider.endDictationCapture(leaseID: lease)
+            provider.endAdmittedTranscription(leaseID: lease)
             check(provider.resolvedLanguageCode() == (automatic ? nil : "fr"), "Ending dictation cannot clear fixed meeting options")
         }
         do {
             reset()
             let provider = AppleSpeechProvider(), lease = UUID(), other = UUID()
             let original = provider.observedRecognizer()
-            try provider.beginDictationCapture(leaseID: lease)
+            try provider.beginAdmittedTranscription(leaseID: lease)
             settings.hidden = true
             check(provider.observedRecognizer() === original, "Concealment cannot replace admitted Apple recognizer/locale")
-            rejects { try provider.beginDictationCapture(leaseID: other) }
-            try provider.beginDictationCapture(leaseID: lease)
-            provider.endDictationCapture(leaseID: other)
+            rejects { try provider.beginAdmittedTranscription(leaseID: other) }
+            try provider.beginAdmittedTranscription(leaseID: lease)
+            provider.endAdmittedTranscription(leaseID: other)
             check(provider.observedRecognizer()?.locale.identifier == "ru-RU", "Stale Apple end retains locale")
-            provider.endDictationCapture(leaseID: lease)
+            provider.endAdmittedTranscription(leaseID: lease)
             check(provider.observedRecognizer()?.locale.identifier == "en-US", "Matching Apple end restores current locale")
         }
         do {
             reset()
             let provider = NemotronProvider(activeLanguage: "ru"), manager = NemotronStreamingAsrManager(targetLanguage: "ru")
             let lease = UUID(), other = UUID()
-            try provider.beginDictationCapture(leaseID: lease)
+            try provider.beginAdmittedTranscription(leaseID: lease)
             settings.hidden = true
             try await provider.apply(to: manager)
             check(manager.targetLanguage == "ru" && manager.changes.isEmpty, "Concealment preserves existing Nemotron manager target")
-            rejects { try provider.beginDictationCapture(leaseID: other) }
-            try provider.beginDictationCapture(leaseID: lease)
-            provider.endDictationCapture(leaseID: other)
+            rejects { try provider.beginAdmittedTranscription(leaseID: other) }
+            try provider.beginAdmittedTranscription(leaseID: lease)
+            provider.endAdmittedTranscription(leaseID: other)
             try await provider.apply(to: manager)
             check(manager.targetLanguage == "ru", "Stale Nemotron end retains target")
-            provider.endDictationCapture(leaseID: lease)
+            provider.endAdmittedTranscription(leaseID: lease)
             try await provider.apply(to: manager)
             check(manager.targetLanguage == "en" && manager.changes == ["en"], "Matching Nemotron end allows current target application")
             settings.hidden = false; settings.nemotronLanguage = "de"
-            try provider.beginDictationCapture(leaseID: other)
+            try provider.beginAdmittedTranscription(leaseID: other)
             settings.hidden = true
             try await provider.apply(to: manager)
             check(manager.targetLanguage == "de", "Nemotron also applies an admitted target not previously loaded")
-            provider.endDictationCapture(leaseID: other)
+            provider.endAdmittedTranscription(leaseID: other)
         }
         do {
             reset(); settings.model = .cohere
             let provider = ExternalCoreMLTranscriptionProvider(), lease = UUID(), other = UUID()
-            try provider.beginDictationCapture(leaseID: lease)
+            try provider.beginAdmittedTranscription(leaseID: lease)
             settings.hidden = true
             check(provider.observedModel == .cohere && provider.observedPrompt == [100, 201, 999], "Cohere retains admitted model and language prompt")
             check(provider.observedDirectory?.path == "/synthetic/import/A", "Cohere retains imported artifact directory after concealment")
-            rejects { try provider.beginDictationCapture(leaseID: other) }
-            try provider.beginDictationCapture(leaseID: lease)
-            provider.endDictationCapture(leaseID: other)
+            rejects { try provider.beginAdmittedTranscription(leaseID: other) }
+            try provider.beginAdmittedTranscription(leaseID: lease)
+            provider.endAdmittedTranscription(leaseID: other)
             check(provider.observedPrompt == [100, 201, 999] && provider.observedDirectory?.path == "/synthetic/import/A", "Stale Cohere end retains snapshot")
-            provider.endDictationCapture(leaseID: lease)
+            provider.endAdmittedTranscription(leaseID: lease)
             settings.hidden = false; settings.model = .alternateCohere; settings.cohereLanguage = .german
             settings.artifactDirectory = URL(fileURLWithPath: "/synthetic/import/B")
             check(provider.observedModel == .alternateCohere && provider.observedPrompt == [100, 203, 999], "Matching Cohere end restores current model/language")
@@ -157,10 +157,10 @@ final class NemotronStreamingAsrManager {
         do {
             reset(); settings.model = .alternateCohere; settings.artifactDirectory = nil
             let provider = ExternalCoreMLTranscriptionProvider(model: .cohere), lease = UUID()
-            try provider.beginDictationCapture(leaseID: lease)
+            try provider.beginAdmittedTranscription(leaseID: lease)
             settings.artifactDirectory = URL(fileURLWithPath: "/synthetic/import/B")
             check(provider.observedModel == .cohere && provider.observedDirectory?.path == "/synthetic/public/cohere", "Explicit Cohere model and admitted public fallback retain precedence")
-            provider.endDictationCapture(leaseID: lease)
+            provider.endAdmittedTranscription(leaseID: lease)
             check(provider.observedModel == .cohere && provider.observedDirectory?.path == "/synthetic/import/B", "Ending admission preserves explicit Cohere model")
         }
         print("Provider dictation capture options: \(assertions) assertions passed.")

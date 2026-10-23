@@ -63,7 +63,7 @@ final class NemotronProvider: TranscriptionProvider {
     private let dictationCaptureLock = NSRecursiveLock()
     private var dictationCaptureConfiguration: DictationCaptureConfiguration?
 
-    func beginDictationCapture(leaseID: UUID) throws {
+    func beginAdmittedTranscription(leaseID: UUID) throws {
         try self.dictationCaptureLock.withLock {
             if let capture = self.dictationCaptureConfiguration {
                 guard capture.leaseID == leaseID else {
@@ -77,7 +77,7 @@ final class NemotronProvider: TranscriptionProvider {
         }
     }
 
-    func endDictationCapture(leaseID: UUID) {
+    func endAdmittedTranscription(leaseID: UUID) {
         self.dictationCaptureLock.withLock {
             guard self.dictationCaptureConfiguration?.leaseID == leaseID else { return }
             self.dictationCaptureConfiguration = nil
