@@ -82,6 +82,29 @@ extension MeetingSessionStoreCheckpointTests {
         value = original; value.transcriptIsComplete = false
         check(!((try MeetingTranscriptExporter.protectedTranscriptJSON(for: value)).isEmpty),
               "Cloud withholding leaves the existing explicit protected manual export usable")
+        value = original; value.transcriptSegments = []
+        try rejects(value, .emptyTranscript, "Measured-complete no-speech source is empty, not incomplete")
+        value = original; value.transcriptSegments[0].end = value.transcriptSegments[0].start
+        try rejects(value, .invalidTranscript, "Server-positive interval requirements apply before admission")
+        value = original; value.endedAt = value.startedAt.addingTimeInterval(86_401)
+        try rejects(value, .exportLimitExceeded, "Sources longer than the existing server limit stay local")
+        value = original
+        value.speakers = (0..<101).map { _ in
+            .init(id: UUID(), displayName: "Synthetic", diarizationClusterID: nil,
+                trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        }
+        try rejects(value, .exportLimitExceeded, "The server speaker limit applies before enqueueing")
+        value = original
+        var provisional = MeetingSessionSpeaker(id: UUID(), displayName: "Синтетический участник Ёё", diarizationClusterID: nil,
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        provisional.identityIsProvisional = true
+        value.speakers = [provisional]; value.transcriptSegments[0].speakerID = provisional.id
+        let exportedSource = try PichiProtectedPublicationSource.prepare(for: value)
+        let exportedObject = try JSONSerialization.jsonObject(with: exportedSource.transcriptBytes) as! [String: Any]
+        check((exportedObject["speakers"] as! [[String: Any]])[0]["identityIsProvisional"] as? Bool == true,
+              "Actual exporter provisional metadata survives source preparation byte-for-byte")
+        check(try PichiProtectedPublicationPayload.validate(exportedSource.transcriptBytes).contains(provisional.id),
+              "Shared wire guard accepts actual exporter-shaped provisional participant bytes")
 
         let cancelled = Task { () throws -> PichiProtectedPublicationSource in
             withUnsafeCurrentTask { $0?.cancel() }

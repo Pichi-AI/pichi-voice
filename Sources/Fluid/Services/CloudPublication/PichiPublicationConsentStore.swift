@@ -21,6 +21,7 @@ actor PichiPublicationConsentStore {
         let schemaVersion: Int
         let scope: Scope
         let automaticPublicationEnabled: Bool
+        let deliveryPaused: Bool?
     }
 
     private let directory: URL
@@ -52,14 +53,53 @@ actor PichiPublicationConsentStore {
         guard let directoryFD = try self.openDirectory() else { throw PichiPublicationConsentFailure.unavailable }
         defer { Darwin.close(directoryFD) }
         // Preserve evidence of corruption or a foreign copied record instead of overwriting it.
-        _ = try self.read(scope: scope, directoryFD: directoryFD)
-        let record = Record(schemaVersion: 1, scope: scope, automaticPublicationEnabled: enabled)
+        let previous = try self.read(scope: scope, directoryFD: directoryFD)
+        let record = Record(schemaVersion: 1, scope: scope, automaticPublicationEnabled: enabled,
+            deliveryPaused: previous?.deliveryPaused ?? false)
         let bytes = try self.encode(record)
         guard bytes.count <= Self.maximumRecordBytes else { throw PichiPublicationConsentFailure.invalidScope }
         try self.write(bytes, name: self.name(for: scope), directoryFD: directoryFD)
         guard try self.read(scope: scope, directoryFD: directoryFD) == record else {
             throw PichiPublicationConsentFailure.unavailable
         }
+    }
+
+    func deliveryPaused(for context: AccountContext) throws -> Bool {
+        try Task.checkCancellation()
+        guard self.configuration != nil, context.organizationID != nil, context.workspaceID != nil else { return false }
+        let scope = try self.scope(for: context)
+        guard let directoryFD = try self.openDirectory() else { return false }
+        defer { Darwin.close(directoryFD) }
+        return try self.read(scope: scope, directoryFD: directoryFD)?.deliveryPaused ?? false
+    }
+
+    func setDeliveryPaused(_ paused: Bool, for context: AccountContext) throws {
+        try Task.checkCancellation()
+        let scope = try self.scope(for: context)
+        guard let directoryFD = try self.openDirectory() else { throw PichiPublicationConsentFailure.unavailable }
+        defer { Darwin.close(directoryFD) }
+        let previous = try self.read(scope: scope, directoryFD: directoryFD)
+        let record = Record(schemaVersion: 1, scope: scope,
+            automaticPublicationEnabled: previous?.automaticPublicationEnabled ?? false, deliveryPaused: paused)
+        let bytes = try self.encode(record)
+        guard bytes.count <= Self.maximumRecordBytes else { throw PichiPublicationConsentFailure.invalidScope }
+        try self.write(bytes, name: self.name(for: scope), directoryFD: directoryFD)
+        guard try self.read(scope: scope, directoryFD: directoryFD) == record else { throw PichiPublicationConsentFailure.unavailable }
+    }
+
+    /// The public Cloud sync toggle changes both delivery admission and future-capture
+    /// consent in one atomic scoped preference record.
+    func setCloudSyncEnabled(_ enabled: Bool, for context: AccountContext) throws {
+        try Task.checkCancellation()
+        let scope = try self.scope(for: context)
+        guard let directoryFD = try self.openDirectory() else { throw PichiPublicationConsentFailure.unavailable }
+        defer { Darwin.close(directoryFD) }
+        _ = try self.read(scope: scope, directoryFD: directoryFD)
+        let record = Record(schemaVersion: 1, scope: scope, automaticPublicationEnabled: enabled, deliveryPaused: !enabled)
+        let bytes = try self.encode(record)
+        guard bytes.count <= Self.maximumRecordBytes else { throw PichiPublicationConsentFailure.invalidScope }
+        try self.write(bytes, name: self.name(for: scope), directoryFD: directoryFD)
+        guard try self.read(scope: scope, directoryFD: directoryFD) == record else { throw PichiPublicationConsentFailure.unavailable }
     }
 
     private func scope(for context: AccountContext) throws -> Scope {

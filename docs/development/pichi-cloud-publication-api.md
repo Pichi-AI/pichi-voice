@@ -1,0 +1,156 @@
+# Shared native cloud publication API
+
+Status: early working source API for N3/N4 and the N2 composition owner. It is not a
+production readiness declaration. The source probes use actual N1/N2/store/exporter code
+with synthetic in-memory authentication and HTTP fixtures, not a live W2 service.
+
+Source inputs: N1 `f989116f2028d1bb1d47cac86ff65f6e57a2391a`, published N2
+`66ae984b15d58e0c0d4ff71cd5f5573a4e5d9183`, W2 wire fixtures
+`128e1dc17b51f0f0877e00eafb1f73c13cadddf5` and additive provisional compatibility fixture
+`c76d7dde2c7bc3c2f374238b8e780fab9d5a145f`. Mandatory N2 transition/composition correction
+`d5febd9421918c192063b61e53d3f208f80d2fb7` is the next approved local integration input;
+final publication must consume it and target its published N2 dependency branch.
+
+## One facade for both platforms
+
+`Sources/Fluid/Services/CloudPublication/PichiCloudPublicationService.swift` defines the
+main-actor `ObservableObject`. Its constructor is:
+
+```swift
+init(account: AccountSessionService,
+     meetings: PrivateProfileMeetingStore = .shared,
+     profiles: PrivateProfileService? = nil,
+     http: (any PichiPublicationHTTPPerforming)? = nil)
+```
+
+The default profile participant is N2's existing service. A missing HTTP executor starts no
+network. Production composition can create `PichiPublicationHTTPClient(configuration:)`
+only from `account.configuration`. It owns an ephemeral session, refuses redirects and
+cookies/cache/credential storage, limits response bodies and joins its requests on shutdown.
+No view owns tokens, an HTTP executor, a queue or a separate profile/account manager.
+
+| Operation | Concrete semantics |
+| --- | --- |
+| `install() async throws` | Once, before N1 restoration/login. Installs the one recording observer and registers the retained N2 transition participant. Does not configure readiness, restore or sign in. |
+| `activateCurrentProfile() async throws` | After N1 publishes its verified current context and N2 has selected readable sources. Loads only known local queue records. Resumes eligible owner-bound work when scoped sync is on and not manually paused. |
+| `refresh() async throws` | Refresh sanitized current-profile settings/pending projection without changing consent or scanning history. |
+| `setCloudSyncEnabled(_ enabled: Bool) async throws` | The only UI Cloud sync toggle. OFF closes network admission immediately, cancels and joins owned POST/GET/PATCH, atomically disables future-capture consent and persists pause, then retains paused immutable work. ON opts in future captures and may resume only previously admitted work for the same verified owner. |
+| `status(for id: MeetingSessionID) async throws -> PichiCloudPublicationStatus` | Load one known current-profile ID. Missing/guest/non-admitted records are local-only; never use this operation to discover uploads in history. |
+| `send(_ id: MeetingSessionID) async throws` | Send only an existing eligible recording-time admission. Does not grant historical consent or resume unrelated user-paused work. Cloud sync must be on. |
+| `retry(_ id: MeetingSessionID) async throws` | Explicit same-key, same-byte retry, preserving Retry-After. An accepted item reconciles instead of reimporting. Does not resume unrelated work. |
+| `pause() async` | Join delivery and persist this account/workspace's pause. Future-capture policy stays unchanged. Write failure remains visible and current delivery stays closed. |
+| `resume() async throws` | Explicitly clear the current owner's manual pause when Cloud sync is on. Review/billing/permission/validation pauses and Retry-After deadlines are preserved. |
+| `reconcile(_ id: MeetingSessionID) async throws` | Owner-authorized GET of the existing import ID; update analysis without changing source identity. Blocked while Cloud sync is off. |
+| `resolveAssessment(_ id: MeetingSessionID, participantID: UUID, criteriaIDs: [String]) async throws` | Explicit represented source participant plus nonempty authorized criteria selection. PATCH never changes original POST fingerprint. No employee guess or implicit reanalysis. Blocked while sync is off. |
+| `shutdown() async` | Join commands, callbacks and delivery, pause durable work, then shut down the owned HTTP executor. Does not stop local recording or delete cloud history. |
+
+Do not bind a UI toggle to the low-level `PichiPublicationConsentStore` methods. They are
+implementation operations and cannot by themselves join an active network request. Disable
+repeat toggle commands while the coherent setter is pending. Its busy/cancellation errors
+must not be converted into an optimistic successful UI state.
+
+## Sanitized presentation
+
+`@Published private(set) var snapshot: PichiCloudPublicationSnapshot` contains:
+
+- `availability: PichiCloudPublicationAvailability`
+- `cloudSyncEnabled: Bool`
+- `items: [MeetingSessionID: PichiCloudPublicationStatus]`, bounded to 128 current-profile
+  projections. Call `status(for:)` for visible known history rows outside this cache.
+
+Availability codes are `unconfigured`, `signedOut`, `profileUnavailable`, `ready`, `pausing`,
+`paused`, `transportUnavailable` and `storageUnavailable`. During OFF, `pausing` means a
+concrete request or durable write is still joining. The published toggle value retains its
+last verified value until the operation finishes. Never show "disabled" solely because the
+user clicked OFF. A failed write leaves transport closed and a visible error; it does not
+claim that a new setting was durably saved.
+
+Delivery status is typed separately from analysis:
+
+```swift
+enum PichiCloudPublicationStatus {
+    case localOnly, waitingForSource, queued, sending
+    case withheld(PichiPublicationWithholdingReason)
+    case retryScheduled(Date)
+    case paused(PichiPublicationPauseReason)
+    case accepted(PichiPublicationReceipt)
+    case conflict
+}
+```
+
+`PichiPublicationReceipt` has schema version 1, opaque `importID`/`recordingID`, upload state
+`accepted` and analysis state `queued`, `running`, `succeeded`, `failed`, `needsParticipant`
+or `needsCriteria`. An upload can stay accepted when analysis fails or needs explicit input.
+Initial POST assessment is always explicit null participant/empty criteria. A represented
+participant is selected by the user later; `isLocalUser` and provisional display flags confer
+no employee or account authority. W2 still owns authorized criteria discovery/detail routing.
+
+Source withholding codes are `notCompleted`, `redactionNotEnabled`, `originalTextRetained`,
+`completenessUnknown`, `incompleteTranscript`, `emptyTranscript`, `excludedIntervals`,
+`invalidTranscript` and `exportLimitExceeded`. A measured-complete empty source is not
+called incomplete. All withheld sources remain local.
+
+Pause codes are `userRequested`, `profileTransition`, `uncertainDelivery`,
+`authenticationRequired`, `accountReview`, `permissionReview`, `receiptReview`,
+`validationRejected`, `sourceConflict`, `retryBudgetExhausted`, `retryAfterBeyondBudget`,
+`transportUnavailable` and `storageUnavailable`. A profile transition cannot turn 402,
+permission/validation review or retry exhaustion into automatic delivery.
+
+N3 owns shared String Catalog entries. Suggested exact English catalog keys are below;
+they are presentation mappings, not behavior selectors or a second status contract.
+
+| Code | Suggested String Catalog key |
+| --- | --- |
+| `localOnly` | `Saved on this device` |
+| `waitingForSource` | `Waiting for protected transcript` |
+| `queued` | `Queued for cloud upload` |
+| `sending` | `Uploading protected transcript` |
+| `retryScheduled` | `Retry at %@` |
+| `accepted` | `Cloud upload accepted` |
+| `pausing` | `Stopping cloud sync` |
+| `paused.userRequested` | `Cloud uploads paused` |
+| `paused.authenticationRequired` | `Sign in again to resume cloud uploads` |
+| `paused.accountReview` | `Review account balance` |
+| `paused.permissionReview` | `Review workspace access` |
+| `paused.receiptReview` | `Review cloud upload status` |
+| `paused.validationRejected` | `Cloud upload needs validation review` |
+| `paused.sourceConflict` / `conflict` | `Cloud source conflict` |
+| `paused.retryBudgetExhausted` | `Automatic retries paused` |
+| `paused.retryAfterBeyondBudget` | `Server requested a longer retry delay` |
+| `withheld.emptyTranscript` | `No transcript text to upload` |
+| `withheld.incompleteTranscript` | `Recognition is incomplete. Kept on this device.` |
+| `withheld.completenessUnknown` | `Recognition completeness is unknown` |
+| `withheld.redactionNotEnabled` | `This recording was captured without text redaction` |
+| `withheld.originalTextRetained` | `Original text is still stored` |
+| `withheld.excludedIntervals` | `Some audio intervals have no transcript` |
+| `withheld.invalidTranscript` | `This protected source needs review` |
+| `withheld.exportLimitExceeded` | `This source exceeds cloud upload limits` |
+| `analysis.queued` / `analysis.running` | `Analysis queued` / `Analysis running` |
+| `analysis.succeeded` | `Analysis completed` |
+| `analysis.failed` | `Analysis failed. Upload retained.` |
+| `analysis.needsParticipant` | `Choose the represented participant` |
+| `analysis.needsCriteria` | `Choose assessment criteria` |
+| `availability.storageUnavailable` | `Cloud storage unavailable. Transfers are paused.` |
+
+Complete missing availability/pause labels in the same catalog. Format retry dates with the
+existing localized date roles. User transcripts, participant names, criteria IDs and imported
+brand names are never translated. Metadata may contain personal data; do not promise full
+anonymization. Do not render arbitrary server error messages/details or credentials.
+
+## Composition and remaining gates
+
+N2 owns a small common composition hook: retain this facade, create the executor from N1's
+trusted configuration, await `install()` before account restore/sign-in, and expose the same
+instance to N3/N4. Invoke `activateCurrentProfile()` after the actual current account/profile
+state is published. Do not invoke it inside an unfinished N1/N2 transition. Register the new
+CloudPublication sources in the mobile manifest/Xcode project under N2's coordinated lease;
+N5 does not regenerate or edit common composition, project IDs or readiness flags.
+
+Working source evidence: 73 durable-store checks and 37 facade checks passed in the actual
+N1/N2 observer/store probe. They cover scoped policy, same-owner/new-generation recovery,
+response loss, original-byte replay, A/B and guest isolation, coherent OFF join, OFF captures,
+blocked GET/PATCH, explicit pending resolution and storage failure without recording failure.
+The probe uses Swift 5 mode because the existing unrelated `ExportedTranscript: Encodable`
+conformance warns under that mode; strict Swift 6 consent/wire checks are separate. These
+results do not establish a native target build, UI quality, full N2 private-source inventory,
+physical-device behavior, real token/browser behavior or live W2 persistence/billing/dispatch.

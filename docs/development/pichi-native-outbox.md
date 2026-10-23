@@ -11,9 +11,9 @@ Corrected N1 API `f989116f2028d1bb1d47cac86ff65f6e57a2391a` is merged as an expl
 dependency, replacing the earlier `f6b0e48` and `9fc25a13` handoffs. The coordinator's independent
 delta review resolved the refresh/workspace and command-cancellation issues without a public interface change.
 N1's final native/runtime evidence remains its own gate. No duplicate account or token
-manager is introduced, and N5 does not alter N1 account sources. N2 source API
-`917bd15d87dd70e16a4e4e7fa781ca3dc61557f4` is now approved for source integration, with
-its runtime/composition acceptance still pending.
+manager is introduced, and N5 does not alter N1 account sources. N2 source API `917bd15d`
+and published follow-up `66ae984b15d58e0c0d4ff71cd5f5573a4e5d9183` are integrated, with
+runtime/composition acceptance still pending. The next mandatory local integration is N2 `d5febd94`.
 
 ## Implemented source gate
 
@@ -87,9 +87,9 @@ The first run passed 55 synthetic checks for scoped defaults/persistence, replac
 cancellation, oversized/truncated/foreign/versioned records, permissions, symlinks, hard
 links, FIFO rejection and interrupted temporary files. Recreating an actor and generation
 simulates storage recovery; this is not a native application relaunch or logout test.
-N1's corrected account probe declares sh; N5's consent probe declares Bash. Both are
-registered without UI access in the existing standalone runner. The registry assertions
-cover 67 probes: 50 sh, 9 Bash and 8 Python.
+N1's account probe declares sh; N5 consent and outbox probes declare Bash. All are registered
+without UI access. With the N2 probes, registry assertions cover 73 probes: 55 sh, 10 Bash
+and 8 Python.
 
 ## Implemented W2 wire codec
 
@@ -105,12 +105,15 @@ original assessment and multipart boundary stay in the original value. PATCH is 
 value and cannot rewrite that original POST. Non-null participants must be represented by
 the protected source; no name, owner label or `isLocalUser` guess is made.
 
-Recovery needs a bounded structural validator for already serialized protected bytes because
-the existing exporter is encode-only. The validator does not re-encode the source and does
+Recovery and source admission share `PichiProtectedPublicationPayload`, a bounded structural
+validator for already serialized bytes because the existing exporter is encode-only. It does not re-encode the source and does
 not prove native completeness, actual redaction or profile ownership. It rejects fields
 outside the exporter allowlist, original/audio/internal exports and invalid typed structure.
 The original exporter remains the only admission encoder. Source bytes/text keep its existing
-limits. Multipart is capped at 1 MiB, response bodies at 65,536 bytes, and explicit selections
+limits. The server contract additionally requires at least one nonblank segment, positive
+intervals, at most 86,400 seconds and at most 100 speakers. Empty complete sources are
+withheld as `emptyTranscript`, separately from incomplete recognition.
+Multipart is capped at 1 MiB, response bodies at 65,536 bytes, and explicit selections
 at 100 unique opaque criteria IDs with at most 512 UTF-8 bytes per ID. These are conservative
 client resource bounds, not a change to server authorization or criteria policy.
 
@@ -118,9 +121,10 @@ Runtime authorization uses the existing N1 `authorizedAccess(for:)`, checks the 
 entire trusted configuration against N1's configuration, and checks `isCurrent` before
 returning a transient bearer request. The owner-checked response overload repeats that fence
 after network completion. N2 capture/profile authorization must still surround all local
-application. Unsigned request values contain no bearer. No HTTP executor or network request
-is activated by this pure codec. The eventual executor must preserve HTTP status/Retry-After,
-refuse redirects and disable cookies, credentials and cache with bounded bodies/time.
+application. Unsigned request values contain no bearer. No network request is activated by
+this pure codec. `PichiPublicationHTTPClient` separately implements the status-preserving
+executor with refused redirects, disabled cookies/cache/credentials, bounded bodies/time,
+at most four requests and joined shutdown.
 
 N1's `AccountHTTPRequesting` is deliberately not reused for publication: it returns only
 Data and collapses statuses needed to distinguish validation, billing, conflict and retries.
@@ -136,7 +140,7 @@ malformed bodies or unknown codes pause for review rather than becoming acceptan
 `PichiPublicationRetryPolicy` permits five total automatic attempts with 5/10/20/40-second
 backoff. Valid delta-seconds or IMF-fixdate Retry-After is honored within a one-hour automatic
 window. Longer valid windows pause rather than retrying early; exhaustion also pauses.
-The future durable worker must persist the attempt budget. This codec starts no timer/retry.
+The durable worker persists the attempt budget. The codec starts no timer/retry.
 
 The existing consent probe also compiles the actual N1 account sources and wire code in
 Swift 6. It passed 55 consent checks and 124 wire checks, including exact fixture hashes/body
@@ -145,7 +149,27 @@ malformed/oversized/unsafe inputs, bounded retry and N1 destination/generation f
 Browser, credentials, transport and lifecycle are synthetic injected test services. That
 lifecycle proves no N2 isolation, and no server, Keychain, browser or real grant is accessed.
 
-## Planned durable state machine
+## Implemented durable store and facade
+
+`PichiPublicationOutboxStore` consumes N2's profile snapshot and N1 configuration. Its
+generation-independent records persist existing `MeetingProfileOwnership`, operation ID,
+recording-time consent, original null assessment, revision 1, exact bytes/digest and typed
+delivery state. Known-ID lookup never scans accepted history. Pending storage is bounded
+to 32 records and 24 MiB of payload; each encoded record is at most 1 MiB. Accepted,
+withheld and false-consent records are retained separately without consuming pending slots.
+There is no automatic accepted-record deletion or new cloud-retention policy.
+
+The shared facade binds the N2 recording observer, persisted-source reload and transition
+participant. It freezes consent before capture, deduplicates repeated notifications and
+keeps callbacks local. An explicitly activated worker handles HTTP independently. Transition
+cleanup joins complete manual commands, the worker and HTTP before clearing projections.
+Billing, permission/validation review and Retry-After deadlines survive logout/resume.
+
+The UI toggle is `setCloudSyncEnabled(_:)`. OFF closes network admission, joins POST/GET/PATCH,
+atomically persists future consent off plus pause, and retains work. ON never claims guest
+or OFF history. See [the concrete API/catalog handoff](pichi-cloud-publication-api.md).
+
+## Durable state machine
 
 These are internal delivery states, separate from W2's analysis state. They are not a second
 account model or profile registry. Concrete owner/context/generation types come from N1;
@@ -219,15 +243,15 @@ must come from explicit user action and current W2 authorization.
 
 ## Shared operation handoff
 
-The one planned `PichiCloudPublicationService` supplies sanitized current-profile/workspace
+The implemented `PichiCloudPublicationService` supplies sanitized current-profile/workspace
 consent, pause reason, per-record withholding/delivery status and independent analysis status.
 N3/N4 consume that shared operation instead of implementing platform-specific queues.
 
-Operations: set future-capture consent, status, send an already admitted eligible source,
+Operations: coherent Cloud sync enable/disable, status, send an already admitted eligible source,
 retry identical durable work, pause and join, owner-authorized resume, reconcile receipt and
 resolve explicit assessment binding. Stable codes are localized through N3's shared catalog.
-Concrete function signatures wait for the approved N1/N2 types. No placeholder account or
-profile manager is supplied by N5.
+Concrete signatures are in the linked API handoff. No placeholder account/profile manager
+is supplied by N5.
 
 ## Required frozen dependencies
 
@@ -251,16 +275,19 @@ echoes, exact bytes/digest, immutable copies, invalid timing/final state, UTF-16
 typed-code round trips and cancellation. This is a focused production-code probe, not a
 native-target build, account-isolation test, model-quality check or live transport test.
 
-The source-gate candidate passed 969 checks in that probe. The compiler reported the existing
+The original source gate passed 969 checks; the first combined N2/source run passed 995,
+including actual exporter provisional metadata. The compiler reported the existing
 Swift 5-mode isolation warning for `ExportedTranscript: Encodable` at exporter line 1028.
-That result belongs to `3c2fd6e4`; the complete compilation input of that probe is unchanged
-by the N1 source merge and consent-store addition. It is reused evidence, not a fresh run
-of the account or consent code. Consent has its separate Swift 6 probe described above.
+The 969 result belongs to `3c2fd6e4` and is historical evidence. N2 and the shared validator
+changed inputs, so final combined checks must run on the integrated candidate.
 
 N5 owns `/Users/sabbah/.codex/worktrees/2448/pichi-voice`, branch
 `codex/pichi-sso-native-outbox-20261022`. Focused compiler outputs belong only under this
 worktree's `.build/meeting-session-store-tests` and are disposable after evidence is saved.
 The separate consent probe owns only `.build/publication-consent-tests`.
+Store/facade probes own only `.build/publication-outbox-tests`. Delegated storage source
+was integrated after verifying all source/test hashes and independent log copies; its
+app-managed worktree archival was requested and must be verified separately.
 No speech models, UI, simulators, devices, microphone/audio routes or server were started.
 Keep this worktree for the named unfinished dependency integration. Native builds require
 coordinator admission and private DerivedData/SourcePackages.

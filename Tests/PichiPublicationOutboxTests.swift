@@ -243,6 +243,33 @@ struct PichiPublicationOutboxTests {
             check(value.attemptCount == attempt, "Attempt counter is monotonic and durable")
             if attempt == 5 { check(value.state == .paused && value.pauseReason == .retryBudgetExhausted, "Automatic retry count is finite") }
         }
+        let review = PichiPublicationOutboxStore(profile: try profile("review-gates"), configuration: configuration)
+        let reviewSource = try source()
+        _ = try await review.capture(id: reviewSource.sessionID, automaticConsent: true)
+        _ = try await review.installSource(id: reviewSource.sessionID, source: reviewSource)
+        _ = try await review.beginAttempt(id: reviewSource.sessionID)
+        _ = try await review.pause(id: reviewSource.sessionID, reason: .accountReview)
+        try await review.pauseAll(reason: .profileTransition)
+        check(try await review.record(id: reviewSource.sessionID)?.pauseReason == .accountReview,
+              "Logout cannot convert a402 review pause into automatic delivery")
+        _ = try await review.explicitRetry(id: reviewSource.sessionID)
+        _ = try await review.beginAttempt(id: reviewSource.sessionID)
+        let scheduled = try await review.scheduleRetry(id: reviewSource.sessionID, decision: .retry(afterSeconds: 60), now: Date())
+        try await review.pauseAll(reason: .profileTransition)
+        let resumedReview = try await review.explicitRetry(id: reviewSource.sessionID)
+        check(resumedReview.state == .retryScheduled && resumedReview.nextAttemptAt == scheduled.nextAttemptAt,
+              "Resume preserves a valid Retry-After deadline instead of retrying early")
+        let unfinished = UUID()
+        _ = try await review.capture(id: unfinished, automaticConsent: true)
+        try await review.pauseAll(reason: .profileTransition)
+        let resumedCapture = try await review.explicitRetry(id: unfinished)
+        check(resumedCapture.state == .waitingForSource && resumedCapture.attemptCount == 0,
+              "Same-owner resume can retain unfinished source preparation without manufacturing payload")
+        try await capacity.pauseAll(reason: .profileTransition)
+        check(try await capacity.record(id: ids[1])?.pauseReason == .retryBudgetExhausted,
+              "Logout cannot erase an exhausted automatic retry budget")
         print("Pichi publication outbox: \(checks) synthetic checks passed")
+        let facadeChecks = try await Self.checkCloudPublicationService(root: root.appendingPathComponent("facade", isDirectory: true))
+        print("Pichi publication facade: \(facadeChecks) synthetic integration checks passed; no live transport")
     }
 }

@@ -20,6 +20,9 @@ extension PichiPublicationConsentTests {
         let source = try bytes("protected-transcript.json")
         let sourceHash = (manifest["source"] as! [String: Any])["sha256"] as! String
         check(source.count == 1392 && digest(source) == sourceHash, "The source byte length and digest match W2")
+        let provisional = try bytes("protected-transcript-provisional.json")
+        check(provisional.count == 1469 && digest(provisional) == "23ffa082ef9ab6ac1b57963757fac8293917db051854756c3bd318786d9f574a",
+              "The separately approved W2 provisional fixture retains its pinned bytes")
         let configuration = AccountConfiguration(issuer: URL(string: "https://identity.example/realms/pichi")!,
             apiBaseURL: URL(string: "https://api.example")!, clientID: "synthetic-native",
             apiAudience: "synthetic-api", bundleIdentifier: "ai.synthetic.voice")
@@ -35,6 +38,9 @@ extension PichiPublicationConsentTests {
                 assessment: assessment ?? .init(participantID: participantID, criteriaIDs: []), boundary: boundary)
         }
         let post = try upload()
+        let provisionalPost = try upload(provisional)
+        check(provisionalPost.unsignedRequest.httpBody?.range(of: provisional) != nil,
+              "Display-only provisional flags are preserved without stripping or re-encoding")
         let originalBody = post.unsignedRequest.httpBody
         check(originalBody == (try bytes("pending-criteria.multipart")), "POST multipart bytes exactly match W2's approved pending-criteria body")
         check(post.unsignedRequest.httpMethod == "POST" && post.unsignedRequest.url?.absoluteString == "https://api.example/api/v1/recordings/imports",
@@ -137,17 +143,22 @@ extension PichiPublicationConsentTests {
             }
         }
         let sourceObject = try JSONSerialization.jsonObject(with: source) as! [String: Any]
-        for mutation in ["audio", "original", "redaction", "boolean", "oversized", "boundary"] {
+        for mutation in ["audio", "original", "redaction", "boolean", "oversized", "boundary", "empty", "blank", "zeroDuration", "tooLong", "tooManySpeakers"] {
             var changed = sourceObject
             switch mutation {
             case "audio": changed["audio"] = "/private/audio.caf"
             case "redaction": var privacy = changed["privacy"] as! [String: Any]; privacy["transcriptPIIRedacted"] = false; changed["privacy"] = privacy
             case "boolean": changed["schemaVersion"] = true
+            case "empty": changed["segments"] = []
+            case "tooLong": changed["durationSeconds"] = 86_401
+            case "tooManySpeakers": changed["speakers"] = (0..<101).map { _ in ["id": UUID().uuidString, "displayName": "Synthetic", "isLocalUser": false] as [String: Any] }
             default:
                 var segments = changed["segments"] as! [[String: Any]]
                 if mutation == "original" { segments[0]["originalText"] = "PRIVATE ORIGINAL" }
                 if mutation == "oversized" { segments[0]["text"] = String(repeating: "x", count: 100_001) }
                 if mutation == "boundary" { segments[0]["text"] = "--" + boundary }
+                if mutation == "blank" { segments[0]["text"] = " \n\t" }
+                if mutation == "zeroDuration" { segments[0]["endSeconds"] = segments[0]["startSeconds"] }
                 changed["segments"] = segments
             }
             try rejects(.invalidRequest, "Unsafe recovered source fails before transport: " + mutation) { _ = try upload(json(changed)) }
@@ -228,6 +239,20 @@ extension PichiPublicationConsentTests {
         do { _ = try await bound.authorized(using: account); check(false, "Logged-out context cannot send") }
         catch let error as AccountError { check(error == .staleOperation, "Authorization is not restored from a durable descriptor") }
         await account.shutdown()
+        let http = try PichiPublicationHTTPClient(configuration: configuration)
+        for url in ["https://foreign.example/api/v1/recordings/imports", "http://api.example/api/v1/recordings/imports",
+                    "https://api.example/api/v1/account", "https://api.example/api/v1/recordings/imports?extra=1"] {
+            var request = authorized; request.url = URL(string: url)!
+            do { _ = try await http.perform(request); check(false, "Unsafe request must fail before network I/O") }
+            catch let error as PichiPublicationNetworkFailure { check(error == .invalidRequest, "HTTP executor rejects authority/route/scheme changes locally") }
+        }
+        do { _ = try await http.perform(post.unsignedRequest); check(false, "A stored unsigned request must not be sent") }
+        catch let error as PichiPublicationNetworkFailure { check(error == .invalidRequest, "HTTP executor requires transient authorization") }
+        async let shutdownA: Void = http.shutdown()
+        async let shutdownB: Void = http.shutdown()
+        _ = await (shutdownA, shutdownB)
+        do { _ = try await http.perform(authorized); check(false, "Closed executor cannot reopen") }
+        catch let error as PichiPublicationNetworkFailure { check(error == .shutdown, "Joined shutdown closes executor admission") }
         return checks
     }
 }

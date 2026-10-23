@@ -11,6 +11,8 @@ xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
     Sources/Fluid/Account/AccountSessionService.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationConsentStore.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationWire.swift \
+    Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationRetryPolicy.swift \
+    Sources/Fluid/Services/CloudPublication/PichiPublicationHTTPClient.swift \
     Tests/PichiPublicationConsentTests.swift Tests/PichiPublicationWireTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests" "$task_test_dir/fixtures-$(uuidgen)" "$PWD/Tests/Fixtures/PichiAccountSyncV1"

@@ -26,27 +26,29 @@ nonisolated struct MeetingResultSidecarStore {
 }
 SWIFT
 python3 Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift"
-task_payload_source=()
-if [ -f Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift ]; then
-    task_payload_source+=(Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift)
-fi
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/AccountPKCE.swift \
     Sources/Fluid/Account/AccountSessionService.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileService.swift Sources/Fluid/Account/PrivateProfileMeetingStore.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
+    Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     "$task_test_dir/AttributionTypes.swift" "$task_test_dir/ApplicationSupport.swift" \
     Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationSource.swift \
-    ${task_payload_source[@]+"${task_payload_source[@]}"} \
+    Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationWire.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationRetryPolicy.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationOutboxStore.swift \
-    Tests/PichiPublicationOutboxTests.swift -o "$task_test_dir/tests"
+    Sources/Fluid/Services/CloudPublication/PichiPublicationConsentStore.swift \
+    Sources/Fluid/Services/CloudPublication/PichiPublicationHTTPClient.swift \
+    Sources/Fluid/Services/CloudPublication/PichiCloudPublicationService.swift \
+    Tests/PichiPublicationOutboxTests.swift Tests/PichiCloudPublicationServiceTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests" "$task_test_dir/fixtures-$(uuidgen)"

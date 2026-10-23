@@ -1,0 +1,10 @@
+{
+  "nativeSourceCommit": "6b7529ae7a5c8883fc968f77a8b378fca71277ae",
+  "nativeSourcePath": "Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift",
+  "nativeSourceLines": "1104-1109",
+  "fixture": "protected-transcript-provisional.json",
+  "sha256": "23ffa082ef9ab6ac1b57963757fac8293917db051854756c3bd318786d9f574a",
+  "byteLength": 1469,
+  "evidence": "Synthetic exporter-shaped extension of the original native fixture after inspecting exact optional boolean emission. Not an executed native export. Original fixture bytes remain unchanged.",
+  "policy": "Display metadata only; no employee selection or authorization. Empty/blank/invalid source remains invalid before charge."
+}

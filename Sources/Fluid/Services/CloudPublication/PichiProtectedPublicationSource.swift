@@ -8,6 +8,7 @@ nonisolated enum PichiPublicationWithholdingReason: String, Codable, CaseIterabl
     case originalTextRetained
     case completenessUnknown
     case incompleteTranscript
+    case emptyTranscript
     case excludedIntervals
     case invalidTranscript
     case exportLimitExceeded
@@ -72,6 +73,10 @@ nonisolated struct PichiProtectedPublicationSource: Equatable, Sendable {
             throw PichiPublicationWithholdingReason.invalidTranscript
         }
         try Task.checkCancellation()
+        do { _ = try PichiProtectedPublicationPayload.validate(bytes) }
+        catch PichiProtectedPublicationPayload.Failure.emptyTranscript { throw PichiPublicationWithholdingReason.emptyTranscript }
+        catch PichiProtectedPublicationPayload.Failure.limitExceeded { throw PichiPublicationWithholdingReason.exportLimitExceeded }
+        catch PichiProtectedPublicationPayload.Failure.invalidTranscript { throw PichiPublicationWithholdingReason.invalidTranscript }
         let source = Self(sessionID: session.id, transcriptBytes: bytes)
         try Task.checkCancellation()
         return source

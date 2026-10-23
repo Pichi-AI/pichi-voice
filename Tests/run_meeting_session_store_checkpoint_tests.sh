@@ -42,6 +42,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
     Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationSource.swift \
+    Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
