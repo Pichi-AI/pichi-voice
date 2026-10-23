@@ -92,7 +92,7 @@ final class MobileAccountInteraction: ObservableObject {
     }
 
     func cancelOwnedSignInOnDisappear(profileBoundaryChanged: Bool = false) {
-        guard !profileBoundaryChanged else { return }
+        guard !profileBoundaryChanged, action == .signIn || action == .switchPerson else { return }
         cancelSignIn()
     }
 
@@ -147,8 +147,9 @@ import SwiftUI
 
 struct MobileAccountSettings: View {
     @ObservedObject var session: AccountSessionService
+    var interaction: MobileAccountInteraction? = nil
     var body: some View {
-        Form { MobileAccountPanel(session: session) }
+        Form { MobileAccountPanel(session: session, interaction: interaction) }
             .navigationTitle(PichiLocalization.text("account.title", defaultValue: "Account"))
             .accessibilityIdentifier("account.settings")
     }
@@ -182,11 +183,12 @@ private struct MobileAccountPanel: View {
     @State private var presentedProjectionRevision: UUID?
     @Environment(\.theme) private var theme
 
-    init(session: AccountSessionService, continueAsGuest: (@MainActor () -> Void)? = nil,
+    init(session: AccountSessionService, interaction suppliedInteraction: MobileAccountInteraction? = nil,
+         continueAsGuest: (@MainActor () -> Void)? = nil,
          actionChanged: @escaping (Bool) -> Void = { _ in }) {
         self.session = session; self.continueAsGuest = continueAsGuest
         self.actionChanged = actionChanged
-        self._interaction = StateObject(wrappedValue: MobileAccountInteraction(session: session,
+        self._interaction = StateObject(wrappedValue: suppliedInteraction ?? MobileAccountInteraction(session: session,
             requireTransitionAdmission: { try PrivateProfileService.shared.requireTransitionAdmission() }))
     }
 

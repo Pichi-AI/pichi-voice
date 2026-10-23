@@ -16,6 +16,7 @@ struct MobileMeetingRoot: View {
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var privateProfile = PrivateProfileService.shared
     @StateObject private var privatePresentation = MobilePrivatePresentationState()
+    @StateObject private var accountInteraction: MobileAccountInteraction
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -112,11 +113,15 @@ struct MobileMeetingRoot: View {
     init(coordinator: MeetingSessionCoordinator, asr: ASRService, store: any MeetingSessionStoring,
          privacy: PichiTranscriptPrivacyService,
          required: MobileRequiredResources, privacyActivation: MobilePrivacyActivation,
+         accountSession: AccountSessionService? = nil,
          microphones: @escaping @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot) {
         self.coordinator = coordinator; self.asr = asr; self.store = store
         self.privacy = privacy; self.microphones = microphones
         self.required = required; self.privacyActivation = privacyActivation
         self._privateSources = StateObject(wrappedValue: MobilePrivateSourceReaders(store: store))
+        self._accountInteraction = StateObject(wrappedValue: MobileAccountInteraction(
+            session: accountSession ?? AppServices.shared.accountSession,
+            requireTransitionAdmission: { try PrivateProfileService.shared.requireTransitionAdmission() }))
     }
 
     enum Destination: String, CaseIterable, Identifiable {
@@ -277,13 +282,13 @@ struct MobileMeetingRoot: View {
         .onChange(of: scenePhase) { _, _ in updateRecordingScreenAwake() }
         .onChange(of: destination) { previous, selected in
             if previous == .settings, selected != .settings, settingsPath.last == .account {
-                Task { await AppServices.shared.accountSession.cancelSignIn() }
+                accountInteraction.cancelOwnedSignInOnDisappear()
             }
             playback.stop(); presentationLoader.cancel(); participantEdit = nil
         }
         .onChange(of: settingsPath) { previous, selected in
             if previous.last == .account, selected.last != .account {
-                Task { await AppServices.shared.accountSession.cancelSignIn() }
+                accountInteraction.cancelOwnedSignInOnDisappear()
             }
         }
         .onChange(of: historyPath) { _, _ in playback.stop(); presentationLoader.cancel(); participantEdit = nil }
@@ -396,7 +401,8 @@ struct MobileMeetingRoot: View {
             case .history:
                 if privateProfile.isPrivateDataVisible { history } else { concealedPrivateData }
             case .settings:
-                MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
+                MobileSettingsRoot(accountSession: accountInteraction.session, accountInteraction: accountInteraction,
+                    asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
                     required: required, privacyActivation: privacyActivation, reportError: report)
             }
         }

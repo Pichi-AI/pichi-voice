@@ -206,6 +206,31 @@ private actor SyntheticAccountTransport: AccountTransporting {
         concealedPanel.lifecycle.onTransition = nil
         await concealedPanel.shutdown()
 
+        let activeWindow = SyntheticAccountUIFixture()
+        let passiveWindow = MobileAccountInteraction(session: activeWindow.session, requireTransitionAdmission: {})
+        activeWindow.browser.hold = true
+        activeWindow.ui.signIn(); await until { activeWindow.browser.waiting }
+        passiveWindow.cancelOwnedSignInOnDisappear()
+        passiveWindow.cancelOwnedSignInOnDisappear(profileBoundaryChanged: false) // Same hook used by navigation.
+        expect(activeWindow.browser.cancelCalls == 0 && activeWindow.session.state == .signingIn,
+               "Passive window dismissal/navigation cannot cancel another window's admission")
+        activeWindow.browser.release(); await activeWindow.ui.waitUntilIdle()
+        expect(activeWindow.session.state == .signedIn && passiveWindow.action == nil,
+               "The initiating window retains its command through passive window disappearance")
+        await activeWindow.shutdown()
+
+        let explicitCancellation = SyntheticAccountUIFixture()
+        let explicitOtherWindow = MobileAccountInteraction(session: explicitCancellation.session, requireTransitionAdmission: {})
+        explicitCancellation.browser.hold = true
+        explicitCancellation.ui.signIn(); await until { explicitCancellation.browser.waiting }
+        explicitOtherWindow.cancelSignIn()
+        await until { explicitCancellation.browser.cancelCalls > 0 }
+        explicitCancellation.browser.release()
+        await explicitOtherWindow.waitUntilIdle(); await explicitCancellation.ui.waitUntilIdle()
+        expect(explicitCancellation.session.state == .signedOut,
+               "Explicit Cancel remains a user request to join shared sign-in cancellation")
+        await explicitCancellation.shutdown()
+
         let restoring = SyntheticAccountUIFixture()
         await restoring.credentials.seed(AccountGrant(identity: .init(issuer: "https://identity.example/realms/test",
             subject: "synthetic-subject", internalUserID: "synthetic-user"), accessToken: "synthetic-old-access",
