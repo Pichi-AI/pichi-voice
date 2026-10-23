@@ -351,17 +351,20 @@ struct CustomDictionaryView: View {
                 entry: entry,
                 existingTriggers: self.allExistingTriggers(excluding: entry.id)
             ) { updatedEntry in
+                guard self.isProfileVisible else { return }
+                let pronunciationStore = PronunciationDictionaryStore.shared
                 if let index = self.entries.firstIndex(where: { $0.id == updatedEntry.id }) {
                     self.entries[index] = updatedEntry
                     self.saveEntries()
                     Task {
+                        guard self.isProfileVisible else { return }
                         if PronunciationProfileEditPolicy.shouldDiscardProfile(
                             previousReplacement: entry.replacement,
                             updatedReplacement: updatedEntry.replacement
                         ) {
-                            try? await PronunciationDictionaryStore.shared.delete(dictionaryEntryID: updatedEntry.id)
+                            try? await pronunciationStore.delete(dictionaryEntryID: updatedEntry.id)
                         } else {
-                            try? await PronunciationDictionaryStore.shared.updateLabel(
+                            try? await pronunciationStore.updateLabel(
                                 dictionaryEntryID: updatedEntry.id,
                                 label: updatedEntry.replacement
                             )
@@ -539,7 +542,7 @@ struct CustomDictionaryView: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 Toggle("Custom Words Boosting", isOn: self.$vocabBoostingEnabled)
                     .onChange(of: self.vocabBoostingEnabled) { _, enabled in
-                        SettingsStore.shared.vocabularyBoostingEnabled = enabled
+                        if self.isProfileVisible { SettingsStore.shared.vocabularyBoostingEnabled = enabled }
                     }
                 self.customWordsPopover
             }
@@ -1142,7 +1145,7 @@ struct CustomDictionaryView: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .onChange(of: self.punctuationAutoConvertEnabled) { _, newValue in
-                SettingsStore.shared.autoConvertPunctuationEnabled = newValue
+                if self.isProfileVisible { SettingsStore.shared.autoConvertPunctuationEnabled = newValue }
             }
             .frame(width: Self.DictionaryHeaderControlLayout.toggleColumnWidth, alignment: .trailing)
             .help("Turn Spoken Formatting on or off.")
@@ -1295,7 +1298,7 @@ struct CustomDictionaryView: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .onChange(of: self.vocabBoostingEnabled) { _, newValue in
-                SettingsStore.shared.vocabularyBoostingEnabled = newValue
+                if self.isProfileVisible { SettingsStore.shared.vocabularyBoostingEnabled = newValue }
             }
             .frame(width: Self.DictionaryHeaderControlLayout.toggleColumnWidth, alignment: .trailing)
             .help("Improve recognition of your custom words when using Parakeet.")
@@ -1603,7 +1606,7 @@ struct CustomDictionaryView: View {
                 .tint(self.theme.palette.accent)
                 .accessibilityLabel("Spoken Formatting")
                 .onChange(of: self.punctuationAutoConvertEnabled) { _, newValue in
-                    SettingsStore.shared.autoConvertPunctuationEnabled = newValue
+                    if self.isProfileVisible { SettingsStore.shared.autoConvertPunctuationEnabled = newValue }
                 }
         }
         .padding(self.theme.metrics.spacing.md)
@@ -1949,6 +1952,7 @@ struct CustomDictionaryView: View {
     // MARK: - Actions
 
     private func saveEntries() {
+        guard self.isProfileVisible else { return }
         SettingsStore.shared.customDictionaryEntries = self.entries
         // Invalidate cached regex patterns so changes take effect immediately
         ASRService.invalidateDictionaryCache()
@@ -2045,11 +2049,13 @@ struct CustomDictionaryView: View {
     }
 
     private func savePunctuationDictionaryPrefix() {
+        guard self.isProfileVisible else { return }
         SettingsStore.shared.punctuationDictionaryPrefix = self.punctuationPrefix
         self.punctuationPrefix = SettingsStore.shared.punctuationDictionaryPrefix
     }
 
     private func savePunctuationRules() {
+        guard self.isProfileVisible else { return }
         SettingsStore.shared.punctuationDictionaryRules = self.punctuationRules
         self.punctuationRules = SettingsStore.shared.punctuationDictionaryRules
     }
@@ -2099,6 +2105,7 @@ struct CustomDictionaryView: View {
     }
 
     private func saveFormattingActionRules() {
+        guard self.isProfileVisible else { return }
         SettingsStore.shared.spokenFormattingActionRules = self.formattingActionRules
         self.formattingActionRules = SettingsStore.shared.spokenFormattingActionRules
     }
@@ -2652,6 +2659,7 @@ struct CustomDictionaryView: View {
     }
 
     private func loadBoostTerms() {
+        guard self.isProfileVisible else { return }
         do {
             self.boostTerms = try ParakeetVocabularyStore.shared.loadUserBoostTerms()
             self.boostStatusMessage = PichiLocalization.format("Loaded %lld custom words.", self.boostTerms.count)
@@ -2664,6 +2672,7 @@ struct CustomDictionaryView: View {
     }
 
     private func saveBoostTerms() {
+        guard self.isProfileVisible else { return }
         do {
             try ParakeetVocabularyStore.shared.saveUserBoostTerms(self.boostTerms)
             self.boostStatusMessage = PichiLocalization.format("Saved %lld custom words.", self.boostTerms.count)
@@ -2675,13 +2684,14 @@ struct CustomDictionaryView: View {
     }
 
     private func exportDictionary() {
+        guard self.isProfileVisible else { return }
         do {
             let panel = NSSavePanel()
             panel.canCreateDirectories = true
             panel.allowedContentTypes = [.json]
             panel.nameFieldStringValue = DictionaryTransferService.shared.suggestedFilename()
 
-            guard panel.runModal() == .OK, let url = panel.url else { return }
+            guard panel.runModal() == .OK, self.isProfileVisible, let url = panel.url else { return }
 
             let document = try DictionaryTransferService.shared.makeExportDocument()
             let data = try DictionaryTransferService.shared.encode(document)
@@ -2697,6 +2707,7 @@ struct CustomDictionaryView: View {
     }
 
     private func importDictionary() {
+        guard self.isProfileVisible else { return }
         do {
             let panel = NSOpenPanel()
             panel.canChooseDirectories = false
@@ -2704,11 +2715,11 @@ struct CustomDictionaryView: View {
             panel.allowsMultipleSelection = false
             panel.allowedContentTypes = [.json]
 
-            guard panel.runModal() == .OK, let url = panel.url else { return }
+            guard panel.runModal() == .OK, self.isProfileVisible, let url = panel.url else { return }
 
             let data = try Data(contentsOf: url)
             let document = try DictionaryTransferService.shared.decode(data)
-            guard let mode = self.confirmDictionaryImport(document) else { return }
+            guard let mode = self.confirmDictionaryImport(document), self.isProfileVisible else { return }
 
             let summary = try DictionaryTransferService.shared.restore(document, mode: mode)
             self.entries = SettingsStore.shared.customDictionaryEntries
@@ -2770,10 +2781,13 @@ struct CustomDictionaryView: View {
     }
 
     private func deleteEntry(_ entry: SettingsStore.CustomDictionaryEntry) {
+        guard self.isProfileVisible else { return }
+        let pronunciationStore = PronunciationDictionaryStore.shared
         self.entries.removeAll { $0.id == entry.id }
         self.saveEntries()
         Task {
-            try? await PronunciationDictionaryStore.shared.delete(dictionaryEntryID: entry.id)
+            guard self.isProfileVisible else { return }
+            try? await pronunciationStore.delete(dictionaryEntryID: entry.id)
         }
     }
 
@@ -2823,6 +2837,7 @@ private extension CustomDictionaryView {
     }
 
     func handlePronunciationMatchingChange(enabled: Bool) {
+        guard self.isProfileVisible else { return }
         SettingsStore.shared.pronunciationMatchingEnabled = enabled
         self.isAutomaticTrainingEnabled = false
         DictionaryTrainingEndpointMonitor.shared.stop()

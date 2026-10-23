@@ -19,6 +19,7 @@ os.environ["DEVELOPER_DIR"] = developer_dir
 
 source = (repo / 'Sources/Fluid/UI/CustomDictionaryView.swift').read_text()
 method = source[source.index('    private func addTrainedReplacement() async {'):source.index('    private func removeTrainingVariant(')].replace('private func addTrainedReplacement', 'func addTrainedReplacement')
+prefix_save = source[source.index('    private func savePunctuationDictionaryPrefix() {'):source.index('    private func savePunctuationRules() {')].replace('private func savePunctuationDictionaryPrefix', 'func savePunctuationDictionaryPrefix')
 progress = source[source.index('struct DictionaryTrainingProgress {'):source.index('enum CustomDictionaryTrainingMerge {')]
 readiness = source[source.index('    private var trainingProgress:'):source.index('    private var trainingAlreadyCorrectWithoutReplacement:')]
 can_save = source[source.index('    private var canAddTrainedReplacement:'):source.index('    private var shouldPulseTrainedReplacementButton:')]
@@ -42,6 +43,7 @@ nonisolated final class UserDefaults: @unchecked Sendable {
 final class SettingsStore: @unchecked Sendable {
     static let shared = SettingsStore()
     var customDictionaryEntries: [CustomDictionaryEntry] = []
+    var punctuationDictionaryPrefix = "original"
     ENTRY
 }
 struct PrivateProfileSnapshot: Equatable, Sendable { let id = UUID() }
@@ -122,6 +124,8 @@ MERGE
     var writes = 0
     func saveEntries() { writes += 1; SettingsStore.shared.customDictionaryEntries = entries }
     func resetTraining() { trainingSaveID = nil; isTrainingProcessing = false; trainingPronunciationEnrollments = []; trainingVariants = [] }
+    var punctuationPrefix = "old-owner-prefix"
+    PREFIX_SAVE
     METHOD
 }
 func check(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -149,6 +153,22 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
                 check(ContinuousClock.now < deadline, "Save did not reach its expected persistence boundary within 3 seconds")
                 try await Task.sleep(for: .milliseconds(1))
             }
+        }
+        // A delayed popover dismissal must never write its original owner's prefix into another profile.
+        do {
+            let view = reset(baseline())
+            SettingsStore.shared.punctuationDictionaryPrefix = "current-owner"
+            PrivateProfileStorage.acceptsNewWork = false
+            view.savePunctuationDictionaryPrefix()
+            check(SettingsStore.shared.punctuationDictionaryPrefix == "current-owner", "Concealed dismissal cannot save punctuation")
+            PrivateProfileStorage.current = PrivateProfileSnapshot()
+            PrivateProfileStorage.acceptsNewWork = true
+            view.savePunctuationDictionaryPrefix()
+            check(SettingsStore.shared.punctuationDictionaryPrefix == "current-owner", "Old dismissal cannot overwrite the next profile")
+            let fresh = reset(baseline())
+            fresh.savePunctuationDictionaryPrefix()
+            check(SettingsStore.shared.punctuationDictionaryPrefix == fresh.punctuationPrefix, "Visible owner retains normal punctuation save")
+            passes += 1
         }
         // Production save and merge retain existing profile UUID and save new entries under the written UUID.
         for existing in [true, false] {
@@ -360,7 +380,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
         print("PASS \(passes) dictionary save scenarios using the production save method, readiness and merge code")
     }
 }
-'''.replace('ENTRY', entry).replace('PROGRESS', progress).replace('MERGE', merge).replace('READINESS', readiness).replace('CAN_SAVE', can_save).replace('METHOD', method)
+'''.replace('ENTRY', entry).replace('PROGRESS', progress).replace('MERGE', merge).replace('READINESS', readiness).replace('CAN_SAVE', can_save).replace('METHOD', method).replace('PREFIX_SAVE', prefix_save)
 swift = swift.replace('check(await PronunciationDictionaryStore.shared.writes.isEmpty,', 'let textOnlyWrites = await PronunciationDictionaryStore.shared.writes\n            check(textOnlyWrites.isEmpty,')
 isolation_swift = r'''
 import Foundation
