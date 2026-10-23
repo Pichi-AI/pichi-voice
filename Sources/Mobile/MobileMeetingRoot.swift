@@ -263,7 +263,10 @@ struct MobileMeetingRoot: View {
         // immutable private readers without replacing capture, UI or awake owners.
         .onChange(of: privateProfile.sourceRevision) { _, _ in
             privateSources.replaceAfterActivation()
-            Task { await refreshHistory() }
+            Task {
+                await privatePresentation.waitForPendingRetirement()
+                await refreshHistory()
+            }
         }
         .onChange(of: coordinator.state) { _, state in
             if coordinator.isRecording { playback.stop() }
@@ -1185,6 +1188,8 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
         invalidate()
         await cleanupTask?.value
     }
+
+    func waitForPendingRetirement() async { await cleanupTask?.value }
 
     private func clear() {
         destination = .meetings; settingsPath = []; historyPath = []; search = ""
