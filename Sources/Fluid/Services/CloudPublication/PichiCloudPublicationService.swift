@@ -48,7 +48,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private var cleanupLocals = Set<UUID>()
     private struct OwnedCommand { let cancel: @Sendable () -> Void; let joined: Task<Void, Never> }
     private var commands: [UUID: OwnedCommand] = [:]
-    private var requests: [UUID: Task<PichiPublicationReceipt, Error>] = [:]
+    private var requests: [UUID: Task<PichiPublicationHTTPResponse, Error>] = [:]
     private var delivering = Set<MeetingSessionID>()
     private var worker: (id: UUID, task: Task<Void, Never>)?
     private var shutdownTask: Task<Void, Never>?
@@ -80,6 +80,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     func resume() async throws { try await self.command { try await self.resumeBody() } }
     func activateCurrentProfile() async throws { try await self.command { try await self.activateBody(resumeUserPauses: false) } }
     func reconcile(_ id: MeetingSessionID) async throws { try await self.command { try await self.reconcileBody(id) } }
+    func assessmentOptions(for id: MeetingSessionID, cursor: String? = nil, limit: Int = 50) async throws -> PichiPublicationAssessmentOptions {
+        try await self.command { try await self.assessmentOptionsBody(id, cursor: cursor, limit: limit) }
+    }
     func resolveAssessment(_ id: MeetingSessionID, participantID: UUID, criteriaIDs: [String]) async throws {
         try await self.command { try await self.resolveAssessmentBody(id, participantID: participantID, criteriaIDs: criteriaIDs) }
     }
@@ -258,7 +261,10 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         guard let record = try await store.record(id: id), let receipt = record.receipt else { throw PichiPublicationOutboxFailure.notAdmitted }
         try self.check(profile, context: context)
         let request = try PichiPublicationRequest.status(configuration: record.configuration, context: context, receipt: receipt)
-        try await self.performReceiptRequest(request, record: record, profile: profile, store: store)
+        let _: PichiPublicationReceipt = try await self.performReceiptRequest(request, record: record, profile: profile, store: store) { response in
+            let receipt = try request.receipt(from: response, account: self.account)
+            return (receipt, receipt)
+        }
     }
 
     private func resolveAssessmentBody(_ id: MeetingSessionID, participantID: UUID, criteriaIDs: [String]) async throws {
@@ -268,11 +274,30 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         try self.check(profile, context: context)
         let request = try PichiPublicationRequest.resolveAssessment(configuration: record.configuration, context: context,
             receipt: receipt, transcriptBytes: bytes, assessment: .init(participantID: participantID, criteriaIDs: criteriaIDs))
-        try await self.performReceiptRequest(request, record: record, profile: profile, store: store)
+        let _: PichiPublicationReceipt = try await self.performReceiptRequest(request, record: record, profile: profile, store: store) { response in
+            let receipt = try request.receipt(from: response, account: self.account)
+            return (receipt, receipt)
+        }
     }
 
-    private func performReceiptRequest(_ request: PichiPublicationRequest, record: PichiPublicationOutboxRecord,
-                                       profile: PrivateProfileSnapshot, store: PichiPublicationOutboxStore) async throws {
+    private func assessmentOptionsBody(_ id: MeetingSessionID, cursor: String?, limit: Int) async throws -> PichiPublicationAssessmentOptions {
+        let (profile, context, store, _) = try self.currentScope()
+        guard let record = try await store.record(id: id), let receipt = record.receipt,
+              let bytes = record.transcriptBytes else { throw PichiPublicationOutboxFailure.notAdmitted }
+        try self.check(profile, context: context)
+        let request = try PichiPublicationRequest.assessmentOptions(configuration: record.configuration, context: context,
+            receipt: receipt, transcriptBytes: bytes, cursor: cursor, limit: limit)
+        return try await self.performReceiptRequest(request, record: record, profile: profile, store: store) { response in
+            let options = try request.assessmentOptions(from: response, account: self.account)
+            return (options, options.receipt)
+        }
+    }
+
+    /// Receipt and options representations share the same lease, grant, deadline,
+    /// response ownership and durable review path. This does not aggregate options pages.
+    private func performReceiptRequest<Value: Sendable>(_ request: PichiPublicationRequest, record: PichiPublicationOutboxRecord,
+        profile: PrivateProfileSnapshot, store: PichiPublicationOutboxStore,
+        decode: (PichiPublicationHTTPResponse) throws -> (Value, PichiPublicationReceipt)) async throws -> Value {
         guard self.delivering.insert(record.sessionID).inserted else { throw AccountError.busy }
         defer { self.delivering.remove(record.sessionID) }
         // Reload after taking the per-record lease. A suspended caller may hold a
@@ -285,11 +310,13 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             throw PichiPublicationOutboxFailure.invalidTransition
         }
         do {
-            let current = try await self.perform(request, profile: profile)
+            let response = try await self.performResponse(request, profile: profile)
+            let (value, receipt) = try decode(response)
             try self.check(profile, context: request.context)
-            let updated = try await store.updateReceipt(id: record.sessionID, receipt: current)
+            let updated = try await store.updateReceipt(id: record.sessionID, receipt: receipt)
             try self.check(profile, context: request.context)
             self.project(record.sessionID, Self.status(updated), profile: profile)
+            return value
         } catch {
             // Cancellation/concealment leaves the accepted receipt intact. A current
             // owner's safe remote failure remains visible across restart and login.
@@ -462,6 +489,11 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     }
 
     private func perform(_ request: PichiPublicationRequest, profile: PrivateProfileSnapshot) async throws -> PichiPublicationReceipt {
+        let response = try await self.performResponse(request, profile: profile)
+        return try request.receipt(from: response, account: self.account)
+    }
+
+    private func performResponse(_ request: PichiPublicationRequest, profile: PrivateProfileSnapshot) async throws -> PichiPublicationHTTPResponse {
         guard let http, self.requests.count < 4 else { throw PichiPublicationNetworkFailure.unavailable }
         try self.check(profile, context: request.context)
         try await self.requireNetworkAdmission(profile: profile, context: request.context)
@@ -471,7 +503,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             try self.check(profile, context: request.context)
             let response = try await http.perform(authorized)
             try self.check(profile, context: request.context)
-            return try request.receipt(from: response, account: self.account)
+            return response
         }
         self.requests[id] = task
         defer { self.requests.removeValue(forKey: id) }

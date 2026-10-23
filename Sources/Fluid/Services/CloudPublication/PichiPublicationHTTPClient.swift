@@ -100,7 +100,7 @@ actor PichiPublicationHTTPClient: PichiPublicationHTTPPerforming {
               let requested = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let trusted = URLComponents(url: self.configuration.apiBaseURL, resolvingAgainstBaseURL: false),
               requested.scheme == "https", requested.host == trusted.host, requested.port == trusted.port,
-              requested.user == nil, requested.password == nil, requested.query == nil, requested.fragment == nil,
+              requested.user == nil, requested.password == nil, requested.fragment == nil,
               (request.httpBody?.count ?? 0) <= PichiPublicationRequest.maximumMultipartBytes,
               let authorization = request.value(forHTTPHeaderField: "Authorization"), authorization.hasPrefix("Bearer "),
               authorization.utf8.count <= 32_775, authorization.count > 7,
@@ -113,9 +113,12 @@ actor PichiPublicationHTTPClient: PichiPublicationHTTPPerforming {
         let pieces = suffix?.split(separator: "/", omittingEmptySubsequences: false)
         let allowed: Bool
         switch request.httpMethod ?? "GET" {
-        case "POST": allowed = path == prefix
-        case "GET": allowed = pieces?.count == 1 && pieces?.first?.isEmpty == false
-        case "PATCH": allowed = pieces?.count == 2 && pieces?.first?.isEmpty == false && pieces?.last == "assessment"
+        case "POST": allowed = path == prefix && requested.query == nil
+        case "GET":
+            if pieces?.count == 2, pieces?.first?.isEmpty == false, pieces?.last == "assessment-options" {
+                allowed = request.httpBody == nil && PichiPublicationRequest.validAssessmentOptionsQuery(requested.queryItems)
+            } else { allowed = pieces?.count == 1 && pieces?.first?.isEmpty == false && requested.query == nil }
+        case "PATCH": allowed = pieces?.count == 2 && pieces?.first?.isEmpty == false && pieces?.last == "assessment" && requested.query == nil
         default: allowed = false
         }
         guard allowed else { throw PichiPublicationNetworkFailure.invalidRequest }
