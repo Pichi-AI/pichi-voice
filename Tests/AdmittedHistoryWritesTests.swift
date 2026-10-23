@@ -115,6 +115,7 @@ import SQLite3
         expect(try await writer.load().count == 1, "Same-account stale output never writes")
 
         try await testStartupAndAudio(root: root, profile: a)
+        try await testConcurrentFinish(root: root, profile: a)
         try await testLegacyMigration(root: root)
         try await testFailedStores(root: root, profile: a)
         print("PASS: \(checks) admitted history/audio conceal, cancellation, generation, migration and retry assertions")
@@ -265,7 +266,7 @@ import SQLite3
         catch { checks += 1 }
         try sql(root.appendingPathComponent("startup.sqlite3"), "DROP TRIGGER reject_insert")
         startup.deleteEntry(id: failed.entryID)
-        try await failed.finish()
+        try await startup.retryAdmittedRecordingWrites()
         expect(startup.admittedRecordingWriteCount == 0, "Deleting a failed entry retires its obsolete upsert failure")
         expect(await startupWriter.drain() == nil, "Deletion keeps the writer drain clean after storage repair")
 
@@ -302,6 +303,40 @@ import SQLite3
         try await neverStarted.finish()
         expect(!startupAudio.audioFileExists(fileName: neverStartedAudio.fileName), "A revoked scheduled worker leaves no PCM")
         try await startup.prepareForProfileTransition()
+    }
+
+    static func testConcurrentFinish(root: URL, profile: PrivateProfileSnapshot) async throws {
+        PrivateProfileStorage.select(profile)
+        let queue = DispatchQueue(label: "synthetic.concurrent-finish")
+        let firstDrainQueued = ReadSignal()
+        let writer = TranscriptionHistoryWriter(defaults: try defaults(), url: root.appendingPathComponent("concurrent-finish.sqlite3"),
+            profile: profile, queue: queue, didEnqueueDrain: { firstDrainQueued.signal() })
+        let history = TranscriptionHistoryStore(writer: writer, profile: profile,
+            audioStore: .init(rootDirectory: root.appendingPathComponent("concurrent-audio"), profile: profile))
+        try await history.waitUntilLoaded()
+        let old = try history.admitRecordingWrite()
+        history.addEntry(rawText: "old", processedText: "old", appName: "synthetic", windowTitle: "synthetic", admission: old)
+        queue.suspend()
+        let firstEntered = ReadSignal(), secondEntered = ReadSignal(), gateReached = ReadSignal()
+        let release = DispatchSemaphore(value: 0)
+        let first = Task { firstEntered.signal(); try await old.finish() }
+        await firstEntered.wait()
+        await firstDrainQueued.wait()
+        // A queue barrier separates the first finish receipt from the second one.
+        queue.async { gateReached.signal(); release.wait() }
+        let second = Task { secondEntered.signal(); try await history.retryAdmittedRecordingWrites() }
+        await secondEntered.wait()
+        queue.resume()
+        await gateReached.wait()
+        try await first.value
+        let newer = try history.admitRecordingWrite(entryID: old.entryID)
+        expect(history.admittedRecordingWriteCount == 1, "A newer capsule can be admitted after the first receipt completes")
+        release.signal()
+        try await second.value
+        expect(history.admittedRecordingWriteCount == 1, "An old concurrent finisher cannot remove the newer capsule")
+        try await newer.finish()
+        expect(history.admittedRecordingWriteCount == 0, "Concurrent cleanup joins finish without leaving stale admissions")
+        try await history.prepareForProfileTransition()
     }
 
     static func sql(_ url: URL, _ statement: String) throws {

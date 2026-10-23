@@ -445,9 +445,16 @@ final class TranscriptionHistoryStore: ObservableObject {
         await admission.audio?.waitUntilCompleted()
         await self.loadTask?.value
         do { try await self.writer.finish(admission.write) }
-        catch { admission.finishing = false; throw error }
+        catch {
+            if admission.finished { return }
+            admission.finishing = false
+            throw error
+        }
+        guard !admission.finished else { return }
         admission.finished = true
-        self.recordingWrites.removeValue(forKey: admission.entryID)
+        if self.recordingWrites[admission.entryID] === admission {
+            self.recordingWrites.removeValue(forKey: admission.entryID)
+        }
         if self.recordingWrites.isEmpty {
             let waiters = self.recordingJoinWaiters; self.recordingJoinWaiters.removeAll()
             for waiter in waiters { waiter.resume() }
@@ -455,6 +462,12 @@ final class TranscriptionHistoryStore: ObservableObject {
     }
 
     fileprivate func retryRecordingWrite(_ admission: DictationHistoryWriteAdmission) async throws {
+        guard admission.history === self else { throw CancellationError() }
+        if admission.finished { return }
+        if admission.revoked || admission.finishing {
+            try await self.finishRecordingWrite(admission)
+            return
+        }
         guard self.validates(admission),
               let entry = self.retainedEntries.first(where: { $0.id == admission.entryID }) ?? admission.entry else { throw CancellationError() }
         admission.entry = entry

@@ -175,6 +175,7 @@ nonisolated final class TranscriptionHistoryWriter: @unchecked Sendable {
     private let queue: DispatchQueue
     private let writerID = UUID()
     private let didReadSnapshot: @Sendable () -> Void
+    private let didEnqueueDrain: @Sendable () -> Void
     private var database: TranscriptionHistoryDatabase?
     private var writeError: Error?
     private var admittedWriteFailures: [UUID: Error] = [:]
@@ -184,8 +185,10 @@ nonisolated final class TranscriptionHistoryWriter: @unchecked Sendable {
     private let profile: PrivateProfileSnapshot?
 
     init(defaults: UserDefaults? = nil, url: URL? = nil, profile: PrivateProfileSnapshot? = nil,
-         queue: DispatchQueue? = nil, didReadSnapshot: @escaping @Sendable () -> Void = {}) {
+         queue: DispatchQueue? = nil, didReadSnapshot: @escaping @Sendable () -> Void = {},
+         didEnqueueDrain: @escaping @Sendable () -> Void = {}) {
         self.didReadSnapshot = didReadSnapshot
+        self.didEnqueueDrain = didEnqueueDrain
         self.queue = queue ?? DispatchQueue(label: "fluid.history.persistence", qos: .utility)
         let selected = profile ?? (defaults == nil && url == nil ? PrivateProfileStorage.current : nil)
         self.profile = selected
@@ -318,6 +321,7 @@ nonisolated final class TranscriptionHistoryWriter: @unchecked Sendable {
     func drain() async -> Error? {
         await withCheckedContinuation { continuation in
             self.queue.async { continuation.resume(returning: self.writeError ?? self.admittedWriteFailures.values.first) }
+            self.didEnqueueDrain()
         }
     }
 
