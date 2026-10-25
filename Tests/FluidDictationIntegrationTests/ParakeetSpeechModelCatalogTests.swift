@@ -4,6 +4,26 @@ import XCTest
 
 @MainActor
 final class ParakeetSpeechModelCatalogTests: XCTestCase {
+    func testPublishedQwenGGUFHasIndependentAdmissionAndTypedProviderMark() throws {
+        let model = SettingsStore.SpeechModel.qwen3Asr17B
+        XCTAssertEqual(model.whisperModelFile, "Qwen3-ASR-1.7B-Q8_0.gguf")
+        XCTAssertNil(model.legacyWhisperModelFile)
+        XCTAssertEqual(model.expectedDownloadBytes, 2_185_030_624)
+        XCTAssertFalse(model.isWhisperModel, "Shared GGUF transport must not enable Whisper-only controls or quality trace calls")
+        XCTAssertFalse(model.supportsStreaming)
+        XCTAssertTrue(model.requiresAppleSilicon)
+        XCTAssertFalse(SettingsStore.SpeechModel.availableModels.contains(.qwen3Asr), "The legacy FluidAudio preview stays disabled")
+        XCTAssertEqual(SettingsStore.SpeechModel.availableModels.contains(model), CPUArchitecture.isAppleSilicon)
+        let codes = Set(try XCTUnwrap(model.supportedLanguageCodes).split(separator: ",").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        })
+        XCTAssertEqual(codes.count, 30)
+        XCTAssertTrue(codes.contains("RU"))
+        XCTAssertEqual(model.provider.presentation.mark, .asset("Provider_Qwen"))
+        XCTAssertEqual(model.provider.presentation.background, .neutral)
+        XCTAssertEqual(model.provider.presentation.resolvedMark(assetAvailable: { _ in false }), .systemSymbol("waveform"))
+    }
+
     func testFrozenMeetingArtifactIdentityChangesWithWeightsAndRejectsSymbolicLinks() throws {
         let descriptor = ParakeetSpeechModelCatalog.v3
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -100,9 +120,9 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
     func testAllOfflineParakeetVariantsHaveIndependentStableCacheAndPronunciationKeys() throws {
         let descriptors = ParakeetSpeechModelCatalog.descriptors
         XCTAssertEqual(Set(descriptors.map(\.variant)), Set(ParakeetSpeechModelCatalog.Variant.allCases))
-        XCTAssertEqual(Set(descriptors.map(\.modelID)).count, 4)
-        XCTAssertEqual(Set(descriptors.map(\.folderName)).count, 4)
-        XCTAssertEqual(Set(descriptors.map(\.pronunciationModelKey)).count, 4)
+        XCTAssertEqual(Set(descriptors.map(\.modelID)).count, 5)
+        XCTAssertEqual(Set(descriptors.map(\.folderName)).count, 5)
+        XCTAssertEqual(Set(descriptors.map(\.pronunciationModelKey)).count, 5)
         let root = URL(fileURLWithPath: "/fixture/FluidAudio/Models", isDirectory: true)
         for descriptor in descriptors {
             let model = try XCTUnwrap(SettingsStore.SpeechModel(rawValue: descriptor.modelID))
@@ -116,7 +136,7 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
             XCTAssertFalse(model.isWhisperModel)
             XCTAssertEqual(model.provider, .nvidia)
             XCTAssertTrue(model.requiresAppleSilicon)
-            XCTAssertEqual(model.requiresMacOS15, model == .fluidParakeetMini || model == .fluidParakeetPico)
+            XCTAssertEqual(model.requiresMacOS15, [.fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro].contains(model))
             XCTAssertFalse(model.requiresMacOS26)
             XCTAssertNil(model.whisperModelFile)
             XCTAssertNil(model.legacyWhisperModelFile)
@@ -201,23 +221,76 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
         XCTAssertEqual(SettingsStore.SpeechModel.fluidParakeetPico.humanReadableName, "Fluid Speech Pico")
     }
 
-    func testSmallVariantsAreOfferedOnlyForEnglishAndDoNotReplaceExistingFirstChoice() {
-        let models: [SettingsStore.SpeechModel] = [.parakeetTDTv2, .parakeetRealtime, .parakeetTDT, .fluidParakeetMini, .fluidParakeetPico]
+    func testProDownloadsItsHostedPackLikeMiniAndPico() throws {
+        let descriptor = ParakeetSpeechModelCatalog.pro
+        let model = SettingsStore.SpeechModel.fluidParakeetPro
+        XCTAssertEqual(model.parakeetDescriptor, descriptor)
+        #if arch(arm64)
+        XCTAssertEqual(descriptor.asrModelVersion, .fluidParakeetPro)
+        #endif
+        XCTAssertEqual(descriptor.archiveURL?.absoluteString, "https://models.fluidvoice.app/parakeet/fluid-pro/1.0.0/fluid-parakeet-pro-coreml.tar")
+        XCTAssertEqual(descriptor.archiveSHA256?.count, 64)
+        XCTAssertEqual(descriptor.manifestSHA256?.count, 64)
+        XCTAssertEqual(descriptor.expectedDownloadBytes, 652_482_560)
+        XCTAssertTrue(descriptor.isHostedPack)
+        XCTAssertFalse(ParakeetSpeechModelCatalog.v3.isHostedPack)
+        XCTAssertNil(CompactSpeechModelReleaseCatalog.shared.descriptor(for: model), "The signed feed only updates Mini and Pico")
+        XCTAssertEqual(descriptor.folderName, "fluid-parakeet-pro-coreml")
+        XCTAssertEqual(descriptor.requiredModelNames, ParakeetSpeechModelCatalog.standardModelNames, "The Mac pack has one encoder")
+        XCTAssertEqual(model.displayName, ParakeetSpeechModelCatalog.proName)
+        XCTAssertEqual(model.humanReadableName, ParakeetSpeechModelCatalog.proName)
+        XCTAssertTrue(descriptor.isEnglishOnly)
+        XCTAssertEqual(model.brandName, "FluidVoice")
+        XCTAssertEqual(model.provider, .nvidia)
+        XCTAssertEqual(descriptor.creditLine, ParakeetSpeechModelCatalog.mini.creditLine)
+        XCTAssertEqual(descriptor.pronunciationModelKey, try descriptor.modelID + ":sha256:" + XCTUnwrap(descriptor.archiveSHA256))
+        XCTAssertTrue(ParakeetSpeechModelCatalog.sharesPronunciationFamily(descriptor.pronunciationModelKey, with: "parakeet-v3"))
+        XCTAssertEqual(ParakeetSpeechModelCatalog.descriptor(forInstalledPronunciationModelKey: descriptor.modelID), descriptor)
+        XCTAssertFalse(ParakeetSpeechModelCatalog.isOutdatedCompactPronunciationModelKey(descriptor.modelID))
+        XCTAssertEqual(
+            FluidAudioProvider(modelOverride: model, configureWordBoosting: false).preservesInstalledCompactWeights,
+            CPUArchitecture.isAppleSilicon,
+            "Like Mini and Pico, a failed load must not delete verified hosted weights"
+        )
+        XCTAssertFalse(FluidAudioProvider(modelOverride: .parakeetTDT, configureWordBoosting: false).preservesInstalledCompactWeights)
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for name in descriptor.requiredModelNames {
+            let root = directory.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: root.appendingPathComponent("weights"), withIntermediateDirectories: true)
+            for file in ["coremldata.bin", "metadata.json", "weights/weight.bin"] {
+                try Data("fixture".utf8).write(to: root.appendingPathComponent(file))
+            }
+        }
+        XCTAssertFalse(descriptor.artifactsAreComplete(at: directory))
+        try Data("{}".utf8).write(to: directory.appendingPathComponent(descriptor.vocabularyFile))
+        XCTAssertFalse(descriptor.artifactsAreComplete(at: directory), "Without the archive marker it is not the hosted release")
+        XCTAssertNil(descriptor.installedArchiveSHA256(at: directory))
+        try descriptor.writeInstallationRevision(at: directory)
+        XCTAssertTrue(descriptor.artifactsAreComplete(at: directory))
+        XCTAssertEqual(descriptor.installedArchiveSHA256(at: directory), descriptor.archiveSHA256)
+    }
+
+    func testHostedVariantsAreOfferedOnlyForEnglishAndDoNotReplaceExistingFirstChoice() {
+        let hosted: [SettingsStore.SpeechModel] = [.fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro]
+        let models: [SettingsStore.SpeechModel] = [.parakeetTDTv2, .parakeetRealtime, .parakeetTDT] + hosted
         let english = VoiceEngineLanguageCatalog.routes(forLanguageID: "en", availableModels: models)
         XCTAssertEqual(english.map(\.model), models)
         XCTAssertEqual(english.first?.model, .parakeetTDTv2)
-        for route in english where route.model == .fluidParakeetMini || route.model == .fluidParakeetPico {
+        for route in english where hosted.contains(route.model) {
             XCTAssertEqual(route.binding, .automatic)
             XCTAssertNotNil(route.badgeText)
         }
         for language in VoiceEngineLanguageCatalog.allLanguages(availableModels: models) where language.id != "en" {
             let routes = VoiceEngineLanguageCatalog.routes(for: language, availableModels: models)
-            XCTAssertFalse(routes.contains { $0.model == .fluidParakeetMini || $0.model == .fluidParakeetPico })
+            XCTAssertFalse(routes.contains { hosted.contains($0.model) })
             XCTAssertEqual(routes.map(\.model), [.parakeetTDT])
         }
-        XCTAssertEqual(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.fluidParakeetMini, .fluidParakeetPico]).map(\.id), ["en"])
-        XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "fr", availableModels: [.fluidParakeetMini, .fluidParakeetPico]).isEmpty)
+        XCTAssertEqual(VoiceEngineLanguageCatalog.allLanguages(availableModels: hosted).map(\.id), ["en"])
+        XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "fr", availableModels: hosted).isEmpty)
         XCTAssertTrue(VoiceEngineLanguageCatalog.routes(forLanguageID: "missing", availableModels: models).isEmpty)
+        XCTAssertEqual(VoiceEngineLanguageCatalog.routes(forLanguageID: "ru", availableModels: models + [.gigaam]).first?.model, .gigaam)
     }
 
     func testEnglishOnboardingShowsV2AndMiniWithoutChangingSelectionOrAvailableRoutes() {

@@ -147,7 +147,7 @@ private final nonisolated class WhisperNativeModelTransfer: @unchecked Sendable 
     func release() { self.session = nil; self.model = nil }
 }
 
-/// TranscriptionProvider implementation using transcribe.cpp for Whisper GGUF models.
+/// TranscriptionProvider implementation using transcribe.cpp for Whisper and Qwen GGUF models.
 /// Public state stays on the provider's existing actor. Blocking native
 /// allocations and destruction use the existing transcription executor.
 final class WhisperProvider: TranscriptionProvider {
@@ -169,6 +169,7 @@ final class WhisperProvider: TranscriptionProvider {
     private var session: Session?
     private var ready = false
     private var loadedModelName: String?
+    private var loadedSpeechModel: SettingsStore.SpeechModel?
 
     private let overriddenModelDirectory: URL?
     private let urlSession: URLSession
@@ -281,6 +282,7 @@ final class WhisperProvider: TranscriptionProvider {
         self.model = nil
         self.ready = false
         self.loadedModelName = nil
+        self.loadedSpeechModel = nil
     }
 
     private func currentLoadedModelName() -> String? {
@@ -289,20 +291,22 @@ final class WhisperProvider: TranscriptionProvider {
         return self.loadedModelName
     }
 
-    private func installModel(_ model: Model, session: Session, modelName: String) {
+    private func installModel(_ model: Model, session: Session, modelName: String, speechModel: SettingsStore.SpeechModel) {
         self.stateLock.lock()
         defer { self.stateLock.unlock() }
         self.model = model
         self.session = session
         self.loadedModelName = modelName
+        self.loadedSpeechModel = speechModel
         self.ready = true
     }
 
-    private func activeSession() -> (session: Session, modelName: String)? {
+    private func activeSession() -> (session: Session, modelName: String, speechModel: SettingsStore.SpeechModel, architecture: String)? {
         self.stateLock.lock()
         defer { self.stateLock.unlock() }
-        guard let session = self.session, let modelName = self.loadedModelName else { return nil }
-        return (session, modelName)
+        guard let session = self.session, let modelName = self.loadedModelName,
+              let speechModel = self.loadedSpeechModel, let model = self.model else { return nil }
+        return (session, modelName, speechModel, model.arch)
     }
 
     private func removeLegacyModelIfNeeded() {
@@ -369,7 +373,7 @@ final class WhisperProvider: TranscriptionProvider {
         }
 
         if !FileManager.default.fileExists(atPath: self.modelURL.path) {
-            DebugLogger.shared.info("WhisperProvider: Downloading Whisper GGUF model...", source: "WhisperProvider")
+            DebugLogger.shared.info("WhisperProvider: Downloading \(targetModel.displayName) GGUF model...", source: "WhisperProvider")
             progressHandler?(.preparingDownload)
             try await self.downloadModel { progress in
                 progressHandler?(.downloading(progress))
@@ -381,10 +385,12 @@ final class WhisperProvider: TranscriptionProvider {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -3,
-                userInfo: [NSLocalizedDescriptionKey: "Whisper model file is missing or corrupted. Please re-download the model."]
+                userInfo: [NSLocalizedDescriptionKey: "\(targetModel.displayName) model file is missing or corrupted. Please re-download the model."]
             )
         }
-        self.removeLegacyModelIfNeeded()
+        if targetModel.isWhisperModel {
+            self.removeLegacyModelIfNeeded()
+        }
 
         let requiredMemoryGB = targetModel.requiredMemoryGB
         let availableMemoryGB = Self.availableMemoryGB()
@@ -464,9 +470,9 @@ final class WhisperProvider: TranscriptionProvider {
             throw CancellationError()
         }
         let (loadedModel, loadedSession) = try prepared.take()
-        self.installModel(loadedModel, session: loadedSession, modelName: loadedModelURL.lastPathComponent)
+        self.installModel(loadedModel, session: loadedSession, modelName: loadedModelURL.lastPathComponent, speechModel: targetModel)
         DebugLogger.shared.info(
-            "WhisperProvider: Model ready (\(currentModelName), backend=\(loadedModel.backend), arch=\(loadedModel.arch))",
+            "WhisperProvider: Model ready (\(currentModelName), backend=\(loadedModel.backend), arch=\(loadedModel.arch), maxAudioMs=\(loadedModel.capabilities.maxAudioMs))",
             source: "WhisperProvider"
         )
     }
@@ -476,7 +482,7 @@ final class WhisperProvider: TranscriptionProvider {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -5,
-                userInfo: [NSLocalizedDescriptionKey: "\(model.displayName) requires the Metal Whisper backend on Apple Silicon."]
+                userInfo: [NSLocalizedDescriptionKey: "\(model.displayName) requires the Metal transcription backend on Apple Silicon."]
             )
         }
 
@@ -541,7 +547,7 @@ final class WhisperProvider: TranscriptionProvider {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "Audio too short for Whisper transcription"]
+                userInfo: [NSLocalizedDescriptionKey: "Audio too short for \(self.selectedModel.displayName) transcription"]
             )
         }
 
@@ -549,7 +555,7 @@ final class WhisperProvider: TranscriptionProvider {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Whisper model not loaded"]
+                userInfo: [NSLocalizedDescriptionKey: "\(self.selectedModel.displayName) model not loaded"]
             )
         }
 
@@ -565,7 +571,7 @@ final class WhisperProvider: TranscriptionProvider {
             return nil
         }
 
-        let resolvedLanguageCode = self.resolvedLanguageCode(explicit: languageCode)
+        let resolvedLanguageCode = self.resolvedLanguageCode(explicit: languageCode, model: active.speechModel)
         // A capture stop may leave less than one second of speech. Pad inside the
         // inference adapter so the sink keeps the original physical clock and PCM
         // bound; no temporary WAV or fabricated final duration is needed.
@@ -573,6 +579,7 @@ final class WhisperProvider: TranscriptionProvider {
             ? samples + [Float](repeating: 0, count: 16_000 - samples.count)
             : samples
         let options = Self.runOptions(languageCode: resolvedLanguageCode, timestamps: timestamps,
+                                      model: active.speechModel,
                                       loadedModelName: active.modelName, sampleCount: samples.count)
         let supportedCodes = VoiceEngineLanguageCatalog.whisperSupportedLanguageCodes
         let requestedLanguage = WhisperProbabilityDiagnostics.languageField(options.language, supportedCodes: supportedCodes, absent: "auto")
@@ -592,14 +599,23 @@ final class WhisperProvider: TranscriptionProvider {
         }
         let started = ProcessInfo.processInfo.systemUptime
         do {
-            let snapshot = try await active.session.runWhisper(inferenceSamples, options: options)
-            try Task.checkCancellation()
-            let transcript = snapshot.transcript
-            let chunks = snapshot.chunks.map { chunk in
-                WhisperShortInputPolicy.Chunk(temperature: chunk.temperature, avgLogprob: chunk.avgLogprob,
-                                             compressionRatio: chunk.compressionRatio, noSpeechProbability: chunk.noSpeechProbability,
-                                             fallbacks: chunk.fallbacks, noSpeechTriggered: chunk.noSpeechTriggered)
+            // The quality snapshot API accepts Whisper only. Other GGUF families
+            // use the library's ordinary run with the same joined cancellation.
+            let transcript: Transcript
+            let chunks: [WhisperShortInputPolicy.Chunk]
+            if active.architecture == "whisper" {
+                let snapshot = try await active.session.runWhisper(inferenceSamples, options: options)
+                transcript = snapshot.transcript
+                chunks = snapshot.chunks.map { chunk in
+                    WhisperShortInputPolicy.Chunk(temperature: chunk.temperature, avgLogprob: chunk.avgLogprob,
+                                                 compressionRatio: chunk.compressionRatio, noSpeechProbability: chunk.noSpeechProbability,
+                                                 fallbacks: chunk.fallbacks, noSpeechTriggered: chunk.noSpeechTriggered)
+                }
+            } else {
+                transcript = try await active.session.run(inferenceSamples, options: options)
+                chunks = []
             }
+            try Task.checkCancellation()
             let decision = boundedTiny
                 ? WhisperShortInputPolicy.evaluate(hasText: !transcript.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, chunks: chunks)
                 : .accepted
@@ -691,9 +707,12 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     static func runOptions(languageCode: String?, timestamps: TimestampKind = .segment,
+                           model: SettingsStore.SpeechModel = .whisperBase, whisperLanguageCode: String? = nil,
                            loadedModelName: String? = nil, sampleCount: Int? = nil) -> RunOptions {
-        let boundedTiny = sampleCount.map { WhisperShortInputPolicy.applies(modelFile: loadedModelName, sampleCount: $0) } ?? false
-        return RunOptions(timestamps: timestamps, language: languageCode == "auto" ? nil : languageCode,
+        let boundedTiny = model.isWhisperModel && (sampleCount.map { WhisperShortInputPolicy.applies(modelFile: loadedModelName, sampleCount: $0) } ?? false)
+        let resolvedLanguage = languageCode ?? (model.isWhisperModel ? whisperLanguageCode : nil)
+        return RunOptions(timestamps: model == .qwen3Asr17B ? .none : timestamps,
+                          language: resolvedLanguage == "auto" ? nil : resolvedLanguage,
                           family: boundedTiny ? .whisper(.init(temperature: 0, temperatureInc: 0, seed: 1)) : nil)
     }
 
@@ -707,10 +726,10 @@ final class WhisperProvider: TranscriptionProvider {
         }
     }
 
-    func resolvedLanguageCode(explicit: String? = nil) -> String? {
+    func resolvedLanguageCode(explicit: String? = nil, model: SettingsStore.SpeechModel? = nil) -> String? {
         if let explicit { return explicit == "auto" ? nil : explicit }
         if self.useAutomaticLanguageDetection { return nil }
-        let selected = self.languageCodeOverride ?? SettingsStore.shared.selectedWhisperLanguageCode
+        let selected = self.languageCodeOverride ?? ((model ?? self.selectedModel).isWhisperModel ? SettingsStore.shared.selectedWhisperLanguageCode : nil)
         return selected == "auto" ? nil : selected
     }
 
@@ -719,7 +738,7 @@ final class WhisperProvider: TranscriptionProvider {
         let retired = self.stateLock.withLock { () -> WhisperNativeModelTransfer? in
             guard let model, let session else { self.ready = false; return nil }
             let retired = WhisperNativeModelTransfer(model: model, session: session)
-            self.session = nil; self.model = nil; self.ready = false; self.loadedModelName = nil
+            self.session = nil; self.model = nil; self.ready = false; self.loadedModelName = nil; self.loadedSpeechModel = nil
             return retired
         }
         // Owners already drain inference before release. Explicitly free the pair
@@ -800,7 +819,7 @@ final class WhisperProvider: TranscriptionProvider {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid Whisper model URL"]
+                userInfo: [NSLocalizedDescriptionKey: "Invalid \(self.selectedModel.displayName) model URL"]
             )
         }
 
@@ -827,7 +846,7 @@ final class WhisperProvider: TranscriptionProvider {
                     let message: String
                     switch error.code {
                     case NSURLErrorNotConnectedToInternet:
-                        message = "No internet connection. Please connect to the internet to download the Whisper model."
+                        message = "No internet connection. Please connect to the internet to download \(self.selectedModel.displayName)."
                     case NSURLErrorTimedOut:
                         message = "Download timed out. Please check your internet connection and try again."
                     case NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost:

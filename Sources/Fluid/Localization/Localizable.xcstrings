@@ -55528,6 +55528,533 @@
           }
         }
       }
+    },
+    "Use my active screen to improve dictation accuracy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use my active screen to improve dictation accuracy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать активное окно для повышения точности диктовки"
+          }
+        }
+      }
+    },
+    "Checking screen access…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking screen access…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка доступа к экрану…"
+          }
+        }
+      }
+    },
+    "Screen access allowed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen access allowed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к экрану разрешён"
+          }
+        }
+      }
+    },
+    "Mac with %lld GB+ RAM": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac with %lld GB+ RAM"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac с %lld ГБ ОЗУ или больше"
+          }
+        }
+      }
+    },
+    "Recommended: Mac with %lld GB or more RAM.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recommended: Mac with %lld GB or more RAM."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуется Mac с %lld ГБ ОЗУ или больше."
+          }
+        }
+      }
+    },
+    "On-screen context": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On-screen context"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Контекст активного окна"
+          }
+        }
+      }
+    },
+    "Allow screen access": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow screen access"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешить доступ к экрану"
+          }
+        }
+      }
+    },
+    "Allow %@ under Screen & System Audio Recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow %@ under Screen & System Audio Recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешите %@ в разделе «Запись экрана и системного аудио»."
+          }
+        }
+      }
+    },
+    "macOS calls this Screen Recording access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS calls this Screen Recording access."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В macOS это разрешение называется «Запись экрана»."
+          }
+        }
+      }
+    },
+    "Supported models: %@. Everything is processed on your device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supported models: %@. Everything is processed on your device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поддерживаемые модели: %@. Вся обработка выполняется на вашем устройстве."
+          }
+        }
+      }
+    },
+    "On. Click to change it in Settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On. Click to change it in Settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включён. Нажмите, чтобы изменить в настройках."
+          }
+        }
+      }
+    },
+    "Off. Click to turn it on in Settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off. Click to turn it on in Settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выключен. Нажмите, чтобы включить в настройках."
+          }
+        }
+      }
+    },
+    "On-screen context, %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On-screen context, %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Контекст активного окна: %@"
+          }
+        }
+      }
+    },
+    "Opens the setting in Settings, Experimental.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens the setting in Settings, Experimental."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открывает параметр в разделе «Настройки», «Экспериментальные функции»."
+          }
+        }
+      }
+    },
+    "on": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "on"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "включён"
+          }
+        }
+      }
+    },
+    "off": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "off"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "выключен"
+          }
+        }
+      }
+    },
+    "New speech models and steadier captions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New speech models and steadier captions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новые модели речи и более плавные субтитры"
+          }
+        }
+      }
+    },
+    "Fluid Speech Pro, Qwen dictation, and smoother live captions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fluid Speech Pro, Qwen dictation, and smoother live captions."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fluid Speech Pro, диктовка Qwen и более плавные субтитры в реальном времени."
+          }
+        }
+      }
+    },
+    "NEW SPEECH MODEL": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NEW SPEECH MODEL"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "НОВАЯ МОДЕЛЬ РЕЧИ"
+          }
+        }
+      }
+    },
+    "An English speech model for dictation on your Mac.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An English speech model for dictation on your Mac."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель для диктовки на английском языке на вашем Mac."
+          }
+        }
+      }
+    },
+    "Open Voice Engine": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Voice Engine"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть распознавание речи"
+          }
+        }
+      }
+    },
+    "MULTILINGUAL SPEECH": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MULTILINGUAL SPEECH"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "МНОГОЯЗЫЧНОЕ РАСПОЗНАВАНИЕ"
+          }
+        }
+      }
+    },
+    "Automatic detection of 30 languages with on-device transcription.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic detection of 30 languages with on-device transcription."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматическое определение 30 языков с расшифровкой на устройстве."
+          }
+        }
+      }
+    },
+    "LIVE TEXT": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LIVE TEXT"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ТЕКСТ В РЕАЛЬНОМ ВРЕМЕНИ"
+          }
+        }
+      }
+    },
+    "Steadier live captions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steadier live captions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Более плавные субтитры"
+          }
+        }
+      }
+    },
+    "Read live text with steadier wrapping and Reduce Motion support.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read live text with steadier wrapping and Reduce Motion support."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Читайте текст с более стабильным переносом строк и поддержкой уменьшения движения."
+          }
+        }
+      }
+    },
+    "Modifier-only keys can't cancel recording. Use Esc or include a regular key.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modifier-only keys can't cancel recording. Use Esc or include a regular key."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для отмены записи недостаточно клавиш-модификаторов. Используйте Esc или добавьте обычную клавишу."
+          }
+        }
+      }
+    },
+    "Research preview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Research preview"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исследовательская версия"
+          }
+        }
+      }
+    },
+    "Our best cleanup model yet": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Our best cleanup model yet"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Наша наиболее точная модель обработки текста"
+          }
+        }
+      }
+    },
+    "Our most accurate model, built for clear dictation in noisy places. Runs on your Mac.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Our most accurate model, built for clear dictation in noisy places. Runs on your Mac."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Наша наиболее точная модель для чёткой диктовки в шумной обстановке. Работает на вашем Mac."
+          }
+        }
+      }
+    },
+    "Automatically detects 30 languages. Transcribes on your Mac after you stop recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically detects 30 languages. Transcribes on your Mac after you stop recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматически определяет 30 языков. Расшифровывает на вашем Mac после остановки записи."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

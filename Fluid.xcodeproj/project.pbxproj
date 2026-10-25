@@ -516,6 +516,7 @@
 		EAA100000000000000000002 /* PichiTextModelEvalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA100000000000000000001 /* PichiTextModelEvalTests.swift */; };
 		F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */; };
 		5A07E361DE084164A9E5A8C8 /* LocalTextModelDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */; };
+		AD1130000000000000000004 /* OverlayCaptionPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */; };
 		AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000003 /* HoldToMutePresentationTests.swift */; };
 		A71C19000000000000000002 /* MeetingInlineCaptionLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71C19000000000000000001 /* MeetingInlineCaptionLayoutTests.swift */; };
 		AD1030000000000000000006 /* DictionaryDrawerLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000005 /* DictionaryDrawerLayoutTests.swift */; };
@@ -652,6 +653,7 @@
 		F5E000000000000000000014 /* fv-serve in Embed Helpers */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000005 /* fv-serve */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		4824DB2261B409107AADB327 /* MeetingPrivacyPublicationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 638F1FFFB1312BFC70B34815 /* MeetingPrivacyPublicationTests.swift */; };
 		F55932CD21E9D28005AE10C0 /* MeetingCaptureStorageAdmissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5B5E6DADC27DE8E247EC335 /* MeetingCaptureStorageAdmissionTests.swift */; };
+		C0DE123A0000000000000002 /* DictationContextCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -736,6 +738,7 @@
 		F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiMeetingSummaryTests.swift; sourceTree = "<group>"; };
 		F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalTextModelDiscoveryTests.swift; sourceTree = "<group>"; };
 		B12A00000000000000000001 /* PichiBrand.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration/PichiBrand.xcconfig; sourceTree = SOURCE_ROOT; };
+		AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayCaptionPresentationTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000003 /* HoldToMutePresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMutePresentationTests.swift; sourceTree = "<group>"; };
 		A71C19000000000000000001 /* MeetingInlineCaptionLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingInlineCaptionLayoutTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000005 /* DictionaryDrawerLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictionaryDrawerLayoutTests.swift; sourceTree = "<group>"; };
@@ -861,6 +864,7 @@
 		F5E000000000000000000005 /* fv-serve */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "fv-serve"; sourceTree = BUILT_PRODUCTS_DIR; };
 		638F1FFFB1312BFC70B34815 /* MeetingPrivacyPublicationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/FluidDictationIntegrationTests/MeetingPrivacyPublicationTests.swift; sourceTree = SOURCE_ROOT; };
 		A5B5E6DADC27DE8E247EC335 /* MeetingCaptureStorageAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/FluidDictationIntegrationTests/MeetingCaptureStorageAdmissionTests.swift; sourceTree = SOURCE_ROOT; };
+		C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationContextCaptureTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -1039,6 +1043,7 @@
 				7CDB0A292F3C4D5600FB7CAD /* DictationE2ETests.swift */,
 				CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */,
 				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
+				AD1130000000000000000003 /* OverlayCaptionPresentationTests.swift */,
 				AD1030000000000000000003 /* HoldToMutePresentationTests.swift */,
 				A71C19000000000000000001 /* MeetingInlineCaptionLayoutTests.swift */,
 				AD1030000000000000000005 /* DictionaryDrawerLayoutTests.swift */,
@@ -1121,6 +1126,7 @@
 				B51800000000000000000001 /* SpokenSendTests.swift */,
 				B51900000000000000000001 /* PrivateAIProviderPromptFormatTests.swift */,
 				B52000000000000000000001 /* PrivateAIDictationTokenBudgetTests.swift */,
+				C0DE123A0000000000000001 /* DictationContextCaptureTests.swift */,
 				C0DE63700000000000000001 /* WhisperLanguageSelectionTests.swift */,
 				CACEC0010000000000000001 /* KeychainServiceCacheTests.swift */,
 				0B05F11E000000000000A001 /* SupportedFileExtensionsTests.swift */,
@@ -1480,6 +1486,7 @@
 				B52000000000000000000002 /* PrivateAIDictationTokenBudgetTests.swift in Sources */,
 				CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */,
 				7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */,
+				AD1130000000000000000004 /* OverlayCaptionPresentationTests.swift in Sources */,
 				AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */,
 				A71C19000000000000000002 /* MeetingInlineCaptionLayoutTests.swift in Sources */,
 				AD1030000000000000000006 /* DictionaryDrawerLayoutTests.swift in Sources */,
@@ -1561,6 +1568,7 @@
 				803000000000000000000002 /* MediaPlaybackServiceTests.swift in Sources */,
 				B51800000000000000000002 /* SpokenSendTests.swift in Sources */,
 				B51900000000000000000002 /* PrivateAIProviderPromptFormatTests.swift in Sources */,
+				C0DE123A0000000000000002 /* DictationContextCaptureTests.swift in Sources */,
 				C0DE63700000000000000002 /* WhisperLanguageSelectionTests.swift in Sources */,
 				CACEC0010000000000000002 /* KeychainServiceCacheTests.swift in Sources */,
 				0B05F11E000000000000A002 /* SupportedFileExtensionsTests.swift in Sources */,
@@ -1769,7 +1777,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
@@ -1797,7 +1805,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = "1.6.12";
+				MARKETING_VERSION = "1.6.13-beta.1";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER).debug";
 				PRODUCT_MODULE_NAME = FluidVoice_Debug;
 				PRODUCT_NAME = "$(PICHI_PRODUCT_NAME) Debug";
@@ -1825,7 +1833,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
@@ -1853,7 +1861,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = "1.6.12";
+				MARKETING_VERSION = "1.6.13-beta.1";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER)";
 				PRODUCT_MODULE_NAME = FluidVoice;
 				PRODUCT_NAME = "$(PICHI_PRODUCT_NAME)";
@@ -2178,7 +2186,7 @@
 			repositoryURL = "https://github.com/altic-dev/FluidAudio.git";
 			requirement = {
 				kind = revision;
-				revision = eb1e6628998e47022799d305b52c2680d3576801;
+				revision = 386f7195670b77f2954c7ee143ec63fcb50b6c3b;
 			};
 		};
 

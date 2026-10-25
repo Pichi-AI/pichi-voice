@@ -511,13 +511,26 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(SettingsSearchIndex.preferredSection(current: .audio, results: []), .audio)
     }
 
+    func testScreenContextSearchRequiresSupportedModelCapability() {
+        for supported in [false, true] {
+            let availability = SettingsSearchAvailability(
+                microphoneAuthorized: true, accessibilityEnabled: true,
+                savesTranscriptionHistory: true, savesAudioWithTranscriptionHistory: true,
+                overlayAtBottom: true, dictationScreenContextAvailable: supported
+            )
+            let matches = SettingsSearchIndex.results(for: "OCR", availability: availability)
+            XCTAssertEqual(matches.contains { $0.target == .dictationScreenContext }, supported)
+        }
+    }
+
     func testSettingsSearchOmitsTargetsUnavailableInTheCurrentState() {
         let availability = SettingsSearchAvailability(
             microphoneAuthorized: true,
             accessibilityEnabled: true,
             savesTranscriptionHistory: false,
             savesAudioWithTranscriptionHistory: false,
-            overlayAtBottom: false
+            overlayAtBottom: false,
+            dictationScreenContextAvailable: false
         )
 
         let permissionTargets = SettingsSearchIndex.results(
@@ -543,7 +556,8 @@ final class SettingsNavigationStateTests: XCTestCase {
             accessibilityEnabled: false,
             savesTranscriptionHistory: true,
             savesAudioWithTranscriptionHistory: true,
-            overlayAtBottom: true
+            overlayAtBottom: true,
+            dictationScreenContextAvailable: false
         )
         let gatedTargets: [(SettingsSearchTarget, String)] = [
             (.primaryDictationShortcuts, "primary dictation shortcuts"),

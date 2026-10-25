@@ -180,6 +180,88 @@ final class WhisperLanguageSelectionTests: XCTestCase {
         XCTAssertEqual(provider.modelOverride, .whisperTiny)
     }
 
+    func testWhisperRunOptionsKeepLanguageFallbackAndTimestamps() {
+        let options = WhisperProvider.runOptions(languageCode: nil, whisperLanguageCode: "hu")
+        XCTAssertEqual(options.language, "hu")
+        XCTAssertEqual(options.timestamps, .segment)
+        XCTAssertEqual(WhisperProvider.runOptions(languageCode: "en", whisperLanguageCode: "hu").language, "en")
+    }
+
+    func testQwenDetectsLanguageWithoutInheritingWhisperSelection() {
+        let options = WhisperProvider.runOptions(languageCode: nil, model: .qwen3Asr17B, whisperLanguageCode: "he")
+        XCTAssertNil(options.language)
+        XCTAssertEqual(options.timestamps, .none)
+    }
+
+    func testQwenHonorsExplicitLanguageWithoutRequestingTimestamps() {
+        let options = WhisperProvider.runOptions(languageCode: "en", model: .qwen3Asr17B, whisperLanguageCode: "hu")
+        XCTAssertEqual(options.language, "en")
+        XCTAssertEqual(options.timestamps, .none)
+        XCTAssertEqual(WhisperProvider.runOptions(languageCode: "auto", timestamps: .word,
+            model: .qwen3Asr17B, whisperLanguageCode: "ru").timestamps, .none)
+        XCTAssertNil(WhisperProvider.runOptions(languageCode: "auto", model: .qwen3Asr17B,
+            whisperLanguageCode: "ru").language)
+    }
+
+    @MainActor
+    func testQwenProviderLanguageResolutionDoesNotReadWhisperPreference() {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedWhisperLanguageCode
+        defer { settings.selectedWhisperLanguageCode = previous }
+        settings.selectedWhisperLanguageCode = "ru"
+        let provider = WhisperProvider(modelOverride: .qwen3Asr17B)
+        XCTAssertNil(provider.resolvedLanguageCode())
+        XCTAssertEqual(provider.resolvedLanguageCode(explicit: "en"), "en")
+        XCTAssertNil(provider.resolvedLanguageCode(explicit: "auto"))
+        // An active native call supplies its captured model, independently of UI selection.
+        XCTAssertNil(provider.resolvedLanguageCode(model: .qwen3Asr17B))
+        XCTAssertEqual(provider.resolvedLanguageCode(model: .whisperTiny), "ru")
+    }
+
+    func testQwenUsesItsOwnGGUFAndDoesNotExposeWhisperControls() {
+        let model = SettingsStore.SpeechModel.qwen3Asr17B
+        XCTAssertEqual(model.whisperModelFile, "Qwen3-ASR-1.7B-Q8_0.gguf")
+        XCTAssertNil(model.legacyWhisperModelFile)
+        XCTAssertEqual(model.provider, .qwen)
+        XCTAssertFalse(model.isWhisperModel)
+        XCTAssertFalse(model.supportsStreaming)
+        XCTAssertTrue(model.hasPerformanceRatings)
+        XCTAssertEqual(SettingsStore.SpeechModel.availableModels.contains(model), CPUArchitecture.isAppleSilicon)
+        XCTAssertFalse(SettingsStore.SpeechModel.availableModels.contains(.qwen3Asr))
+    }
+
+    func testQwenTranscribesFixtureFromExistingModelAndPreservesWhisperCache() async throws {
+        guard let modelPath = ProcessInfo.processInfo.environment["FLUIDVOICE_QWEN_MODEL_PATH"] else {
+            throw XCTSkip("Set FLUIDVOICE_QWEN_MODEL_PATH to an existing Qwen GGUF for the local inference check.")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let modelFile = try XCTUnwrap(SettingsStore.SpeechModel.qwen3Asr17B.whisperModelFile)
+        try FileManager.default.linkItem(at: URL(fileURLWithPath: modelPath), to: directory.appendingPathComponent(modelFile))
+        let legacyFile = directory.appendingPathComponent("ggml-tiny.bin")
+        try Data("unrelated Whisper cache".utf8).write(to: legacyFile)
+        let provider = WhisperProvider(modelDirectory: directory, modelOverride: .qwen3Asr17B)
+        guard provider.modelsExistOnDisk() else {
+            return XCTFail("This check must reuse the existing model without downloading.")
+        }
+
+        do {
+            try await provider.prepare()
+            let samples = try AudioFixtureLoader.load16kMonoFloatSamples(named: "dictation_fixture", ext: "wav")
+            let result = try await provider.transcribe(samples)
+
+            XCTAssertTrue(result.text.lowercased().contains("hello"), "Unexpected fixture transcription: \(result.text)")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: legacyFile.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: modelPath))
+            print("Qwen fixture transcription: \(result.text)")
+        } catch {
+            await provider.releaseResidency()
+            throw error
+        }
+        await provider.releaseResidency()
+    }
+
     func testStoredWhisperLanguageSelectionResolution() {
         XCTAssertNil(SettingsStore.whisperLanguageCode(fromStoredValue: nil))
         XCTAssertNil(SettingsStore.whisperLanguageCode(fromStoredValue: "auto"))

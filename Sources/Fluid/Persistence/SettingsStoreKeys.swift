@@ -149,6 +149,7 @@ extension SettingsStore {
         static let continuousDictationModeEnabled = "ContinuousDictationModeEnabled"
         static let continuousDictationSpacingEnabled = "ContinuousDictationSpacingEnabled"
         static let contextAwareCapitalizationEnabled = "ContextAwareCapitalizationEnabled"
+        static let dictationScreenContextEnabled = "DictationScreenContextEnabled"
 
         // Custom Dictionary
         static let customDictionaryEntries = "CustomDictionaryEntries"

@@ -1535,6 +1535,19 @@ struct SettingsView: View {
                 }
                 .settingsSearchTarget(.fasterLongDictation)
                 .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
+
+                if !PrivateAIIntegrationService.dictationContextModelIDs.isEmpty {
+                    ThemedCard(style: .standard) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Label(PichiLocalization.text("On-screen context"), systemImage: "sparkles")
+                                .font(.fluidSystem(.headline))
+                            DictationScreenContextSettings(settings: self.settings, isBusy: self.asr.isRunningOrStarting)
+                        }
+                        .padding(16)
+                    }
+                    .settingsSearchTarget(.dictationScreenContext)
+                    .shownInSettingsSection(.experimental, selectedSection: self.selectedSection)
+                }
             }
             .padding(.bottom, 28)
             .fluidPageContent(width: .expanding)

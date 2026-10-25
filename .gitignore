@@ -301,3 +301,4 @@ builds/
 .claude/
 !/docs/development/upstream-sync-1.6.12.md
 !/docs/development/onboarding-integration-2026-10-22.md
+!docs/development/upstream-sync-1.6.13-beta1.md
