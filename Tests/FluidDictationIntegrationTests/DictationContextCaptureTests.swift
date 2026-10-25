@@ -22,10 +22,10 @@ final class DictationContextCaptureTests: XCTestCase {
 
     func testDisabledContextReadsNeitherCursorNorScreen() async {
         let request = self.request(isEnabled: false)
-        let context = await DictationContextReader.read(request) { _, _ in
+        let context = await DictationContextReader.read(request, recognizeWindow: { _, _ in
             XCTFail("Screen context Off must prevent screenshots")
             return ["unexpected screen text"]
-        }
+        })
         XCTAssertNil(context)
     }
 
@@ -38,14 +38,98 @@ final class DictationContextCaptureTests: XCTestCase {
             textBeforeCursor: "Known cursor text",
             isEnabled: true
         )
-        let context = await DictationContextReader.read(request, readElement: { _ in
+        let context = await DictationContextReader.read(request, readFocusedPrivacy: { _ in true }, readElement: { _ in
             .init(role: "AXWindow", isSecure: false, texts: [], frame: nil, children: [], hasCompletePrivacyMetadata: true)
-        }) { _, window in
+        }, recognizeWindow: { _, window in
             XCTAssertNotNil(window)
             return ["A name from the target window"]
-        }
-        XCTAssertEqual(context?.textBeforeCursor, "Known cursor text")
+        })
+        XCTAssertNil(context?.textBeforeCursor, "No focused field means supplied cursor text is not attributable")
         XCTAssertEqual(context?.screenText, ["A name from the target window"])
+    }
+
+    func testUnknownFocusedPrivacyDropsSuppliedCursor() async {
+        let failures = [self.attributeError(.cannotComplete), self.attributeError(.invalidUIElement), self.attributeError(.failure), self.attributeError(.attributeUnsupported), self.attributeError(.noValue), NSNull()]
+        for failure in failures {
+            for attributes in [["AXTextField" as NSString, failure], [failure, "" as NSString]] {
+                let metadata = FocusedPrivacyAttributes(values: attributes)
+                let context = await DictationContextReader.read(
+                    self.focusedRequest(cursor: "Protected supplied cursor"),
+                    readFocusedPrivacy: { _ in DictationContextReader.isKnownPublicFocusedElement(attributes: metadata.values) },
+                    readCursor: { _ in XCTFail("Unknown security must precede either cursor source"); return "Protected read" }
+                , recognizeWindow: { _, _ in XCTFail("Unknown focused security must not invoke OCR"); return [] })
+                XCTAssertNil(context)
+            }
+        }
+    }
+
+    func testKnownSecureFocusedTargetDropsBothCursorSources() async {
+        for attributes in [["AXSecureTextField" as NSString, "" as NSString], ["AXTextField" as NSString, "AXSecureTextField" as NSString]] {
+            let metadata = FocusedPrivacyAttributes(values: attributes)
+            for cursor: String? in ["Protected supplied cursor", nil] {
+                let context = await DictationContextReader.read(
+                    self.focusedRequest(cursor: cursor),
+                    readFocusedPrivacy: { _ in DictationContextReader.isKnownPublicFocusedElement(attributes: metadata.values) },
+                    readCursor: { _ in XCTFail("Known secure fields must not read cursor text"); return "Protected read" }
+                , recognizeWindow: { _, _ in XCTFail("Known secure fields must not invoke OCR"); return [] })
+                XCTAssertNil(context)
+            }
+        }
+    }
+
+    func testKnownPublicFocusedTargetRetainsBoundedSuppliedCursor() async {
+        let metadata = FocusedPrivacyAttributes(values: ["AXTextField" as NSString, "" as NSString])
+        let context = await DictationContextReader.read(
+            self.focusedRequest(cursor: String(repeating: "x", count: 2100) + "end"),
+            readFocusedPrivacy: { _ in DictationContextReader.isKnownPublicFocusedElement(attributes: metadata.values) },
+            readCursor: { _ in XCTFail("Supplied cursor must avoid a second text read"); return nil }
+        , recognizeWindow: { _, _ in XCTFail("A missing captured window must not use another window"); return [] })
+        XCTAssertEqual(context?.textBeforeCursor?.count, 2000)
+        XCTAssertTrue(context?.textBeforeCursor?.hasSuffix("end") == true)
+        XCTAssertNil(context?.screenText)
+    }
+
+    func testKnownPublicFocusedTargetClassifiesBeforeReadingCursor() async {
+        let metadata = FocusedPrivacyAttributes(values: ["AXTextField" as NSString, "" as NSString])
+        let trace = FocusedContextReadTrace()
+        let context = await DictationContextReader.read(
+            self.focusedRequest(cursor: nil),
+            readFocusedPrivacy: { _ in
+                trace.record("privacy")
+                return DictationContextReader.isKnownPublicFocusedElement(attributes: metadata.values)
+            },
+            readCursor: { _ in trace.record("cursor"); return "Public cursor" }
+        , recognizeWindow: { _, _ in XCTFail("A missing captured window must not invoke OCR"); return [] })
+        XCTAssertEqual(trace.events, ["privacy", "cursor"])
+        XCTAssertEqual(context?.textBeforeCursor, "Public cursor")
+    }
+
+    func testNilFocusedTargetDropsSuppliedCursorWithoutReadingAField() async {
+        let request = self.request(isEnabled: true)
+        let context = await DictationContextReader.read(
+            request,
+            readFocusedPrivacy: { _ in XCTFail("There is no focused field to classify"); return true },
+            readCursor: { _ in XCTFail("There is no focused field to read"); return "Unexpected" }
+        , recognizeWindow: { _, _ in XCTFail("There is no captured window"); return [] })
+        XCTAssertNil(context)
+    }
+
+    func testCancellationDuringFocusedClassificationPreventsCursorRead() async {
+        let metadata = FocusedPrivacyAttributes(values: ["AXTextField" as NSString, "" as NSString])
+        let request = self.focusedRequest(cursor: nil)
+        let read = Task {
+            await DictationContextReader.read(
+                request,
+                readFocusedPrivacy: { _ in
+                    withUnsafeCurrentTask { $0?.cancel() }
+                    return DictationContextReader.isKnownPublicFocusedElement(attributes: metadata.values)
+                },
+                readCursor: { _ in XCTFail("Cancellation must be checked before reading cursor text"); return "Unexpected" }
+            , recognizeWindow: { _, _ in XCTFail("Cancellation must prevent OCR"); return [] })
+        }
+        let context = await read.value
+        XCTAssertTrue(read.isCancelled)
+        XCTAssertNil(context)
     }
 
     func testAttributeDecoderDoesNotTreatFailedContainerChildrenAsEmpty() async {
@@ -122,7 +206,7 @@ final class DictationContextCaptureTests: XCTestCase {
     func testSecureSiblingPreventsWholeWindowOCR() async {
         let fixture = ContextAccessibilityFixture()
         let request = fixture.request
-        let context = await DictationContextReader.read(request, readElement: { element in
+        let context = await DictationContextReader.read(request, readFocusedPrivacy: { _ in true }, readElement: { element in
             if CFEqual(element, fixture.window) {
                 return .init(role: "AXWindow", isSecure: false, texts: [], frame: nil, children: [fixture.field, fixture.sibling], hasCompletePrivacyMetadata: true)
             }
@@ -130,10 +214,10 @@ final class DictationContextCaptureTests: XCTestCase {
                 return .init(role: "AXTextField", isSecure: false, texts: ["Public field"], frame: nil, children: [], hasCompletePrivacyMetadata: true)
             }
             return .init(role: "AXSecureTextField", isSecure: true, texts: ["Protected secret"], frame: nil, children: [], hasCompletePrivacyMetadata: true)
-        }) { _, _ in
+        }, recognizeWindow: { _, _ in
             XCTFail("A secure sibling must suppress whole-window OCR in an ordinary app")
             return ["Protected secret from screenshot"]
-        }
+        })
         XCTAssertEqual(context?.textBeforeCursor, "Public cursor")
         XCTAssertEqual(context?.screenText, ["Public field"])
     }
@@ -141,15 +225,15 @@ final class DictationContextCaptureTests: XCTestCase {
     func testUnknownDescendantPreventsWholeWindowOCR() async {
         let fixture = ContextAccessibilityFixture()
         for hasUnknownRole in [false, true] {
-            let context = await DictationContextReader.read(fixture.request, readElement: { element in
+            let context = await DictationContextReader.read(fixture.request, readFocusedPrivacy: { _ in true }, readElement: { element in
                 if CFEqual(element, fixture.window) {
                     return .init(role: "AXWindow", isSecure: false, texts: ["Public label"], frame: nil, children: [fixture.sibling], hasCompletePrivacyMetadata: true)
                 }
                 return hasUnknownRole ? .init(role: "", isSecure: false, texts: [], frame: nil, children: [], hasCompletePrivacyMetadata: true) : nil
-            }) { _, _ in
+            }, recognizeWindow: { _, _ in
                 XCTFail("An unreadable descendant cannot establish that whole-window OCR is safe")
                 return ["Unexpected screenshot"]
-            }
+            })
             XCTAssertEqual(context?.textBeforeCursor, "Public cursor")
             XCTAssertEqual(context?.screenText, ["Public label"])
         }
@@ -157,30 +241,30 @@ final class DictationContextCaptureTests: XCTestCase {
 
     func testTruncatedAccessibilityWalkPreventsWholeWindowOCR() async {
         let fixture = ContextAccessibilityFixture()
-        let context = await DictationContextReader.read(fixture.request, readElement: { element in
+        let context = await DictationContextReader.read(fixture.request, readFocusedPrivacy: { _ in true }, readElement: { element in
             .init(role: "AXWindow", isSecure: false, texts: [], frame: nil,
                   children: CFEqual(element, fixture.window) ? Array(repeating: fixture.sibling, count: 4001) : [], hasCompletePrivacyMetadata: true)
-        }) { _, _ in
+        }, recognizeWindow: { _, _ in
             XCTFail("A bounded walk that omitted children must not admit a screenshot")
             return ["Unexpected screenshot"]
-        }
+        })
         XCTAssertEqual(context?.textBeforeCursor, "Public cursor")
         XCTAssertNil(context?.screenText)
     }
 
     func testMissingCapturedWindowNeverFallsBackToAnotherWindow() async {
-        let context = await DictationContextReader.read(self.request(isEnabled: true)) { _, _ in
+        let context = await DictationContextReader.read(self.request(isEnabled: true), recognizeWindow: { _, _ in
             XCTFail("A missing target window must not fall back to another window")
             return ["unexpected screen text"]
-        }
+        })
         XCTAssertNil(context?.screenText)
     }
 
     func testPasswordManagerDropsCursorAndScreenContext() async {
-        let context = await DictationContextReader.read(self.request(bundleID: "com.1password", isEnabled: true)) { _, _ in
+        let context = await DictationContextReader.read(self.request(bundleID: "com.1password", isEnabled: true), recognizeWindow: { _, _ in
             XCTFail("Private apps must not invoke OCR")
             return []
-        }
+        })
         XCTAssertNil(context)
     }
 
@@ -189,11 +273,11 @@ final class DictationContextCaptureTests: XCTestCase {
             pid: 999_999,
             bundleID: "test.context",
             window: nil,
-            element: nil,
+            element: ContextAccessibilityFixture().field,
             textBeforeCursor: String(repeating: "a", count: 2100) + "end",
             isEnabled: true
         )
-        let context = await DictationContextReader.read(request)
+        let context = await DictationContextReader.read(request, readFocusedPrivacy: { _ in true })
         XCTAssertEqual(context?.textBeforeCursor?.count, 2000)
         XCTAssertTrue(context?.textBeforeCursor?.hasSuffix("end") == true)
     }
@@ -605,6 +689,11 @@ final class DictationContextCaptureTests: XCTestCase {
         XCTAssertTrue(availability.includes(.experimental))
     }
 
+    private func focusedRequest(cursor: String?) -> DictationContextReader.Request {
+        .init(pid: 999_999, bundleID: "test.ordinary-editor", window: nil,
+              element: ContextAccessibilityFixture().field, textBeforeCursor: cursor, isEnabled: true)
+    }
+
     private func attributeError(_ error: AXError) -> AnyObject {
         var error = error
         guard let value = AXValueCreate(.axError, &error) else { preconditionFailure("Cannot create a synthetic AX error") }
@@ -737,4 +826,15 @@ private actor ContextRetirementState {
     }
 
     func finished() { self.hasFinished = true }
+}
+
+private nonisolated struct FocusedPrivacyAttributes: @unchecked Sendable {
+    let values: [AnyObject]
+}
+
+private final nonisolated class FocusedContextReadTrace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+    var events: [String] { self.lock.withLock { self.recorded } }
+    func record(_ event: String) { self.lock.withLock { self.recorded.append(event) } }
 }

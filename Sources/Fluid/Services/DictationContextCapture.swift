@@ -228,15 +228,23 @@ nonisolated enum DictationContextReader {
 
     static func read(
         _ request: Request,
+        readFocusedPrivacy: @Sendable (AXUIElement) -> Bool = { DictationContextReader.focusedElementIsKnownPublic($0) },
+        readCursor: @Sendable (AXUIElement) -> String? = { DictationContextReader.textBeforeCursor(in: $0) },
         readElement: @Sendable (AXUIElement) -> ElementText? = { DictationContextReader.elementText($0) },
         recognizeWindow: @Sendable (pid_t, AXUIElement?) async -> [String] = { await DictationContextReader.recognizedWindowText(pid: $0, window: $1) }
     ) async -> DictationTypingContext? {
         guard request.isEnabled, !Task.isCancelled else { return nil }
-        if let element = request.element { AXUIElementSetMessagingTimeout(element, self.messagingTimeoutSeconds) }
         guard !self.isPrivate(request) else { return nil }
 
-        let textBeforeCursor = (request.textBeforeCursor ?? request.element.flatMap(self.textBeforeCursor(in:)))
-            .map { String($0.suffix(self.maxTextBeforeCursorCharacters)) }
+        var textBeforeCursor: String?
+        if let element = request.element {
+            // Supplied cursor text has the same privacy requirements as a fresh AX read.
+            guard readFocusedPrivacy(element), !Task.isCancelled else { return nil }
+            textBeforeCursor = (request.textBeforeCursor ?? readCursor(element))
+                .map { String($0.suffix(self.maxTextBeforeCursorCharacters)) }
+        }
+        // Without a captured field, cursor text cannot be attributed safely. The
+        // captured window may still contribute independently checked screen text.
 
         var lines = LineCollector()
         let windows = self.windows(for: request)
@@ -309,15 +317,25 @@ nonisolated enum DictationContextReader {
         {
             return true
         }
-        return request.element.map(self.isSecure) ?? false
+        return false
     }
 
-    private static func isSecure(_ element: AXUIElement) -> Bool {
-        let role = self.string(element, kAXRoleAttribute) ?? ""
-        let subrole = self.string(element, kAXSubroleAttribute) ?? ""
-        return role == "AXSecureTextField"
-            || subrole == (kAXSecureTextFieldSubrole as String)
-            || subrole.localizedCaseInsensitiveContains("secure")
+    private static func focusedElementIsKnownPublic(_ element: AXUIElement) -> Bool {
+        AXUIElementSetMessagingTimeout(element, self.messagingTimeoutSeconds)
+        var valuesRef: CFArray?
+        let attributes = [kAXRoleAttribute, kAXSubroleAttribute] as CFArray
+        guard AXUIElementCopyMultipleAttributeValues(element, attributes, AXCopyMultipleAttributeOptions(), &valuesRef) == .success,
+              let values = valuesRef as? [AnyObject]
+        else { return false }
+        return self.isKnownPublicFocusedElement(attributes: values)
+    }
+
+    /// A failed role/subrole is unknown, never an empty public field.
+    static func isKnownPublicFocusedElement(attributes: [AnyObject]) -> Bool {
+        guard attributes.count == 2,
+              let security = self.elementSecurity(role: attributes[0], subrole: attributes[1])
+        else { return false }
+        return security.isKnown && !security.isSecure
     }
 
     // MARK: - Text before the cursor
@@ -422,12 +440,10 @@ nonisolated enum DictationContextReader {
     /// A successful bulk AX call can still contain CFNull or an AX error per slot.
     /// Those values are not evidence that a container is a leaf or a field is public.
     static func decodeElementText(_ values: [AnyObject]) -> ElementText? {
-        guard values.count == 9, let role = values[0] as? String, !role.isEmpty else { return nil }
-        let subrole = values[1] as? String
-        let securityIsKnown = subrole != nil || (!self.textEntryRoles.contains(role) && self.isAbsentAttribute(values[1]))
-        let isSecure = role == "AXSecureTextField"
-            || subrole == (kAXSecureTextFieldSubrole as String)
-            || subrole?.localizedCaseInsensitiveContains("secure") == true
+        guard values.count == 9,
+              let security = self.elementSecurity(role: values[0], subrole: values[1])
+        else { return nil }
+        let (role, securityIsKnown, isSecure) = security
         let children = values[7] as? [AXUIElement]
         var texts: [String] = []
         if securityIsKnown, !isSecure, var value = values[2] as? String {
@@ -455,6 +471,17 @@ nonisolated enum DictationContextReader {
             children: securityIsKnown ? children ?? [] : [],
             hasCompletePrivacyMetadata: securityIsKnown && children != nil
         )
+    }
+
+    /// Shared by the focused-field gate and the window's per-element decoder.
+    private static func elementSecurity(role value: AnyObject, subrole subroleValue: AnyObject) -> (role: String, isKnown: Bool, isSecure: Bool)? {
+        guard let role = value as? String, !role.isEmpty else { return nil }
+        let subrole = subroleValue as? String
+        let known = subrole != nil || (!self.textEntryRoles.contains(role) && self.isAbsentAttribute(subroleValue))
+        let secure = role == "AXSecureTextField"
+            || subrole == (kAXSecureTextFieldSubrole as String)
+            || subrole?.localizedCaseInsensitiveContains("secure") == true
+        return (role, known, secure)
     }
 
     /// Subrole is optional on non-text roles. Transport failures are not absence.
