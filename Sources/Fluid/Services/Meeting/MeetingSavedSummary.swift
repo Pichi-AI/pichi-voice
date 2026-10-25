@@ -79,4 +79,3 @@ nonisolated struct MeetingSavedSummary: Codable {
         }
     }
 }
-
