@@ -44,7 +44,10 @@ struct MobileSettingsRoot: View {
                     settings.resetMobileSetupProgress()
                 } label: {
                     Label(PichiLocalization.text("Replay onboarding"), systemImage: "arrow.counterclockwise")
+                        .foregroundStyle(theme.palette.primaryText)
                 }
+                // A native row like the ones above: full-row touch and highlight, no box inside it.
+                .buttonStyle(.automatic)
                 .disabled(!canReplaySetup)
                 .accessibilityIdentifier("settings.replaySetup")
             } footer: {

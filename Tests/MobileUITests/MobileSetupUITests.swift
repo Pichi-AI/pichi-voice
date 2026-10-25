@@ -124,13 +124,14 @@ final class MobileSetupUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
         let sidebar = app.buttons["navigation.settings"]
-        if sidebar.waitForExistence(timeout: 5) { sidebar.tap() }
+        // Far from the label and icon: the whole sidebar row must respond.
+        if sidebar.waitForExistence(timeout: 5) { sidebar.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap() }
         else { app.tabBars.buttons["Настройки"].tap() }
         let replay = app.buttons["settings.replaySetup"]
         XCTAssertTrue(replay.waitForExistence(timeout: 10))
         XCTAssertTrue(replay.isEnabled, "Replay is available while no meeting is active")
         capture("replay-00-settings")
-        replay.tap()
+        replay.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 10))
         capture("replay-01-welcome")
         // A quick second tap must not act on the page that is still arriving.
