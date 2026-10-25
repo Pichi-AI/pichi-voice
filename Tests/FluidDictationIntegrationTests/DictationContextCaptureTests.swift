@@ -39,7 +39,7 @@ final class DictationContextCaptureTests: XCTestCase {
             isEnabled: true
         )
         let context = await DictationContextReader.read(request, readElement: { _ in
-            .init(role: "AXWindow", isSecure: false, texts: [], frame: nil, children: [])
+            .init(role: "AXWindow", isSecure: false, texts: [], frame: nil, children: [], hasCompletePrivacyMetadata: true)
         }) { _, window in
             XCTAssertNotNil(window)
             return ["A name from the target window"]
@@ -48,17 +48,88 @@ final class DictationContextCaptureTests: XCTestCase {
         XCTAssertEqual(context?.screenText, ["A name from the target window"])
     }
 
+    func testAttributeDecoderDoesNotTreatFailedContainerChildrenAsEmpty() async {
+        for role in ["AXWindow", "AXGroup"] {
+            let failures = [self.attributeError(.cannotComplete), self.attributeError(.invalidUIElement), self.attributeError(.failure), NSNull()]
+            for failure in failures {
+                var attributes = self.accessibilityAttributes(role: role)
+                attributes[7] = failure
+                let item = DictationContextReader.decodeElementText(attributes)
+                XCTAssertEqual(item?.role, role)
+                XCTAssertEqual(item?.hasCompletePrivacyMetadata, false)
+                await self.assertDecodedNodeSuppressesOCR(item)
+            }
+        }
+    }
+
+    func testAttributeDecoderAcceptsTypedEmptyChildren() async {
+        let item = DictationContextReader.decodeElementText(self.accessibilityAttributes(role: "AXWindow"))
+        XCTAssertEqual(item?.hasCompletePrivacyMetadata, true)
+        let fixture = ContextAccessibilityFixture()
+        let lines = await DictationContextReader.recognizeWindowIfSafe(
+            pid: 999_999, window: fixture.window, wordCount: 0,
+            hasCompletePrivacyMetadata: item?.hasCompletePrivacyMetadata == true
+        ) { _, _ in ["Public OCR fallback"] }
+        XCTAssertEqual(lines, ["Public OCR fallback"])
+    }
+
+    func testAttributeDecoderAllowsMissingNonTextSubroleAndOptionalAttributes() async {
+        let absentSubroles = [self.attributeError(.attributeUnsupported), self.attributeError(.noValue), NSNull()]
+        for absent in absentSubroles {
+            var attributes = self.accessibilityAttributes(role: "AXWindow")
+            attributes[1] = absent
+            for index in [2, 3, 4, 5, 6, 8] { attributes[index] = self.attributeError(.attributeUnsupported) }
+            let item = DictationContextReader.decodeElementText(attributes)
+            XCTAssertEqual(item?.hasCompletePrivacyMetadata, true)
+            XCTAssertEqual(item?.texts, [])
+            let fixture = ContextAccessibilityFixture()
+            let lines = await DictationContextReader.recognizeWindowIfSafe(
+                pid: 999_999, window: fixture.window, wordCount: 0,
+                hasCompletePrivacyMetadata: item?.hasCompletePrivacyMetadata == true
+            ) { _, _ in ["Public OCR fallback"] }
+            XCTAssertEqual(lines, ["Public OCR fallback"])
+        }
+    }
+
+    func testAttributeDecoderDoesNotAssumeUnsupportedStaticTextHasNoChildren() async {
+        var attributes = self.accessibilityAttributes(role: "AXStaticText")
+        attributes[1] = self.attributeError(.attributeUnsupported)
+        attributes[7] = self.attributeError(.attributeUnsupported)
+        let item = DictationContextReader.decodeElementText(attributes)
+        XCTAssertEqual(item?.texts, ["Public label"])
+        XCTAssertEqual(item?.hasCompletePrivacyMetadata, false, "Unsupported children are not a successful empty children array")
+        await self.assertDecodedNodeSuppressesOCR(item)
+    }
+
+    func testAttributeDecoderDropsTextEntryValuesWhenSubroleIsUncertain() async {
+        for role in ["AXTextField", "AXTextArea", "AXComboBox"] {
+            let failures = [self.attributeError(.cannotComplete), self.attributeError(.attributeUnsupported), self.attributeError(.noValue), self.attributeError(.failure), NSNull()]
+            for failure in failures {
+                var attributes = self.accessibilityAttributes(role: role)
+                attributes[1] = failure
+                attributes[2] = "Protected value" as NSString
+                attributes[3] = "Protected title" as NSString
+                attributes[7] = [ContextAccessibilityFixture().field] as NSArray
+                let item = DictationContextReader.decodeElementText(attributes)
+                XCTAssertEqual(item?.hasCompletePrivacyMetadata, false)
+                XCTAssertEqual(item?.texts, [], "An unknown security subrole must not publish a field value or title")
+                XCTAssertEqual(item?.children.count, 0, "Do not descend inside a field that might be secure")
+                await self.assertDecodedNodeSuppressesOCR(item)
+            }
+        }
+    }
+
     func testSecureSiblingPreventsWholeWindowOCR() async {
         let fixture = ContextAccessibilityFixture()
         let request = fixture.request
         let context = await DictationContextReader.read(request, readElement: { element in
             if CFEqual(element, fixture.window) {
-                return .init(role: "AXWindow", isSecure: false, texts: [], frame: nil, children: [fixture.field, fixture.sibling])
+                return .init(role: "AXWindow", isSecure: false, texts: [], frame: nil, children: [fixture.field, fixture.sibling], hasCompletePrivacyMetadata: true)
             }
             if CFEqual(element, fixture.field) {
-                return .init(role: "AXTextField", isSecure: false, texts: ["Public field"], frame: nil, children: [])
+                return .init(role: "AXTextField", isSecure: false, texts: ["Public field"], frame: nil, children: [], hasCompletePrivacyMetadata: true)
             }
-            return .init(role: "AXSecureTextField", isSecure: true, texts: ["Protected secret"], frame: nil, children: [])
+            return .init(role: "AXSecureTextField", isSecure: true, texts: ["Protected secret"], frame: nil, children: [], hasCompletePrivacyMetadata: true)
         }) { _, _ in
             XCTFail("A secure sibling must suppress whole-window OCR in an ordinary app")
             return ["Protected secret from screenshot"]
@@ -72,9 +143,9 @@ final class DictationContextCaptureTests: XCTestCase {
         for hasUnknownRole in [false, true] {
             let context = await DictationContextReader.read(fixture.request, readElement: { element in
                 if CFEqual(element, fixture.window) {
-                    return .init(role: "AXWindow", isSecure: false, texts: ["Public label"], frame: nil, children: [fixture.sibling])
+                    return .init(role: "AXWindow", isSecure: false, texts: ["Public label"], frame: nil, children: [fixture.sibling], hasCompletePrivacyMetadata: true)
                 }
-                return hasUnknownRole ? .init(role: "", isSecure: false, texts: [], frame: nil, children: []) : nil
+                return hasUnknownRole ? .init(role: "", isSecure: false, texts: [], frame: nil, children: [], hasCompletePrivacyMetadata: true) : nil
             }) { _, _ in
                 XCTFail("An unreadable descendant cannot establish that whole-window OCR is safe")
                 return ["Unexpected screenshot"]
@@ -88,7 +159,7 @@ final class DictationContextCaptureTests: XCTestCase {
         let fixture = ContextAccessibilityFixture()
         let context = await DictationContextReader.read(fixture.request, readElement: { element in
             .init(role: "AXWindow", isSecure: false, texts: [], frame: nil,
-                  children: CFEqual(element, fixture.window) ? Array(repeating: fixture.sibling, count: 4001) : [])
+                  children: CFEqual(element, fixture.window) ? Array(repeating: fixture.sibling, count: 4001) : [], hasCompletePrivacyMetadata: true)
         }) { _, _ in
             XCTFail("A bounded walk that omitted children must not admit a screenshot")
             return ["Unexpected screenshot"]
@@ -534,6 +605,28 @@ final class DictationContextCaptureTests: XCTestCase {
         XCTAssertTrue(availability.includes(.experimental))
     }
 
+    private func attributeError(_ error: AXError) -> AnyObject {
+        var error = error
+        guard let value = AXValueCreate(.axError, &error) else { preconditionFailure("Cannot create a synthetic AX error") }
+        return value
+    }
+
+    private func accessibilityAttributes(role: String) -> [AnyObject] {
+        [role as NSString, "" as NSString, "Public label" as NSString, NSNull(), NSNull(), NSNull(), NSNull(), [] as NSArray, NSNull()]
+    }
+
+    private func assertDecodedNodeSuppressesOCR(_ item: DictationContextReader.ElementText?) async {
+        let fixture = ContextAccessibilityFixture()
+        let lines = await DictationContextReader.recognizeWindowIfSafe(
+            pid: 999_999, window: fixture.window, wordCount: 0,
+            hasCompletePrivacyMetadata: item?.hasCompletePrivacyMetadata == true
+        ) { _, _ in
+            XCTFail("Incomplete per-attribute AX privacy evidence must not invoke OCR")
+            return ["Protected screenshot"]
+        }
+        XCTAssertEqual(lines, [])
+    }
+
     private func searchAvailability(privateAIAvailable: Bool) -> SettingsSearchAvailability {
         .init(
             microphoneAuthorized: true,
@@ -541,7 +634,7 @@ final class DictationContextCaptureTests: XCTestCase {
             savesTranscriptionHistory: true,
             savesAudioWithTranscriptionHistory: true,
             overlayAtBottom: false,
-            privateAIAvailable: privateAIAvailable
+            dictationScreenContextAvailable: privateAIAvailable
         )
     }
 

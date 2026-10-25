@@ -1553,7 +1553,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         if let directory = try await self.store.existingSessionDirectory(for: sessionID) {
             let snapshot = target
             try await Task.detached(priority: .utility) {
-                try MeetingSummaryController.SavedSummary.migrateLegacySummaries(in: directory, for: snapshot)
+                try MeetingSavedSummary.migrateLegacySummaries(in: directory, for: snapshot)
             }.value
         }
 

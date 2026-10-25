@@ -183,3 +183,5 @@ Sources/Fluid/Services/Privacy/TranscriptSensitiveDictionary.swift
 Sources/Fluid/Persistence/SettingsStore+SensitiveDataDictionary.swift
 
 Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift
+Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift
+Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift

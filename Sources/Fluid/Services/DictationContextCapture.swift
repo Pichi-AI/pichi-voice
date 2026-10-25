@@ -245,12 +245,11 @@ nonisolated enum DictationContextReader {
             let windowAllowsOCR = self.collectAccessibilityText(in: window, into: &lines, readElement: readElement)
             allowsOCR = allowsOCR && windowAllowsOCR
         }
-        if allowsOCR, let window = windows.first,
-           lines.wordCount < self.minimumAccessibilityWords, !Task.isCancelled
-        {
-            for line in await recognizeWindow(request.pid, window) {
-                lines.add(line)
-            }
+        for line in await self.recognizeWindowIfSafe(
+            pid: request.pid, window: windows.first, wordCount: lines.wordCount,
+            hasCompletePrivacyMetadata: allowsOCR, recognizeWindow: recognizeWindow
+        ) {
+            lines.add(line)
         }
         guard !Task.isCancelled else { return nil }
 
@@ -259,6 +258,20 @@ nonisolated enum DictationContextReader {
             screenText: lines.lines.isEmpty ? nil : lines.lines
         )
         return context.textBeforeCursor == nil && context.screenText == nil ? nil : context
+    }
+
+    /// Keep the OCR admission decision testable without reading Accessibility or a screen.
+    static func recognizeWindowIfSafe(
+        pid: pid_t,
+        window: AXUIElement?,
+        wordCount: Int,
+        hasCompletePrivacyMetadata: Bool,
+        recognizeWindow: @Sendable (pid_t, AXUIElement?) async -> [String]
+    ) async -> [String] {
+        guard hasCompletePrivacyMetadata, let window,
+              wordCount < self.minimumAccessibilityWords, !Task.isCancelled
+        else { return [] }
+        return await recognizeWindow(pid, window)
     }
 
     private static func windows(for request: Request) -> [AXUIElement] {
@@ -332,6 +345,16 @@ nonisolated enum DictationContextReader {
         let texts: [String]
         let frame: CGRect?
         let children: [AXUIElement]
+        let hasCompletePrivacyMetadata: Bool
+
+        init(role: String, isSecure: Bool, texts: [String], frame: CGRect?, children: [AXUIElement], hasCompletePrivacyMetadata: Bool) {
+            self.role = role
+            self.isSecure = isSecure
+            self.texts = texts
+            self.frame = frame
+            self.children = children
+            self.hasCompletePrivacyMetadata = hasCompletePrivacyMetadata
+        }
     }
 
     private static let fetchedAttributes = [
@@ -364,7 +387,7 @@ nonisolated enum DictationContextReader {
                 allowsOCR = false
                 continue
             }
-            if item.role.isEmpty { allowsOCR = false }
+            if item.role.isEmpty || !item.hasCompletePrivacyMetadata { allowsOCR = false }
             if item.isSecure {
                 allowsOCR = false
                 continue
@@ -393,17 +416,30 @@ nonisolated enum DictationContextReader {
               let values = valuesRef as? [AnyObject], values.count == 9
         else { return nil }
 
-        let role = values[0] as? String ?? ""
-        let subrole = values[1] as? String ?? ""
+        return self.decodeElementText(values)
+    }
+
+    /// A successful bulk AX call can still contain CFNull or an AX error per slot.
+    /// Those values are not evidence that a container is a leaf or a field is public.
+    static func decodeElementText(_ values: [AnyObject]) -> ElementText? {
+        guard values.count == 9, let role = values[0] as? String, !role.isEmpty else { return nil }
+        let subrole = values[1] as? String
+        let securityIsKnown = subrole != nil || (!self.textEntryRoles.contains(role) && self.isAbsentAttribute(values[1]))
+        let isSecure = role == "AXSecureTextField"
+            || subrole == (kAXSecureTextFieldSubrole as String)
+            || subrole?.localizedCaseInsensitiveContains("secure") == true
+        let children = values[7] as? [AXUIElement]
         var texts: [String] = []
-        if var value = values[2] as? String {
+        if securityIsKnown, !isSecure, var value = values[2] as? String {
             if self.textEntryRoles.contains(role) {
                 value = self.textEntryValue(value, visibleRange: self.axValue(values[8], as: CFRange.self, type: .cfRange))
             }
             texts.append(value)
         }
-        if let title = values[3] as? String { texts.append(title) }
-        if self.labelledRoles.contains(role), let description = values[4] as? String { texts.append(description) }
+        if securityIsKnown, !isSecure {
+            if let title = values[3] as? String { texts.append(title) }
+            if self.labelledRoles.contains(role), let description = values[4] as? String { texts.append(description) }
+        }
 
         var frame: CGRect?
         if let origin = self.axValue(values[5], as: CGPoint.self, type: .cgPoint),
@@ -413,11 +449,19 @@ nonisolated enum DictationContextReader {
         }
         return ElementText(
             role: role,
-            isSecure: role == "AXSecureTextField" || subrole == (kAXSecureTextFieldSubrole as String) || subrole.localizedCaseInsensitiveContains("secure"),
+            isSecure: isSecure,
             texts: texts,
             frame: frame,
-            children: values[7] as? [AXUIElement] ?? []
+            children: securityIsKnown ? children ?? [] : [],
+            hasCompletePrivacyMetadata: securityIsKnown && children != nil
         )
+    }
+
+    /// Subrole is optional on non-text roles. Transport failures are not absence.
+    private static func isAbsentAttribute(_ value: AnyObject) -> Bool {
+        if CFGetTypeID(value) == CFNullGetTypeID() { return true }
+        guard let error = self.axValue(value, as: AXError.self, type: .axError) else { return false }
+        return error == .attributeUnsupported || error == .noValue
     }
 
     /// Use the app's visible range even for short fields that may be scrolled.

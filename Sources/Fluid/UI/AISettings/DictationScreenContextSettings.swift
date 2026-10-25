@@ -69,13 +69,20 @@ struct DictationScreenContextSettings: View {
                 }
 
                 Text(self.permission.requiresSettings
-                    ? PichiLocalization.format("Allow %@ under Screen & System Audio Recording.", AppBrand.appName)
+                    ? PichiLocalization.format("Allow %@ under Screen & System Audio Recording.", self.permissionApplicationName)
                     : PichiLocalization.text("macOS calls this Screen Recording access."))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// System Settings identifies the signed installation, independently of imported appearance.
+    private var permissionApplicationName: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String)
+            ?? ProcessInfo.processInfo.processName
     }
 
     private var supportedModelsDescription: String {
