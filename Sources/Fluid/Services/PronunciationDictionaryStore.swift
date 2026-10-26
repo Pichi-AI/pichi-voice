@@ -90,6 +90,8 @@ actor PronunciationDictionaryStore {
     /// bounded read lease. Ordinary store/UI reads still require current visibility.
     nonisolated final class CaptureRead: @unchecked Sendable {
         let profile: PrivateProfileSnapshot
+        /// Shared matching is best-effort within the unchanged capture reference budget.
+        let omittedSharedProfileCount: Int
         private let leaseID: UUID
         private let lock = NSLock()
         private var selectedProfiles: [PronunciationDictionaryProfile]
@@ -98,10 +100,11 @@ actor PronunciationDictionaryStore {
         private var closed = false
 
         fileprivate init(profile: PrivateProfileSnapshot, leaseID: UUID,
-                         profiles: [PronunciationDictionaryProfile],
+                         profiles: [PronunciationDictionaryProfile], omittedSharedProfileCount: Int = 0,
                          inspections: [UUID: DictionaryCaptureEvidenceFile],
                          originals: [UUID: DictionaryCaptureEvidenceFile]) {
             self.profile = profile
+            self.omittedSharedProfileCount = omittedSharedProfileCount
             self.leaseID = leaseID
             self.selectedProfiles = profiles
             self.inspections = inspections
@@ -152,34 +155,58 @@ actor PronunciationDictionaryStore {
         deinit { self.closeFiles() }
     }
 
-    /// Opens only the references the existing matcher can use (first three per
-    /// selected profile). It does not load PCM, mutate metadata or delete orphans.
+    /// Mandatory exact-model reads preserve their original 128-profile capacity. Shared-family
+    /// expansion is optional: 128 words / 1024 candidates total, adding no variant beyond eight
+    /// candidates per word while leaving the original exact list untouched. The same 384 unique
+    /// references and 16 MB metadata limits remain in force. Invalid, unavailable or
+    /// excess optional candidates are omitted before the immutable snapshot is created. One
+    /// fallback per otherwise unrepresented word precedes extra variants for an admitted word.
     nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>,
                                      includingSharedFamilies: Bool = false) throws -> CaptureRead {
         try Task.checkCancellation()
         guard let profile = self.profile, PrivateProfileStorage.isReadable(profile),
               PrivateProfileStorage.acceptsNewWork else { throw PronunciationDictionaryStoreError.staleEvidence }
-        var profiles: [PronunciationDictionaryProfile] = []
+        var exact: [PronunciationDictionaryProfile] = []
+        var shared: [PronunciationDictionaryProfile] = []
+        var sharedCandidateCount = 0
         if let metadata = try DictionaryCaptureEvidenceFile(url: self.fileURL, maximumBytes: 16_000_000, profile: profile) {
             defer { metadata.close() }
-            profiles = try metadata.read { data in
+            let selection = try metadata.read { data in
                 let document = try JSONDecoder().decode(Document.self, from: data)
                 guard document.version == 1 else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
-                // Retain all bounded family candidates until the loaded encoder shape is known.
-                // Shared matching still selects one compatible source per word without changing its identity.
-                let selected = document.profiles.filter {
-                    entryIDs.contains($0.dictionaryEntryID) &&
-                        ($0.modelKey == modelKey || (includingSharedFamilies &&
-                            ParakeetSpeechModelCatalog.sharesPronunciationFamily($0.modelKey, with: modelKey)))
-                }
-                guard selected.count <= 128, selected.allSatisfy({ item in
+                func isValid(_ item: PronunciationDictionaryProfile) -> Bool {
                     (1...2048).contains(item.hiddenSize) && item.enrollments.count <= 10 &&
-                    item.enrollments.allSatisfy {
-                        $0.modelKey == item.modelKey && $0.values.count == item.hiddenSize && $0.values.allSatisfy(\.isFinite)
+                        item.enrollments.allSatisfy {
+                            $0.modelKey == item.modelKey && $0.values.count == item.hiddenSize && $0.values.allSatisfy(\.isFinite)
+                        }
+                }
+                let exact = document.profiles.filter { $0.modelKey == modelKey && entryIDs.contains($0.dictionaryEntryID) }
+                guard exact.count <= 128, exact.allSatisfy(isValid) else {
+                    throw PronunciationDictionaryStoreError.inconsistentEnrollment
+                }
+                var selectedEntries = Set(exact.map(\.dictionaryEntryID))
+                var candidatesPerEntry = Dictionary(grouping: exact, by: \.dictionaryEntryID).mapValues(\.count)
+                var selectedIDs = Set(exact.map(\.id))
+                var shared: [PronunciationDictionaryProfile] = []
+                var candidateCount = 0
+                if includingSharedFamilies {
+                    for item in document.profiles where item.modelKey != modelKey && entryIDs.contains(item.dictionaryEntryID) &&
+                        ParakeetSpeechModelCatalog.sharesPronunciationFamily(item.modelKey, with: modelKey)
+                    {
+                        try Task.checkCancellation()
+                        candidateCount += 1
+                        guard isValid(item), item.isEligibleForMatching, exact.count + shared.count < 1024,
+                              (candidatesPerEntry[item.dictionaryEntryID] ?? 0) < 8,
+                              selectedEntries.contains(item.dictionaryEntryID) || selectedEntries.count < 128,
+                              selectedIDs.insert(item.id).inserted else { continue }
+                        selectedEntries.insert(item.dictionaryEntryID)
+                        candidatesPerEntry[item.dictionaryEntryID, default: 0] += 1
+                        shared.append(item)
                     }
-                }) else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
-                return selected
+                }
+                return (exact, shared, candidateCount)
             }
+            exact = selection.0; shared = selection.1; sharedCandidateCount = selection.2
         }
         var inspections: [UUID: DictionaryCaptureEvidenceFile] = [:]
         var originals: [UUID: DictionaryCaptureEvidenceFile] = [:]
@@ -190,23 +217,67 @@ actor PronunciationDictionaryStore {
                 for file in originals.values { file.close() }
             }
         }
-        for selected in profiles {
-            for capture in selected.enrollments.prefix(3) {
-                if let id = capture.inspectionID, inspections[id] == nil {
-                    inspections[id] = try DictionaryCaptureEvidenceFile(url: self.inspectionURL(id), maximumBytes: 24_000_000, profile: profile)
-                } else if capture.inspectionID == nil, let id = capture.originalAudioID, originals[id] == nil {
-                    originals[id] = try DictionaryCaptureEvidenceFile(url: self.audioURL(id), maximumBytes: 2_000_000, profile: profile)
+        func pinReferences(_ selected: PronunciationDictionaryProfile, optional: Bool) throws -> Bool {
+            try Task.checkCancellation()
+            let captures = selected.enrollments.prefix(3)
+            let neededInspections = Set(captures.compactMap(\.inspectionID)).subtracting(inspections.keys)
+            let neededOriginals = Set(captures.filter { $0.inspectionID == nil }.compactMap(\.originalAudioID)).subtracting(originals.keys)
+            guard inspections.count + originals.count + neededInspections.count + neededOriginals.count <= 384 else {
+                if optional { return false }
+                throw PronunciationDictionaryStoreError.inconsistentEnrollment
+            }
+            var addedInspections: [UUID: DictionaryCaptureEvidenceFile] = [:]
+            var addedOriginals: [UUID: DictionaryCaptureEvidenceFile] = [:]
+            var committed = false
+            defer {
+                if !committed {
+                    for file in addedInspections.values { file.close() }
+                    for file in addedOriginals.values { file.close() }
                 }
             }
+            for capture in captures {
+                if let id = capture.inspectionID, inspections[id] == nil, addedInspections[id] == nil {
+                    if let file = try DictionaryCaptureEvidenceFile(url: self.inspectionURL(id), maximumBytes: 24_000_000, profile: profile) {
+                        addedInspections[id] = file
+                    } else if optional { return false }
+                } else if capture.inspectionID == nil, let id = capture.originalAudioID,
+                          originals[id] == nil, addedOriginals[id] == nil
+                {
+                    if let file = try DictionaryCaptureEvidenceFile(url: self.audioURL(id), maximumBytes: 2_000_000, profile: profile) {
+                        addedOriginals[id] = file
+                    } else if optional { return false }
+                }
+            }
+            for (id, file) in addedInspections { inspections[id] = file }
+            for (id, file) in addedOriginals { originals[id] = file }
+            committed = true
+            return true
         }
-        guard inspections.count + originals.count <= 384 else {
-            throw PronunciationDictionaryStoreError.inconsistentEnrollment
+        for selected in exact { _ = try pinReferences(selected, optional: false) }
+        var profiles = exact
+        var admittedEntries = Set(exact.map(\.dictionaryEntryID))
+        var attempted = Set<Int>()
+        func admitOptional(_ index: Int) throws {
+            attempted.insert(index)
+            do {
+                let candidate = shared[index]
+                if try pinReferences(candidate, optional: true) {
+                    profiles.append(candidate)
+                    admittedEntries.insert(candidate.dictionaryEntryID)
+                }
+            } catch is CancellationError { throw CancellationError() }
+            catch { /* An optional family reference cannot invalidate the mandatory exact snapshot. */ }
         }
+        for index in shared.indices where !admittedEntries.contains(shared[index].dictionaryEntryID) {
+            try admitOptional(index)
+        }
+        for index in shared.indices where !attempted.contains(index) { try admitOptional(index) }
         guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else {
             throw PronunciationDictionaryStoreError.staleEvidence
         }
         try Task.checkCancellation()
         let result = CaptureRead(profile: profile, leaseID: leaseID, profiles: profiles,
+            omittedSharedProfileCount: sharedCandidateCount - (profiles.count - exact.count),
             inspections: inspections, originals: originals)
         transferred = true
         return result

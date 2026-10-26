@@ -115,12 +115,99 @@ import Darwin
         expect(exactRead.profiles == [exactDifferentWidth], "Existing exact-model admission remains the default")
         exactRead.close(leaseID: familyLease)
         let familyRead = try familyStore.admitCaptureRead(leaseID: familyLease, modelKey: "synthetic-family-b", entryIDs: [familyEntry], includingSharedFamilies: true)
-        expect(familyRead.profiles == [sharedFamily, exactDifferentWidth], "Shared admission pins only selected entry and compatible family candidates")
+        expect(familyRead.profiles == [exactDifferentWidth, sharedFamily], "Shared admission pins only selected entry and compatible family candidates")
         expect(PronunciationDictionaryStore.selectSharedProfiles(familyRead.profiles, modelKey: "synthetic-family-b", hiddenSize: 2) == [sharedFamily], "Loaded shape can select a compatible fallback after exact-model shape mismatch")
         expect(PronunciationDictionaryStore.selectSharedProfiles(familyRead.profiles, modelKey: "synthetic-family-b", hiddenSize: 3) == [exactDifferentWidth], "Exact model remains preferred when compatible")
         expect(PronunciationDictionaryStore.selectSharedProfiles(familyRead.profiles, modelKey: "synthetic-family-b", hiddenSize: 4).isEmpty, "Incompatible encoder shape cannot activate retained vectors")
         expect(await familyStore.sharedProfiles(modelKey: "synthetic-family-b", hiddenSize: 2).contains(sharedFamily), "Ordinary shared profile selection works while visible")
         defer { familyRead.close(leaseID: familyLease) }
+        let capacityURL = a.rootDirectory.appendingPathComponent("synthetic-capacity-profiles.json")
+        let capacityStore = PronunciationDictionaryStore(fileURL: capacityURL, profile: a)
+        func capacityProfiles(_ count: Int, variants: [String]) -> [PronunciationDictionaryProfile] {
+            (0..<count).flatMap { _ in
+                let entryID = UUID()
+                return variants.map { familyProfile(entryID: entryID, key: $0, width: 2) }
+            }
+        }
+        let pairs = capacityProfiles(65, variants: ["synthetic-family-a", "synthetic-family-b"])
+        try await capacityStore.replaceAllProfiles(pairs)
+        let capacityBytes = try Data(contentsOf: capacityURL)
+        let capacityLease = UUID()
+        let capacityRead = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-b",
+            entryIDs: Set(pairs.map(\.dictionaryEntryID)), includingSharedFamilies: true)
+        expect(capacityRead.profiles.count == 130 && capacityRead.omittedSharedProfileCount == 0,
+            "65 words retain both valid model variants within separate word and candidate bounds")
+        expect(PronunciationDictionaryStore.selectSharedProfiles(capacityRead.profiles, modelKey: "synthetic-family-b", hiddenSize: 2).count == 65,
+            "65 admitted words remain independently matchable")
+        capacityRead.close(leaseID: capacityLease)
+        expect(try Data(contentsOf: capacityURL) == capacityBytes, "Family capacity selection does not rewrite stored source")
+        let fullCapacity = capacityProfiles(128, variants: ["synthetic-family-a", "synthetic-family-b"])
+        try await capacityStore.replaceAllProfiles(fullCapacity)
+        let fullRead = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-b",
+            entryIDs: Set(fullCapacity.map(\.dictionaryEntryID)), includingSharedFamilies: true)
+        expect(fullRead.profiles.count == 256 && Set(fullRead.profiles.map(\.dictionaryEntryID)).count == 128,
+            "Original 128-word capacity survives two compatible profiles per word")
+        fullRead.close(leaseID: capacityLease)
+        let fallbackRead = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-target",
+            entryIDs: Set(fullCapacity.map(\.dictionaryEntryID)), includingSharedFamilies: true)
+        expect(Set(fallbackRead.profiles.prefix(128).map(\.dictionaryEntryID)).count == 128,
+            "One fallback per unrepresented word is admitted before additional family variants")
+        expect(fallbackRead.profiles.count == 256 && fallbackRead.omittedSharedProfileCount == 0,
+            "All 128 fallback words keep both candidates when the unchanged resource budget permits")
+        fallbackRead.close(leaseID: capacityLease)
+        let manyVariants = capacityProfiles(128, variants: ["synthetic-family-b"] + (0..<8).map { "synthetic-family-version-\($0)" })
+        try await capacityStore.replaceAllProfiles(manyVariants)
+        let limitedRead = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-b",
+            entryIDs: Set(manyVariants.map(\.dictionaryEntryID)), includingSharedFamilies: true)
+        expect(limitedRead.profiles.count == 1024 && limitedRead.omittedSharedProfileCount == 128,
+            "Excess optional versions stay within eight profiles per word and 1024 total candidates")
+        expect(limitedRead.profiles.filter { $0.modelKey == "synthetic-family-b" }.count == 128,
+            "Optional metadata overflow cannot remove any mandatory exact word")
+        limitedRead.close(leaseID: capacityLease)
+        let voicePairs = pairs.map { item -> PronunciationDictionaryProfile in
+            var item = item
+            item.enrollments = item.enrollments.map { capture in
+                var capture = capture; capture.inspectionID = UUID(); return capture
+            }
+            return item
+        }
+        for item in voicePairs {
+            for capture in item.enrollments {
+                try encoder.encode(inspection).write(to: inspectionDirectory.appendingPathComponent("\(capture.inspectionID!).plist"))
+            }
+        }
+        try await capacityStore.replaceAllProfiles(voicePairs)
+        let handlesBeforeCapacity = try descriptorCount()
+        let voiceRead = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-b",
+            entryIDs: Set(voicePairs.map(\.dictionaryEntryID)), includingSharedFamilies: true)
+        let exactVoice = voicePairs.filter { $0.modelKey == "synthetic-family-b" }
+        expect(voiceRead.profiles.prefix(65).map(\.id) == exactVoice.map(\.id),
+            "Mandatory exact profiles are pinned before optional family profiles regardless of source order")
+        expect(voiceRead.profiles.count >= 65 && voiceRead.omittedSharedProfileCount >= 2,
+            "65 words with 195 exact references remain usable when optional variants request 390 unique files")
+        expect(try descriptorCount() <= handlesBeforeCapacity + 384,
+            "Optional sharing cannot exceed the unchanged 384-reference budget")
+        for item in exactVoice {
+            for capture in item.enrollments {
+                expect(try voiceRead.inspection(for: capture.inspectionID!) == inspection,
+                    "Every mandatory exact voice reference remains readable")
+            }
+        }
+        voiceRead.close(leaseID: capacityLease)
+        expect(try descriptorCount() == handlesBeforeCapacity, "Closing the bounded expanded snapshot releases every file")
+        struct CapacityDocument: Encodable { let version = 1; let profiles: [PronunciationDictionaryProfile] }
+        var malformedOptional = sharedFamily; malformedOptional.enrollments[0] = .init(values: [1], sourceFrameCount: 1, modelKey: malformedOptional.modelKey)
+        try JSONEncoder().encode(CapacityDocument(profiles: [malformedOptional, exactDifferentWidth])).write(to: capacityURL, options: .atomic)
+        let safeExactRead = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-b",
+            entryIDs: [familyEntry], includingSharedFamilies: true)
+        expect(safeExactRead.profiles == [exactDifferentWidth] && safeExactRead.omittedSharedProfileCount == 1,
+            "Malformed optional vectors do not invalidate valid mandatory exact admission")
+        safeExactRead.close(leaseID: capacityLease)
+        var malformedExact = exactDifferentWidth; malformedExact.enrollments[0] = .init(values: [1], sourceFrameCount: 1, modelKey: malformedExact.modelKey)
+        try JSONEncoder().encode(CapacityDocument(profiles: [malformedExact])).write(to: capacityURL, options: .atomic)
+        rejects("Malformed mandatory exact metadata must still reject admission") {
+            _ = try capacityStore.admitCaptureRead(leaseID: capacityLease, modelKey: "synthetic-family-b", entryIDs: [familyEntry], includingSharedFamilies: true)
+        }
         let handlesBefore = try descriptorCount()
         let leaseID = UUID()
         let read = try store.admitCaptureRead(leaseID: leaseID, modelKey: "synthetic", entryIDs: [entry, originalEntry])
@@ -158,7 +245,7 @@ import Darwin
         expect(negatives.revision == negativeRevision && negatives.frames(entryID: entry, profileKey: "selected", modelKey: "synthetic") == [negativeFrames], "Admitted negative comparison remains immutable")
         PrivateProfileStorage.select(b)
         expect(await familyStore.sharedProfiles(modelKey: "synthetic-family-b", hiddenSize: 2).isEmpty, "B cannot query A through new shared-profile API")
-        expect(familyRead.profiles == [sharedFamily, exactDifferentWidth], "A family candidates remain immutable under admitted lease after B selection")
+        expect(familyRead.profiles == [exactDifferentWidth, sharedFamily], "A family candidates remain immutable under admitted lease after B selection")
         rejects("Old A cannot open a shared family read while B is selected") { _ = try familyStore.admitCaptureRead(leaseID: UUID(), modelKey: "synthetic-family-b", entryIDs: [familyEntry], includingSharedFamilies: true) }
         familyRead.close(leaseID: familyLease)
         let familyBytesAfterClose = try Data(contentsOf: familyURL)

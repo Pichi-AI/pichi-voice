@@ -34,7 +34,7 @@ nonisolated struct TranscriptionResult: Sendable {
 nonisolated enum ParakeetSpeechModelCatalog {
     // Synthetic family policy for store-lifetime probes; actual catalog policy has native coverage.
     static func sharesPronunciationFamily(_ source: String, with target: String) -> Bool {
-        [source, target].allSatisfy { ["synthetic-family-a", "synthetic-family-b"].contains($0) }
+        [source, target].allSatisfy { $0.hasPrefix("synthetic-family-") }
     }
     static func descriptor(forInstalledPronunciationModelKey key: String) -> Bool? { true }
     static func isOutdatedCompactPronunciationModelKey(_ key: String) -> Bool { false }
