@@ -753,9 +753,10 @@ struct TranscriptionHistoryView: View {
     }
 
     private func copyCommandProviders() -> [NSItemProvider] {
-        guard let entry = self.selectedEntry, let text = entry.clipboardText else { return [] }
+        guard self.projection.isVisible,
+              let entry = self.selectedEntry, let text = entry.clipboardText else { return [] }
         ClipboardAudit.record("ui_copy_command")
-        self.showCopiedFeedback(for: entry)
+        self.projection.showCopyFeedback(entryID: entry.id)
         return [NSItemProvider(object: text as NSString)]
     }
 
