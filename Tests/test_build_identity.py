@@ -1,5 +1,6 @@
 """Portable guards for installation identity across upstream project merges."""
 import pathlib
+import plistlib
 import re
 import shutil
 import subprocess
@@ -44,7 +45,7 @@ class BuildIdentityTests(unittest.TestCase):
             for relative in [
                 'Fluid.xcodeproj/project.pbxproj', 'scripts/dev/update-mobile-project.py',
                 'Sources/Mobile/shared-sources.txt', 'Sources/Fluid/Branding/brand-package.json',
-                'Sources/Mobile/Info.plist',
+                'Sources/Mobile/Info.plist', 'Sources/Mobile/Version.xcconfig',
             ]:
                 destination = root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +75,22 @@ class BuildIdentityTests(unittest.TestCase):
 
     def testMergedProjectPreservesBothDistributionIdentities(self):
         validate_application_identity(PROJECT.read_text())
+
+    def testMobileAppAndExtensionShareReleaseVersionOverrides(self):
+        project = PROJECT.read_text()
+        version_id = re.search(r'(\w+) /\* Mobile file Sources/Mobile/Version.xcconfig \*/', project).group(1)
+        for label in ['Mobile Debug', 'Mobile Release', 'Mobile activity Debug', 'Mobile activity Release']:
+            configuration = re.search(r'/\* ' + label + r' \*/ = \{([^\n]+)', project).group(1)
+            self.assertIn('baseConfigurationReference = ' + version_id + ';', configuration)
+            self.assertNotIn('CURRENT_PROJECT_VERSION =', configuration)
+            self.assertNotIn('MARKETING_VERSION =', configuration)
+        for relative in ['Sources/Mobile/Info.plist', 'Sources/MobileActivity/Info.plist']:
+            info = plistlib.loads((ROOT / relative).read_bytes())
+            self.assertEqual(info['CFBundleVersion'], '$(CURRENT_PROJECT_VERSION)')
+            self.assertEqual(info['CFBundleShortVersionString'], '$(MARKETING_VERSION)')
+        defaults = (ROOT / 'Sources/Mobile/Version.xcconfig').read_text()
+        self.assertRegex(defaults, r'(?m)^CURRENT_PROJECT_VERSION = 5$')
+        self.assertRegex(defaults, r'(?m)^MARKETING_VERSION = 0\.1\.0$')
 
     def testDuplicateUpstreamIdentityAndReleaseSettingsAreRejected(self):
         project = PROJECT.read_text()

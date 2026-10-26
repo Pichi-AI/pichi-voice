@@ -14,6 +14,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT = ROOT / "Fluid.xcodeproj/project.pbxproj"
 APP_INFO = ROOT / "Sources/Mobile/Info.plist"
+VERSION_CONFIG = ROOT / "Sources/Mobile/Version.xcconfig"
 # Debug and Release share one app identity. An embedded extension must extend it, so a local
 # signing identity overrides this one setting rather than PRODUCT_BUNDLE_IDENTIFIER.
 APP_BUNDLE = "ai.pichi.voice.mobile"
@@ -25,8 +26,13 @@ if app_info.get("NSSupportsLiveActivities") is not True:
     if "NSSupportsLiveActivities" in app_info or app_info_text.count("</dict></plist>") != 1:
         raise ValueError("Set NSSupportsLiveActivities to true in " + str(APP_INFO.relative_to(ROOT)))
     app_info_text = app_info_text.replace("</dict></plist>", "<key>NSSupportsLiveActivities</key><true/>\n</dict></plist>")
-# The embedded extension must report the containing app's versions.
-app_version, app_build = app_info["CFBundleShortVersionString"], app_info["CFBundleVersion"]
+# The app and extension expand one shared configuration, including command-line
+# release build overrides. Neither plist may override those settings with literals.
+for key, setting in [("CFBundleShortVersionString", "MARKETING_VERSION"), ("CFBundleVersion", "CURRENT_PROJECT_VERSION")]:
+    if app_info.get(key) != "$(" + setting + ")":
+        raise ValueError(key + " must use the shared mobile version setting")
+if not VERSION_CONFIG.is_file():
+    raise ValueError("Missing shared mobile version configuration")
 
 def uid(label):
     return hashlib.sha256(("PichiVoiceMobile:" + label).encode()).hexdigest()[:24].upper()
@@ -57,7 +63,7 @@ file_refs = {}
 def file_ref(path, label="Mobile file "):
     if path not in file_refs:
         kind = {".swift":"sourcecode.swift", ".xcstrings":"text.json.xcstrings", ".xcassets":"folder.assetcatalog",
-                ".strings":"text.plist.strings", ".json":"text.json"}.get(Path(path).suffix, "folder")
+                ".strings":"text.plist.strings", ".json":"text.json", ".xcconfig":"text.xcconfig"}.get(Path(path).suffix, "folder")
         file_refs[path] = obj(label + path, f"isa = PBXFileReference; lastKnownFileType = {kind}; path = {quoted(path)}; sourceTree = SOURCE_ROOT;")
         file_ids.append(file_refs[path])
     return file_refs[path]
@@ -89,6 +95,7 @@ source_phase = obj("Mobile Sources", f"isa = PBXSourcesBuildPhase; buildActionMa
 resource_phase = obj("Mobile Resources", f"isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = {arr(resource_builds)}; runOnlyForDeploymentPostprocessing = 0;")
 framework_phase = obj("Mobile Frameworks", f"isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = {arr(framework_builds)}; runOnlyForDeploymentPostprocessing = 0;")
 product_ref = obj("PichiVoiceMobile.app", 'isa = PBXFileReference; explicitFileType = wrapper.application; path = PichiVoiceMobile.app; sourceTree = BUILT_PRODUCTS_DIR;')
+version_ref = file_ref("Sources/Mobile/Version.xcconfig")
 
 def configs(label, test=False, hosted=False, extension=False):
     config_ids = []
@@ -113,15 +120,16 @@ def configs(label, test=False, hosted=False, extension=False):
         elif extension:
             # The extension has no String Catalog; the app passes it already localized copy.
             settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER=APP_BUNDLE, PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity",
-                INFOPLIST_FILE="Sources/MobileActivity/Info.plist", CURRENT_PROJECT_VERSION=app_build, MARKETING_VERSION=app_version,
+                INFOPLIST_FILE="Sources/MobileActivity/Info.plist",
                 SKIP_INSTALL="YES", APPLICATION_EXTENSION_API_ONLY="YES", SWIFT_EMIT_LOC_STRINGS="NO",
                 LD_RUNPATH_SEARCH_PATHS="$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks")
         else:
             settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER=APP_BUNDLE, PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER)",
                 INFOPLIST_FILE="Sources/Mobile/Info.plist", ASSETCATALOG_COMPILER_APPICON_NAME="MobileAppIcon",
-                CURRENT_PROJECT_VERSION=app_build, MARKETING_VERSION=app_version, ENABLE_PREVIEWS="YES", PICHI_SOURCE_REVISION="unknown")
+                ENABLE_PREVIEWS="YES", PICHI_SOURCE_REVISION="unknown")
         rendered = " ".join(f"{key} = {quoted(value)};" for key, value in settings.items())
-        config_ids.append(obj(label+" "+name, f"isa = XCBuildConfiguration; buildSettings = {{ {rendered} }}; name = {name};"))
+        base_configuration = "" if test else f"baseConfigurationReference = {version_ref}; "
+        config_ids.append(obj(label+" "+name, f"isa = XCBuildConfiguration; {base_configuration}buildSettings = {{ {rendered} }}; name = {name};"))
     return obj(label+" configurations", f"isa = XCConfigurationList; buildConfigurations = {arr(config_ids)}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;")
 
 # WidgetKit Live Activity extension: every Swift file in Sources/MobileActivity plus the packaged
