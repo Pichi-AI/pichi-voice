@@ -396,6 +396,21 @@ class DriverTests(unittest.TestCase):
             self.assertEqual(self.processes.verify_members(child, [child.pid]), [child.pid])
             self.assertEqual(sum("--deep" in call.args[0] for call in verify.call_args_list), 3)
 
+    def test_restarted_membership_snapshot_discards_local_leader_proof(self):
+        child, parent, bundle, observed = self.clone_child("proof-snapshot-race")
+        def executable(pid):
+            if pid == 900:
+                raise ProcessLookupError("Helper disappeared")
+            return self.processes.metadata[pid]["executable"]
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch.object(self.processes, "executable_for", side_effect=executable), \
+             patch.object(self.processes, "group_members", side_effect=[[900, child.pid], [child.pid]]), \
+             patch("meeting_continuity_driver.subprocess.run") as verify:
+            self.assertEqual(self.processes.assert_owned(child), [child.pid])
+            self.assertEqual(sum("--deep" in call.args[0] for call in verify.call_args_list), 2)
+        self.assertEqual(self.processes.signals, [])
+
     def test_same_guard_leader_proof_requires_fresh_unchanged_identity(self):
         for fault in ("bytes", "profile", "group", "lifetime", "child"):
             with self.subTest(fault=fault):
