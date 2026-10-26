@@ -281,6 +281,7 @@ builds/
 !/scripts/dev/check-localization.py
 !/scripts/dev/check-diarization-repeatability.py
 !/scripts/dev/check-xcode-build-settings.py
+!/scripts/dev/mobile-framework-metadata.py
 !/scripts/dev/capture-mobile-frames.py
 !/scripts/dev/mobile-screen-stream.swift
 !/docs/development/upstream-sync-1.6.11.md
