@@ -460,7 +460,7 @@ class OwnedProcesses:
             try:
                 # Detached vendor helpers can exit shortly after their joined browser.
                 # Observe natural exit only; an unproven process is never signalled.
-                deadline = time.monotonic() + 10
+                deadline = time.monotonic() + 30
                 remaining = self.copied_bundle_processes(deadline)
                 while remaining and time.monotonic() < deadline:
                     time.sleep(0.025)

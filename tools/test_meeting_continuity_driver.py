@@ -301,7 +301,7 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(self.processes.statuses[child.pid], -9)
         self.assertNotIn((901, signal.SIGKILL), self.processes.signals)
 
-    def test_persistent_detached_helper_observation_has_one_ten_second_budget(self):
+    def test_persistent_detached_helper_observation_has_one_thirty_second_budget(self):
         self.processes.child("chrome")
         detached = dict(processID=900, processGroup=901, executablePath=str(self.processes.chrome_app / "crashpad"))
         with patch.object(self.processes, "copied_bundle_processes", return_value=[detached]) as scan, \
@@ -309,9 +309,9 @@ class DriverTests(unittest.TestCase):
              patch("meeting_continuity_driver.time.sleep", side_effect=self.clock.pause), \
              self.assertRaisesRegex(ProtocolError, "outside joined-child proof"):
             self.processes.cleanup()
-        self.assertGreaterEqual(self.clock.now, 10)
-        self.assertLess(self.clock.now, 10.026)
-        self.assertTrue(all(call.args == (10,) for call in scan.call_args_list))
+        self.assertGreaterEqual(self.clock.now, 30)
+        self.assertLess(self.clock.now, 30.026)
+        self.assertTrue(all(call.args == (30,) for call in scan.call_args_list))
         self.assertNotIn((901, signal.SIGKILL), self.processes.signals)
 
     def test_real_copy_scan_finds_detached_helper_without_signalling(self):
