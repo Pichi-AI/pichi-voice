@@ -82,8 +82,9 @@ struct MeetingOwnerVoiceSettingsContent: View {
         if self.model.phase == .recording {
             // Once the sample is long enough, finishing becomes the clear next step.
             if self.model.seconds >= MeetingOwnerVoiceEnrollmentCapture.recommendedSeconds {
-                Button(PichiLocalization.text("Done")) { self.model.finishRecording() }
-                    .buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.stop")
+                Button { self.model.finishRecording() } label: {
+                    Text(PichiLocalization.text("Done")).foregroundStyle(self.theme.palette.accentForeground)
+                }.buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.stop")
             } else {
                 Button(PichiLocalization.text("Stop")) { self.model.finishRecording() }
                     .accessibilityIdentifier("ownerVoice.stop")
@@ -98,8 +99,9 @@ struct MeetingOwnerVoiceSettingsContent: View {
                 self.model.start(microphone: self.microphone)
             }.accessibilityIdentifier("ownerVoice.start")
             if self.model.phase == .ready {
-                Button(PichiLocalization.text("Save")) { self.model.save() }
-                    .buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.save")
+                Button { self.model.save() } label: {
+                    Text(PichiLocalization.text("Save")).foregroundStyle(self.theme.palette.accentForeground)
+                }.buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.save")
                 Button(PichiLocalization.text("Cancel")) { self.model.discardDraft() }
                     .accessibilityIdentifier("ownerVoice.cancel")
             }
