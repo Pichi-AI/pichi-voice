@@ -97,15 +97,30 @@ final class MeetingFloatingCaptionsController: ObservableObject {
 
     private var panel: MeetingFloatingCaptionsPanel?
     private var stateSubscription: AnyCancellable?
+    private var profileSubscription: AnyCancellable?
     private var screenParametersObserver: NSObjectProtocol?
 
-    private init() {}
+    private init() {
+        self.profileSubscription = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.concealPrivatePresentation() }
+            }
+    }
+
+    private func concealPrivatePresentation() {
+        self.hide()
+        self.panel?.contentView = nil
+        self.panel = nil
+        self.stateSubscription?.cancel()
+        self.stateSubscription = nil
+    }
 
     /// Opens the captions window, growing out of `sourceFrame` (the pill) when motion is allowed.
     func show(from sourceFrame: NSRect?) {
-        guard SettingsStore.shared.fluidMeetEnabled else { return }
+        guard SettingsStore.shared.fluidMeetEnabled else { self.hide(); return }
+        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         let coordinator = AppServices.shared.meetingSessionCoordinator
-        guard MeetingOverlayVisibility.isVisible(for: coordinator.state) else { return }
+        guard MeetingOverlayVisibility.isVisible(for: coordinator.state) else { self.hide(); return }
         let panel = self.panelOrCreate(coordinator: coordinator)
         self.subscribeIfNeeded(coordinator: coordinator)
 
@@ -166,8 +181,9 @@ final class MeetingFloatingCaptionsController: ObservableObject {
         guard self.stateSubscription == nil else { return }
         self.stateSubscription = coordinator.$state
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                guard MeetingOverlayVisibility.isVisible(for: state) else {
+            .sink { [weak self, weak coordinator] _ in
+                guard PrivateProfileStorage.acceptsNewWork, let coordinator,
+                      MeetingOverlayVisibility.isVisible(for: coordinator.state) else {
                     self?.hide()
                     return
                 }

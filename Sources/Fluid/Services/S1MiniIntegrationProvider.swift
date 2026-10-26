@@ -47,12 +47,12 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
     }
 
     nonisolated var configuredModelID: String {
-        let value = UserDefaults.standard.string(forKey: S1MiniProviderFeature.shared.selectedModelDefaultsKey) ?? ""
+        let value = PrivateProfileDefaults.shared.string(forKey: S1MiniProviderFeature.shared.selectedModelDefaultsKey) ?? ""
         return S1MiniProviderFeature.shared.canonicalModelID(for: value) ?? S1MiniProviderFeature.shared.defaultModelID
     }
     nonisolated var selectedModel: PrivateAIRegisteredModel { self.store.model }
     nonisolated var configuredLocalModelPath: String? {
-        let path = UserDefaults.standard.string(forKey: S1MiniProviderFeature.shared.localModelPathDefaultsKey)?
+        let path = PrivateProfileDefaults.shared.string(forKey: S1MiniProviderFeature.shared.localModelPathDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return path?.isEmpty == false ? path : nil
     }

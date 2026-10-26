@@ -21,12 +21,12 @@ def snippet(file, start, end):
     return text[first:text.index(end, first)]
 
 delete = snippet('Sources/Fluid/UI/FileTranscriptionView.swift',
-                 '                        Button(role: .destructive) { self.pendingDeleteEntry = entry } label: {',
+                 '                        Button(role: .destructive) {\n                            guard self.privateProjection.isCurrent else { return }\n                            self.privateProjection.pendingDeleteEntry = entry\n                        } label: {',
                  '                        Spacer(minLength: 0)')
 badge = snippet('Sources/Fluid/UI/AISettingsView+SpeechRecognition.swift',
                 '                        Text("Active")', '                    } else {')
 choose = snippet('Sources/Fluid/UI/FileTranscriptionView.swift',
-                 '                    Button { self.showingFilePicker = true } label: {',
+                 '                    Button { self.privateProjection.showingFilePicker = true } label: {',
                  '                }\n                .frame(maxWidth: .infinity)')
 copy = snippet('Sources/Fluid/UI/FileTranscriptionView.swift',
                '                        Button { self.copyToClipboard(entry.text) } label: {',
@@ -93,16 +93,20 @@ def fallback(control):
 # controls. Use its exact documented fallback for raster-only evidence too.
 choose, copy, explore, updates = map(fallback, [choose, copy, explore, updates])
 Path(sys.argv[1]).write_text('import SwiftUI\n'
+    '@MainActor final class ProductionFileControlProjection: ObservableObject {\n'
+    '    @Published var pendingDeleteEntry: String?\n'
+    '    @Published var showingFilePicker = false\n'
+    '    var isCurrent: Bool { true }\n}\n'
     'struct DeleteRoleFixture: View {\n'
     '    @Environment(\\.theme) private var theme\n'
     '    let entry = "synthetic"\n'
-    '    @State private var pendingDeleteEntry: String?\n'
+    '    @StateObject private var privateProjection = ProductionFileControlProjection()\n'
     '    var body: some View {\n' + delete + '\n    }\n}\n'
     'struct ActiveBadgeFixture: View {\n'
     '    @Environment(\\.theme) private var theme\n'
     '    var body: some View {\n' + badge + '\n    }\n}\n'
     'struct ChooseFileActionFixture: View {\n'
-    '    @State private var showingFilePicker = false\n'
+    '    @StateObject private var privateProjection = ProductionFileControlProjection()\n'
     '    var body: some View {\n' + choose + '\n    }\n}\n'
     'struct CopyTranscriptActionFixture: View {\n'
     '    private struct Entry { let text = "synthetic" }\n'
@@ -194,10 +198,10 @@ menu_reference = menu_reference.replace('FluidGlassMenuActionStyle', 'Production
 menu_reference = menu_reference.replace('.glassEffect(.regular, in: .capsule)', '.background(Color.clear)', 1)
 export_source = snippet('Sources/Fluid/UI/FileTranscriptionView.swift',
     '                        Menu {\n                            ForEach(ExportFormat.allCases',
-    '                        Button(role: .destructive) { self.pendingDeleteEntry = entry } label: {')
+    '                        Button(role: .destructive) {\n                            guard self.privateProjection.isCurrent else { return }\n                            self.privateProjection.pendingDeleteEntry = entry\n                        } label: {')
 assert export_source.count('.fluidGlassMenuAction()') == 1
 assert 'ForEach(ExportFormat.allCases, id: \\.self)' in export_source
-assert 'self.exportDocument = try TranscriptionDocument(entry: entry, format: format)' in export_source
+assert 'self.privateProjection.exportDocument = try TranscriptionDocument(entry: entry, format: format)' in export_source
 label_start = export_source.index('                            Label("Export",')
 export_label = export_source[label_start:export_source.index('\n                        }', label_start)]
 stats_share = snippet('Sources/Fluid/UI/StatsView.swift',
@@ -392,6 +396,8 @@ activity_path = 'Sources/Fluid/UI/StatsActivityView.swift'
 activity = ink_source(activity_path)
 history = ink_snippet('Sources/Fluid/UI/TranscriptionHistoryView.swift',
     '    private var searchBar: some View {', '    // MARK: - Entry List')
+# The production projection owns search state; this render-only fixture supplies a Binding.
+history = history.replace('self.$projection.searchQuery', 'self.$searchQuery').replace('self.projection.searchQuery', 'self.searchQuery')
 files = ink_snippet('Sources/Fluid/UI/FileTranscriptionView.swift',
     '            HStack(spacing: self.theme.metrics.spacing.sm) {\n                Image(systemName: "magnifyingglass")',
     '            Divider()')
@@ -763,6 +769,7 @@ bundle = Path(sys.argv[1]).parent / 'OverlayCaptionFixture.app/Contents'
 }))
 PY
 
+python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift"
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Branding/AppBrand.swift \
@@ -792,7 +799,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/ProductionNativeInputPresentations.swift" \
     "$task_test_dir/ToolbarPageLayout.swift" \
     Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift \
-    Sources/Fluid/Theme/Components/WindowSizingComponents.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift -o "$task_test_dir/tests"
+    Sources/Fluid/Theme/Components/WindowSizingComponents.swift "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift -o "$task_test_dir/tests"
 # Keep the existing full-suite executable and its bundle context unchanged.
 # The focused caption pass uses the same binary with real compiled resources.
 case " $* " in

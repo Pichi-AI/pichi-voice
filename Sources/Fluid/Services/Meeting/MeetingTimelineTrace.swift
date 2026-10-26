@@ -43,6 +43,7 @@ final nonisolated class MeetingTimelineTrace: @unchecked Sendable {
     private let queue = DispatchQueue(label: "meeting.private-timeline", qos: .utility)
     private let lock = NSLock()
     private let limits: Limits
+    private let profile: PrivateProfileSnapshot
     private let directory: URL
     private var pending: [(Event, Int)] = []
     private var pendingBytes = 0
@@ -63,14 +64,20 @@ final nonisolated class MeetingTimelineTrace: @unchecked Sendable {
     let fileURL: URL
 
     init(directory: URL? = nil, limits: Limits = .init()) {
-        let root = directory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let profile = PrivateProfileStorage.current
+        self.profile = profile
+        let guestRoot = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MeetingTimelineTrace", isDirectory: true)
+        let root = directory ?? (profile.isGuest ? guestRoot : profile.directory("MeetingTimelineTrace"))
         self.directory = root
         self.limits = limits
         self.fileURL = root.appendingPathComponent("\(id.uuidString).private.jsonl")
     }
 
     func record(_ kind: String, fields: [String: String] = [:], text: String? = nil, words: [Word] = []) {
+        // A process trace is pinned to its original profile and never follows a later login.
+        let current = PrivateProfileStorage.current
+        guard current.isReadable, current.id == profile.id, current.generation == profile.generation else { return }
         // Timestamp belongs to the caller, never to delayed disk IO.
         let uptime = ProcessInfo.processInfo.systemUptime
         var clipped = false
@@ -163,6 +170,22 @@ final nonisolated class MeetingTimelineTrace: @unchecked Sendable {
             }
         }
     }
+    /// Lifecycle requires an actual join, rather than the bounded diagnostic flush timeout.
+    /// A timed-out ordinary flush never authorizes changing a private storage boundary.
+    func finishForProfileTransition() async {
+        lock.withLock { closed = true }
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                drain()
+                writeStatus()
+                try? file?.synchronize()
+                try? file?.close()
+                file = nil
+                continuation.resume()
+            }
+        }
+    }
+
     var status: Status {
         lock.withLock { .init(accepted: accepted, written: written, dropped: dropped,
             truncated: truncated, writeFailed: writeFailed, closed: closed, flushTimedOut: flushTimedOut) }

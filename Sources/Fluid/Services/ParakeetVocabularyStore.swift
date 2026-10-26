@@ -5,8 +5,12 @@ import FluidAudio
 
 /// JSON-backed store for Parakeet vocabulary boosting terms.
 /// Persists to Application Support so it survives app updates and can be user-edited.
-final class ParakeetVocabularyStore {
-    static let shared = ParakeetVocabularyStore()
+@MainActor final class ParakeetVocabularyStore {
+    static var shared: ParakeetVocabularyStore {
+        PrivateProfileObjectCache.value(key: "ParakeetVocabularyStore") {
+            ParakeetVocabularyStore(profile: PrivateProfileStorage.current)
+        }
+    }
 
     nonisolated struct VocabularyConfig: Codable, Sendable {
         nonisolated struct Term: Codable, Hashable, Sendable {
@@ -85,15 +89,22 @@ final class ParakeetVocabularyStore {
     }
 
     private let fileName = "parakeet_custom_vocabulary.json"
-    private let appSupportFolder = AppBrand.storageNamespace
+    private let rootDirectory: URL
+    private let profile: PrivateProfileSnapshot?
 
-    private init() {}
+    init(rootDirectory: URL? = nil, profile: PrivateProfileSnapshot? = nil) {
+        let selected = profile ?? (rootDirectory == nil ? PrivateProfileStorage.current : nil)
+        self.profile = selected
+        self.rootDirectory = rootDirectory ?? selected!.rootDirectory
+    }
+
+    private func requireAccess() throws {
+        guard self.profile.map(PrivateProfileStorage.isReadable) != false else { throw CancellationError() }
+    }
 
     func vocabularyFileURL() throws -> URL {
-        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            throw StoreError.applicationSupportUnavailable
-        }
-        let directory = base.appendingPathComponent(self.appSupportFolder, isDirectory: true)
+        try self.requireAccess()
+        let directory = self.rootDirectory
         DebugLogger.shared.debug(
             "ParakeetVocabularyStore: app support directory=\(directory.path)",
             source: "ParakeetVocabularyStore"
@@ -137,7 +148,7 @@ final class ParakeetVocabularyStore {
         _ = try self.validateJSON(json)
         let url = try self.ensureVocabularyFileExists()
         try json.write(to: url, atomically: true, encoding: .utf8)
-        NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
+        NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: self)
     }
 
     /// Loads only the user-managed boost terms from storage.
@@ -150,14 +161,16 @@ final class ParakeetVocabularyStore {
 
     /// Search reads a bounded snapshot without creating files or blocking the UI.
     @concurrent nonisolated static func readSearchTerms() async throws -> [VocabularyConfig.Term] {
-        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return [] }
-        let url = base.appendingPathComponent("\(AppBrand.storageNamespace)/parakeet_custom_vocabulary.json")
+        let profile = PrivateProfileStorage.current
+        guard PrivateProfileStorage.isReadable(profile) else { return [] }
+        let url = profile.rootDirectory.appendingPathComponent("parakeet_custom_vocabulary.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let limit = 2 * 1024 * 1024
         guard let data = try handle.read(upToCount: limit + 1), data.count <= limit else { return [] }
         let parsed = try JSONDecoder().decode(VocabularyConfig.self, from: data)
+        guard PrivateProfileStorage.isReadable(profile) else { return [] }
         return Self.normalizeUserTerms(parsed.terms, maxTerms: Defaults.maxTerms)
     }
 
@@ -183,15 +196,30 @@ final class ParakeetVocabularyStore {
 
         let url = try self.ensureVocabularyFileExists()
         try text.write(to: url, atomically: true, encoding: .utf8)
-        NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
+        NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: self)
     }
 
     func hasAnyBoostTerms() -> Bool {
         (try? self.loadResolvedConfig())?.terms.isEmpty == false
     }
 
-    func loadResolvedConfig() throws -> ResolvedConfig {
-        let rawJSON = try self.loadRawJSON()
+    func loadResolvedConfig(maximumBytes: Int? = nil) throws -> ResolvedConfig {
+        let rawJSON: String
+        if let maximumBytes {
+            try self.requireAccess()
+            let url = self.rootDirectory.appendingPathComponent(self.fileName)
+            if let file = try DictionaryCaptureEvidenceFile(url: url, maximumBytes: maximumBytes, profile: self.profile) {
+                defer { file.close() }
+                rawJSON = try file.read { String(decoding: $0, as: UTF8.self) }
+            } else if let bundled = Bundle.main.url(forResource: "parakeet_custom_vocabulary.default", withExtension: "json"),
+                      let text = try? String(contentsOf: bundled, encoding: .utf8) {
+                rawJSON = try Self.brandedFactoryDefaultJSON(text)
+            } else {
+                rawJSON = Self.defaultTemplateJSON()
+            }
+        } else {
+            rawJSON = try self.loadRawJSON()
+        }
         let parsed = (try? self.validateJSON(rawJSON)) ?? VocabularyConfig(
             alpha: nil,
             minCtcScore: nil,
@@ -340,9 +368,11 @@ extension Notification.Name {
 extension ParakeetVocabularyStore {
     /// Creates tokenized vocabulary + CTC models for FluidAudio vocabulary boosting.
     func loadTokenizedVocabularyBundle(
-        maxTerms: Int = 256
+        maxTerms: Int = 256,
+        resolvedConfig: ResolvedConfig? = nil
     ) async throws -> (vocabulary: CustomVocabularyContext, ctcModels: CtcModels)? {
-        let resolved = try self.loadResolvedConfig()
+        // An admitted provider supplies its immutable visible-profile configuration.
+        let resolved = try resolvedConfig ?? self.loadResolvedConfig()
         DebugLogger.shared.debug("ParakeetVocabularyStore: resolved vocabulary term count=\(resolved.terms.count)", source: "ParakeetVocabularyStore")
         guard !resolved.terms.isEmpty else {
             DebugLogger.shared.debug("ParakeetVocabularyStore: no resolved terms; returning nil bundle", source: "ParakeetVocabularyStore")

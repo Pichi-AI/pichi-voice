@@ -50,7 +50,7 @@ filter_source = service[filter_start:filter_end]
 store_path = Path("Sources/Fluid/Persistence/ChatHistoryStore.swift")
 store = store_path.read_text()
 unique_position(store, "final class ChatHistoryStore: ObservableObject", store_path)
-unique_position(store, "init(defaults: UserDefaults = .standard)", store_path)
+unique_position(store, "init(defaults: UserDefaults? = nil, profile: PrivateProfileSnapshot? = nil)", store_path)
 if "Foundation.UserDefaults" in store:
     raise SystemExit("Archive search test isolation failed: store bypasses the in-memory UserDefaults double")
 (output / "ChatHistoryStore.swift").write_text(
@@ -61,7 +61,10 @@ if "Foundation.UserDefaults" in store:
 )
 PY
 
+python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift" --synthetic-brand
 xcrun swiftc -parse-as-library \
+    "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Tests/Support/StandaloneGuestProfileDefaults.swift \
     "$task_test_dir/AppSearchSnapshot.swift" \
     "$task_test_dir/ChatHistoryStore.swift" \
     Sources/Fluid/Persistence/PersistedHistory.swift \

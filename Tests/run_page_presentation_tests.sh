@@ -24,6 +24,7 @@ assert source.count(color_marker) == 1
 fixture = '\nfinal class SettingsStore { static let shared = SettingsStore(); let accentColor: Color = .blue }\n'
 Path(sys.argv[1]).write_text(source[:source.index(marker)] + source[source.index(color_marker):] + fixture)
 PY_THEME
+python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift"
 xcrun swiftc -parse-as-library \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Branding/AppBrand.swift \
@@ -36,7 +37,7 @@ xcrun swiftc -parse-as-library \
     Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift \
     Sources/Fluid/UI/AppNavigationState.swift \
     Sources/Fluid/Theme/Components/FluidPageLayout.swift \
-    Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift \
+    Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift \
     "$task_test_dir/DashboardLayout.swift" \
     Tests/PagePresentationTests.swift \
     -o "$task_test_dir/tests"

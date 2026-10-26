@@ -36,13 +36,13 @@ extension OnboardingAISetupController {
             }
         },
         readPendingDownload: {
-            let pending = UserDefaults.standard.bool(forKey: "OnboardingFIPendingDownload")
+            let pending = PrivateProfileDefaults.shared.bool(forKey: "OnboardingFIPendingDownload")
             DebugLogger.shared.info("Recovery check pending=\(pending)", source: "OnboardingAI")
             return pending
         },
         writePendingDownload: {
-            UserDefaults.standard.set($0, forKey: "OnboardingFIPendingDownload")
-            UserDefaults.standard.synchronize()
+            PrivateProfileDefaults.shared.set($0, forKey: "OnboardingFIPendingDownload")
+            PrivateProfileDefaults.shared.synchronize()
             DebugLogger.shared.info("Persisted pending=\($0)", source: "OnboardingAI")
         }
     ))

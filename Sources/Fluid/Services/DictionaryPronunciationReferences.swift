@@ -9,7 +9,7 @@ enum DictionaryPronunciationReferences {
         let embedding: PronunciationEmbedding
     }
 
-    static func make(profiles: [PronunciationDictionaryProfile], hiddenSize: Int? = nil, compatibleModelKey: String? = nil) -> [Reference] {
+    static func make(profiles: [PronunciationDictionaryProfile], hiddenSize: Int? = nil, compatibleModelKey: String? = nil, pronunciationEnabled: Bool = DictionaryPronunciationExperiment.enabled) -> [Reference] {
         profiles.flatMap { profile -> [Reference] in
             let compatible = compatibleModelKey.map {
                 (profile.modelKey == $0 || ParakeetSpeechModelCatalog.sharesPronunciationFamily(profile.modelKey, with: $0)) &&
@@ -19,7 +19,7 @@ enum DictionaryPronunciationReferences {
             guard compatible, profile.enrollments.allSatisfy({ $0.modelKey == profile.modelKey })
             else { return [] }
             guard hiddenSize == nil || profile.hiddenSize == hiddenSize else { return [] }
-            if let calibration = profile.edgeCalibration {
+            if let calibration = profile.edgeCalibration(enabled: pronunciationEnabled) {
                 let frames = profile.enrollments.compactMap(\.edgeFrameCount)
                 return [Reference(profile: profile, sampleNumber: 0, embedding: PronunciationEmbedding(
                     values: calibration.center, sourceFrameCount: max(1, frames.reduce(0, +) / frames.count)

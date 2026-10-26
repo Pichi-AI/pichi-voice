@@ -7,6 +7,10 @@ import UIKit
 @MainActor
 final class AppServices: ObservableObject {
     static let shared = AppServices()
+    let accountSession: AccountSessionService
+    let privateProfiles: PrivateProfileService
+    private var cloudPublicationActivation: PichiCloudPublicationActivation?
+    var cloudPublication: PichiCloudPublicationService? { cloudPublicationActivation?.service }
     let asr: ASRService
     let meetingSessionCoordinator: MeetingSessionCoordinator
     let meetingProcessingPipeline: MeetingProcessingPipeline
@@ -18,6 +22,8 @@ final class AppServices: ObservableObject {
     let privacyActivation: MobilePrivacyActivation
     private var requiredPreparationTask: Task<Void, Never>?
     @Published private(set) var isUIReady = false
+    @Published private(set) var hasRestoredAccount = false
+    private var accountRestorationTask: Task<Void, Never>?
     private static var didCleanExportStaging = false
     private let settings: SettingsStore
     private var idlePreparationObservers: Set<AnyCancellable> = []
@@ -51,15 +57,27 @@ final class AppServices: ObservableObject {
     init(store: (any MeetingSessionStoring)? = nil,
          capture injectedCapture: (any MeetingCaptureControlling)? = nil,
          settings: SettingsStore? = nil,
+         accountSession: AccountSessionService? = nil,
+         privateProfiles: PrivateProfileService? = nil,
+         publicationHTTP: (any PichiPublicationHTTPPerforming)? = nil,
          privacy: PichiTranscriptPrivacyService? = nil,
          privacyRedactor: (any TranscriptTextRedacting)? = nil,
          microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil) {
+        let isProductionComposition = store == nil && settings == nil && accountSession == nil
+            && privateProfiles == nil && injectedCapture == nil && privacy == nil && privacyRedactor == nil
+            && microphoneResolver == nil && publicationHTTP == nil
+        // Only a deliberate facade injection can install an observer in a fixture.
+        // A generic test store must never touch the global facade or production HTTP.
+        let publicationStore = isProductionComposition ? PrivateProfileMeetingStore.shared
+            : store as? PrivateProfileMeetingStore
         // A cold-start operation only. Additional service compositions must not remove
         // files currently being used by an already-open native share sheet.
         if !Self.didCleanExportStaging {
             try? MeetingSharePayload.cleanupAbandonedShares()
             Self.didCleanExportStaging = true
         }
+        self.accountSession = accountSession ?? .production()
+        self.privateProfiles = privateProfiles ?? (isProductionComposition ? .shared : .init())
         let settings = settings ?? SettingsStore.shared
         self.settings = settings
         self.meetingLocation = MeetingLocationService(settings: settings)
@@ -156,11 +174,46 @@ final class AppServices: ObservableObject {
             Task { @MainActor in await self?.idleResourcesChanged() }
         }.store(in: &idlePreparationObservers)
         observeIdleResourceStores()
+        do {
+            try self.privateProfiles.configure(isBusy: { [weak self] in
+                guard let self else { return true }
+                return (publicationStore != nil && self.cloudPublicationActivation?.isInstalled != true)
+                    || !self.meetingSessionCoordinator.isQuiescent || !self.asr.canBeginPrivateProfileTransition
+                    || self.privateProfiles.hasRetainedCaptureStopHandler
+            }, prepare: { [weak self] in
+                guard let self else { throw AccountError.isolationRequired }
+                self.requiredPreparationTask?.cancel(); await self.requiredPreparationTask?.value
+                self.requiredPreparationTask = nil
+                await self.updateIdlePreparation()
+                try await PrivateProfileSources.prepare(coordinator: self.meetingSessionCoordinator, asr: self.asr)
+            }, activate: { [weak self] profile in
+                guard let self else { throw AccountError.isolationRequired }
+                try await PrivateProfileSources.activate(profile, asr: self.asr)
+                self.privacyActivation.restore()
+            }, conceal: {
+                await PrivateProfileSources.conceal()
+            })
+            try self.accountSession.installLifecycle(self.privateProfiles)
+            if isProductionComposition { PrivateProfileStorage.closeAdmission() }
+        } catch {
+            DebugLogger.shared.warning("Private profile lifecycle unavailable", source: "MobileAppServices")
+        }
+        if let publicationStore {
+            let http: (any PichiPublicationHTTPPerforming)? = isProductionComposition
+                ? self.accountSession.configuration.flatMap { try? PichiPublicationHTTPClient(configuration: $0) }
+                : publicationHTTP
+            let service = PichiCloudPublicationService(account: self.accountSession, meetings: publicationStore,
+                profiles: self.privateProfiles, http: http)
+            self.cloudPublicationActivation = PichiCloudPublicationActivation(service: service,
+                account: self.accountSession, profiles: self.privateProfiles)
+        }
     }
 
     func signalUIReady() async {
         guard !isUIReady else { return }
         isUIReady = true
+        await restoreAccountBeforePrivateUI()
+        guard PrivateProfileStorage.acceptsNewWork else { return }
         await meetingSessionCoordinator.ensureRestored()
         await meetingSessionCoordinator.sweepExpiredAudio()
         hasRestoredInitialState = true
@@ -174,6 +227,34 @@ final class AppServices: ObservableObject {
         await updateIdlePreparation()
     }
 
+    func restoreAccountBeforePrivateUI() async {
+        if accountRestorationTask == nil {
+            accountRestorationTask = Task { @MainActor in
+                if let publication = cloudPublicationActivation {
+                    do { try await publication.install() }
+                    catch {
+                        DebugLogger.shared.warning("Cloud publication composition unavailable", source: "MobileAppServices")
+                        return
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                await accountSession.restore()
+                guard !Task.isCancelled else { return }
+                let current = PrivateProfileStorage.current
+                if current.isReadable { PrivateProfileStorage.select(current) }
+                await cloudPublicationActivation?.activateAfterAccountCommand()
+                guard !Task.isCancelled else { return }
+                hasRestoredAccount = true
+            }
+        }
+        await accountRestorationTask?.value
+    }
+    func restorePrivateSourcesAfterCommit() async {
+        guard PrivateProfileStorage.acceptsNewWork else { return }
+        await meetingSessionCoordinator.ensureRestored()
+        await cloudPublicationActivation?.activateAfterAccountCommand()
+    }
+
     func setSceneActive(_ active: Bool) async {
         isSceneActive = active
         await updateIdlePreparation()
@@ -184,10 +265,24 @@ final class AppServices: ObservableObject {
     }
 
     func shutdownForTermination() async {
+        accountRestorationTask?.cancel(); await accountRestorationTask?.value
+        accountRestorationTask = nil
+        await cloudPublicationActivation?.shutdown()
+        await accountSession.shutdown()
         await idlePreparation.shutdown()
         await meetingSessionCoordinator.shutdownForTermination()
         await asr.shutdownForTermination()
     }
+
+    var hasActivePrivateCapture: Bool {
+        meetingSessionCoordinator.isRecording || privateProfiles.hasRetainedCaptureStopHandler
+    }
+    func stopPrivateCaptureAndLogout() async {
+        if meetingSessionCoordinator.isRecording { _ = try? await meetingSessionCoordinator.stopAndTranscribe() }
+        else { await privateProfiles.requestCaptureStop() }
+        await accountSession.logout()
+    }
+    func retryPrivateProfileCleanupAndLogout() async { await accountSession.logout() }
 
     private func updateIdlePreparation() async {
         observeIdleResourceStores()
@@ -218,7 +313,7 @@ final class AppServices: ObservableObject {
                 MeetingTimelineTrace.shared?.record("idle_preparation_decision", fields: decision)
             }
         }
-        await idlePreparation.update(.init(isSceneActive: isSceneActive, isUIReady: isUIReady && hasRestoredInitialState,
+        await idlePreparation.update(.init(isSceneActive: isSceneActive, isUIReady: isUIReady && hasRestoredInitialState && PrivateProfileStorage.acceptsNewWork,
             preparationEnabled: enabled, configurationIdentity: identity,
             hasRecordingActivity: meetingActivity, hasOtherModelWork: otherWork, resourceRevision: idleResourceRevision))
     }
@@ -311,13 +406,19 @@ struct PichiVoiceMobileApp: App {
     }
 
     @ViewBuilder private var meetingRoot: some View {
+        PrivateProfileRoot(services: services, profiles: services.privateProfiles) { privateMeetingContent }
+    }
+
+    @ViewBuilder private var privateMeetingContent: some View {
         if !settings.mobileSetupCompleted {
-            MobileOnboarding(asr: services.asr, required: services.requiredResources, privacy: services.privacyActivation,
+            MobileOnboarding(accountSession: services.accountSession, cloudPublication: services.cloudPublication,
+                asr: services.asr, required: services.requiredResources, privacy: services.privacyActivation,
                 audioArbiter: services.meetingAudioActivityArbiter)
         } else {
                 MobileMeetingRoot(coordinator: services.meetingSessionCoordinator, asr: services.asr,
                     store: services.meetingStore, privacy: services.transcriptPrivacy,
                     required: services.requiredResources, privacyActivation: services.privacyActivation,
+                    accountSession: services.accountSession, cloudPublication: services.cloudPublication,
                     microphones: { await IOSMeetingCaptureEngine.microphoneSnapshot() })
         }
     }

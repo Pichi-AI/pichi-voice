@@ -28,6 +28,37 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
     /// The required audio format for the analyzer
     private var analyzerFormat: AVAudioFormat?
     private var preparedLocale: Locale?
+    private let captureLock = NSRecursiveLock()
+    private var dictationCaptureLocale: (leaseID: UUID, locale: Locale)?
+    private var analysisOperations: [UUID: AppleSpeechAnalyzerOperation] = [:]
+    private var isEndingAdmission = false
+
+    func beginAdmittedTranscription(leaseID: UUID) throws {
+        try self.captureLock.withLock {
+            guard !self.isEndingAdmission else { throw CancellationError() }
+            if let capture = self.dictationCaptureLocale {
+                guard capture.leaseID == leaseID else { throw CancellationError() }
+                return
+            }
+            self.dictationCaptureLocale = (leaseID, self.preparedLocale ?? self.selectedSpeechLocale())
+        }
+    }
+
+    func endAdmittedTranscription(leaseID: UUID) async {
+        let operations = self.captureLock.withLock { () -> [AppleSpeechAnalyzerOperation]? in
+            guard self.dictationCaptureLocale?.leaseID == leaseID else { return nil }
+            self.isEndingAdmission = true
+            return Array(self.analysisOperations.values)
+        }
+        guard let operations else { return }
+        for operation in operations { operation.cancel() }
+        for operation in operations { await operation.waitUntilFinished() }
+        self.captureLock.withLock {
+            guard self.dictationCaptureLocale?.leaseID == leaseID else { return }
+            self.dictationCaptureLocale = nil
+            self.isEndingAdmission = false
+        }
+    }
 
     /// Thread-safe cache for model installation status.
     /// Protected by `_cacheQueue` for thread-safe access from both sync and async contexts.
@@ -179,7 +210,9 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
         }
 
         DebugLogger.shared.debug("AppleSpeechAnalyzer: Starting transcription with \(samples.count) samples", source: "AppleSpeechAnalyzerProvider")
-        let transcriptionLocale = self.preparedLocale ?? self.selectedSpeechLocale()
+        let transcriptionLocale = self.captureLock.withLock {
+            self.dictationCaptureLocale?.locale ?? self.preparedLocale ?? self.selectedSpeechLocale()
+        }
 
         // 1. Create a FRESH transcriber for this transcription
         let freshTranscriber = SpeechTranscriber(
@@ -188,12 +221,6 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
             reportingOptions: [],
             attributeOptions: []
         )
-
-        // 2. Create input stream
-        let (inputStream, inputContinuation) = AsyncStream<AnalyzerInput>.makeStream()
-
-        // 3. Create a fresh analyzer with the fresh transcriber
-        let analyzer = SpeechAnalyzer(modules: [freshTranscriber])
 
         // 4. Convert samples to AVAudioPCMBuffer
         guard let buffer = createPCMBuffer(from: samples) else {
@@ -217,59 +244,74 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
             convertedBuffer = buffer
         }
 
-        // 6. Set up results collector FIRST (before starting analyzer - per Apple's pattern)
-        var finalText = ""
-        let resultsTask = Task {
-            DebugLogger.shared.debug("AppleSpeechAnalyzer: Results task started, waiting for results...", source: "AppleSpeechAnalyzerProvider")
-            for try await case let result in freshTranscriber.results {
-                let text = String(result.text.characters)
-                DebugLogger.shared.debug("AppleSpeechAnalyzer: Got result - isFinal: \(result.isFinal), text: '\(text)'", source: "AppleSpeechAnalyzerProvider")
+        let (inputStream, inputContinuation) = AsyncStream<AnalyzerInput>.makeStream()
+        let analyzer = SpeechAnalyzer(modules: [freshTranscriber])
+        // Return the collected text from its task rather than sharing mutable text
+        // between the collector and the provider operation.
+        let resultsTask = Task { () throws -> String in
+            var finalText = ""
+            for try await result in freshTranscriber.results {
+                try Task.checkCancellation()
                 if result.isFinal {
-                    // ACCUMULATE results (per Apple's pattern) - don't break!
-                    if !finalText.isEmpty && !text.isEmpty {
-                        finalText += " "
-                    }
+                    let text = String(result.text.characters)
+                    if !finalText.isEmpty && !text.isEmpty { finalText += " " }
                     finalText += text
                 }
-                // Continue iterating until stream ends (after finalizeAndFinish)
             }
-            DebugLogger.shared.debug("AppleSpeechAnalyzer: Results iteration complete, accumulated: '\(finalText)'", source: "AppleSpeechAnalyzerProvider")
+            try Task.checkCancellation()
+            return finalText
         }
-
-        // 7. Start the analyzer (this kicks off processing)
-        DebugLogger.shared.debug("AppleSpeechAnalyzer: Starting analyzer...", source: "AppleSpeechAnalyzerProvider")
-        try await analyzer.start(inputSequence: inputStream)
-        DebugLogger.shared.debug("AppleSpeechAnalyzer: Analyzer started", source: "AppleSpeechAnalyzerProvider")
-
-        // 8. Feed audio and signal end of input
-        let input = AnalyzerInput(buffer: convertedBuffer)
-        inputContinuation.yield(input)
-        inputContinuation.finish()
-        DebugLogger.shared.debug("AppleSpeechAnalyzer: Audio fed and input finished", source: "AppleSpeechAnalyzerProvider")
-
-        // 9. Finalize - this tells the analyzer to process remaining audio and complete the results stream
-        do {
-            try await analyzer.finalizeAndFinishThroughEndOfInput()
-            DebugLogger.shared.debug("AppleSpeechAnalyzer: Analyzer finalized", source: "AppleSpeechAnalyzerProvider")
-        } catch {
-            DebugLogger.shared.warning("Analyzer finalize error: \(error.localizedDescription)", source: "AppleSpeechAnalyzerProvider")
+        let operation = AppleSpeechAnalyzerOperation(
+            resultsTask: resultsTask,
+            finishInput: { inputContinuation.finish() },
+            cancelAnalyzer: { await analyzer.cancelAndFinishNow() }
+        )
+        let operationID = UUID()
+        let admitted = self.captureLock.withLock {
+            guard !self.isEndingAdmission else { return false }
+            self.analysisOperations[operationID] = operation
+            return true
         }
-
-        // 10. Now wait for results task to complete (it will finish once stream closes)
-        do {
-            try await resultsTask.value
-        } catch {
-            DebugLogger.shared.warning("Speech recognition error: \(error.localizedDescription)", source: "AppleSpeechAnalyzerProvider")
+        guard admitted else {
+            await operation.cancelAndJoinWorkers()
+            throw CancellationError()
         }
-
-        DebugLogger.shared.debug("AppleSpeechAnalyzer: Transcription complete - result: '\(finalText)'", source: "AppleSpeechAnalyzerProvider")
-        return ASRTranscriptionResult(text: finalText, confidence: 1.0)
+        defer {
+            self.captureLock.withLock { self.analysisOperations[operationID] = nil }
+            operation.finishJoining()
+        }
+        return try await withTaskCancellationHandler {
+            do {
+                try Task.checkCancellation()
+                try operation.checkCancellation()
+                try await analyzer.start(inputSequence: inputStream)
+                try Task.checkCancellation()
+                try operation.checkCancellation()
+                inputContinuation.yield(AnalyzerInput(buffer: convertedBuffer))
+                inputContinuation.finish()
+                try await analyzer.finalizeAndFinishThroughEndOfInput()
+                let finalText = try await resultsTask.value
+                await operation.joinWorkers()
+                try Task.checkCancellation()
+                try operation.checkCancellation()
+                return ASRTranscriptionResult(text: finalText, confidence: 1.0)
+            } catch {
+                // start and finalize may both throw after the collector has started.
+                // No path releases the provider before the input, analyzer and collector join.
+                await operation.cancelAndJoinWorkers()
+                throw error
+            }
+        } onCancel: {
+            operation.cancel()
+        }
     }
 
     // MARK: - Helpers
 
     private func selectedSpeechLocale() -> Locale {
-        SettingsStore.shared.selectedAppleSpeechLocale
+        self.captureLock.withLock {
+            self.dictationCaptureLocale?.locale ?? SettingsStore.shared.selectedAppleSpeechLocale
+        }
     }
 
     private func normalizedIdentifier(for locale: Locale) -> String {
@@ -304,6 +346,82 @@ final class AppleSpeechAnalyzerProvider: TranscriptionProvider {
         }
 
         return buffer
+    }
+}
+
+// MARK: - Analyzer worker ownership
+
+/// Retains the asynchronous SDK cancellation and collector until both have joined.
+/// Its callbacks contain only this analyzer's input and actor, never live settings.
+final nonisolated class AppleSpeechAnalyzerOperation: @unchecked Sendable {
+    private let lock = NSLock()
+    private let resultsTask: Task<String, Error>
+    private let finishInput: @Sendable () -> Void
+    private let cancelAnalyzer: @Sendable () async -> Void
+    private var cancellationTask: Task<Void, Never>?
+    private var workersFinished = false
+    private var joined = false
+    private var joinWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(
+        resultsTask: Task<String, Error>,
+        finishInput: @escaping @Sendable () -> Void,
+        cancelAnalyzer: @escaping @Sendable () async -> Void
+    ) {
+        self.resultsTask = resultsTask
+        self.finishInput = finishInput
+        self.cancelAnalyzer = cancelAnalyzer
+    }
+
+    func checkCancellation() throws {
+        if self.lock.withLock({ self.cancellationTask != nil }) { throw CancellationError() }
+    }
+
+    func cancel() {
+        let requested = self.lock.withLock {
+            guard !self.workersFinished, self.cancellationTask == nil else { return false }
+            self.cancellationTask = Task { await self.cancelAnalyzer() }
+            return true
+        }
+        if requested {
+            self.finishInput()
+            self.resultsTask.cancel()
+        }
+    }
+
+    func cancelAndJoinWorkers() async {
+        self.cancel()
+        await self.joinWorkers()
+    }
+
+    func joinWorkers() async {
+        let cancellationTask = self.lock.withLock {
+            self.workersFinished = true
+            return self.cancellationTask
+        }
+        await cancellationTask?.value
+        _ = await self.resultsTask.result
+    }
+
+    func finishJoining() {
+        let waiters = self.lock.withLock {
+            self.joined = true
+            let waiters = self.joinWaiters
+            self.joinWaiters.removeAll()
+            return waiters
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func waitUntilFinished() async {
+        await withCheckedContinuation { continuation in
+            let ready = self.lock.withLock {
+                guard !self.joined else { return true }
+                self.joinWaiters.append(continuation)
+                return false
+            }
+            if ready { continuation.resume() }
+        }
     }
 }
 

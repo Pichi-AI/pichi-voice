@@ -2,11 +2,12 @@ import Foundation
 
 // Standalone harness: compile the real store against in-memory persistence and
 // inert transcription dependencies. Never touches the installed app's history.
-final class UserDefaults {
-    static let standard = UserDefaults()
+final class InMemoryFileHistoryDefaults: UserDefaults, @unchecked Sendable {
+    private let lock = NSLock()
     private var values: [String: Any] = [:]
-    func data(forKey key: String) -> Data? { self.values[key] as? Data }
-    func set(_ value: Any?, forKey key: String) { self.values[key] = value }
+    init() { super.init(suiteName: nil)! }
+    override func data(forKey key: String) -> Data? { self.lock.withLock { self.values[key] as? Data } }
+    override func set(_ value: Any?, forKey key: String) { self.lock.withLock { self.values[key] = value } }
 }
 
 struct SpeakerTranscriptSegment: Codable, Equatable { let text: String }
@@ -32,7 +33,7 @@ final class DebugLogger {
 
 @main @MainActor struct FileTranscriptRenameTests {
     static func main() throws {
-        let defaults = UserDefaults()
+        let defaults = InMemoryFileHistoryDefaults()
         let store = FileTranscriptionHistoryStore(defaults: defaults)
         let result = TranscriptionResult(
             id: UUID(),

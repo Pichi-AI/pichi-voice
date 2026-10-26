@@ -1,4 +1,20 @@
 # Explicit membership in the universal iOS target. The desktop target retains its existing membership.
+Sources/Fluid/Account/AccountComposition.swift
+Sources/Fluid/Account/AccountDomain.swift
+Sources/Fluid/Account/AccountHTTPTransport.swift
+Sources/Fluid/Account/AccountJWTValidator.swift
+Sources/Fluid/Account/AccountKeychainStore.swift
+Sources/Fluid/Account/AccountPKCE.swift
+Sources/Fluid/Account/AccountSessionService.swift
+Sources/Fluid/Account/AccountSystemBrowser.swift
+Sources/Fluid/Account/PrivateProfileDefaults.swift
+Sources/Fluid/Account/PrivateProfileStorage.swift
+Sources/Fluid/Account/PrivateProfileMeetingStore.swift
+Sources/Fluid/Account/PrivateProfileService.swift
+Sources/Fluid/Account/PrivateProfileAuxiliaryServices.swift
+Sources/Fluid/Account/PrivateProfileOperationOwner.swift
+Sources/Fluid/Account/PrivateProfileRoot.swift
+Sources/Fluid/Account/PrivateProfileSources.swift
 Sources/Fluid/Branding/AppBrand.swift
 Sources/Fluid/Branding/AppModelPaths.swift
 Sources/Fluid/Branding/BrandDistribution.swift
@@ -185,3 +201,14 @@ Sources/Fluid/Persistence/SettingsStore+SensitiveDataDictionary.swift
 Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift
 Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift
 Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift
+
+# Protected publication uses the shared account/profile composition.
+Sources/Fluid/Services/CloudPublication/PichiCloudPublicationActivation.swift
+Sources/Fluid/Services/CloudPublication/PichiCloudPublicationService.swift
+Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift
+Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationSource.swift
+Sources/Fluid/Services/CloudPublication/PichiPublicationConsentStore.swift
+Sources/Fluid/Services/CloudPublication/PichiPublicationHTTPClient.swift
+Sources/Fluid/Services/CloudPublication/PichiPublicationOutboxStore.swift
+Sources/Fluid/Services/CloudPublication/PichiPublicationRetryPolicy.swift
+Sources/Fluid/Services/CloudPublication/PichiPublicationWire.swift

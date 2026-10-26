@@ -3,6 +3,9 @@ import Darwin
 import Foundation
 
 nonisolated protocol MeetingSessionStoring: Sendable {
+    /// Freeze local ownership under the existing capture admission, before the first manifest.
+    func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership?
+    func cancelCaptureAdmission(for id: MeetingSessionID) async
     func create(_ session: MeetingSession) async throws
     func save(_ session: MeetingSession) async throws
     func load(id: MeetingSessionID) async throws -> MeetingSession?
@@ -22,6 +25,8 @@ nonisolated protocol MeetingSessionStoring: Sendable {
 nonisolated extension MeetingSessionStoring {
     func loadHistory() async throws -> [MeetingSession] { try await self.loadAll() }
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
+    func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership? { nil }
+    func cancelCaptureAdmission(for id: MeetingSessionID) async {}
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
@@ -33,8 +38,6 @@ private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
 }
 
 actor MeetingSessionStore: MeetingSessionStoring {
-    static let shared = MeetingSessionStore()
-
     private struct SessionIndex: Codable {
         static let currentSchemaVersion = 1
 

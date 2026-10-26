@@ -1,0 +1,110 @@
+import ApplicationServices
+import Foundation
+
+/// Exercises actual capture retirement and the actual ContentView attach/cancel methods.
+/// Only the external app target, settings and profile composition are synthetic.
+@MainActor enum DictationContextProfileChecks {
+    static func run(root: URL, check: (Bool, String) -> Void) async throws {
+        let original = PrivateProfileStorage.current
+        defer { PrivateProfileStorage.select(original) }
+        let identity = AccountIdentity(issuer: "https://synthetic.invalid/realm", subject: "A", internalUserID: "123")
+        let a = try PrivateProfileStorage.proposed(context: .init(identity: identity, organizationID: "17", workspaceID: "9", generation: UUID()), generation: UUID(), legacyRootDirectory: root)
+        let b = try PrivateProfileStorage.proposed(context: .init(identity: .init(issuer: identity.issuer, subject: "B", internalUserID: "124"), organizationID: "17", workspaceID: "9", generation: UUID()), generation: UUID(), legacyRootDirectory: root)
+        let target = TypingService.RecordingTargetContext(id: UUID(), pid: 999_999, bundleIdentifier: "synthetic.context", window: nil, element: nil)
+
+        PrivateProfileStorage.select(a)
+        let view = ContextProfileViewHarness()
+        let reader = HeldContextReader()
+        var capture: DictationContextCapture?
+        guard let id = view.privateOutputOperations.admit(cancel: { capture?.cancel() }, join: { await capture?.cancelAndWait() }) else {
+            check(false, "Current profile admits its context reader")
+            return
+        }
+        capture = DictationContextCapture.start(target: target, read: { await reader.read() })
+        guard let capture else { check(false, "Actual capture owns the empty reader slot"); return }
+        view.dictationContextCapture = capture
+        view.dictationContextOperationID = id
+        view.dictationContextProfile = a
+        await reader.waitUntilStarted()
+
+        // The actual ContentView cancellation clears UI references immediately but must
+        // retain its owner registration until OS-style cooperative cleanup has returned.
+        view.cancelDictationContextCapture()
+        check(view.dictationContextCapture == nil && view.dictationContextOperationID == nil, "Cancel clears transient view state")
+        PrivateProfileStorage.conceal(generation: UUID())
+        var joined = false
+        let transition = Task { @MainActor in await view.privateOutputOperations.retireAndJoin(); joined = true }
+        for _ in 0..<20 { await Task.yield() }
+        check(!joined, "Profile transition waits for a canceled context reader after the view discarded it")
+        check(!view.privateOutputOperations.isCurrent, "Conceal closes reader publication immediately")
+        let overlap = DictationContextCapture.start(target: target) { .init(textBeforeCursor: "must not run", screenText: nil) }
+        check(overlap == nil, "Retiring actual reader keeps replacement admission closed")
+        await reader.finish(.init(textBeforeCursor: "Late canceled A", screenText: ["Late A line"]))
+        await transition.value
+        check(joined, "Actual reader cleanup joins before transition completes")
+        let canceled = await capture.result(timeout: .seconds(1))
+        check(canceled == nil, "Canceled reader cannot return its late private context")
+
+        // Deliberately omit retirement here: exact profile/generation publication guards
+        // must still reject a completed A result if the selected profile became B.
+        PrivateProfileStorage.select(a)
+        let staleView = ContextProfileViewHarness()
+        let lateReader = HeldContextReader()
+        guard let lateCapture = DictationContextCapture.start(target: target, read: { await lateReader.read() }) else {
+            check(false, "Joined cleanup reopens actual reader admission")
+            return
+        }
+        var staleSnapshot: DictationStopSnapshot? = .init(target: target)
+        let attach = Task { @MainActor in
+            await staleView.attachDictationContext(lateCapture, profile: a, to: &staleSnapshot)
+        }
+        await lateReader.waitUntilStarted()
+        for _ in 0..<10 { await Task.yield() }
+        PrivateProfileStorage.select(b)
+        await lateReader.finish(.init(textBeforeCursor: "Late A result", screenText: ["A private line"]))
+        await attach.value
+        check(staleSnapshot?.typingContext == nil, "Actual ContentView attachment rejects an old profile after await")
+        check(staleView.benchmarkCount == 0, "Rejected context does not reach later presentation/logging")
+        await lateCapture.cancelAndWait()
+
+        // Same logical user/profile but a new generation is a distinct admission too.
+        PrivateProfileStorage.select(a)
+        let oldGenerationView = ContextProfileViewHarness()
+        let sameIdentity = try PrivateProfileStorage.proposed(context: a.context, generation: UUID(), legacyRootDirectory: root)
+        PrivateProfileStorage.select(sameIdentity)
+        let ready = DictationContextCapture(target: target, task: Task { .init(textBeforeCursor: "Old generation", screenText: nil) })
+        var oldSnapshot: DictationStopSnapshot? = .init(target: target)
+        await oldGenerationView.attachDictationContext(ready, profile: a, to: &oldSnapshot)
+        check(oldSnapshot?.typingContext == nil, "Actual attachment rejects an old generation for the same profile ID")
+        await ready.cancelAndWait()
+
+        let freshView = ContextProfileViewHarness()
+        let expected = DictationTypingContext(textBeforeCursor: "Current generation", screenText: ["Current line"])
+        let fresh = DictationContextCapture(target: target, task: Task { expected })
+        var freshSnapshot: DictationStopSnapshot? = .init(target: target)
+        await freshView.attachDictationContext(fresh, profile: sameIdentity, to: &freshSnapshot)
+        check(freshSnapshot?.typingContext == expected, "Current profile and exact target may attach actual context")
+        check(freshView.benchmarkCount == 1, "Accepted context follows the existing completion path")
+        await fresh.cancelAndWait()
+        await freshView.privateOutputOperations.retireAndJoin()
+        await oldGenerationView.privateOutputOperations.retireAndJoin()
+        await staleView.privateOutputOperations.retireAndJoin()
+    }
+}
+
+/// Models a cooperative OS operation which does not finish merely on Task.cancel().
+private actor HeldContextReader {
+    private var started = false
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+    private var result: CheckedContinuation<DictationTypingContext?, Never>?
+    func read() async -> DictationTypingContext? {
+        started = true
+        startedWaiter?.resume(); startedWaiter = nil
+        return await withCheckedContinuation { result = $0 }
+    }
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startedWaiter = $0 }
+    }
+    func finish(_ value: DictationTypingContext?) { result?.resume(returning: value); result = nil }
+}

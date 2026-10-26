@@ -60,6 +60,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     var onTimeout: ((UUID) -> Void)?
 
     private var panel: MeetingFloatingCaptionsPanel?
+    private var profileSubscription: AnyCancellable?
     private var autoDismissTask: Task<Void, Never>?
     private var suppressionRetryTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
@@ -69,10 +70,42 @@ final class MeetingDetectionPromptController: ObservableObject {
     private var pendingSuppressedRequest: MeetingAutoDetector.PromptRequest?
     private var hasLoggedCurrentSuppression = false
 
-    private init() {}
+    private var presentationProfile: PrivateProfileSnapshot?
+
+    private var canPresentCurrentProfile: Bool {
+        guard let presentationProfile else { return false }
+        return PrivateProfileStorage.acceptsNewWork && PrivateProfileStorage.isReadable(presentationProfile)
+    }
+
+    private init() {
+        self.profileSubscription = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.concealPrivatePresentation() }
+            }
+    }
+
+    private func concealPrivatePresentation() {
+        // The start operation may already own capture. Conceal only its presentation;
+        // the common recording owner retains the explicit Stop action.
+        self.presentationProfile = nil
+        self.cancelSuppressionRetry()
+        self.clearAutoDismiss()
+        self.pendingSuppressedRequest = nil
+        self.request = nil
+        self.appIcon = nil
+        self.appDisplayName = ""
+        self.startErrorMessage = nil
+        self.isStarting = false
+        self.hasLoggedCurrentSuppression = false
+        self.panel?.orderOut(nil)
+        self.panel?.contentView = nil
+        self.panel = nil
+    }
 
     func present(_ request: MeetingAutoDetector.PromptRequest) {
         guard SettingsStore.shared.fluidMeetEnabled else { return }
+        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
+        self.presentationProfile = PrivateProfileStorage.current
         switch Self.incomingPromptPolicy(
             isStarting: self.isStarting,
             currentEpisodeID: self.request?.episodeID,
@@ -119,6 +152,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 
     func startTapped() {
+        guard self.canPresentCurrentProfile else { self.concealPrivatePresentation(); return }
         guard let request, !self.isStarting else { return }
         guard Self.primaryAction(for: request.cta) == .startRecording else {
             let episodeID = request.episodeID
@@ -130,19 +164,23 @@ final class MeetingDetectionPromptController: ObservableObject {
         self.startErrorMessage = nil
         self.pauseAutoDismiss()
         let episodeID = request.episodeID
+        let profile = self.presentationProfile
         self.startTask?.cancel()
         self.startTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard !Task.isCancelled, let self, let profile, PrivateProfileStorage.isReadable(profile),
+                  self.canPresentCurrentProfile, self.request?.episodeID == episodeID else { return }
             do {
                 guard let onStart = self.onStart else {
                     self.isStarting = false
                     return
                 }
                 try await onStart(episodeID)
-                guard !Task.isCancelled, self.request?.episodeID == episodeID else { return }
+                guard !Task.isCancelled, PrivateProfileStorage.isReadable(profile),
+                      self.canPresentCurrentProfile, self.request?.episodeID == episodeID else { return }
                 self.hide()
             } catch {
-                guard !Task.isCancelled, self.request?.episodeID == episodeID else { return }
+                guard !Task.isCancelled, PrivateProfileStorage.isReadable(profile),
+                      self.canPresentCurrentProfile, self.request?.episodeID == episodeID else { return }
                 DebugLogger.shared.log("prompt-start-failed error=\(error)", source: "MeetingAutoDetector")
                 self.startErrorMessage = Self.startErrorMessage(from: error, appDisplayName: self.appDisplayName)
                 self.isStarting = false
@@ -154,6 +192,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 
     func dismissTapped() {
+        guard self.canPresentCurrentProfile else { self.concealPrivatePresentation(); return }
         guard let request, !self.isStarting else { return }
         self.hide()
         self.onDismiss?(request.episodeID)
@@ -161,6 +200,7 @@ final class MeetingDetectionPromptController: ObservableObject {
 
     /// Turns meeting detection off entirely; FluidMeet settings › Automation turns it back on.
     func dontShowAgainTapped() {
+        guard self.canPresentCurrentProfile else { self.concealPrivatePresentation(); return }
         guard let request, !self.isStarting else { return }
         SettingsStore.shared.meetingAutoDetectEnabled = false
         DebugLogger.shared.log("prompt-dont-show-again", source: "MeetingAutoDetector")
@@ -171,6 +211,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 
     func pauseAutoDismiss() {
+        guard self.canPresentCurrentProfile else { self.concealPrivatePresentation(); return }
         guard self.request != nil, !self.isAutoDismissPaused, let startedAt = self.autoDismissLegStartedAt else { return }
         self.remainingAutoDismissSeconds = Self.remainingAutoDismissSeconds(
             self.remainingAutoDismissSeconds,
@@ -183,6 +224,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 
     func resumeAutoDismiss() {
+        guard self.canPresentCurrentProfile else { self.concealPrivatePresentation(); return }
         guard let request = self.request, self.isAutoDismissPaused, !self.isStarting else { return }
         self.isAutoDismissPaused = false
         self.scheduleAutoDismiss(for: request.episodeID)
@@ -206,6 +248,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 
     private func showVisiblePrompt(_ request: MeetingAutoDetector.PromptRequest, remainingSeconds: TimeInterval) {
+        guard self.canPresentCurrentProfile else { self.concealPrivatePresentation(); return }
         self.pendingSuppressedRequest = nil
         self.cancelSuppressionRetry()
         self.request = request
@@ -240,6 +283,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 
     private func beginSuppressedRetry(_ request: MeetingAutoDetector.PromptRequest) {
+        guard self.canPresentCurrentProfile else { self.concealPrivatePresentation(); return }
         self.request = nil
         self.panel?.orderOut(nil)
         self.pendingSuppressedRequest = request
@@ -268,6 +312,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 
     private func scheduleSuppressionRetry() {
+        guard self.canPresentCurrentProfile else { self.concealPrivatePresentation(); return }
         self.suppressionRetryTask?.cancel()
         self.suppressionRetryTask = nil
         guard let pending = self.pendingSuppressedRequest else { return }
@@ -278,12 +323,13 @@ final class MeetingDetectionPromptController: ObservableObject {
             self.finishSuppressionEvaluation(pending: pending, reason: nil)
         case let .queryFullscreen(pid):
             let episodeID = pending.episodeID
+            let profile = self.presentationProfile
             self.suppressionRetryTask = Task { [weak self] in
                 let isFullScreen = await Task.detached(priority: .userInitiated) {
                     MeetingDetectionPromptController.isProcessFullScreen(processIdentifier: pid)
                 }.value
-                guard !Task.isCancelled, let self else { return }
-                guard self.pendingSuppressedRequest?.episodeID == episodeID else { return }
+                guard !Task.isCancelled, let self, let profile, PrivateProfileStorage.isReadable(profile),
+                      self.canPresentCurrentProfile, self.pendingSuppressedRequest?.episodeID == episodeID else { return }
                 self.applyFullscreenQueryResult(pending: pending, queriedPid: pid, isFullScreen: isFullScreen)
             }
         }
@@ -338,10 +384,11 @@ final class MeetingDetectionPromptController: ObservableObject {
             let delayNanoseconds = UInt64(delay * 1_000_000_000)
             let startedAt = Date()
             let episodeID = pending.episodeID
+            let profile = self.presentationProfile
             self.suppressionRetryTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: delayNanoseconds)
-                guard !Task.isCancelled, let self else { return }
-                guard self.pendingSuppressedRequest?.episodeID == episodeID else { return }
+                guard !Task.isCancelled, let self, let profile, PrivateProfileStorage.isReadable(profile),
+                      self.canPresentCurrentProfile, self.pendingSuppressedRequest?.episodeID == episodeID else { return }
                 self.remainingAutoDismissSeconds = Self.remainingAutoDismissSeconds(
                     self.remainingAutoDismissSeconds,
                     after: Date().timeIntervalSince(startedAt)
@@ -381,6 +428,7 @@ final class MeetingDetectionPromptController: ObservableObject {
     }
 
     private func scheduleAutoDismiss(for episodeID: UUID) {
+        guard self.canPresentCurrentProfile else { self.concealPrivatePresentation(); return }
         guard !self.isAutoDismissPaused else { return }
         guard self.remainingAutoDismissSeconds > 0 else {
             self.onTimeout?(episodeID)
@@ -389,9 +437,11 @@ final class MeetingDetectionPromptController: ObservableObject {
         }
         let delayNanoseconds = UInt64(self.remainingAutoDismissSeconds * 1_000_000_000)
         self.autoDismissLegStartedAt = Date()
+        let profile = self.presentationProfile
         self.autoDismissTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
-            guard !Task.isCancelled, let self, self.request?.episodeID == episodeID else { return }
+            guard !Task.isCancelled, let self, let profile, PrivateProfileStorage.isReadable(profile),
+                  self.canPresentCurrentProfile, self.request?.episodeID == episodeID else { return }
             self.onTimeout?(episodeID)
             self.hide()
         }
@@ -634,11 +684,24 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
     var onDismiss: (() -> Void)?
 
     private var panel: MeetingFloatingCaptionsPanel?
+    private var profileSubscription: AnyCancellable?
 
-    private init() {}
+    private init() {
+        self.profileSubscription = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.concealPrivatePresentation() }
+            }
+    }
+
+    private func concealPrivatePresentation() {
+        self.hide()
+        self.panel?.contentView = nil
+        self.panel = nil
+    }
 
     func present() {
         guard SettingsStore.shared.fluidMeetEnabled else { return }
+        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         guard !self.isPresented else { return }
         self.isPresented = true
         let panel = self.panelOrCreate()
@@ -674,6 +737,7 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
     }
 
     func dismiss() {
+        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         self.onDismiss?()
         self.hide()
     }

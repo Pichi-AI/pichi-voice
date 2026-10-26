@@ -12,7 +12,7 @@ final class MeetingPlaybackProgress: ObservableObject {
 
 /// One player for the visible transcript. Never changes capture, speaker or persisted state.
 @MainActor
-final class MeetingSegmentPlayback: ObservableObject {
+final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionParticipant {
     @Published private(set) var activeSegmentID: MeetingTranscriptSegmentID?
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
@@ -27,6 +27,15 @@ final class MeetingSegmentPlayback: ObservableObject {
     private var statusObserver: NSKeyValueObservation?
     private var requestID = UUID()
     private var activeSegmentIDs: [MeetingTranscriptSegmentID] = []
+    private let profile = PrivateProfileStorage.current
+
+    init() { PrivateProfileService.shared.register(self) }
+
+    func prepareForPrivateProfileTransition() async throws {
+        let task = loadTask
+        stop()
+        await task?.value
+    }
 
     func toggle(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID) {
         self.toggle(sessionID: sessionID, segmentIDs: [segmentID])
@@ -35,6 +44,7 @@ final class MeetingSegmentPlayback: ObservableObject {
     /// Read the requested paragraph from fresh canonical data before resolving audio. The first
     /// member remains the playback identity; the verified mapping covers the paragraph's range.
     func toggle(sessionID: MeetingSessionID, segmentIDs: [MeetingTranscriptSegmentID]) {
+        guard PrivateProfileStorage.isReadable(profile) else { return }
         guard let segmentID = segmentIDs.first else { return }
         let wasActive = self.activeSegmentID == segmentID && self.activeSegmentIDs == segmentIDs
         if wasActive {

@@ -5,6 +5,9 @@ import SwiftUI
 /// the shared onboarding light, icon, hero, progress, cards and motion, text roles, local model
 /// metadata and progressive preparation semantics.
 struct MobileOnboarding: View {
+    @ObservedObject var accountSession: AccountSessionService = AppServices.shared.accountSession
+    var cloudPublication: PichiCloudPublicationService? = nil
+    @ObservedObject private var privateProfile = PrivateProfileService.shared
     @ObservedObject var asr: ASRService
     @ObservedObject var required: MobileRequiredResources
     @ObservedObject var privacy: MobilePrivacyActivation
@@ -23,6 +26,7 @@ struct MobileOnboarding: View {
     @State private var advancing = false
     @State private var error: String?
     @State private var operation: Task<Void, Never>?
+    @State private var accountActionIsActive = false
     @State private var pageShownAt = -TimeInterval.infinity
     @State private var highlightsHeight: CGFloat = 0
     private var step: Int { settings.mobileSetupStep }
@@ -165,6 +169,10 @@ struct MobileOnboarding: View {
 
     private var welcomeHighlights: some View {
         VStack(spacing: 14) {
+            Text(PichiLocalization.text("cloud.onboarding.localRecognition"))
+                .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 14) {
                 highlight("Live meeting transcripts", systemImage: "waveform")
                 highlight("Automatic speaker labels", systemImage: "person.2")
@@ -260,6 +268,10 @@ struct MobileOnboarding: View {
             Label(PichiLocalization.text("Your meeting setup is ready"), systemImage: "checkmark.circle.fill")
                 .font(theme.typography.sectionTitle).foregroundStyle(theme.palette.success)
                 .frame(maxWidth: .infinity)
+            if accountSession.configuration != nil {
+                MobileAccountOnboarding(session: accountSession, continueAsGuest: next,
+                    actionChanged: { accountActionIsActive = $0 }, cloudPublication: cloudPublication)
+            }
             if advancing && asr.modelPreparationPhase == nil {
                 ProgressView(PichiLocalization.text("Checking setup…")).frame(maxWidth: .infinity)
             }
@@ -291,7 +303,9 @@ struct MobileOnboarding: View {
                 guard !isSettling else { return }
                 error = nil; settings.mobileSetupStep -= 1
             }
-            .disabled(advancing).accessibilityIdentifier("onboarding.back")
+            .disabled(advancing || accountSession.state == .signingIn || accountActionIsActive
+                || !privateProfile.isPrivateDataVisible)
+            .accessibilityIdentifier("onboarding.back")
         }
     }
 
@@ -315,7 +329,9 @@ struct MobileOnboarding: View {
         // The welcome page keeps the desktop's wide first step.
         pill(step == 6 ? "Get started" : error == nil ? "Next" : "Try again", prominent: true,
              minWidth: step == 0 ? Metrics.welcomeAction : nil) { next() }
-            .disabled(advancing || (step == 3 && privacy.isPreparing))
+            .disabled(advancing || (step == 3 && privacy.isPreparing)
+                || accountSession.state == .signingIn || accountActionIsActive
+                || !privateProfile.isPrivateDataVisible)
             .accessibilityIdentifier("onboarding.next")
     }
 
@@ -366,7 +382,10 @@ struct MobileOnboarding: View {
     }
 
     private func next() {
-        guard !advancing, !isSettling else { return }
+        guard !advancing, !isSettling, privateProfile.isPrivateDataVisible,
+              !privateProfile.isTransitioning else { return }
+        let profile = PrivateProfileStorage.current
+        let projectionRevision = privateProfile.projectionRevision
         let current = step
         error = nil
         guard let preparation = preparation(for: current) else { settings.mobileSetupStep = current + 1; return }
@@ -376,11 +395,19 @@ struct MobileOnboarding: View {
             do {
                 try await preparation()
                 try Task.checkCancellation()
-                guard settings.mobileSetupStep == current else { return }
+                guard settings.mobileSetupStep == current,
+                      privateProfile.isPrivateDataVisible, !privateProfile.isTransitioning,
+                      privateProfile.projectionRevision == projectionRevision,
+                      PrivateProfileStorage.current == profile else { return }
                 if current == 6 { settings.mobileSetupCompleted = true }
                 else { settings.mobileSetupStep = current + 1 }
             } catch is CancellationError { }
-            catch { self.error = error.localizedDescription }
+            catch {
+                guard privateProfile.isPrivateDataVisible,
+                      privateProfile.projectionRevision == projectionRevision,
+                      PrivateProfileStorage.current == profile else { return }
+                self.error = error.localizedDescription
+            }
         }
     }
 }

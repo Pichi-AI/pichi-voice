@@ -1,6 +1,10 @@
 """Portable guards for installation identity across upstream project merges."""
 import pathlib
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -34,6 +38,39 @@ def validate_application_identity(project):
 
 
 class BuildIdentityTests(unittest.TestCase):
+    def testMobileRegenerationPreservesSourcesAndIncludesNewPlatformFiles(self):
+        with tempfile.TemporaryDirectory(prefix='pichi-mobile-membership-') as directory:
+            root = pathlib.Path(directory)
+            for relative in [
+                'Fluid.xcodeproj/project.pbxproj', 'scripts/dev/update-mobile-project.py',
+                'Sources/Mobile/shared-sources.txt', 'Sources/Fluid/Branding/brand-package.json',
+            ]:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / relative, destination)
+            for folder in ['Sources/Mobile', 'Tests/MobileUITests', 'Tests/MobileIntegrationTests']:
+                (root / folder).mkdir(parents=True, exist_ok=True)
+                for source in (ROOT / folder).glob('*.swift'):
+                    (root / folder / source.name).touch()
+            (root / 'Fluid.xcodeproj/xcshareddata/xcschemes').mkdir(parents=True)
+            for name in ['MobileRegisteredModelInferenceTests.swift', 'MeetingOwnerVoiceProfileTests.swift']:
+                if (ROOT / 'Tests/FluidDictationIntegrationTests' / name).is_file():
+                    destination = root / 'Tests/FluidDictationIntegrationTests' / name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.touch()
+            generator = root / 'scripts/dev/update-mobile-project.py'
+            subprocess.run([sys.executable, '-S', str(generator)], check=True, capture_output=True)
+            regenerated = (root / 'Fluid.xcodeproj/project.pbxproj').read_text()
+            self.assertEqual(regenerated, PROJECT.read_text(), 'Regeneration must preserve every existing source registration')
+            for source in ['MeetingLocationService.swift', 'MeetingLocationSettingsContent.swift',
+                           'AccountSessionService.swift', 'PrivateProfileService.swift']:
+                self.assertIn(source, regenerated)
+            (root / 'Sources/Mobile/MobileAccount.swift').touch()
+            subprocess.run([sys.executable, '-S', str(generator)], check=True, capture_output=True)
+            updated = (root / 'Fluid.xcodeproj/project.pbxproj').read_text()
+            self.assertIn('Mobile file Sources/Mobile/MobileAccount.swift', updated)
+            self.assertIn('Mobile build Sources/Mobile/MobileAccount.swift', updated)
+
     def testMergedProjectPreservesBothDistributionIdentities(self):
         validate_application_identity(PROJECT.read_text())
 

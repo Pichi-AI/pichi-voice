@@ -103,6 +103,26 @@ final class MobilePresentationDocumentTests: XCTestCase {
         XCTAssertEqual(releases, 1)
     }
 
+    func testProfileTransitionClearsNativeDocumentAndPreservesRecordingScreenLease() async throws {
+        var disabled = false
+        let awake = MobilePresentationAwakeRegistry(getDisabled: { disabled }, setDisabled: { disabled = $0 })
+        let recordingScreen = awake.acquire()
+        let document = try MobilePresentationDocument(url: URL(fileURLWithPath: "/synthetic.pdf"),
+            startAccess: { _ in false }, isReadablePDF: { _ in true }, loadPDF: { _ in self.stubPDF() })
+        let coordinator = MobilePresentationPDFView.Coordinator(document: document, awake: awake)
+        let view = PDFView()
+        view.document = document.pdf; coordinator.attach(view)
+        coordinator.update(isRecording: true)
+        try await coordinator.prepareForPrivateProfileTransition()
+        XCTAssertNil(view.document)
+        XCTAssertNil(coordinator.document)
+        XCTAssertTrue(disabled, "Private PDF cleanup cannot release the recording screen's awake owner")
+        awake.release(recordingScreen)
+        XCTAssertFalse(disabled)
+        coordinator.update(isRecording: true)
+        XCTAssertNil(view.document, "The old document cannot reappear after transition cleanup")
+    }
+
     func testMultipleRecordingWindowsRestoreOnlyAfterLastRelease() {
         var disabled = false, writes: [Bool] = []
         let awake = MobilePresentationAwakeRegistry(getDisabled: { disabled }, setDisabled: {

@@ -26,6 +26,121 @@ final class AppServices: ObservableObject {
     /// Shared singleton instance
     static let shared = AppServices()
 
+    lazy var privateProfiles: PrivateProfileService = {
+        let profiles = PrivateProfileService.shared
+        do {
+            try profiles.configure(isBusy: { [weak self] in
+                guard let self else { return true }
+                return self._cloudPublicationActivation?.isInstalled != true
+                    || self._meetingSessionCoordinator?.isQuiescent == false
+                    || self._asr?.canBeginPrivateProfileTransition == false
+                    || self._fileTranscriptionService?.isTranscribing == true
+                    || PrivateProfileService.shared.hasRetainedCaptureStopHandler
+                    || TranscriptionHistoryStore.shared.admittedRecordingWriteCount > 0
+            }, prepare: { [weak self] in
+                guard let self else { throw AccountError.isolationRequired }
+                await self._localAIModelResidency?.shutdown(); self._localAIModelResidency = nil
+                self._meetingAutoDetector?.stop(); self._meetingAutoDetector = nil
+                MeetingRecordingPillController.shared.deactivate()
+                try await PrivateProfileSources.prepare(coordinator: self._meetingSessionCoordinator, asr: self._asr)
+                self._fileTranscriptionService = nil
+                self.summaryControllers.removeAll(); self.activeSummaryControllers.removeAll()
+                self.activeMeetingSummarySession = nil
+            }, activate: { [weak self] profile in
+                guard let self else { throw AccountError.isolationRequired }
+                try await PrivateProfileSources.activate(profile,
+                    asr: self.isTerminating ? nil : self._asr)
+                if !self.isTerminating, self.isUIReady { self.refreshFluidMeetAvailability() }
+            }, conceal: { [weak self] in
+                guard let self else { throw AccountError.isolationRequired }
+                let warmup = self.privateAIStartupWarmup
+                warmup?.cancel(); await warmup?.value
+                self.privateAIStartupWarmup = nil
+                self._meetingAutoDetector?.stop(); self._meetingAutoDetector = nil
+                MeetingRecordingPillController.shared.deactivate()
+                await PrivateProfileSources.conceal()
+            })
+        } catch {
+            DebugLogger.shared.warning("Private profile composition unavailable", source: "AppServices")
+        }
+        PrivateProfileStorage.closeAdmission()
+        return profiles
+    }()
+    lazy var accountSession: AccountSessionService = {
+        let service = AccountSessionService.production()
+        do { try service.installLifecycle(privateProfiles) }
+        catch { DebugLogger.shared.warning("Private profile lifecycle unavailable", source: "AppServices") }
+        return service
+    }()
+    private var _cloudPublicationActivation: PichiCloudPublicationActivation?
+    var cloudPublication: PichiCloudPublicationService {
+        cloudPublicationActivation.service
+    }
+    private var cloudPublicationActivation: PichiCloudPublicationActivation {
+        if let existing = _cloudPublicationActivation { return existing }
+        let account = accountSession
+        let http = account.configuration.flatMap { try? PichiPublicationHTTPClient(configuration: $0) }
+        let service = PichiCloudPublicationService(account: account, meetings: .shared,
+            profiles: privateProfiles, http: http)
+        let owner = PichiCloudPublicationActivation(service: service, account: account, profiles: privateProfiles)
+        _cloudPublicationActivation = owner
+        return owner
+    }
+    private var accountRestorationTask: Task<Void, Never>?
+    @Published private(set) var hasRestoredAccount = false
+
+    func restoreAccountBeforePrivateUI() async {
+        if accountRestorationTask == nil {
+            let session = accountSession, publication = cloudPublicationActivation
+            accountRestorationTask = Task { @MainActor in
+                do { try await publication.install() }
+                catch {
+                    DebugLogger.shared.warning("Cloud publication composition unavailable", source: "AppServices")
+                    return
+                }
+                guard !Task.isCancelled, !isTerminating else { return }
+                await session.restore()
+                guard !Task.isCancelled else { return }
+                let current = PrivateProfileStorage.current
+                if current.isReadable { PrivateProfileStorage.select(current) }
+                await publication.activateAfterAccountCommand()
+                guard !Task.isCancelled, !isTerminating else { return }
+                hasRestoredAccount = true
+            }
+        }
+        await accountRestorationTask?.value
+    }
+
+    func restorePrivateSourcesAfterCommit() async {
+        guard !isTerminating, PrivateProfileStorage.acceptsNewWork else { return }
+        await _meetingSessionCoordinator?.ensureRestored()
+        guard PrivateProfileStorage.acceptsNewWork else { return }
+        LocalAPIServer.shared.start()
+        await _cloudPublicationActivation?.activateAfterAccountCommand()
+    }
+
+    var hasActivePrivateCapture: Bool {
+        self._meetingSessionCoordinator?.isRecording == true || self._asr?.isRunning == true
+            || self.privateProfiles.hasRetainedCaptureStopHandler
+    }
+
+    func stopPrivateCaptureAndLogout() async {
+        if self._meetingSessionCoordinator?.isRecording == true {
+            _ = try? await self._meetingSessionCoordinator?.stopAndTranscribe()
+        } else { await privateProfiles.requestCaptureStop() }
+        await accountSession.logout()
+    }
+
+    func retryPrivateProfileCleanupAndLogout() async {
+        if !privateProfiles.hasRetainedCaptureStopHandler,
+           _meetingSessionCoordinator?.isQuiescent != false,
+           _asr?.canBeginPrivateProfileTransition != false,
+           _fileTranscriptionService?.isTranscribing != true {
+            try? await TranscriptionHistoryStore.shared.retryAdmittedRecordingWrites()
+        }
+        await accountSession.logout()
+    }
+
     // MARK: - Startup Gate
 
     /// Flag indicating the UI has completed its initial render.
@@ -40,10 +155,14 @@ final class AppServices: ObservableObject {
         if !self.isUIReady {
             DebugLogger.shared.info("🚦 UI Ready signal received - services can now initialize", source: "AppServices")
             self.isUIReady = true
+            Task { @MainActor in
+                await self.restoreAccountBeforePrivateUI()
+                guard !self.isTerminating, PrivateProfileStorage.acceptsNewWork else { return }
+                self.refreshFluidMeetAvailability()
+                self.refreshLocalAIResidency()
+                self.prewarmLocalPrivateAIForStartup()
+            }
         }
-        self.refreshFluidMeetAvailability()
-        self.refreshLocalAIResidency()
-        self.prewarmLocalPrivateAIForStartup()
     }
 
     // MARK: - Lazy Services
@@ -249,10 +368,15 @@ final class AppServices: ObservableObject {
             }
             .store(in: &self.cancellables)
         Task { @MainActor in
-            guard SettingsStore.shared.fluidMeetEnabled else { return }
+            let profile = PrivateProfileStorage.current
+            guard SettingsStore.shared.fluidMeetEnabled,
+                  PrivateProfileStorage.acceptsNewWork,
+                  PrivateProfileStorage.isReadable(profile) else { return }
             MeetingRecordingPillController.shared.activate(coordinator: coordinator)
             await coordinator.ensureRestored()
-            guard SettingsStore.shared.fluidMeetEnabled else { return }
+            guard SettingsStore.shared.fluidMeetEnabled,
+                  PrivateProfileStorage.acceptsNewWork,
+                  PrivateProfileStorage.isReadable(profile) else { return }
             await coordinator.sweepExpiredAudio()
         }
         return coordinator
@@ -433,7 +557,9 @@ final class AppServices: ObservableObject {
     }
 
     private func refreshFluidMeetAvailability() {
-        guard SettingsStore.shared.fluidMeetEnabled else {
+        guard SettingsStore.shared.fluidMeetEnabled,
+              PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(PrivateProfileStorage.current) else {
             self._meetingAutoDetector?.stop()
             self._meetingAutoDetector = nil
             self.meetingAutomaticTarget = nil
@@ -499,6 +625,11 @@ final class AppServices: ObservableObject {
 
     func shutdownForTermination() async {
         self.isTerminating = true
+        self.accountRestorationTask?.cancel()
+        await self.accountRestorationTask?.value
+        self.accountRestorationTask = nil
+        await self._cloudPublicationActivation?.shutdown()
+        await self.accountSession.shutdown()
         self.privateAIStartupWarmup?.cancel()
         await self.privateAIStartupWarmup?.value
         self.privateAIStartupWarmup = nil

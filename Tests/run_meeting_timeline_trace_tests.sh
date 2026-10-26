@@ -34,8 +34,10 @@ assert legacy.index('self.liveTranscript.accepts(safe, generation: generation, a
 assert 'if let trace = MeetingTimelineTrace.shared' in legacy
 PY
 # Child directory must not exist: disabled tracing must not create it.
+python3 Tests/Support/write_private_profile_standalone_types.py "$trace_build/ProfileTypes.swift" --synthetic-brand
 env -u PICHI_MEETING_TIMELINE_PROFILE xcrun swiftc -swift-version 6 -default-isolation MainActor -parse-as-library \
     -module-cache-path "$trace_build/ModuleCache" \
+    "$trace_build/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift "$trace_case/PublicationProbe.swift" \
     Tests/MeetingTimelineTraceTests.swift -o "$trace_build/tests"
 env -u PICHI_MEETING_TIMELINE_PROFILE "$trace_build/tests" "$trace_case/private"

@@ -14,7 +14,8 @@ import ZeppelinEmbed
 /// after a store evicts rows past its cap, and the recovery after a reset. An
 /// interrupted run leaves nothing to undo; the next run finishes it.
 actor SearchIndex {
-    static let shared = SearchIndex()
+    private static let profiles = PrivateProfileStoreCache<SearchIndex>()
+    static var shared: SearchIndex { profiles.value { _ in SearchIndex(root: .shared) } }
 
     struct ReconcileReport: Equatable, Sendable {
         var upserted = 0

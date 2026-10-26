@@ -52,6 +52,45 @@ final class NemotronProvider: TranscriptionProvider {
     private var manager: NemotronStreamingAsrManager?
     private var streamedSampleCount: Int = 0
     private var activeLanguageCode: String?
+
+    // MARK: - Dictation capture configuration
+
+    private struct DictationCaptureConfiguration {
+        let leaseID: UUID
+        let languageCode: String
+    }
+
+    private let dictationCaptureLock = NSRecursiveLock()
+    private var dictationCaptureConfiguration: DictationCaptureConfiguration?
+
+    func beginAdmittedTranscription(leaseID: UUID) throws {
+        try self.dictationCaptureLock.withLock {
+            if let capture = self.dictationCaptureConfiguration {
+                guard capture.leaseID == leaseID else {
+                    throw CancellationError()
+                }
+                return
+            }
+            self.dictationCaptureConfiguration = DictationCaptureConfiguration(
+                leaseID: leaseID, languageCode: self.selectedLanguageCode
+            )
+        }
+    }
+
+    func endAdmittedTranscription(leaseID: UUID) {
+        self.dictationCaptureLock.withLock {
+            guard self.dictationCaptureConfiguration?.leaseID == leaseID else { return }
+            self.dictationCaptureConfiguration = nil
+        }
+    }
+
+    private var selectedLanguageCode: String {
+        self.dictationCaptureLock.withLock {
+            self.dictationCaptureConfiguration?.languageCode ?? SettingsStore.shared.selectedNemotronLanguage.rawValue
+        }
+    }
+
+    // MARK: - Runtime state
     private var componentProfilingSessionActive = false
     private var maxTranscriptionSamples: Int = 240_000
     private let minimumFinalChunkSamples: Int = 16_000
@@ -76,7 +115,7 @@ final class NemotronProvider: TranscriptionProvider {
     func installManagerForTesting(_ manager: NemotronStreamingAsrManager, cacheDirectory: URL) {
         self.manager = manager
         self.isReady = true
-        self.activeLanguageCode = SettingsStore.shared.selectedNemotronLanguage.rawValue
+        self.activeLanguageCode = self.selectedLanguageCode
         self.cacheDirectoryForTesting = cacheDirectory
     }
     #endif
@@ -198,7 +237,7 @@ final class NemotronProvider: TranscriptionProvider {
         self.manager = manager
         self.isReady = true
         DebugLogger.shared.info(
-            "Nemotron: provider ready [mode=\(self.mode.displayName), lang=\(SettingsStore.shared.selectedNemotronLanguage.rawValue), maxSamples=\(self.maxTranscriptionSamples)]",
+            "Nemotron: provider ready [mode=\(self.mode.displayName), lang=\(self.selectedLanguageCode), maxSamples=\(self.maxTranscriptionSamples)]",
             source: "Nemotron"
         )
     }
@@ -491,7 +530,7 @@ final class NemotronProvider: TranscriptionProvider {
     }
 
     private func applySelectedLanguage(to manager: NemotronStreamingAsrManager) async throws {
-        let languageCode = SettingsStore.shared.selectedNemotronLanguage.rawValue
+        let languageCode = self.selectedLanguageCode
         guard self.activeLanguageCode != languageCode else { return }
         try await manager.setTargetLanguage(languageCode)
         self.activeLanguageCode = languageCode

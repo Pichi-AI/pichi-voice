@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -8,54 +9,210 @@ enum FileTranscriptionSearchReveal {
     }
 }
 
+/// The view owns only local projections and UI work. Composition replaces this owner
+/// with the profile-bound history source after activation; a concealed owner never rebinds.
+@MainActor
+final class FileTranscriptionPrivateProjection: ObservableObject, PrivateProfileTransitionParticipant {
+    struct RowMetadata {
+        let preview: String
+        let fullDate: String
+    }
+
+    @Published var selectedFileURL: URL?
+    @Published var showingFilePicker = false
+    @Published var showingExportDialog = false
+    @Published var exportDocument: TranscriptionDocument?
+    @Published var showingCopyConfirmation = false
+    @Published var isDropTargeted = false
+    @Published var dropErrorMessage: String?
+    @Published var searchQuery = ""
+    @Published var pendingDeleteEntry: FileTranscriptionEntry?
+    @Published var showingClearConfirmation = false
+    @Published var rowMetadata: [UUID: RowMetadata] = [:]
+    @Published var filteredEntries: [FileTranscriptionEntry] = []
+    // Only an explicit global-search reveal may move the library viewport.
+    @Published var pendingRevealID: UUID?
+    private let profile = PrivateProfileStorage.current
+    private let revision = PrivateProfileService.shared.projectionRevision
+    private let sourceRevision = PrivateProfileService.shared.sourceRevision
+    private let clearReveal: @MainActor () -> Void
+    private var concealed = false
+    private var uiTasks: [UUID: Task<Void, Never>] = [:]
+    private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
+
+    init(clearReveal: @escaping @MainActor () -> Void) {
+        self.clearReveal = clearReveal
+        PrivateProfileService.shared.register(self)
+    }
+
+    var isCurrent: Bool {
+        !self.concealed && PrivateProfileService.shared.isPrivateDataVisible &&
+            !PrivateProfileService.shared.isTransitioning &&
+            PrivateProfileService.shared.projectionRevision == self.revision &&
+            PrivateProfileStorage.acceptsNewWork && PrivateProfileStorage.isReadable(self.profile)
+    }
+
+    func performUIWork(_ operation: @escaping @MainActor () async -> Void) {
+        guard self.isCurrent else { return }
+        let id = UUID()
+        self.uiTasks[id] = Task { @MainActor in
+            guard !Task.isCancelled, self.isCurrent else { self.uiTasks[id] = nil; return }
+            await operation()
+            self.uiTasks[id] = nil
+        }
+    }
+
+    func performTranscription(_ operation: @escaping @MainActor () async -> Void) {
+        guard self.isCurrent, self.transcriptionTasks.isEmpty else { return }
+        let id = UUID()
+        // This caller-bound operation drives the existing shared service. Concealment
+        // joins it without cancelling provider/capture work owned by that service.
+        self.transcriptionTasks[id] = Task { @MainActor in
+            if self.isCurrent { await operation() }
+            self.transcriptionTasks[id] = nil
+        }
+    }
+
+    func conceal() {
+        let clearsCurrentReveal = !self.concealed && PrivateProfileService.shared.sourceRevision == self.sourceRevision
+        self.concealed = true
+        self.uiTasks.values.forEach { $0.cancel() }
+        self.selectedFileURL = nil
+        self.showingFilePicker = false
+        self.showingExportDialog = false
+        self.exportDocument = nil
+        self.showingCopyConfirmation = false
+        self.isDropTargeted = false
+        self.dropErrorMessage = nil
+        self.searchQuery = ""
+        self.pendingDeleteEntry = nil
+        self.showingClearConfirmation = false
+        self.rowMetadata = [:]
+        self.filteredEntries = []
+        self.pendingRevealID = nil
+        if clearsCurrentReveal { self.clearReveal() }
+    }
+
+    func prepareForPrivateProfileTransition() async throws {
+        self.conceal()
+        let ui = Array(self.uiTasks.values)
+        let transcriptions = Array(self.transcriptionTasks.values)
+        for task in ui { await task.value }
+        for task in transcriptions { await task.value }
+        self.uiTasks = [:]
+        self.transcriptionTasks = [:]
+        self.conceal()
+    }
+}
+
+/// NSItemProvider may finish after cancellation. Its callback owns no view state;
+/// cancellation resumes and joins our UI waiter, and late URLs are discarded.
+nonisolated private final class FileTranscriptionDropRequest: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completed = false
+    private var continuation: CheckedContinuation<URL?, Never>?
+    private var progress: Progress?
+
+    @MainActor
+    func load(_ provider: NSItemProvider) async -> URL? {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<URL?, Never>) in
+                self.lock.lock()
+                if self.completed {
+                    self.lock.unlock()
+                    continuation.resume(returning: nil)
+                    return
+                }
+                self.continuation = continuation
+                self.lock.unlock()
+                let progress = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+                    self.finish(data.flatMap { URL(dataRepresentation: $0, relativeTo: nil) })
+                }
+                self.lock.lock()
+                let completed = self.completed
+                if !completed { self.progress = progress }
+                self.lock.unlock()
+                if completed { progress.cancel() }
+            }
+        } onCancel: {
+            self.finish(nil)
+        }
+    }
+
+    private func finish(_ url: URL?) {
+        self.lock.lock()
+        guard !self.completed else { self.lock.unlock(); return }
+        self.completed = true
+        let continuation = self.continuation
+        let progress = self.progress
+        self.continuation = nil
+        self.progress = nil
+        self.lock.unlock()
+        if url == nil { progress?.cancel() }
+        continuation?.resume(returning: url)
+    }
+}
+
+/// Only profile-bound presentation is replaced on successful activation. The
+/// injected processing services remain alive under their composition owners.
 struct FileTranscriptionView: View {
+    typealias ExportFormat = FileTranscriptionProfileView.ExportFormat
+    @ObservedObject var asrService: ASRService
+    @ObservedObject var transcriptionService: FileTranscriptionService
+    @ObservedObject private var profiles = PrivateProfileService.shared
+    @Binding var revealTarget: AppSearchHit.Target?
+
+    init(asrService: ASRService, transcriptionService: FileTranscriptionService,
+         revealTarget: Binding<AppSearchHit.Target?> = .constant(nil)) {
+        self.asrService = asrService
+        self.transcriptionService = transcriptionService
+        self._revealTarget = revealTarget
+    }
+
+    var body: some View {
+        FileTranscriptionProfileView(asrService: self.asrService, transcriptionService: self.transcriptionService,
+                                     revealTarget: self.$revealTarget)
+            .id(self.profiles.sourceRevision)
+    }
+}
+
+struct FileTranscriptionProfileView: View {
     @ObservedObject var asrService: ASRService
     @ObservedObject private var transcriptionService: FileTranscriptionService
-    @ObservedObject private var fileHistoryStore = FileTranscriptionHistoryStore.shared
+    @ObservedObject private var fileHistoryStore: FileTranscriptionHistoryStore
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var profiles = PrivateProfileService.shared
+    @StateObject private var privateProjection: FileTranscriptionPrivateProjection
     @Binding private var revealTarget: AppSearchHit.Target?
-    @State private var selectedFileURL: URL?
     @Environment(\.theme) private var theme
     @Environment(\.locale) private var interfaceLocale
 
     init(asrService: ASRService, transcriptionService: FileTranscriptionService, revealTarget: Binding<AppSearchHit.Target?> = .constant(nil)) {
+        let historyStore = FileTranscriptionHistoryStore.shared
+        self._fileHistoryStore = ObservedObject(wrappedValue: historyStore)
+        self._privateProjection = StateObject(wrappedValue: FileTranscriptionPrivateProjection(clearReveal: {
+            revealTarget.wrappedValue = nil
+            historyStore.selectedEntryID = nil
+        }))
         self._revealTarget = revealTarget
         self.asrService = asrService
         _transcriptionService = ObservedObject(wrappedValue: transcriptionService)
     }
 
-    @State private var showingFilePicker = false
-    @State private var showingExportDialog = false
-    @State private var exportDocument: TranscriptionDocument?
-    @State private var showingCopyConfirmation = false
-    @State private var isDropTargeted = false
-    @State private var dropErrorMessage: String?
-    @State private var searchQuery = ""
     @State private var transcriptListWidth: CGFloat = 320
     @State private var splitterDragStart: CGFloat?
     @State private var isSplitterHovered = false
-    @State private var pendingDeleteEntry: FileTranscriptionEntry?
-    @State private var showingClearConfirmation = false
-
-    private struct RowMetadata {
-        let preview: String
-        let fullDate: String
-    }
-
-    @State private var rowMetadata: [UUID: RowMetadata] = [:]
-    @State private var filteredEntries: [FileTranscriptionEntry] = []
-    // Only an explicit global-search reveal may move the library viewport.
-    @State private var pendingRevealID: UUID?
 
     private func updateSearchResults(entries: [FileTranscriptionEntry]) {
-        let query = self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.filteredEntries = query.isEmpty ? entries : entries.filter {
+        guard self.privateProjection.isCurrent else { return }
+        let query = self.privateProjection.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.privateProjection.filteredEntries = query.isEmpty ? entries : entries.filter {
             $0.displayTitle.localizedStandardContains(query) || $0.fileName.localizedStandardContains(query) || $0.text.localizedStandardContains(query)
         }
     }
 
     private var selectedEntry: FileTranscriptionEntry? {
-        let entries = self.filteredEntries
+        let entries = self.privateProjection.filteredEntries
         return entries.first { $0.id == self.fileHistoryStore.selectedEntryID } ?? entries.first
     }
 
@@ -72,7 +229,7 @@ struct FileTranscriptionView: View {
     }
 
     private var selectedFileIsVideo: Bool {
-        guard let fileExtension = (self.selectedFileURL ?? self.transcriptionService.currentFileURL)?
+        guard let fileExtension = (self.privateProjection.selectedFileURL ?? self.transcriptionService.currentFileURL)?
             .pathExtension.lowercased()
         else { return false }
         return UTType(filenameExtension: fileExtension)?.conforms(to: .movie) ?? false
@@ -88,6 +245,17 @@ struct FileTranscriptionView: View {
     }
 
     var body: some View {
+        Group {
+            if self.privateProjection.isCurrent {
+                self.privateContent
+            }
+        }
+        .onChange(of: self.profiles.projectionRevision) { _, _ in
+            if !self.privateProjection.isCurrent { self.privateProjection.conceal() }
+        }
+    }
+
+    private var privateContent: some View {
         VStack(spacing: 0) {
             VStack(spacing: self.theme.metrics.spacing.sm) {
                 if let activity = self.conflictingActivity {
@@ -100,7 +268,7 @@ struct FileTranscriptionView: View {
                 if let error = self.transcriptionService.error {
                     self.errorCard(error: error)
                 }
-                if let message = self.dropErrorMessage {
+                if let message = self.privateProjection.dropErrorMessage {
                     self.dropErrorCard(message: message)
                 }
             }
@@ -112,7 +280,7 @@ struct FileTranscriptionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(self.theme.palette.contentBackground)
         .overlay(alignment: .topTrailing) {
-            if self.showingCopyConfirmation {
+            if self.privateProjection.showingCopyConfirmation {
                 Text("Copied!")
                     .font(self.theme.typography.caption)
                     .padding(.horizontal, 12)
@@ -125,75 +293,82 @@ struct FileTranscriptionView: View {
             }
         }
         .fileExporter(
-            isPresented: self.$showingExportDialog,
-            document: self.exportDocument,
-            contentType: self.exportDocument?.format == .json ? .json : .plainText,
-            defaultFilename: self.exportDocument?.defaultFilename
+            isPresented: self.$privateProjection.showingExportDialog,
+            document: self.privateProjection.exportDocument,
+            contentType: self.privateProjection.exportDocument?.format == .json ? .json : .plainText,
+            defaultFilename: self.privateProjection.exportDocument?.defaultFilename
         ) { exportCompletion in
+            guard self.privateProjection.isCurrent else { return }
             switch exportCompletion {
             case .success:
                 DebugLogger.shared.info("File exported successfully", source: "FileTranscriptionView")
             case let .failure(error):
                 DebugLogger.shared.error("Export failed: \(error)", source: "FileTranscriptionView")
             }
-            self.exportDocument = nil
+            self.privateProjection.exportDocument = nil
         }
-        .onReceive(self.fileHistoryStore.$entries) { entries in
-            self.rowMetadata = Dictionary(entries.map { entry in
+        .onReceive(self.fileHistoryStore.entriesPublisher) { entries in
+            guard self.privateProjection.isCurrent else { return }
+            self.privateProjection.rowMetadata = Dictionary(entries.map { entry in
                 (entry.id, self.metadata(for: entry))
             }, uniquingKeysWith: { _, latest in latest })
             self.updateSearchResults(entries: entries)
         }
-        .task(id: self.revealTarget) {
-            guard let id = FileTranscriptionSearchReveal.transcriptID(self.revealTarget) else { return }
-            self.searchQuery = ""
+        .onChange(of: self.revealTarget, initial: true) { _, _ in
+            guard self.privateProjection.isCurrent, let id = FileTranscriptionSearchReveal.transcriptID(self.revealTarget) else { return }
+            self.privateProjection.searchQuery = ""
             self.updateSearchResults(entries: self.fileHistoryStore.entries)
             self.fileHistoryStore.selectedEntryID = id
-            self.pendingRevealID = self.filteredEntries.contains(where: { $0.id == id }) ? id : nil
+            self.privateProjection.pendingRevealID = self.privateProjection.filteredEntries.contains(where: { $0.id == id }) ? id : nil
             self.revealTarget = nil
         }
-        .onChange(of: self.searchQuery) { _, _ in
+        .onChange(of: self.privateProjection.searchQuery) { _, _ in
             self.updateSearchResults(entries: self.fileHistoryStore.entries)
         }
         .onChange(of: self.interfaceLocale) { _, _ in
-            self.rowMetadata = Dictionary(self.fileHistoryStore.entries.map { ($0.id, self.metadata(for: $0)) }, uniquingKeysWith: { _, latest in latest })
+            guard self.privateProjection.isCurrent else { return }
+            self.privateProjection.rowMetadata = Dictionary(self.fileHistoryStore.entries.map { ($0.id, self.metadata(for: $0)) }, uniquingKeysWith: { _, latest in latest })
         }
         .onChange(of: self.transcriptionService.isTranscribing) { _, isTranscribing in
-            guard isTranscribing else { return }
+            guard self.privateProjection.isCurrent, isTranscribing else { return }
             AccessibilityNotification.Announcement(PichiLocalization.text("File transcription started")).post()
         }
         .onChange(of: self.transcriptionService.result?.id) { _, resultID in
-            guard resultID != nil else { return }
-            self.searchQuery = ""
+            guard self.privateProjection.isCurrent, resultID != nil else { return }
+            self.privateProjection.searchQuery = ""
             AccessibilityNotification.Announcement(PichiLocalization.text("File transcription complete")).post()
         }
         .onChange(of: self.transcriptionService.error) { _, error in
-            guard let error, !error.isEmpty else { return }
+            guard self.privateProjection.isCurrent, let error, !error.isEmpty else { return }
             AccessibilityNotification.Announcement(PichiLocalization.format("File transcription failed. %@", error)).post()
         }
         .alert("Delete transcript?", isPresented: Binding(
-            get: { self.pendingDeleteEntry != nil },
-            set: { if !$0 { self.pendingDeleteEntry = nil } }
+            get: { self.privateProjection.pendingDeleteEntry != nil },
+            set: { if !$0 { self.privateProjection.pendingDeleteEntry = nil } }
         )) {
-            Button("Cancel", role: .cancel) { self.pendingDeleteEntry = nil }
+            Button("Cancel", role: .cancel) { self.privateProjection.pendingDeleteEntry = nil }
             Button("Delete", role: .destructive) {
-                if let entry = self.pendingDeleteEntry {
+                if self.privateProjection.isCurrent, let entry = self.privateProjection.pendingDeleteEntry {
                     self.fileHistoryStore.deleteEntry(id: entry.id)
                 }
-                self.pendingDeleteEntry = nil
+                self.privateProjection.pendingDeleteEntry = nil
             }
         } message: {
             Text("This deletes the saved transcript. Your original audio or video file is kept.")
         }
-        .alert("Clear all transcripts?", isPresented: self.$showingClearConfirmation) {
+        .alert("Clear all transcripts?", isPresented: self.$privateProjection.showingClearConfirmation) {
             Button("Cancel", role: .cancel) {}
-            Button("Clear all", role: .destructive) { self.fileHistoryStore.clearAll() }
+            Button("Clear all", role: .destructive) {
+                guard self.privateProjection.isCurrent else { return }
+                self.fileHistoryStore.clearAll()
+            }
         } message: {
             Text("All saved file transcripts will be permanently deleted. Original files are kept.")
         }
         .onAppear {
-            if self.selectedFileURL == nil {
-                self.selectedFileURL = self.transcriptionService.currentFileURL
+            guard self.privateProjection.isCurrent else { return }
+            if self.privateProjection.selectedFileURL == nil {
+                self.privateProjection.selectedFileURL = self.transcriptionService.currentFileURL
             }
         }
     }
@@ -224,7 +399,7 @@ struct FileTranscriptionView: View {
 
     private var fileSelectionCard: some View {
         VStack(spacing: 16) {
-            if let fileURL = selectedFileURL ?? self.transcriptionService.currentFileURL {
+            if let fileURL = self.privateProjection.selectedFileURL ?? self.transcriptionService.currentFileURL {
                 // Show selected file
                 HStack {
                     Image(systemName: "doc.fill")
@@ -247,7 +422,8 @@ struct FileTranscriptionView: View {
                     FluidGlassControlGroup {
                         HStack(spacing: 8) {
                             Button(action: {
-                                self.selectedFileURL = nil
+                                guard self.privateProjection.isCurrent else { return }
+                                self.privateProjection.selectedFileURL = nil
                                 self.transcriptionService.reset()
                             }) {
                                 Label("Remove file", systemImage: "xmark")
@@ -256,7 +432,7 @@ struct FileTranscriptionView: View {
                             .disabled(self.transcriptionService.isTranscribing)
                             .help(PichiLocalization.text(self.transcriptionService.isTranscribing ? "Wait for transcription to finish" : "Remove file"))
                             Button(action: {
-                                Task {
+                                self.privateProjection.performTranscription {
                                     await self.transcribeFile()
                                 }
                             }) {
@@ -349,14 +525,14 @@ struct FileTranscriptionView: View {
                         .font(self.theme.typography.titleIcon)
                         .foregroundStyle(self.theme.palette.accentText)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                        Text(PichiLocalization.text(self.isDropTargeted ? "Drop to select file" : "Transcribe a file"))
+                        Text(PichiLocalization.text(self.privateProjection.isDropTargeted ? "Drop to select file" : "Transcribe a file"))
                             .font(self.theme.typography.sectionTitle)
                         Text("Drop audio or video here, or choose a file.")
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.theme.palette.secondaryText)
                     }
                     Spacer(minLength: 8)
-                    Button { self.showingFilePicker = true } label: {
+                    Button { self.privateProjection.showingFilePicker = true } label: {
                         Label("Choose file…", systemImage: "plus")
                     }
                     .fluidGlassAction(prominent: true)
@@ -377,22 +553,23 @@ struct FileTranscriptionView: View {
                     RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg)
                         .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [6, 5]))
                         .allowsHitTesting(false)
-                        .foregroundColor(self.isDropTargeted ? self.theme.palette.accentText : self.theme.palette.cardBorder)
+                        .foregroundColor(self.privateProjection.isDropTargeted ? self.theme.palette.accentText : self.theme.palette.cardBorder)
                 )
-                .onDrop(of: [.fileURL], isTargeted: self.$isDropTargeted) { providers in
+                .onDrop(of: [.fileURL], isTargeted: self.$privateProjection.isDropTargeted) { providers in
                     self.handleDrop(providers: providers)
                 }
             }
         }
         .fileImporter(
-            isPresented: self.$showingFilePicker,
+            isPresented: self.$privateProjection.showingFilePicker,
             allowedContentTypes: FileTranscriptionService.allowedContentTypes,
             allowsMultipleSelection: false
         ) { result in
+            guard self.privateProjection.isCurrent else { return }
             switch result {
             case let .success(urls):
                 if let url = urls.first {
-                    self.selectedFileURL = url
+                    self.privateProjection.selectedFileURL = url
                     self.transcriptionService.reset()
                 }
             case let .failure(error):
@@ -503,7 +680,7 @@ struct FileTranscriptionView: View {
             HStack {
                 Text("Transcripts").font(self.theme.typography.sectionTitle)
                 Spacer()
-                Text("\(self.filteredEntries.count)")
+                Text("\(self.privateProjection.filteredEntries.count)")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -512,10 +689,10 @@ struct FileTranscriptionView: View {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(self.theme.palette.secondaryText)
-                FluidSearchField(title: "Search transcripts…", text: self.$searchQuery)
+                FluidSearchField(title: "Search transcripts…", text: self.$privateProjection.searchQuery)
                     .accessibilityLabel(PichiLocalization.text("Search filenames and transcript text"))
-                if !self.searchQuery.isEmpty {
-                    Button { self.searchQuery = "" } label: {
+                if !self.privateProjection.searchQuery.isEmpty {
+                    Button { self.privateProjection.searchQuery = "" } label: {
                         Image(systemName: "xmark.circle.fill")
                     }
                     .buttonStyle(.plain)
@@ -529,11 +706,11 @@ struct FileTranscriptionView: View {
             .padding(.bottom, self.theme.metrics.spacing.md)
             Divider()
 
-            if self.filteredEntries.isEmpty {
+            if self.privateProjection.filteredEntries.isEmpty {
                 VStack(spacing: self.theme.metrics.spacing.sm) {
-                    Text(PichiLocalization.text(self.searchQuery.isEmpty ? "No transcripts yet" : "No matching transcripts"))
+                    Text(PichiLocalization.text(self.privateProjection.searchQuery.isEmpty ? "No transcripts yet" : "No matching transcripts"))
                         .font(self.theme.typography.bodySmallStrong)
-                    Text(PichiLocalization.text(self.searchQuery.isEmpty ? "Transcribe a file to start your library." : "Try a filename or words from the transcript."))
+                    Text(PichiLocalization.text(self.privateProjection.searchQuery.isEmpty ? "Transcribe a file to start your library." : "Try a filename or words from the transcript."))
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
@@ -544,19 +721,21 @@ struct FileTranscriptionView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: self.theme.metrics.spacing.xs) {
-                            ForEach(self.filteredEntries) { entry in
+                            ForEach(self.privateProjection.filteredEntries) { entry in
                                 self.transcriptRow(entry: entry).id(entry.id)
                             }
                         }
                         .padding(self.theme.metrics.spacing.sm)
                     }
-                    .task(id: self.pendingRevealID) {
-                        guard let id = self.pendingRevealID else { return }
-                        await Task.yield()
-                        guard !Task.isCancelled, self.pendingRevealID == id,
-                              self.filteredEntries.contains(where: { $0.id == id }) else { return }
-                        proxy.scrollTo(id)
-                        self.pendingRevealID = nil
+                    .onChange(of: self.privateProjection.pendingRevealID, initial: true) { _, id in
+                        guard let id else { return }
+                        self.privateProjection.performUIWork {
+                            await Task.yield()
+                            guard !Task.isCancelled, self.privateProjection.isCurrent, self.privateProjection.pendingRevealID == id,
+                                  self.privateProjection.filteredEntries.contains(where: { $0.id == id }) else { return }
+                            proxy.scrollTo(id)
+                            self.privateProjection.pendingRevealID = nil
+                        }
                     }
                 }
             }
@@ -566,7 +745,7 @@ struct FileTranscriptionView: View {
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                 Spacer()
-                Button("Clear all…") { self.showingClearConfirmation = true }
+                Button("Clear all…") { self.privateProjection.showingClearConfirmation = true }
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .buttonStyle(.plain)
@@ -581,7 +760,8 @@ struct FileTranscriptionView: View {
         let isSelected = self.selectedEntry?.id == entry.id
         return HStack(spacing: self.theme.metrics.spacing.xs) {
             Button {
-                self.pendingRevealID = nil
+                guard self.privateProjection.isCurrent else { return }
+                self.privateProjection.pendingRevealID = nil
                 self.fileHistoryStore.selectedEntryID = entry.id
             } label: {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
@@ -592,7 +772,7 @@ struct FileTranscriptionView: View {
                     FileTranscriptRelativeDateLabel(entry: entry, locale: self.interfaceLocale)
                         .font(self.theme.typography.captionSmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
-                    Text(self.rowMetadata[entry.id]?.preview ?? "")
+                    Text(self.privateProjection.rowMetadata[entry.id]?.preview ?? "")
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                         .lineLimit(1)
@@ -605,6 +785,7 @@ struct FileTranscriptionView: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             .editableTitle(entry.displayTitle, id: entry.id.uuidString, doubleClickEnabled: false) {
+                guard self.privateProjection.isCurrent else { return }
                 self.fileHistoryStore.renameEntry(id: entry.id, to: $0)
             }
             Button { self.copyToClipboard(entry.text) } label: {
@@ -633,7 +814,7 @@ struct FileTranscriptionView: View {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(self.theme.typography.titleIcon)
                 .foregroundStyle(self.theme.palette.secondaryText)
-            Text(PichiLocalization.text(self.searchQuery.isEmpty ? "Your transcript appears here" : "No matching transcript"))
+            Text(PichiLocalization.text(self.privateProjection.searchQuery.isEmpty ? "Your transcript appears here" : "No matching transcript"))
                 .font(self.theme.typography.sectionTitle)
             Text("Select a file on the left to read, copy, or export its transcript.")
                 .font(self.theme.typography.bodySmall)
@@ -652,9 +833,10 @@ struct FileTranscriptionView: View {
                     .lineLimit(2)
                     .truncationMode(.middle)
                     .editableTitle(entry.displayTitle, id: entry.id.uuidString) {
+                        guard self.privateProjection.isCurrent else { return }
                         self.fileHistoryStore.renameEntry(id: entry.id, to: $0)
                     }
-                Text(self.rowMetadata[entry.id]?.fullDate ?? "")
+                Text(self.privateProjection.rowMetadata[entry.id]?.fullDate ?? "")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                 HStack(spacing: self.theme.metrics.spacing.md) {
@@ -674,9 +856,10 @@ struct FileTranscriptionView: View {
                         Menu {
                             ForEach(ExportFormat.allCases, id: \.self) { format in
                                 Button(PichiLocalization.text(format.rawValue)) {
+                                    guard self.privateProjection.isCurrent else { return }
                                     do {
-                                        self.exportDocument = try TranscriptionDocument(entry: entry, format: format)
-                                        self.showingExportDialog = true
+                                        self.privateProjection.exportDocument = try TranscriptionDocument(entry: entry, format: format)
+                                        self.privateProjection.showingExportDialog = true
                                     } catch {
                                         DebugLogger.shared.error("Export failed: \(error)", source: "FileTranscriptionView")
                                     }
@@ -686,7 +869,10 @@ struct FileTranscriptionView: View {
                             Label("Export", systemImage: "square.and.arrow.up")
                         }
                         .fluidGlassMenuAction()
-                        Button(role: .destructive) { self.pendingDeleteEntry = entry } label: {
+                        Button(role: .destructive) {
+                            guard self.privateProjection.isCurrent else { return }
+                            self.privateProjection.pendingDeleteEntry = entry
+                        } label: {
                             Label("Delete", systemImage: "trash")
                         }
                         .buttonStyle(FluidOutlinedButtonStyle(height: FluidButtonSize.large.controlHeight, foreground: self.theme.palette.primaryText))
@@ -740,8 +926,8 @@ struct FileTranscriptionView: View {
         .background(self.theme.palette.windowBackground)
     }
 
-    private func metadata(for entry: FileTranscriptionEntry) -> RowMetadata {
-        return RowMetadata(
+    private func metadata(for entry: FileTranscriptionEntry) -> FileTranscriptionPrivateProjection.RowMetadata {
+        return FileTranscriptionPrivateProjection.RowMetadata(
             preview: entry.previewText,
             fullDate: entry.timestamp.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(self.interfaceLocale))
         )
@@ -760,6 +946,7 @@ struct FileTranscriptionView: View {
             Spacer()
 
             Button("Dismiss") {
+                guard self.privateProjection.isCurrent else { return }
                 self.transcriptionService.reset()
             }
             .fluidGlassAction()
@@ -788,7 +975,7 @@ struct FileTranscriptionView: View {
             Spacer()
 
             Button("Dismiss") {
-                self.dropErrorMessage = nil
+                self.privateProjection.dropErrorMessage = nil
             }
             .fluidGlassAction()
         }
@@ -810,50 +997,50 @@ struct FileTranscriptionView: View {
     private static let dropErrorCopy = FileTranscriptionService.dropErrorCopy
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            let url: URL? = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
-            guard let url = url else { return }
-            let ext = url.pathExtension.lowercased()
-            guard Self.supportedFileExtensions.contains(ext) else {
-                DispatchQueue.main.async {
-                    self.dropErrorMessage = PichiLocalization.text(Self.dropErrorCopy)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        self.dropErrorMessage = nil
-                    }
-                }
+        guard self.privateProjection.isCurrent, let provider = providers.first else { return false }
+        let request = FileTranscriptionDropRequest()
+        self.privateProjection.performUIWork {
+            let url = await request.load(provider)
+            guard !Task.isCancelled, self.privateProjection.isCurrent, let url else { return }
+            guard Self.supportedFileExtensions.contains(url.pathExtension.lowercased()) else {
+                self.privateProjection.dropErrorMessage = PichiLocalization.text(Self.dropErrorCopy)
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled, self.privateProjection.isCurrent else { return }
+                self.privateProjection.dropErrorMessage = nil
                 return
             }
-            DispatchQueue.main.async {
-                self.selectedFileURL = url
-                self.transcriptionService.reset()
-                self.dropErrorMessage = nil
-            }
+            self.privateProjection.selectedFileURL = url
+            self.transcriptionService.reset()
+            self.privateProjection.dropErrorMessage = nil
         }
         return true
     }
 
     private func transcribeFile() async {
-        guard let fileURL = selectedFileURL else { return }
+        guard self.privateProjection.isCurrent, let fileURL = self.privateProjection.selectedFileURL else { return }
 
         do {
             _ = try await self.transcriptionService.transcribeFile(fileURL)
         } catch {
+            guard self.privateProjection.isCurrent else { return }
             DebugLogger.shared.error("Transcription error: \(error)", source: "FileTranscriptionView")
         }
     }
 
     private func copyToClipboard(_ text: String) {
+        guard self.privateProjection.isCurrent else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
 
         withAnimation {
-            self.showingCopyConfirmation = true
+            self.privateProjection.showingCopyConfirmation = true
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        self.privateProjection.performUIWork {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, self.privateProjection.isCurrent else { return }
             withAnimation {
-                self.showingCopyConfirmation = false
+                self.privateProjection.showingCopyConfirmation = false
             }
         }
     }
@@ -869,6 +1056,7 @@ nonisolated struct TranscriptionDocument: FileDocument {
     let format: FileTranscriptionView.ExportFormat
     let defaultFilename: String
     private let contents: Data
+    private let profile = PrivateProfileStorage.current
 
     init(
         entry: FileTranscriptionEntry,
@@ -888,12 +1076,16 @@ nonisolated struct TranscriptionDocument: FileDocument {
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        self.fileWrapper()
+        try self.fileWrapper()
     }
 
     /// The snapshot is already serialized; exporting owns no scratch files.
-    func fileWrapper() -> FileWrapper {
-        FileWrapper(regularFileWithContents: self.contents)
+    /// The OS can retain a document after dismissing its sheet, so fence byte access too.
+    func fileWrapper() throws -> FileWrapper {
+        guard PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(self.profile) else {
+            throw CocoaError(.userCancelled)
+        }
+        return FileWrapper(regularFileWithContents: self.contents)
     }
 }
 

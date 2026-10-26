@@ -34,7 +34,14 @@ final class KeychainService: @unchecked Sendable {
     // Explicitly nonisolated: on macOS 15.4+ the synthesized main-actor deinit can abort until the OS runtime has the fix (swiftlang/swift#88036).
     nonisolated deinit {}
 
-    static let shared = KeychainService()
+    private static let profiles = PrivateProfileStoreCache<KeychainService>()
+    static var shared: KeychainService { self.bound(to: PrivateProfileStorage.current) }
+    static func bound(to snapshot: PrivateProfileSnapshot) -> KeychainService {
+        self.profiles.value(for: snapshot) { profile in
+            KeychainService(service: profile.credentialService, account: AppBrand.keychainAccount,
+                migratesLegacyEntries: profile.isGuest, profile: profile)
+        }
+    }
 
     private struct TestingBackend {
         let load: () throws -> [String: String]
@@ -55,8 +62,12 @@ final class KeychainService: @unchecked Sendable {
         case loaded([String: String])
     }
 
-    private let service = AppBrand.keychainService
-    private let account = AppBrand.keychainAccount
+    let service: String
+    let account: String
+    private let migratesLegacyEntries: Bool
+    private let profile: PrivateProfileSnapshot?
+    private var admissionClosed = false
+    private var retirementWaiters: [CheckedContinuation<Void, Never>] = []
     private let cacheLock = NSLock()
     private let ioLock = NSRecursiveLock()
     private var keyCache = KeyCache.unloaded
@@ -69,7 +80,12 @@ final class KeychainService: @unchecked Sendable {
     private let worker = DispatchQueue(label: "provider-credential-storage", qos: .utility)
     private let testingBackend: TestingBackend?
 
-    private init() {
+    init(service: String, account: String, migratesLegacyEntries: Bool = false,
+         profile: PrivateProfileSnapshot? = nil) {
+        self.service = service
+        self.account = account
+        self.migratesLegacyEntries = migratesLegacyEntries
+        self.profile = profile
         // The ASR baseline host must never touch credentials; any transitive
         // `SettingsStore.shared` initialization reaches this stored-property singleton.
         #if PICHI_CREDENTIAL_TEST_BACKEND_ONLY
@@ -82,12 +98,18 @@ final class KeychainService: @unchecked Sendable {
     }
 
     init(
+        service: String = "synthetic-provider-service", account: String = "synthetic-provider-account",
+        migratesLegacyEntries: Bool = true, profile: PrivateProfileSnapshot? = nil,
         testingLoad: @escaping () throws -> [String: String],
         testingSave: @escaping ([String: String]) throws -> Void,
         testingLegacyLoad: @escaping () throws -> [String: String] = { [:] },
         testingLegacyRemove: @escaping ([String]) throws -> Void = { _ in },
         testingAccess: @escaping (Bool) -> Void = { _ in }
     ) {
+        self.service = service
+        self.account = account
+        self.migratesLegacyEntries = migratesLegacyEntries
+        self.profile = profile
         self.testingBackend = TestingBackend(
             load: testingLoad, save: testingSave, legacyLoad: testingLegacyLoad,
             legacyRemove: testingLegacyRemove, access: testingAccess
@@ -96,21 +118,56 @@ final class KeychainService: @unchecked Sendable {
 
     // MARK: - Public API
 
+    private var profileIsReadable: Bool {
+        guard let profile else { return true }
+        let current = PrivateProfileStorage.current
+        return profile.isReadable && current.isReadable && current.id == profile.id && current.generation == profile.generation
+    }
+
+    /// Stops admission and waits for the worker AND its main-actor migration
+    /// acknowledgment. A worker-queue barrier alone would leave a late callback.
+    func retireAndJoin() async {
+        await withCheckedContinuation { continuation in
+            self.cacheLock.withLock {
+                self.admissionClosed = true
+                self.keyCache = .unloaded
+                self.readinessState = .unavailable
+                self.retirementWaiters.append(continuation)
+            }
+            self.completeRetirementIfIdle()
+        }
+    }
+
+    private func completeRetirementIfIdle() {
+        let waiters = self.cacheLock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            guard self.admissionClosed, !self.backgroundLoadPending, self.pendingUserActions == 0 else { return [] }
+            let waiters = self.retirementWaiters
+            self.retirementWaiters.removeAll()
+            self.keyCache = .unloaded
+            self.readinessState = .unavailable
+            return waiters
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+
     var readiness: Readiness {
-        self.cacheLock.withLock { self.readinessState }
+        guard self.profileIsReadable else { return .unavailable }
+        return self.cacheLock.withLock { self.admissionClosed ? .unavailable : self.readinessState }
     }
 
     /// A missing snapshot is unknown, never an authoritative empty aggregate.
     var cachedKeys: [String: String]? {
-        guard case let .loaded(keys) = self.cachedState() else { return nil }
+        guard self.profileIsReadable, case let .loaded(keys) = self.cachedState() else { return nil }
         return keys
     }
 
     /// One atomic snapshot for inference admission. Refresh failures may retain
     /// cached display values, but must not present them as loaded credentials.
     var loadedKeys: [String: String]? {
-        self.cacheLock.withLock {
-            guard self.readinessState == .loaded, case let .loaded(keys) = self.keyCache else { return nil }
+        guard self.profileIsReadable else { return nil }
+        return self.cacheLock.withLock {
+            guard !self.admissionClosed, self.readinessState == .loaded, case let .loaded(keys) = self.keyCache else { return nil }
             return keys
         }
     }
@@ -122,8 +179,9 @@ final class KeychainService: @unchecked Sendable {
         migrating additions: [String: String] = [:], canonicalProviderIDs: [String: String]? = nil,
         completion: @escaping @MainActor @Sendable (Result<[String: String], Error>) async -> Void
     ) -> Bool {
+        guard self.profileIsReadable else { return false }
         let admitted = self.cacheLock.withLock {
-            guard !self.backgroundLoadPending, self.pendingUserActions == 0 else { return false }
+            guard !self.admissionClosed, !self.backgroundLoadPending, self.pendingUserActions == 0 else { return false }
             self.backgroundLoadPending = true
             self.readinessState = .pending
             return true
@@ -140,6 +198,7 @@ final class KeychainService: @unchecked Sendable {
                     self.backgroundLoadPending = false
                     self.readinessState = self.pendingUserActions > 0 ? .pending : self.lastIOReadiness
                 }
+                self.completeRetirementIfIdle()
             }
         }
         return true
@@ -203,8 +262,9 @@ final class KeychainService: @unchecked Sendable {
     }
 
     private func withUserAction<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        guard self.profileIsReadable else { throw KeychainServiceError.unavailable }
         let admitted = self.cacheLock.withLock {
-            guard self.pendingUserActions == 0 else { return false }
+            guard !self.admissionClosed, self.pendingUserActions == 0 else { return false }
             self.pendingUserActions += 1
             self.readinessState = .pending
             return true
@@ -215,6 +275,7 @@ final class KeychainService: @unchecked Sendable {
                 self.pendingUserActions -= 1
                 self.readinessState = self.backgroundLoadPending ? .pending : self.lastIOReadiness
             }
+            self.completeRetirementIfIdle()
         }
         return try await operation()
     }
@@ -335,6 +396,7 @@ final class KeychainService: @unchecked Sendable {
     }
 
     func legacyProviderEntries(interactive: Bool = true) throws -> [String: String] {
+        guard self.migratesLegacyEntries else { return [:] }
         self.ioLock.lock()
         defer { self.ioLock.unlock() }
         if let testingBackend { testingBackend.access(interactive); return try testingBackend.legacyLoad() }
@@ -388,6 +450,7 @@ final class KeychainService: @unchecked Sendable {
     }
 
     func removeLegacyEntries(providerIDs: [String] = [], interactive: Bool = true) throws {
+        guard self.migratesLegacyEntries else { return }
         self.ioLock.lock()
         defer { self.ioLock.unlock() }
         // An explicit empty migration set must never enumerate/delete unrelated entries.
@@ -414,6 +477,7 @@ final class KeychainService: @unchecked Sendable {
     // MARK: - Private helpers
 
     private func loadStoredKeys(forceRefresh: Bool = false) throws -> [String: String] {
+        guard self.profileIsReadable, !self.cacheLock.withLock({ self.admissionClosed }) else { throw KeychainServiceError.unavailable }
         if !forceRefresh, case let .loaded(keys) = self.cachedState() { return keys }
 
         self.ioLock.lock()
@@ -502,11 +566,12 @@ final class KeychainService: @unchecked Sendable {
     private func cachedState() -> KeyCache {
         self.cacheLock.lock()
         defer { self.cacheLock.unlock() }
-        return self.keyCache
+        return self.admissionClosed ? .unloaded : self.keyCache
     }
 
     private func setCachedKeys(_ keys: [String: String]) {
         self.cacheLock.lock()
+        guard !self.admissionClosed else { self.cacheLock.unlock(); return }
         self.keyCache = .loaded(keys)
         self.lastIOReadiness = .loaded
         self.readinessState = self.backgroundLoadPending || self.pendingUserActions > 0 ? .pending : .loaded

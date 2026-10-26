@@ -12,8 +12,24 @@ struct DictationAudioMetadata: Codable, Equatable, Sendable {
     let model: String?
 }
 
+final class DictationAudioSaveAdmission {
+    func save(snapshot: DictationAudioSnapshot, model: String?) throws -> DictationAudioMetadata {
+        fatalError("Audio recovery is covered by the actual admitted history/audio probe")
+    }
+    func complete() {}
+    func abortIfUnstarted() {}
+    func discardUnattached() {}
+    func waitUntilCompleted() async {}
+}
+
 final class DictationAudioHistoryStore {
     static let shared = DictationAudioHistoryStore()
+    static func scoped(to profile: PrivateProfileSnapshot) -> DictationAudioHistoryStore { self.shared }
+    func admitSave(for admission: TranscriptionHistoryWriteAdmission, timestamp: Date) throws -> DictationAudioSaveAdmission {
+        fatalError("Recording admission is outside this persistence-only probe")
+    }
+    func claimMetadata(_ metadata: DictationAudioMetadata, from audio: DictationAudioSaveAdmission,
+                       history: TranscriptionHistoryWriteAdmission) -> Bool { false }
     @discardableResult func deleteAudio(fileName: String) -> Int64 { 0 }
     func deleteAllAudioFiles() {}
     func audioUsageBytes() -> Int64 { 0 }
@@ -352,7 +368,7 @@ final class DebugLogger {
         await store.waitForTodaySummary()
         precondition(store.todaySummary == .init(words: 0, transcriptions: 0), "Never apply a stale bulk-rebuild result")
         var replacedFromSubscriber = false
-        let subscription = store.$todaySummary.sink { summary in
+        let subscription = store.todaySummaryPublisher.sink { summary in
             guard summary.words == 3, !replacedFromSubscriber else { return }
             replacedFromSubscriber = true
             store.restore(from: [yesterday, tomorrow])
