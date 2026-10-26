@@ -221,6 +221,20 @@
     }
 
     @MainActor private static func checkDiscoveryAdmission(profileA: PrivateProfileSnapshot, profileB: PrivateProfileSnapshot) async throws {
+        PrivateProfileStorage.select(profileA)
+        SettingsStore.shared.fluidMeetEnabled = false
+        let disabled = AppServices()
+        let disabledReads = MeetingCaptureSourceCatalog.microphoneReads
+        do { try await disabled.startMeetingRecordingFromMenuBar(); check(false, "Disabled FluidMeet cannot begin discovery") }
+        catch {
+            check(error is MeetingCoordinatorError && disabled.starts == 0
+                  && MeetingCaptureSourceCatalog.microphoneReads == disabledReads,
+                  "Disabled feature rejects before reading capture sources")
+        }
+        var disabledOperationCalled = false
+        await MenuBarFeedbackProbe().startMeetingRecordingInBackground { disabledOperationCalled = true }
+        check(!disabledOperationCalled, "Disabled menu does not invoke its recording operation")
+        SettingsStore.shared.fluidMeetEnabled = true
         for holdMicrophone in [true, false] {
             PrivateProfileStorage.select(profileA)
             SettingsStore.shared.meetingRecordingDefaults.owner = "A"

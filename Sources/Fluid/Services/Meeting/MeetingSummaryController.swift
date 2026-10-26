@@ -181,6 +181,7 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
     }
 
     func download() {
+        guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
         guard !self.busy, let model else { return }
         self.downloading = true
         self.error = nil
@@ -203,6 +204,7 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
     }
 
     func deleteModel(asr: ASRService) {
+        guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
         guard !self.busy, !self.checking, self.installed, let model else { return }
         self.generation = UUID()
         self.deleting = true
@@ -230,7 +232,7 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
     }
 
     func summarize(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingSummaryRoute, customPrompt: String = "") {
-        guard PrivateProfileStorage.isReadable(privateProfile) else { return }
+        guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
         guard !self.busy, !self.checking,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
@@ -298,6 +300,7 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
         thinking: Bool,
         asr: ASRService
     ) {
+        guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
         guard !self.busy, !self.checking, self.installed, let model,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true

@@ -112,11 +112,22 @@ final class AppServices: ObservableObject {
     }
 
     func restorePrivateSourcesAfterCommit() async {
-        guard !isTerminating, PrivateProfileStorage.acceptsNewWork else { return }
-        await _meetingSessionCoordinator?.ensureRestored()
-        guard PrivateProfileStorage.acceptsNewWork else { return }
+        let profile = PrivateProfileStorage.current
+        guard !Task.isCancelled, !self.isTerminating,
+              PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(profile) else { return }
+        await self._meetingSessionCoordinator?.ensureRestored()
+        guard !Task.isCancelled, !self.isTerminating,
+              PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(profile) else { return }
+        await self._cloudPublicationActivation?.activateAfterAccountCommand()
+        guard !Task.isCancelled, !self.isTerminating,
+              PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(profile) else { return }
+        // Source activation runs with admission closed. Reconcile availability only
+        // after the exact new profile commits and its asynchronous restoration joins.
+        self.refreshFluidMeetAvailability()
         LocalAPIServer.shared.start()
-        await _cloudPublicationActivation?.activateAfterAccountCommand()
     }
 
     var hasActivePrivateCapture: Bool {

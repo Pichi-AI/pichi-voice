@@ -232,8 +232,10 @@ struct MeetingMicrophoneCatalogSnapshot {}
 struct MeetingApplicationIdentity {}
 enum MeetingAutoDetector { struct ResolvedTarget: Equatable { let bundleIdentifier: String } }
 enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String) }
+enum MeetingCoordinatorError: Error { case featureDisabled }
 @MainActor final class SettingsStore {
     static let shared = SettingsStore()
+    var fluidMeetEnabled = true
     var meetingRecordingDefaults = MeetingRecordingDefaults()
     var preferredInputDeviceUID: String?
 }
