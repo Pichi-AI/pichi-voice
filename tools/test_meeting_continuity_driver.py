@@ -301,6 +301,19 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(self.processes.statuses[child.pid], -9)
         self.assertNotIn((901, signal.SIGKILL), self.processes.signals)
 
+    def test_persistent_detached_helper_observation_has_one_ten_second_budget(self):
+        self.processes.child("chrome")
+        detached = dict(processID=900, processGroup=901, executablePath=str(self.processes.chrome_app / "crashpad"))
+        with patch.object(self.processes, "copied_bundle_processes", return_value=[detached]) as scan, \
+             patch("meeting_continuity_driver.time.monotonic", side_effect=self.clock.read), \
+             patch("meeting_continuity_driver.time.sleep", side_effect=self.clock.pause), \
+             self.assertRaisesRegex(ProtocolError, "outside joined-child proof"):
+            self.processes.cleanup()
+        self.assertGreaterEqual(self.clock.now, 10)
+        self.assertLess(self.clock.now, 10.026)
+        self.assertTrue(all(call.args == (10,) for call in scan.call_args_list))
+        self.assertNotIn((901, signal.SIGKILL), self.processes.signals)
+
     def test_real_copy_scan_finds_detached_helper_without_signalling(self):
         self.processes.metadata[900] = dict(group=901, executable=str(self.processes.chrome_app / "crashpad"))
         with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S Google Chrome Helper\n"):
