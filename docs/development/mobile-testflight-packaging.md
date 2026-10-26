@@ -15,6 +15,7 @@ The pinned ONNX 1.24.2 package supplies a static framework. Xcode 27 embeds a ge
 Preserve the original archive. Copy it into a new task-owned `.xcarchive` path before changing metadata. The commands below run on that copy only. Set these values from the actual archive, existing identity and build evidence:
 
 ```bash
+set -eu
 # Set pichi_raw_archive, pichi_prepared_archive and pichi_signing_identity first.
 # The destination must not exist. Both archives must belong to this task.
 test ! -e "$pichi_prepared_archive"
