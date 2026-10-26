@@ -122,7 +122,7 @@ struct MobileMeetingRoot: View {
         self.required = required; self.privacyActivation = privacyActivation
         self.cloudPublication = cloudPublication
         self._cloudInteraction = StateObject(wrappedValue: MobileCloudInteraction(session: accountSession ?? AppServices.shared.accountSession))
-        self._historySnapshot = StateObject(wrappedValue: MeetingHistorySnapshot(load: { try await store.loadAll() }))
+        self._historySnapshot = StateObject(wrappedValue: MeetingHistorySnapshot(load: { try await store.loadHistory() }))
         self._accountInteraction = StateObject(wrappedValue: MobileAccountInteraction(
             session: accountSession ?? AppServices.shared.accountSession,
             requireTransitionAdmission: { try PrivateProfileService.shared.requireTransitionAdmission() }))
