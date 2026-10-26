@@ -272,6 +272,7 @@ builds/
 !/docs/development/pichi-private-profile-api.md
 !/docs/development/mobile-meetings.md
 !/docs/development/ipad-demo-install-via-mac.md
+!/docs/development/ipad-demo-testflight.md
 !/scripts/
 /scripts/*
 !/scripts/dev/
