@@ -76,6 +76,23 @@ class BuildIdentityTests(unittest.TestCase):
     def testMergedProjectPreservesBothDistributionIdentities(self):
         validate_application_identity(PROJECT.read_text())
 
+    def testMobilePrivacyPurposeStringsHaveEnglishAndRussianCopy(self):
+        info = plistlib.loads((ROOT / 'Sources/Mobile/Info.plist').read_bytes())
+        for key in ['NSMicrophoneUsageDescription', 'NSSpeechRecognitionUsageDescription',
+                    'NSLocationWhenInUseUsageDescription', 'NSLocalNetworkUsageDescription']:
+            with self.subTest(key=key):
+                self.assertIsInstance(info.get(key), str)
+                self.assertGreater(len(info[key].strip()), 20)
+                for language in ['en', 'ru']:
+                    resource = ROOT / f'Sources/Mobile/Resources/{language}.lproj/InfoPlist.strings'
+                    match = re.search(r'"' + key + r'"\s*=\s*"([^"\n]+)";', resource.read_text())
+                    self.assertIsNotNone(match, f'{language} needs a localized privacy purpose for {key}')
+                    self.assertGreater(len(match.group(1).strip()), 20)
+                    if language == 'en':
+                        self.assertEqual(match.group(1), info[key])
+                    else:
+                        self.assertRegex(match.group(1), '[А-Яа-яЁё]')
+
     def testMobileAppAndExtensionShareReleaseVersionOverrides(self):
         project = PROJECT.read_text()
         version_id = re.search(r'(\w+) /\* Mobile file Sources/Mobile/Version.xcconfig \*/', project).group(1)
