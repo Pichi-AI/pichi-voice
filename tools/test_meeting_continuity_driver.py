@@ -604,6 +604,15 @@ class DriverTests(unittest.TestCase):
             with self.assertRaisesRegex(ProtocolError, "disappearance"):
                 self.processes.kill_group(child)
 
+    def test_process_inspection_timeout_is_capped_without_extending_a_caller_deadline(self):
+        with patch("meeting_continuity_driver.time.monotonic", return_value=10):
+            self.assertEqual(self.processes.process_timeout(None), 5)
+            self.assertEqual(self.processes.process_timeout(30), 5)
+            self.assertEqual(self.processes.process_timeout(10.25), 0.25)
+            for deadline in (10, 9):
+                with self.assertRaisesRegex(ProtocolError, "deadline"):
+                    self.processes.process_timeout(deadline)
+
     def test_cleanup_refresh_and_ps_timeout_keep_existing_three_second_deadline(self):
         child = self.processes.child("chrome")
         self.processes.statuses[child.pid] = -9

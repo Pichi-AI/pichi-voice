@@ -254,10 +254,11 @@ class OwnedProcesses:
         return os.getpgid(pid)
 
     def process_timeout(self, deadline):
-        remaining = 2 if deadline is None else deadline - time.monotonic()
+        # Process inspection can be delayed by host load; retain the caller's tighter cleanup deadline.
+        remaining = 5 if deadline is None else deadline - time.monotonic()
         if remaining <= 0:
             raise ProtocolError("Owned process verification deadline expired.")
-        return min(2, remaining)
+        return min(5, remaining)
 
     def arguments_for(self, pid, deadline=None):
         return subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "command="], text=True,
