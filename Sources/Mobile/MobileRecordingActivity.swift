@@ -92,7 +92,13 @@ final class MobileRecordingActivityOwner {
         self.enqueueEnd(Activity<Attributes>.activities)
         // UIKit delivers this notification on the main actor. The cancellable owns its observer.
         self.terminationObserver = NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)
-            .sink { [weak self] _ in MainActor.assumeIsolated { _ = self?.endBeforeExit() } }
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    if let self, !self.endBeforeExit() {
+                        DebugLogger.shared.warning("Recording Live Activity cleanup exceeded the termination deadline", source: "LiveActivity")
+                    }
+                }
+            }
     }
 
     /// Read the coordinator after publication commits, then enforce the existing profile boundary.
@@ -143,6 +149,7 @@ final class MobileRecordingActivityOwner {
             case let .start(recording):
                 let previousEnd = self.pendingEnd
                 self.pendingStart = Task { [weak self] in
+                    defer { if self?.revision == revision { self?.pendingStart = nil } }
                     await previousStart?.value
                     await previousEnd?.value
                     guard let self, !Task.isCancelled, self.revision == revision,
@@ -154,7 +161,10 @@ final class MobileRecordingActivityOwner {
             }
         }
         if self.pendingStart == nil, let previousStart {
-            self.pendingStart = Task { await previousStart.value }
+            self.pendingStart = Task { [weak self] in
+                await previousStart.value
+                if self?.revision == revision { self?.pendingStart = nil }
+            }
         }
     }
 
@@ -215,6 +225,7 @@ final class MobileRecordingActivityOwner {
             self.activity = activity
             guard reviewDeadline == nil else { return }
             let wait = self.waitForRefresh
+            let activityID = activity.id
             // Cancellation and OS update completion must not need the main actor, which
             // willTerminate may temporarily block while waiting for the final end request.
             self.refresh = Task.detached {
@@ -222,7 +233,8 @@ final class MobileRecordingActivityOwner {
                     do { try await wait() } catch { return }
                     guard !Task.isCancelled, PrivateProfileStorage.acceptsNewWork,
                           PrivateProfileStorage.isReadable(profile) else { return }
-                    await activity.update(ActivityContent(state: state,
+                    guard let current = Activity<Attributes>.activities.first(where: { $0.id == activityID }) else { return }
+                    await current.update(ActivityContent(state: state,
                         staleDate: MobileRecordingActivityPlan.staleDate(refreshedAt: Date())))
                 }
             }
@@ -243,10 +255,16 @@ final class MobileRecordingActivityOwner {
     /// A concrete background cleanup chain survives main-actor termination waiting.
     private func enqueueEnd(_ activities: [Activity<Attributes>], after refresh: Task<Void, Never>? = nil) {
         let previous = self.pendingEnd
+        let activityIDs = activities.map(\.id)
         self.pendingEnd = Task.detached {
             await previous?.value
             await refresh?.value
-            for activity in activities { await activity.end(nil, dismissalPolicy: .immediate) }
+            // Activity is not Sendable. Resolve its process-owned proxy on this executor;
+            // only immutable IDs cross the actor boundary.
+            for id in activityIDs {
+                guard let activity = Activity<Attributes>.activities.first(where: { $0.id == id }) else { continue }
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
         }
     }
 
