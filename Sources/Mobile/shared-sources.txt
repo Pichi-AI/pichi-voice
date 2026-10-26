@@ -212,3 +212,5 @@ Sources/Fluid/Services/CloudPublication/PichiPublicationHTTPClient.swift
 Sources/Fluid/Services/CloudPublication/PichiPublicationOutboxStore.swift
 Sources/Fluid/Services/CloudPublication/PichiPublicationRetryPolicy.swift
 Sources/Fluid/Services/CloudPublication/PichiPublicationWire.swift
+# Shared with the Live Activity extension target, which compiles every file in Sources/MobileActivity.
+Sources/MobileActivity/MobileRecordingActivityAttributes.swift

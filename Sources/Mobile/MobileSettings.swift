@@ -42,10 +42,21 @@ struct MobileSettingsRoot: View {
                         Label(PichiLocalization.text("Recording"), systemImage: "waveform")
                     }.accessibilityIdentifier("settings.recording")
                     NavigationLink(value: MobileSettingsDestination.models) {
-                        Label(PichiLocalization.text("Voice Engine"), systemImage: "waveform")
+                        LabeledContent { Text(settings.selectedSpeechModel.displayName) } label: {
+                            Label(PichiLocalization.text("Voice Engine"), systemImage: "waveform")
+                        }
                     }.accessibilityIdentifier("settings.models")
                     NavigationLink(value: MobileSettingsDestination.privacy) {
-                        Label(PichiLocalization.text("Data cleanup"), systemImage: "lock.shield")
+                        LabeledContent {
+                            switch privacyActivation.state {
+                            case .active: Text(PichiLocalization.text("On"))
+                            case .enabling: ProgressView().controlSize(.small)
+                            case .off: Text(PichiLocalization.text("Off"))
+                            case .failed: Text(PichiLocalization.text("Unavailable"))
+                            }
+                        } label: {
+                            Label(PichiLocalization.text("Data cleanup"), systemImage: "lock.shield")
+                        }
                     }.accessibilityIdentifier("settings.privacy")
                 } footer: {
                     Text(PichiLocalization.text("Audio recordings and transcripts are stored on this device."))

@@ -44,11 +44,12 @@ class BuildIdentityTests(unittest.TestCase):
             for relative in [
                 'Fluid.xcodeproj/project.pbxproj', 'scripts/dev/update-mobile-project.py',
                 'Sources/Mobile/shared-sources.txt', 'Sources/Fluid/Branding/brand-package.json',
+                'Sources/Mobile/Info.plist',
             ]:
                 destination = root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(ROOT / relative, destination)
-            for folder in ['Sources/Mobile', 'Tests/MobileUITests', 'Tests/MobileIntegrationTests']:
+            for folder in ['Sources/Mobile', 'Sources/MobileActivity', 'Tests/MobileUITests', 'Tests/MobileIntegrationTests']:
                 (root / folder).mkdir(parents=True, exist_ok=True)
                 for source in (ROOT / folder).glob('*.swift'):
                     (root / folder / source.name).touch()

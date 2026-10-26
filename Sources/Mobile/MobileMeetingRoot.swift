@@ -2,6 +2,7 @@ import AVFoundation
 import Combine
 import UniformTypeIdentifiers
 import SwiftUI
+import TipKit
 import UIKit
 
 /// Platform navigation and transient view state only. The shared coordinator owns every meeting.
@@ -66,6 +67,7 @@ struct MobileMeetingRoot: View {
         get { privatePresentation.showRecordingSettings }
         nonmutating set { privatePresentation.showRecordingSettings = newValue }
     }
+    @State private var startFeedback = 0
     @State private var microphoneSnapshot = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
     private var edit: MeetingEditDraft? {
         get { privatePresentation.edit }
@@ -265,6 +267,13 @@ struct MobileMeetingRoot: View {
             await coordinator.ensureRestored()
             await refreshHistory()
             await refreshMicrophones()
+        }
+        // iOS mutes haptics while the microphone records, so they mark the Start tap and the end of
+        // capture rather than the recording states themselves. `.start` and `.stop` play on watchOS only.
+        .sensoryFeedback(.impact(weight: .medium), trigger: startFeedback)
+        .sensoryFeedback(trigger: coordinator.state) { previous, state in
+            guard privateProfile.isPrivateDataVisible, PrivateProfileStorage.acceptsNewWork else { return nil }
+            return Self.captureEndFeedback(from: previous, to: state)
         }
         // The app's UI-ready signal owns the launch sweep; its committed deletions reload History.
         .onChange(of: coordinator.retentionSweepRevision) { _, _ in Task { await refreshHistory() } }
@@ -492,13 +501,25 @@ struct MobileMeetingRoot: View {
                             .accessibilityIdentifier("meeting.settings")
                     }
                     if isBusy { ProgressView().accessibilityIdentifier("meeting.preparing") }
+                    if FirstMeetingTip.setupFinished {
+                        TipView(FirstMeetingTip()).tint(theme.palette.accent)
+                    }
                 }.padding(compactHeight ? 12 : 20).background(theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: theme.metrics.corners.lg))
-                Label(PichiLocalization.text("Stored on this device. Place the microphone where everyone can be heard."), systemImage: "lock")
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                    .accessibilityIdentifier("meeting.storageNote")
             }.padding(compactHeight ? 12 : 24).frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
-        }.safeAreaPadding(.bottom, compactHeight ? 48 : 0)
-            .accessibilityIdentifier("meeting.ready")
+        }
+        .accessibilityIdentifier("meeting.ready")
+        // Like the recording controls, this footer belongs to the native navigation safe area.
+        // A long first-meeting tip scrolls above it instead of pushing the note under the tab bar.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Label(PichiLocalization.text("Stored on this device. Place the microphone where everyone can be heard."), systemImage: "lock")
+                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("meeting.storageNote")
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
+                .padding(.horizontal, 24).padding(.vertical, 12)
+                .background(theme.palette.toolbarBackground)
+        }
     }
 
     private func recording(_ session: MeetingSession) -> some View {
@@ -946,9 +967,24 @@ struct MobileMeetingRoot: View {
         }.accessibilityElement(children: .contain).accessibilityIdentifier("transcript.paragraph.\(paragraph.id)")
     }
 
+    /// Success when capture ends normally and a warning when it ends early; nothing on restore.
+    private static func captureEndFeedback(from previous: MeetingCoordinatorState, to state: MeetingCoordinatorState) -> SensoryFeedback? {
+        switch previous {
+        case .recording, .recordingDegraded, .stopping: break
+        default: return nil
+        }
+        switch state {
+        case .processing, .completed: return .success
+        case .interrupted, .failed: return .warning
+        default: return nil
+        }
+    }
+
     private func beginMeeting() {
         guard privateProfile.isPrivateDataVisible, PrivateProfileStorage.acceptsNewWork,
               let admission = privatePresentation.publications.admit() else { return }
+        startFeedback += 1
+        FirstMeetingTip().invalidate(reason: .actionPerformed)
         run {
             // Finish preparation before the capture lease can open the microphone.
             try await required.prepare(modelID: settings.selectedSpeechModel.rawValue)

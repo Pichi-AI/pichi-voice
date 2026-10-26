@@ -18538,6 +18538,23 @@
         }
       }
     },
+    "Speech is transcribed on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speech is transcribed on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Речь распознаётся на этом устройстве."
+          }
+        }
+      }
+    },
     "Everywhere": {
       "extractionState": "manual",
       "localizations": {
@@ -38808,6 +38825,23 @@
         }
       }
     },
+    "Start your first meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start your first meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начните первую встречу"
+          }
+        }
+      }
+    },
     "Starting Meeting Recording…": {
       "extractionState": "manual",
       "localizations": {
@@ -52212,6 +52246,23 @@
         }
       }
     },
+    "On": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включено"
+          }
+        }
+      }
+    },
     "On device - %@": {
       "extractionState": "manual",
       "localizations": {
@@ -55515,6 +55566,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Whisper Tiny использует компактную модель. Скорость и расход памяти зависят от устройства."
+          }
+        }
+      }
+    },
+    "Record a meeting and return to its transcript.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record a meeting and return to its transcript."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запишите встречу и вернитесь к её тексту."
           }
         }
       }
