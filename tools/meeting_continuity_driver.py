@@ -65,6 +65,7 @@ class OwnedProcesses:
         self.profile.mkdir(mode=0o700)
         self.children = {}
         self.statuses = {}
+        self.identity_receipt = None
 
     def chrome(self, url):
         parsed = urlsplit(url)
@@ -156,15 +157,67 @@ class OwnedProcesses:
                 raise ProtocolError("Refuse to signal an exited process.")
             return []
         expected = str(self.executable) if child.kind == "chrome" else "/usr/bin/afplay"
-        if (self.executable_for(child.pid) != expected or self.group_for(child.pid) != child.pid
-                or child.args[0] != expected or (child.kind == "chrome"
-                and (f"--user-data-dir={self.profile}" not in child.args
-                     or f"--user-data-dir={self.profile}" not in self.arguments_for(child.pid, deadline).split()))):
-            raise ProtocolError("Owned executable, profile or process group does not match.")
+        observation = dict(processID=child.pid, kind=child.kind, expectedExecutable=expected,
+                           expectedProcessGroup=child.pid, launchedExecutable=child.args[0])
+        try:
+            observation["observedExecutable"] = self.executable_for(child.pid)
+            observation["observedProcessGroup"] = self.group_for(child.pid)
+            predicates = dict(executableMatches=observation["observedExecutable"] == expected,
+                              processGroupMatches=observation["observedProcessGroup"] == child.pid,
+                              launchedExecutableMatches=child.args[0] == expected)
+            observation["predicates"] = predicates
+            if child.kind == "chrome":
+                profile = f"--user-data-dir={self.profile}"
+                arguments = self.arguments_for(child.pid, deadline).split()
+                # The URL contains an ephemeral fixture token. Retain actual process arguments
+                # for diagnosis without copying that query into the private ownership journal.
+                observation["observedArguments"] = [
+                    argument.split("?", 1)[0] + "?<fixture-query-redacted>"
+                    if argument.startswith("http://127.0.0.1:") else argument for argument in arguments]
+                observation["expectedProfileArgument"] = profile
+                predicates.update(launchedProfileMatches=profile in child.args,
+                                  observedProfileMatches=profile in arguments)
+            observation["predicates"] = predicates
+        except Exception as error:
+            observation["observationError"] = str(error)
+            self.record_identity("ownership-identity", **observation)
+            raise
+        self.record_identity("ownership-identity", **observation)
+        failed = [name for name, matches in predicates.items() if not matches]
+        if failed:
+            raise ProtocolError("Owned process identity does not match: " + ", ".join(failed) + ".")
         verified = self.verify_members(child, self.group_members(child.pid, deadline), deadline)
         if require_live:
             self.require_live_owner(child, verified)
         return verified
+
+    def record_identity(self, step, **fields):
+        if self.identity_receipt is not None:
+            self.identity_receipt(step, **fields)
+
+    def copied_bundle_processes(self, deadline):
+        """Report surviving copy users, including detached helpers; never signal them."""
+        output = subprocess.check_output(
+            ["/bin/ps", "-U", str(os.getuid()), "-o", "pid=,pgid=,stat="], text=True,
+            timeout=self.process_timeout(deadline))
+        remaining = []
+        for row in output.splitlines():
+            if time.monotonic() >= deadline:
+                raise ProtocolError("Copied Chrome cleanup inspection deadline expired.")
+            pid, group, state = row.split()
+            if state.startswith("Z"):
+                continue
+            try:
+                executable = self.executable_for(int(pid))
+            except (ProtocolError, ProcessLookupError) as error:
+                try:
+                    self.group_for(int(pid))
+                except ProcessLookupError:
+                    continue  # The snapshot raced exit; no signal is justified.
+                raise ProtocolError(f"Cannot inspect live same-user PID {pid}; copied Chrome cleanup is unverified.") from error
+            if executable.startswith(str(self.chrome_app) + "/"):
+                remaining.append(dict(processID=int(pid), processGroup=int(group), executablePath=executable))
+        return remaining
 
     def require_live_owner(self, child, verified):
         if self.children.get(child.pid) is not child or child.pid not in verified or self.poll(child) is not None:
@@ -244,6 +297,15 @@ class OwnedProcesses:
                 self.stop(child)
             except Exception as error:
                 errors.append(str(error))
+        if any(child.kind == "chrome" for child in self.children.values()):
+            try:
+                remaining = self.copied_bundle_processes(time.monotonic() + 3)
+                if remaining:
+                    self.record_identity("unresolved-copied-bundle-processes", processes=remaining,
+                                         signalled=False, ownershipProven=False)
+                    errors.append("Copied Chrome processes remain outside joined-child proof; no extra signals sent.")
+            except Exception as error:
+                errors.append(str(error))
         if errors:
             raise ProtocolError("Owned fixture cleanup failed: " + "; ".join(errors))
 
@@ -257,11 +319,13 @@ class Driver:
         self.capture_seen = None
         self.protocol_complete = False
         self.owned_joined = False
+        self.preflight_complete = False
         self.failure = None
         self.state_path = fixture.root / "driver-state.json"
         journal = fixture.root / "driver-events.jsonl"
         if self.state_path.exists() or self.state_path.is_symlink() or journal.exists() or journal.is_symlink():
             raise ProtocolError("Use a fresh driver run.")
+        self.processes.identity_receipt = self.receipt
 
     def check(self):
         if self.fixture.root.resolve(strict=True) != self.fixture.root:
@@ -324,13 +388,23 @@ class Driver:
             self.pause(0.025)
         raise ProtocolError("Natural playback completion timed out.")
 
-    def run(self):
+    def run(self, preflight_only=False):
         try:
             self.check()
             browser = self.processes.chrome(self.url("browserBefore", self.before))
             self.receipt("browser-launched", processID=browser.pid, executablePath=browser.args[0])
             self.until(lambda: self.fixture.prepared_phase == "browserBefore", 30)
-            self.receipt("prepared-before-capture", processID=browser.pid, speechStarted=False)
+            self.processes.assert_owned(browser)
+            self.receipt("prepared-before-capture", processID=browser.pid, speechStarted=False,
+                         identityVerified=True)
+            if preflight_only:
+                if any((self.fixture.root / name).exists() or (self.fixture.root / name).is_symlink()
+                       for name in ("capture-ready.json", "phase-command.json", "phase-ack.json", "outcome.json")):
+                    raise ProtocolError("Preflight requires no native capture or phase files.")
+                self.preflight_complete = True
+                self.receipt("preflight-complete", nativeCaptureStarted=False, speechStarted=False,
+                             cuaPlayClicks=0)
+                return
             self.until(lambda: (self.fixture.root / "capture-ready.json").exists(), 120)
             self.capture_seen = self.clock()
             self.fixture.authorize(dict(runID=self.fixture.run_id, token=self.fixture.token))
@@ -382,7 +456,7 @@ class Driver:
                 self.processes.cleanup()
                 self.owned_joined = True
                 self.receipt("owned-processes-joined", protocolComplete=self.protocol_complete,
-                             failure=self.failure, liveOwnedChildren=0)
+                             preflightComplete=self.preflight_complete, failure=self.failure, liveOwnedChildren=0)
             except Exception as error:
                 self.failure = str(error)
                 self.receipt("cleanup-failed", reason=str(error))
@@ -397,12 +471,19 @@ def main():
         parser.add_argument("--" + option, required=True)
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--dry-run", action="store_true", help="Print the concrete plan without serving or launching anything")
+    parser.add_argument("--preflight-only", action="store_true",
+                        help="Prepare the browser, verify identity and join cleanup without native capture or Play")
     args = parser.parse_args()
     if (args.chrome_app != args.workspace / "Google Chrome.app" or args.second_wave.parent != args.stimulus_dir
             or not NAME.fullmatch(args.second_wave.name) or args.before_wav == args.after_wav
             or not NAME.fullmatch(args.before_wav) or not NAME.fullmatch(args.after_wav) or not 1 <= args.port <= 65535):
         parser.error("Use the workspace's Google Chrome copy, distinct named WAVs and one localhost port.")
     if args.dry_run:
+        if args.preflight_only:
+            print(json.dumps(dict(runID=str(uuid.UUID(args.run_id)).upper(), mode="prepare-identity-cleanup",
+                nativeCaptureStarted=False, speechStarted=False, applicationLaunched=False, serverStarted=False,
+                prepareLimitSeconds=30, cuaPlayClicks=0)))
+            return
         print(json.dumps(dict(runID=str(uuid.UUID(args.run_id)).upper(), nativeCaptureStarted=False,
             applicationLaunched=False, serverStarted=False, durationSeconds=100, phaseLimitSeconds=60,
             cues=["prepared-before-capture", "await-first-cua-play", "await-final-cua-play"], cuaPlayClicks=2,
@@ -423,7 +504,7 @@ def main():
     worker = threading.Thread(target=server.serve_forever)
     worker.start()
     try:
-        driver.run()
+        driver.run(preflight_only=args.preflight_only)
     finally:
         server.shutdown()
         worker.join(3)
@@ -432,6 +513,7 @@ def main():
             driver.receipt("server-cleanup-failed")
             raise ProtocolError("Fixture server thread did not join.")
         driver.receipt("fixture-server-joined", protocolComplete=driver.protocol_complete,
+                       preflightComplete=driver.preflight_complete,
                        failure=driver.failure, ownedProcessesJoined=driver.owned_joined,
                        liveOwnedChildren=0 if driver.owned_joined else None, serverRunning=False)
 

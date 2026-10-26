@@ -36,6 +36,7 @@ class MockProcesses(OwnedProcesses):
         self.profile = self.workspace / "profile"
         self.wave = Path("/synthetic/second.wav")
         self.children, self.statuses, self.metadata = {}, {}, {}
+        self.identity_receipt = None
         self.signals, self.launches = [], []
         self.after_resume = lambda: None
 
@@ -81,6 +82,11 @@ class MockProcesses(OwnedProcesses):
             self.clock.now += 1.0  # Deliberately short playback proves actual >=8s absence gate.
             self.statuses[pid] = 0
             self.after_resume()
+
+    def copied_bundle_processes(self, deadline):
+        return [dict(processID=pid, processGroup=value["group"], executablePath=value["executable"])
+                for pid, value in self.metadata.items() if self.statuses.get(pid) is None
+                and value["executable"].startswith(str(self.chrome_app) + "/")]
 
 
 class MockFixture:
@@ -204,6 +210,101 @@ class DriverTests(unittest.TestCase):
                 with self.assertRaises(ProtocolError):
                     processes.stop(child)
                 self.assertEqual(processes.signals, [])
+
+    def test_identity_receipt_records_each_predicate_and_redacts_fixture_query(self):
+        child = self.processes.child("chrome")
+        self.processes.metadata[child.pid]["arguments"] += " http://127.0.0.1:8888/meeting_browser_speech_stimulus.html?token=private-fixture-token"
+        self.processes.assert_owned(child)
+        value = read_json(self.driver.state_path)
+        self.assertEqual(value["step"], "ownership-identity")
+        self.assertEqual(value["observedExecutable"], str(self.processes.executable))
+        self.assertEqual(value["observedProcessGroup"], child.pid)
+        self.assertTrue(all(value["predicates"].values()))
+        self.assertIn(f"--user-data-dir={self.processes.profile}", value["observedArguments"])
+        self.assertNotIn("private-fixture-token", json.dumps(value))
+
+    def test_identity_failure_names_failed_predicates_and_records_observed_values(self):
+        child = self.processes.child("chrome")
+        self.processes.metadata[child.pid].update(executable="/unexpected/chrome", group=999,
+                                                arguments="chrome --user-data-dir=/unexpected/profile")
+        with self.assertRaisesRegex(ProtocolError, "executableMatches, processGroupMatches, observedProfileMatches"):
+            self.processes.assert_owned(child)
+        value = read_json(self.driver.state_path)
+        self.assertEqual(value["observedExecutable"], "/unexpected/chrome")
+        self.assertEqual(value["observedProcessGroup"], 999)
+        self.assertEqual(value["observedArguments"], ["chrome", "--user-data-dir=/unexpected/profile"])
+        self.assertEqual(self.processes.signals, [])
+
+    def test_identity_observation_timeout_is_recorded_and_never_signalled(self):
+        child = self.processes.child("chrome")
+        with patch.object(self.processes, "arguments_for", side_effect=subprocess.TimeoutExpired("ps", 1)):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.processes.assert_owned(child, deadline=1)
+        value = read_json(self.driver.state_path)
+        self.assertIn("observationError", value)
+        self.assertEqual(value["observedProcessGroup"], child.pid)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_prepare_identity_cleanup_preflight_never_waits_for_capture_or_creates_player(self):
+        def prepare():
+            if read_json(self.driver.state_path)["step"] == "browser-launched":
+                self.fixture.prepared_phase = "browserBefore"
+        self.clock.pump = prepare
+        with patch("meeting_continuity_driver.wait_ack", side_effect=AssertionError("Preflight has no native phase")):
+            self.driver.run(preflight_only=True)
+        self.assertTrue(self.driver.preflight_complete)
+        self.assertFalse(self.driver.protocol_complete)
+        self.assertTrue(self.driver.owned_joined)
+        self.assertEqual([kind for kind, _, _ in self.processes.launches], ["chrome"])
+        self.assertEqual(self.fixture.commands, [])
+        for name in ("capture-ready.json", "phase-command.json", "phase-ack.json"):
+            self.assertFalse((self.root / name).exists())
+        self.assertTrue(read_json(self.driver.state_path)["preflightComplete"])
+
+    def test_preflight_rejects_native_capture_evidence_and_joins_owned_child(self):
+        atomic_json(self.root / "capture-ready.json", dict(runID=self.fixture.run_id))
+        with self.assertRaisesRegex(ProtocolError, "no native capture"):
+            self.driver.run(preflight_only=True)
+        self.assertFalse(self.driver.preflight_complete)
+        self.assertTrue(self.driver.owned_joined)
+        self.assertEqual(self.fixture.commands, [])
+
+    def test_detached_copied_helper_is_reported_without_extra_signals_or_join_claim(self):
+        self.processes.metadata[900] = dict(group=901, executable=str(self.processes.chrome_app / "crashpad"))
+        self.processes.statuses[900] = None
+        with self.assertRaisesRegex(ProtocolError, "outside joined-child proof"):
+            self.run_driver()
+        self.assertFalse(self.driver.owned_joined)
+        self.assertIsNone(self.processes.statuses[900])
+        self.assertNotIn((901, signal.SIGKILL), self.processes.signals)
+        events = [json.loads(line) for line in (self.root / "driver-events.jsonl").read_text().splitlines()]
+        event = next(value for value in events if value["step"] == "unresolved-copied-bundle-processes")
+        self.assertFalse(event["signalled"])
+        self.assertFalse(event["ownershipProven"])
+        self.assertEqual(event["processes"][0]["processID"], 900)
+
+    def test_real_copy_scan_finds_detached_helper_without_signalling(self):
+        self.processes.metadata[900] = dict(group=901, executable=str(self.processes.chrome_app / "crashpad"))
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S\n"):
+            remaining = OwnedProcesses.copied_bundle_processes(self.processes, float("inf"))
+        self.assertEqual(remaining[0]["processID"], 900)
+        self.assertEqual(remaining[0]["processGroup"], 901)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_copy_scan_failed_lookup_of_live_pid_cannot_claim_cleanup(self):
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S\n"), \
+             patch.object(self.processes, "executable_for", side_effect=ProtocolError("Unreadable")), \
+             patch.object(self.processes, "group_for", return_value=901):
+            with self.assertRaisesRegex(ProtocolError, "cleanup is unverified"):
+                OwnedProcesses.copied_bundle_processes(self.processes, float("inf"))
+        self.assertEqual(self.processes.signals, [])
+
+    def test_copy_scan_snapshot_racing_exit_is_not_signalled_or_reported_live(self):
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S\n"), \
+             patch.object(self.processes, "executable_for", side_effect=ProtocolError("Exited")), \
+             patch.object(self.processes, "group_for", side_effect=ProcessLookupError("Gone")):
+            self.assertEqual(OwnedProcesses.copied_bundle_processes(self.processes, float("inf")), [])
+        self.assertEqual(self.processes.signals, [])
 
     def test_native_failure_prevents_second_source_process_start(self):
         def fail(sequence):
@@ -386,6 +487,13 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(plan["cuaPlayClicks"], 2)
         self.assertEqual(plan["durationSeconds"], 100)
         self.assertEqual(plan["phaseLimitSeconds"], 60)
+        result = subprocess.run(command + ["--preflight-only"], check=True, capture_output=True, text=True, timeout=3)
+        plan = json.loads(result.stdout)
+        self.assertEqual(plan["mode"], "prepare-identity-cleanup")
+        self.assertFalse(plan["speechStarted"])
+        self.assertFalse(plan["nativeCaptureStarted"])
+        self.assertFalse(plan["serverStarted"])
+        self.assertEqual(plan["cuaPlayClicks"], 0)
 
     def test_cleanup_failure_is_retained_without_claiming_owned_children_joined(self):
         with patch.object(self.processes, "cleanup", side_effect=ProtocolError("unverified cleanup")):
