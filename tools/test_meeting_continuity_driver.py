@@ -276,7 +276,9 @@ class DriverTests(unittest.TestCase):
     def test_detached_copied_helper_is_reported_without_extra_signals_or_join_claim(self):
         self.processes.metadata[900] = dict(group=901, executable=str(self.processes.chrome_app / "crashpad"))
         self.processes.statuses[900] = None
-        with self.assertRaisesRegex(ProtocolError, "outside joined-child proof"):
+        with patch("meeting_continuity_driver.time.monotonic", side_effect=self.clock.read), \
+             patch("meeting_continuity_driver.time.sleep", side_effect=self.clock.pause), \
+             self.assertRaisesRegex(ProtocolError, "outside joined-child proof"):
             self.run_driver()
         self.assertFalse(self.driver.owned_joined)
         self.assertIsNone(self.processes.statuses[900])
@@ -286,6 +288,18 @@ class DriverTests(unittest.TestCase):
         self.assertFalse(event["signalled"])
         self.assertFalse(event["ownershipProven"])
         self.assertEqual(event["processes"][0]["processID"], 900)
+
+    def test_detached_helper_natural_exit_is_observed_without_signalling_its_group(self):
+        child = self.processes.child("chrome")
+        detached = dict(processID=900, processGroup=901, executablePath=str(self.processes.chrome_app / "crashpad"))
+        with patch.object(self.processes, "copied_bundle_processes", side_effect=[[detached], []]) as scan, \
+             patch("meeting_continuity_driver.time.monotonic", side_effect=self.clock.read), \
+             patch("meeting_continuity_driver.time.sleep", side_effect=self.clock.pause):
+            self.processes.cleanup()
+        self.assertEqual(scan.call_count, 2)
+        self.assertEqual(scan.call_args_list[0].args, scan.call_args_list[1].args)
+        self.assertEqual(self.processes.statuses[child.pid], -9)
+        self.assertNotIn((901, signal.SIGKILL), self.processes.signals)
 
     def test_real_copy_scan_finds_detached_helper_without_signalling(self):
         self.processes.metadata[900] = dict(group=901, executable=str(self.processes.chrome_app / "crashpad"))

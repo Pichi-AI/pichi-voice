@@ -458,7 +458,15 @@ class OwnedProcesses:
                 errors.append(str(error))
         if any(child.kind == "chrome" for child in self.children.values()):
             try:
-                remaining = self.copied_bundle_processes(time.monotonic() + 3)
+                # Detached vendor helpers can exit shortly after their joined browser.
+                # Observe natural exit only; an unproven process is never signalled.
+                deadline = time.monotonic() + 3
+                remaining = self.copied_bundle_processes(deadline)
+                while remaining and time.monotonic() < deadline:
+                    time.sleep(0.025)
+                    if time.monotonic() >= deadline:
+                        break
+                    remaining = self.copied_bundle_processes(deadline)
                 if remaining:
                     self.record_identity("unresolved-copied-bundle-processes", processes=remaining,
                                          signalled=False, ownershipProven=False)
