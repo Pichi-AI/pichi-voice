@@ -1,16 +1,32 @@
 #!/usr/bin/env python3
-"""Update only the mobile target's explicit shared-source membership, leaving desktop intact.
+"""Update only the mobile targets' explicit shared-source membership, leaving desktop intact.
 
-`--check` reports a project that no longer matches the manifest instead of writing it.
+The app embeds the Live Activity extension built from Sources/MobileActivity. `--check` reports a
+project or app Info.plist that no longer matches the manifest instead of writing it.
 """
 from pathlib import Path
 import hashlib
 import json
+import plistlib
 import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT = ROOT / "Fluid.xcodeproj/project.pbxproj"
+APP_INFO = ROOT / "Sources/Mobile/Info.plist"
+# Debug and Release share one app identity. An embedded extension must extend it, so a local
+# signing identity overrides this one setting rather than PRODUCT_BUNDLE_IDENTIFIER.
+APP_BUNDLE = "ai.pichi.voice.mobile"
+
+# The app declares Live Activity support; the plist keeps its compact hand-edited layout.
+app_info_text = APP_INFO.read_text()
+app_info = plistlib.loads(app_info_text.encode())
+if app_info.get("NSSupportsLiveActivities") is not True:
+    if "NSSupportsLiveActivities" in app_info or app_info_text.count("</dict></plist>") != 1:
+        raise ValueError("Set NSSupportsLiveActivities to true in " + str(APP_INFO.relative_to(ROOT)))
+    app_info_text = app_info_text.replace("</dict></plist>", "<key>NSSupportsLiveActivities</key><true/>\n</dict></plist>")
+# The embedded extension must report the containing app's versions.
+app_version, app_build = app_info["CFBundleShortVersionString"], app_info["CFBundleVersion"]
 
 def uid(label):
     return hashlib.sha256(("PichiVoiceMobile:" + label).encode()).hexdigest()[:24].upper()
@@ -37,12 +53,17 @@ resource_paths = [
     "Sources/Mobile/Resources/brand-distribution.json", "Sources/Mobile/Resources/MobileAssets.xcassets",
 ]
 file_ids, source_builds, resource_builds = [], [], []
+file_refs = {}
+def file_ref(path, label="Mobile file "):
+    if path not in file_refs:
+        kind = {".swift":"sourcecode.swift", ".xcstrings":"text.json.xcstrings", ".xcassets":"folder.assetcatalog",
+                ".strings":"text.plist.strings", ".json":"text.json"}.get(Path(path).suffix, "folder")
+        file_refs[path] = obj(label + path, f"isa = PBXFileReference; lastKnownFileType = {kind}; path = {quoted(path)}; sourceTree = SOURCE_ROOT;")
+        file_ids.append(file_refs[path])
+    return file_refs[path]
+
 for path in sources + resource_paths:
-    ext = Path(path).suffix
-    kind = {".swift":"sourcecode.swift", ".xcstrings":"text.json.xcstrings", ".xcassets":"folder.assetcatalog",
-            ".strings":"text.plist.strings", ".json":"text.json"}.get(ext, "folder")
-    ref = obj("Mobile file " + path, f"isa = PBXFileReference; lastKnownFileType = {kind}; path = {quoted(path)}; sourceTree = SOURCE_ROOT;")
-    file_ids.append(ref)
+    ref = file_ref(path)
     build = obj("Mobile build " + path, f"isa = PBXBuildFile; fileRef = {ref};")
     (source_builds if path in sources else resource_builds).append(build)
 
@@ -69,7 +90,7 @@ resource_phase = obj("Mobile Resources", f"isa = PBXResourcesBuildPhase; buildAc
 framework_phase = obj("Mobile Frameworks", f"isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = {arr(framework_builds)}; runOnlyForDeploymentPostprocessing = 0;")
 product_ref = obj("PichiVoiceMobile.app", 'isa = PBXFileReference; explicitFileType = wrapper.application; path = PichiVoiceMobile.app; sourceTree = BUILT_PRODUCTS_DIR;')
 
-def configs(label, test=False, hosted=False):
+def configs(label, test=False, hosted=False, extension=False):
     config_ids = []
     for name in ("Debug", "Release"):
         settings = {
@@ -77,7 +98,7 @@ def configs(label, test=False, hosted=False):
             "TARGETED_DEVICE_FAMILY":"1,2", "SUPPORTS_MACCATALYST":"NO", "SWIFT_VERSION":"5.0",
             "SWIFT_STRICT_CONCURRENCY":"targeted", "SWIFT_DEFAULT_ACTOR_ISOLATION":"MainActor",
             "SWIFT_ACTIVE_COMPILATION_CONDITIONS":"$(inherited) MOBILE" + (" DEBUG" if name=="Debug" else ""),
-            "PRODUCT_NAME":"$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER":"ai.pichi.voice.mobile" + (".integrationtests" if hosted else ".uitests" if test else ""),
+            "PRODUCT_NAME":"$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER":APP_BUNDLE + (".integrationtests" if hosted else ".uitests" if test else ""),
             "ENABLE_TESTABILITY":"YES" if name=="Debug" else "NO",
             "PICHI_PRODUCT_NAME":json.loads((ROOT / "Sources/Fluid/Branding/brand-package.json").read_text())["profile"]["appName"],
             "CODE_SIGN_STYLE":"Automatic", "DEVELOPMENT_TEAM":"", "GENERATE_INFOPLIST_FILE":"YES" if test else "NO",
@@ -89,15 +110,40 @@ def configs(label, test=False, hosted=False):
                 TEST_HOST="$(BUILT_PRODUCTS_DIR)/PichiVoiceMobile.app/PichiVoiceMobile")
         elif test:
             settings.update(TEST_TARGET_NAME="PichiVoiceMobile", BUNDLE_LOADER="", TEST_HOST="")
+        elif extension:
+            # The extension has no String Catalog; the app passes it already localized copy.
+            settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER=APP_BUNDLE, PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity",
+                INFOPLIST_FILE="Sources/MobileActivity/Info.plist", CURRENT_PROJECT_VERSION=app_build, MARKETING_VERSION=app_version,
+                SKIP_INSTALL="YES", APPLICATION_EXTENSION_API_ONLY="YES", SWIFT_EMIT_LOC_STRINGS="NO",
+                LD_RUNPATH_SEARCH_PATHS="$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks")
         else:
-            settings.update(INFOPLIST_FILE="Sources/Mobile/Info.plist", ASSETCATALOG_COMPILER_APPICON_NAME="MobileAppIcon",
-                CURRENT_PROJECT_VERSION="5", MARKETING_VERSION="0.1.0", ENABLE_PREVIEWS="YES", PICHI_SOURCE_REVISION="unknown")
+            settings.update(PICHI_MOBILE_BUNDLE_IDENTIFIER=APP_BUNDLE, PRODUCT_BUNDLE_IDENTIFIER="$(PICHI_MOBILE_BUNDLE_IDENTIFIER)",
+                INFOPLIST_FILE="Sources/Mobile/Info.plist", ASSETCATALOG_COMPILER_APPICON_NAME="MobileAppIcon",
+                CURRENT_PROJECT_VERSION=app_build, MARKETING_VERSION=app_version, ENABLE_PREVIEWS="YES", PICHI_SOURCE_REVISION="unknown")
         rendered = " ".join(f"{key} = {quoted(value)};" for key, value in settings.items())
         config_ids.append(obj(label+" "+name, f"isa = XCBuildConfiguration; buildSettings = {{ {rendered} }}; name = {name};"))
     return obj(label+" configurations", f"isa = XCConfigurationList; buildConfigurations = {arr(config_ids)}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;")
 
+# WidgetKit Live Activity extension: every Swift file in Sources/MobileActivity plus the packaged
+# brand mark asset catalog. The app compiles the shared attributes file through the manifest.
+activity_builds = []
+for path in sorted((ROOT / "Sources/MobileActivity").glob("*.swift")):
+    relative = str(path.relative_to(ROOT))
+    activity_builds.append(obj("Mobile activity build " + relative, f"isa = PBXBuildFile; fileRef = {file_ref(relative, 'Mobile activity file ')};"))
+activity_sources = obj("Mobile activity Sources", f"isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = {arr(activity_builds)}; runOnlyForDeploymentPostprocessing = 0;")
+activity_resource = obj("Mobile activity resource Sources/Fluid/Assets.xcassets", f"isa = PBXBuildFile; fileRef = {file_ref('Sources/Fluid/Assets.xcassets')};")
+activity_resources = obj("Mobile activity Resources", f"isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = {arr([activity_resource])}; runOnlyForDeploymentPostprocessing = 0;")
+activity_frameworks = obj("Mobile activity Frameworks", "isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;")
+activity_product = obj("PichiVoiceMobileActivity.appex", 'isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; path = PichiVoiceMobileActivity.appex; sourceTree = BUILT_PRODUCTS_DIR;')
+activity_config = configs("Mobile activity", extension=True)
+activity_target = obj("PichiVoiceMobileActivity", f'isa = PBXNativeTarget; buildConfigurationList = {activity_config}; buildPhases = {arr([activity_sources, activity_frameworks, activity_resources])}; buildRules = (); dependencies = (); name = PichiVoiceMobileActivity; productName = PichiVoiceMobileActivity; productReference = {activity_product}; productType = "com.apple.product-type.app-extension";')
+activity_proxy = obj("Mobile activity proxy", f"isa = PBXContainerItemProxy; containerPortal = 7C078D872E3B339200FB7CAC; proxyType = 1; remoteGlobalIDString = {activity_target}; remoteInfo = PichiVoiceMobileActivity;")
+activity_dependency = obj("Mobile activity dependency", f"isa = PBXTargetDependency; target = {activity_target}; targetProxy = {activity_proxy};")
+activity_embed = obj("Mobile embed PichiVoiceMobileActivity.appex", f"isa = PBXBuildFile; fileRef = {activity_product}; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }};")
+embed_phase = obj("Mobile Embed Foundation Extensions", f'isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = {arr([activity_embed])}; name = "Embed Foundation Extensions"; runOnlyForDeploymentPostprocessing = 0;')
+
 app_config = configs("Mobile")
-app_target = obj("PichiVoiceMobile", f"isa = PBXNativeTarget; buildConfigurationList = {app_config}; buildPhases = {arr([source_phase, framework_phase, resource_phase])}; buildRules = (); dependencies = (); name = PichiVoiceMobile; packageProductDependencies = {arr(package_products)}; productName = PichiVoiceMobile; productReference = {product_ref}; productType = \"com.apple.product-type.application\";")
+app_target = obj("PichiVoiceMobile", f"isa = PBXNativeTarget; buildConfigurationList = {app_config}; buildPhases = {arr([source_phase, framework_phase, resource_phase, embed_phase])}; buildRules = (); dependencies = {arr([activity_dependency])}; name = PichiVoiceMobile; packageProductDependencies = {arr(package_products)}; productName = PichiVoiceMobile; productReference = {product_ref}; productType = \"com.apple.product-type.application\";")
 
 test_builds = []
 for path in sorted((ROOT / "Tests/MobileUITests").glob("*.swift")):
@@ -132,15 +178,15 @@ mobile_group = obj("Mobile shared sources", f'isa = PBXGroup; children = {arr(fi
 
 text = PROJECT.read_text()
 text = re.sub(r"\n/\* Begin Pichi mobile target \*/.*?/\* End Pichi mobile target \*/\n", "\n", text, flags=re.S)
-for identifier in (app_target,test_target,integration_target,product_ref,test_product,integration_product,mobile_group):
+for identifier in (app_target,test_target,integration_target,activity_target,product_ref,test_product,integration_product,activity_product,mobile_group):
     text = re.sub(r"\n\s*" + identifier + r" /\* Pichi mobile membership \*/,", "", text)
 block = "\n/* Begin Pichi mobile target */\n" + "".join(objects) + "/* End Pichi mobile target */\n"
 text = re.sub(r"(\tobjects = \{\n)\n*", lambda match: match.group(1), text, count=1)
 text = text.replace("\tobjects = {\n", "\tobjects = {\n" + block, 1)
 # This edits only the original main/product groups and project targets lists.
 for original_id, additions, marker in [("7C078D862E3B339200FB7CAC", [mobile_group], "children"),
-                                      ("7C078D902E3B339200FB7CAC", [product_ref,test_product,integration_product], "children"),
-                                      ("7C078D872E3B339200FB7CAC", [app_target,test_target,integration_target], "targets")]:
+                                      ("7C078D902E3B339200FB7CAC", [product_ref,test_product,integration_product,activity_product], "children"),
+                                      ("7C078D872E3B339200FB7CAC", [app_target,test_target,integration_target,activity_target], "targets")]:
     pattern = r"(" + original_id + r"(?: /\*[^*]*\*/)? = \{.*?" + marker + r" = \()"
     insertion = "".join("\n\t\t\t\t" + identifier + " /* Pichi mobile membership */," for identifier in additions)
     text, count = re.subn(pattern, lambda match: match.group(1)+insertion, text, count=1, flags=re.S)
@@ -156,10 +202,13 @@ scheme = f'''<?xml version="1.0" encoding="UTF-8"?>
 '''
 SCHEME = ROOT / "Fluid.xcodeproj/xcshareddata/xcschemes/PichiVoiceMobile.xcscheme"
 if "--check" in sys.argv[1:]:
-    if PROJECT.read_text() != text or not SCHEME.exists() or SCHEME.read_text() != scheme:
+    if (PROJECT.read_text() != text or not SCHEME.exists() or SCHEME.read_text() != scheme
+            or APP_INFO.read_text() != app_info_text):
         sys.exit("The mobile target differs from Sources/Mobile/shared-sources.txt. Run python3 scripts/dev/update-mobile-project.py.")
     print("Mobile target matches Sources/Mobile/shared-sources.txt")
     sys.exit(0)
 PROJECT.write_text(text)
 SCHEME.write_text(scheme)
-print(f"Mobile target: {len(sources)} shared and platform Swift files, {len(test_builds)} UI and {len(integration_builds)} hosted integration test files")
+APP_INFO.write_text(app_info_text)
+print(f"Mobile target: {len(sources)} shared and platform Swift files, {len(test_builds)} UI and {len(integration_builds)} hosted integration test files, "
+      f"{len(activity_builds)} Live Activity extension files")

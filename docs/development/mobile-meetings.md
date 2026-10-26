@@ -91,6 +91,19 @@ flowchart TB
 
 Новые платформенные файлы решают конкретные отличия: iOS audio session, UIKit Share, touch navigation и UIKit theme bridge. Общие классы не получают отдельный constructor argument или switch для каждой ASR-модели. Backend descriptor и inference adapter владеют engine-specific поведением и артефактами.
 
+## Live Activity во время записи
+
+На iPhone во время записи Lock Screen и Dynamic Island показывают знак продукта, статус `Meeting recording in progress` («Идёт запись встречи»), тип встречи и время записи. Время считает сама система через `Text(timerInterval:)`. Push и сеть не используются.
+
+- `MobileRecordingActivityOwner` в `Sources/Mobile/MobileRecordingActivity.swift` единственный вызывает ActivityKit. `AppServices.shared` передаёт ему `state` и `activeSession` существующего `MeetingSessionCoordinator`; coordinator и pipeline о Live Activity не знают. Дополнительные compositions в тестах activity не создают.
+- Чистый `MobileRecordingActivityPlan` запускает одну activity на сессию только в `recording` и `recordingDegraded`. Остановка, обработка, прерывание, ошибка и сброс сразу завершают её с немедленным скрытием. Отказ системы для той же сессии не повторяется.
+- Activity запрашивается с `staleDate` через 5 минут. Пока идёт запись, приложение работает в фоне в audio mode и каждые 2 минуты переносит `staleDate` вперёд; обновление останавливается вместе с activity. Если процесс завершился без остановки (crash, нехватка памяти), система через несколько минут помечает activity устаревшей, и расширение показывает `Meeting recording was interrupted` («Запись встречи прервана») без таймера и без индикатора записи.
+- Выход процесса: при `willTerminate` выполняется ограниченная попытка завершить activity, следующий запуск завершает все activities предыдущего процесса. Отдельного shutdown-пути на iOS нет.
+- Расширение `PichiVoiceMobileActivity` собирается из `Sources/MobileActivity`. Общий тип `MobileRecordingActivityAttributes` компилируется в приложение через `shared-sources.txt`. Приложение передаёт уже локализованный текст из String Catalog, имя из `AppBrand`, accent для светлой и тёмной темы и дизайн шрифта общих ролей. У расширения нет своего каталога, настроек или brand package; знак берётся из packaged `markAsset`, для импортированного оформления используется символ `waveform`.
+- Без поддержки или при выключенных Live Activities, включая iPad, запись идёт как раньше.
+- Генератор проекта создаёт target расширения, встраивает его в приложение, добавляет `NSSupportsLiveActivities` и берёт версии расширения из `Sources/Mobile/Info.plist`. Bundle ID расширения равен `$(PICHI_MOBILE_BUNDLE_IDENTIFIER).activity`. Для собственной подписи менять `PICHI_MOBILE_BUNDLE_IDENTIFIER`, а не `PRODUCT_BUNDLE_IDENTIFIER`: последний из командной строки применяется к обоим targets и ломает проверку встроенного расширения.
+- В DEBUG `PICHI_UI_LIVE_ACTIVITY_REVIEW=1` запускает настоящий запрос activity с синтетической сессией без микрофона и модели. `PICHI_UI_LIVE_ACTIVITY_REVIEW_ELAPSED` задаёт прошедшие секунды, `PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE_AFTER` отключает обновления, и показанная activity устаревает через заданное число секунд, как после crash. Уже устаревшую при запросе activity система не показывает.
+
 ## Аудио до появления текста
 
 Общий `MeetingLiveBubbleScrollList` показывает фрагменты ожидающего аудио в macOS и iOS. Используются существующие `AudioWaveformBars` из панели диктовки и `FlowLayout` из настроек. Только последние три фрагмента анимируются с частотой до 20 кадров в секунду; остальные сохраняют форму. Системное уменьшение движения отключает анимацию.

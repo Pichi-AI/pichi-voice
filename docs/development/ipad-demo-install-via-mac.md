@@ -69,8 +69,8 @@ bash scripts/dev/new-worktree.sh ratibor-demo "$PICHI_LOCAL_SOURCE_COMMIT"
 
 1. Подключить разблокированный iPad кабелем. Подтвердить доверие к Mac на iPad и выполнить сопряжение в Xcode, если оно запрошено.
 2. В `Xcode > Settings > Apple Accounts` войти в собственный Apple Account. Должна появиться собственная Personal Team.
-3. Открыть target **PichiVoiceMobile**, раздел `Signing & Capabilities`. Включить `Automatically manage signing`, выбрать собственную команду. Не выбирать одноимённый macOS target или тестовые targets.
-4. Для первой отдельной установки задать уникальный Bundle Identifier, например `com.example.ratibor.pichivoicedemo`, заменив пример на собственный уникальный идентификатор. Общий `ai.pichi.voice.mobile` может быть недоступен другой команде. Локальные изменения подписи не публиковать в репозиторий.
+3. Открыть target **PichiVoiceMobile**, раздел `Signing & Capabilities`. Включить `Automatically manage signing`, выбрать собственную команду. То же сделать для встроенного target **PichiVoiceMobileActivity**. Не выбирать одноимённый macOS target или тестовые targets.
+4. Для первой отдельной установки задать уникальный идентификатор, например `com.example.ratibor.pichivoicedemo`, заменив пример на собственный уникальный идентификатор. Общий `ai.pichi.voice.mobile` может быть недоступен другой команде. В `Build Settings > All` обоих targets, **PichiVoiceMobile** и **PichiVoiceMobileActivity**, изменить одинаково `PICHI_MOBILE_BUNDLE_IDENTIFIER`, а не поле Bundle Identifier: расширение получает тот же идентификатор с суффиксом `.activity`. Локальные изменения подписи не публиковать в репозиторий.
 5. Выбрать scheme **PichiVoiceMobile** и именно подключённый iPad в качестве destination. Дождаться подготовки устройства и установки необходимых компонентов Xcode.
 6. На iPad включить `Настройки > Конфиденциальность и безопасность > Режим разработчика`, если Xcode запросит. Потребуются перезапуск и подтверждение на разблокированном iPad. Если пункт ещё не появился, сначала завершить сопряжение с Xcode. См. [инструкцию Apple](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device).
 
@@ -101,7 +101,7 @@ xcodebuild -project Fluid.xcodeproj -scheme PichiVoiceMobile \
   -clonedSourcePackagesDirPath "$PWD/.build/demo-release/SourcePackages" \
   -allowProvisioningUpdates -allowProvisioningDeviceRegistration \
   CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$PICHI_DEMO_TEAM" \
-  PRODUCT_BUNDLE_IDENTIFIER="$PICHI_DEMO_BUNDLE" \
+  PICHI_MOBILE_BUNDLE_IDENTIFIER="$PICHI_DEMO_BUNDLE" \
   PICHI_SOURCE_REVISION="$PICHI_DEMO_REVISION" build
 
 PICHI_DEMO_APP="$PWD/.build/demo-release/DerivedData/Build/Products/Release-iphoneos/PichiVoiceMobile.app"

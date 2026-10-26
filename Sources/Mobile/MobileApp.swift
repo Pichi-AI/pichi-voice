@@ -6,7 +6,8 @@ import UIKit
 /// the existing coordinator, pipeline, registry, settings, resource and storage owners.
 @MainActor
 final class AppServices: ObservableObject {
-    static let shared = AppServices()
+    /// Only the process composition owns ActivityKit presentation.
+    static let shared = AppServices(recordingActivity: MobileRecordingActivityOwner())
     let accountSession: AccountSessionService
     let privateProfiles: PrivateProfileService
     private var cloudPublicationActivation: PichiCloudPublicationActivation?
@@ -20,6 +21,7 @@ final class AppServices: ObservableObject {
     let transcriptPrivacy: PichiTranscriptPrivacyService
     let requiredResources: MobileRequiredResources
     let privacyActivation: MobilePrivacyActivation
+    let recordingActivity: MobileRecordingActivityOwner?
     private var requiredPreparationTask: Task<Void, Never>?
     @Published private(set) var isUIReady = false
     @Published private(set) var hasRestoredAccount = false
@@ -62,7 +64,8 @@ final class AppServices: ObservableObject {
          publicationHTTP: (any PichiPublicationHTTPPerforming)? = nil,
          privacy: PichiTranscriptPrivacyService? = nil,
          privacyRedactor: (any TranscriptTextRedacting)? = nil,
-         microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil) {
+         microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil,
+         recordingActivity: MobileRecordingActivityOwner? = nil) {
         let isProductionComposition = store == nil && settings == nil && accountSession == nil
             && privateProfiles == nil && injectedCapture == nil && privacy == nil && privacyRedactor == nil
             && microphoneResolver == nil && publicationHTTP == nil
@@ -96,6 +99,7 @@ final class AppServices: ObservableObject {
         let meetingRedactor: any TranscriptTextRedacting = privacyRedactor ?? privacy
         let resolveMicrophone = microphoneResolver ?? { try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: $0) }
         self.asr = asr; self.meetingStore = store; self.transcriptPrivacy = privacy
+        self.recordingActivity = recordingActivity
         self.requiredResources = MobileRequiredResources()
         self.privacyActivation = MobilePrivacyActivation(settings: settings, canPrepare: {
             asr.activeExclusiveActivity == nil && !asr.hasActiveModelPreparation
@@ -190,7 +194,9 @@ final class AppServices: ObservableObject {
                 guard let self else { throw AccountError.isolationRequired }
                 try await PrivateProfileSources.activate(profile, asr: self.asr)
                 self.privacyActivation.restore()
-            }, conceal: {
+            }, conceal: { [weak self] in
+                guard let self else { throw AccountError.isolationRequired }
+                await self.recordingActivity?.conceal(admittedSessionID: self.meetingSessionCoordinator.activeSession?.id)
                 await PrivateProfileSources.conceal()
             })
             try self.accountSession.installLifecycle(self.privateProfiles)
@@ -207,6 +213,7 @@ final class AppServices: ObservableObject {
             self.cloudPublicationActivation = PichiCloudPublicationActivation(service: service,
                 account: self.accountSession, profiles: self.privateProfiles)
         }
+        recordingActivity?.observe(meetingSessionCoordinator)
     }
 
     func signalUIReady() async {
@@ -250,9 +257,16 @@ final class AppServices: ObservableObject {
         await accountRestorationTask?.value
     }
     func restorePrivateSourcesAfterCommit() async {
-        guard PrivateProfileStorage.acceptsNewWork else { return }
+        let profile = PrivateProfileStorage.current
+        guard !Task.isCancelled, PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(profile) else { return }
         await meetingSessionCoordinator.ensureRestored()
+        guard !Task.isCancelled, PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(profile) else { return }
         await cloudPublicationActivation?.activateAfterAccountCommand()
+        guard !Task.isCancelled, PrivateProfileStorage.acceptsNewWork,
+              PrivateProfileStorage.isReadable(profile) else { return }
+        await recordingActivity?.resumeAfterProfileCommit()
     }
 
     func setSceneActive(_ active: Bool) async {
@@ -265,6 +279,7 @@ final class AppServices: ObservableObject {
     }
 
     func shutdownForTermination() async {
+        await recordingActivity?.shutdown()
         accountRestorationTask?.cancel(); await accountRestorationTask?.value
         accountRestorationTask = nil
         await cloudPublicationActivation?.shutdown()
@@ -388,6 +403,14 @@ struct PichiVoiceMobileApp: App {
                 // UI-test application runs in another process and retains real startup.
                 if NSClassFromString("XCTestCase") != nil { return }
                 if ProcessInfo.processInfo.environment["PICHI_UI_CAPTION_REVIEW"] == "1" { return }
+                // The production Live Activity request with a synthetic session, without a
+                // microphone, model preparation or stored meeting.
+                if ProcessInfo.processInfo.environment["PICHI_UI_LIVE_ACTIVITY_REVIEW"] == "1" {
+                    await services.restoreAccountBeforePrivateUI()
+                    await services.recordingActivity?.resumeAfterProfileCommit()
+                    services.recordingActivity?.showReviewSample()
+                    return
+                }
                 #if targetEnvironment(simulator)
                 // Saved-meeting presentation tests use the normal root/store while
                 // skipping unrelated launch-time artifact installation and inference.
