@@ -255,7 +255,7 @@ SHELL_PROBES = (
 PYTHON_PROBES = (
     "delivery_failure_copy", "dictation_context_profile", "diarization_repeatability", "dictionary_training_save", "dictation_capture_admission", "fluid_audio_capture_options", "gigaam_artifact_ownership", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
     "meeting_speaker_attribution",
-    "private_capture_feedback", "private_panel_concealment", "settings_backup_concurrency",
+    "private_capture_feedback", "private_profile_activation_summary", "private_panel_concealment", "settings_backup_concurrency",
 )
 PROBES = tuple(sorted(
     [Probe(f"Tests/run_{name}_tests.sh", "sh") for name in SHELL_PROBES]
