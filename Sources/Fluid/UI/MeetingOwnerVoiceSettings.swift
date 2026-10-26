@@ -19,7 +19,7 @@ struct MeetingOwnerVoiceSettingsContent: View {
             Label(PichiLocalization.text(self.model.hasProfile ? "Your voice is saved" : "Your voice is not set up"),
                   systemImage: self.model.hasProfile ? "person.crop.circle.badge.checkmark" : "person.wave.2")
                 .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .foregroundStyle(self.model.hasProfile ? self.theme.palette.success : self.theme.palette.primaryText)
                 .accessibilityIdentifier("ownerVoice.status")
             Text(PichiLocalization.text("Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."))
                 .font(self.theme.typography.bodySmall)
@@ -37,8 +37,15 @@ struct MeetingOwnerVoiceSettingsContent: View {
                     .accessibilityIdentifier("ownerVoice.readingPrompt")
             }
             if self.model.phase == .recording {
-                ProgressView(value: self.model.seconds, total: MeetingOwnerVoiceEnrollmentCapture.maximumSeconds)
-                    .accessibilityLabel(PichiLocalization.text("Voice sample duration"))
+                HStack(spacing: self.theme.metrics.spacing.md) {
+                    // The same live level as a recording meeting.
+                    AudioWaveformBars(color: self.theme.palette.accent, barCount: 7, barWidth: 3, barSpacing: 3,
+                        minHeight: 3, maxHeight: 24, level: { CGFloat(min(1, self.model.level * 5)) }, noiseThreshold: 0.02,
+                        isAnimating: true, isIdleWaveEnabled: false)
+                        .frame(width: 45, height: 26).accessibilityHidden(true)
+                    ProgressView(value: self.model.seconds, total: MeetingOwnerVoiceEnrollmentCapture.maximumSeconds)
+                        .accessibilityLabel(PichiLocalization.text("Voice sample duration"))
+                }
                 Text(Duration.seconds(self.model.seconds).formatted(.time(pattern: .minuteSecond)))
                     .font(self.theme.typography.caption).monospacedDigit()
                     .accessibilityIdentifier("ownerVoice.duration")
@@ -73,8 +80,14 @@ struct MeetingOwnerVoiceSettingsContent: View {
 
     @ViewBuilder private var actions: some View {
         if self.model.phase == .recording {
-            Button(PichiLocalization.text("Stop")) { self.model.finishRecording() }
-                .accessibilityIdentifier("ownerVoice.stop")
+            // Once the sample is long enough, finishing becomes the clear next step.
+            if self.model.seconds >= MeetingOwnerVoiceEnrollmentCapture.recommendedSeconds {
+                Button(PichiLocalization.text("Done")) { self.model.finishRecording() }
+                    .buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.stop")
+            } else {
+                Button(PichiLocalization.text("Stop")) { self.model.finishRecording() }
+                    .accessibilityIdentifier("ownerVoice.stop")
+            }
             Button(PichiLocalization.text("Cancel")) { self.model.cancel() }
                 .accessibilityIdentifier("ownerVoice.cancel")
         } else if self.model.isBusy {
@@ -110,6 +123,7 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var hasProfile = false
     @Published private(set) var seconds: Double = 0
+    @Published private(set) var level: Float = 0
     @Published private(set) var error: String?
     @Published var showDeleteConfirmation = false
     private let profile = PrivateProfileStorage.current
@@ -188,9 +202,14 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
                 let deadline = ContinuousClock.now.advanced(by: .seconds(25))
                 while !self.stopRequested, active.capturedSeconds < MeetingOwnerVoiceEnrollmentCapture.maximumSeconds, ContinuousClock.now < deadline {
                     try active.checkFailure()
-                    if self.isProfileVisible { self.seconds = active.capturedSeconds }
+                    let captured = active.capturedSeconds
+                    if self.isProfileVisible {
+                        self.level = captured > self.seconds ? active.recentLevel : self.level / 2
+                        self.seconds = captured
+                    } else { self.level = 0 }
                     try await Task.sleep(for: .milliseconds(100))
                 }
+                self.level = 0
                 if self.isProfileVisible { self.seconds = active.capturedSeconds; self.phase = .checking }
                 var pcm = try await active.stop(discard: false)
                 capture = nil
@@ -208,6 +227,7 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
             if let modelOperation { self.modelResidency.endOperation(modelOperation) }
             if let lease { await self.audioArbiter.release(lease) }
             if Task.isCancelled || !self.isProfileVisible { self.draft = nil; self.error = nil }
+            self.level = 0
             self.phase = self.draft == nil ? .idle : .ready
             self.operation = nil
             if self.captureStopID == captureID { self.captureStopID = nil }
@@ -227,6 +247,7 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
     }
 
     func prepareForPrivateProfileTransition() async throws {
+        self.level = 0
         // Busy logout hides the retained owner; only the root Stop action or the
         // existing capture deadline ends enrollment. It never auto-saves a profile.
         if captureStopID != nil { hasProfile = false; return }

@@ -367,6 +367,9 @@ struct PichiVoiceMobileApp: App {
     @StateObject private var services = AppServices.shared
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.scenePhase) private var scenePhase
+
+    init() { FirstMeetingTip.configure() }
+
     var body: some Scene {
         WindowGroup {
             AdaptiveAppTheme(accent: settings.accentColor) {
