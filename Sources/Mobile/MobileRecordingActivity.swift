@@ -64,86 +64,170 @@ final class MobileRecordingActivityOwner {
     typealias Attributes = MobileRecordingActivityAttributes
 
     private let settings: SettingsStore
+    private let waitForRefresh: @Sendable () async throws -> Void
     private var plan = MobileRecordingActivityPlan()
     private var activity: Activity<Attributes>?
     private var refresh: Task<Void, Never>?
     private var pendingEnd: Task<Void, Never>?
+    private var pendingStart: Task<Void, Never>?
     private var observation: AnyCancellable?
-    private var terminationObserver: NSObjectProtocol?
+    private var terminationObserver: AnyCancellable?
+    private weak var coordinator: MeetingSessionCoordinator?
+    private var revision = UUID()
+    private var concealed = true
+    private var terminating = false
+    private var lastObservedSessionID: MeetingSessionID?
+    private var suppressedSessionID: MeetingSessionID?
+    #if DEBUG
+    private var reviewStaleAfter: TimeInterval?
+    #endif
 
-    init(settings: SettingsStore? = nil) {
+    init(settings: SettingsStore? = nil,
+         waitForRefresh: @escaping @Sendable () async throws -> Void = {
+             try await Task.sleep(for: .seconds(MobileRecordingActivityPlan.refreshInterval))
+         }) {
         self.settings = settings ?? SettingsStore.shared
-        // Every activity present before this process requests one belongs to an earlier process,
-        // whose recording cannot still be running.
+        self.waitForRefresh = waitForRefresh
+        // Cleanup is owned and joined before any new request, including startup races.
         self.enqueueEnd(Activity<Attributes>.activities)
-        self.terminationObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.willTerminateNotification, object: nil, queue: .main
-        ) { _ in Self.endAllBeforeExit() }
+        // UIKit delivers this notification on the main actor. The cancellable owns its observer.
+        self.terminationObserver = NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)
+            .sink { [weak self] _ in MainActor.assumeIsolated { _ = self?.endBeforeExit() } }
     }
 
-    /// The published values are delivered before they are stored, so ActivityKit work runs after
-    /// the coordinator has finished its transition.
+    /// Read the coordinator after publication commits, then enforce the existing profile boundary.
     func observe(_ coordinator: MeetingSessionCoordinator) {
+        self.coordinator = coordinator
         self.observation = coordinator.$state.combineLatest(coordinator.$activeSession)
-            .map { MobileRecordingActivityPlan.recording(state: $0, session: $1) }
-            .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.apply($0) }
+            .sink { [weak self, weak coordinator] _ in
+                guard let coordinator else { return }
+                self?.applyCurrentRecording(coordinator)
+            }
+    }
+
+    private func applyCurrentRecording(_ coordinator: MeetingSessionCoordinator) {
+        let profile = PrivateProfileStorage.current
+        let session = coordinator.activeSession
+        let owned = session.map { $0.profileOwnership?.matches(profile) ?? profile.isGuest } ?? true
+        let desired = owned ? MobileRecordingActivityPlan.recording(state: coordinator.state, session: session) : nil
+        self.apply(desired)
+    }
+
+    /// Composition calls this only after the account/profile source set has committed.
+    func resumeAfterProfileCommit() async {
+        let profile = PrivateProfileStorage.current
+        await self.pendingEnd?.value
+        guard !Task.isCancelled, !self.terminating,
+              PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(profile) else { return }
+        self.concealed = false
+        if let coordinator { self.applyCurrentRecording(coordinator) }
     }
 
     func apply(_ desired: MobileRecordingActivityPlan.Recording?) {
-        for action in self.plan.update(desired) {
+        if let desired { self.lastObservedSessionID = desired.sessionID }
+        let profile = PrivateProfileStorage.current
+        let permitted = !self.concealed && !self.terminating
+            && PrivateProfileStorage.acceptsNewWork && PrivateProfileStorage.isReadable(profile)
+            && desired?.sessionID != self.suppressedSessionID ? desired : nil
+        let actions = self.plan.update(permitted)
+        guard !actions.isEmpty else { return }
+        let revision = UUID()
+        self.revision = revision
+        let previousStart = self.pendingStart
+        previousStart?.cancel()
+        self.pendingStart = nil
+        for action in actions {
             switch action {
-            case let .start(recording): self.start(recording)
             case let .end(sessionID): self.end(sessionID)
+            case let .start(recording):
+                let previousEnd = self.pendingEnd
+                self.pendingStart = Task { [weak self] in
+                    await previousStart?.value
+                    await previousEnd?.value
+                    guard let self, !Task.isCancelled, self.revision == revision,
+                          !self.concealed, !self.terminating,
+                          PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(profile),
+                          self.plan.sessionID == recording.sessionID else { return }
+                    self.start(recording, profile: profile)
+                }
             }
         }
+        if self.pendingStart == nil, let previousStart {
+            self.pendingStart = Task { await previousStart.value }
+        }
+    }
+
+    /// Busy logout conceals presentation and joins updates/ends without stopping admitted capture.
+    func conceal(admittedSessionID: MeetingSessionID? = nil) async {
+        self.suppressedSessionID = admittedSessionID ?? self.lastObservedSessionID ?? self.plan.sessionID
+        self.concealed = true
+        self.revision = UUID()
+        let start = self.pendingStart
+        start?.cancel()
+        self.pendingStart = nil
+        _ = self.plan.update(nil)
+        let current = self.activity
+        self.activity = nil
+        let refresh = self.refresh
+        refresh?.cancel()
+        self.refresh = nil
+        self.enqueueEnd(current.map { [$0] } ?? [], after: refresh)
+        await start?.value
+        await self.pendingEnd?.value
+    }
+
+    func shutdown() async {
+        self.terminating = true
+        self.terminationObserver?.cancel()
+        self.terminationObserver = nil
+        self.observation?.cancel()
+        self.observation = nil
+        await self.conceal()
     }
 
     #if DEBUG
-    /// Review only: the production request path with a synthetic session and no microphone.
-    /// `PICHI_UI_LIVE_ACTIVITY_REVIEW_ELAPSED` sets the elapsed seconds.
-    /// `PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE_AFTER` stops refreshes and lets the shown activity become
-    /// stale after that many seconds, as after a crash; the system does not present an activity that
-    /// is already stale when requested.
+    /// Synthetic visual review uses the same admitted request path after guest restoration.
     func showReviewSample() {
         let environment = ProcessInfo.processInfo.environment
         let elapsed = environment["PICHI_UI_LIVE_ACTIVITY_REVIEW_ELAPSED"].flatMap(TimeInterval.init) ?? 754
-        let staleAfter = environment["PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE_AFTER"].flatMap(TimeInterval.init)
+        self.reviewStaleAfter = environment["PICHI_UI_LIVE_ACTIVITY_REVIEW_STALE_AFTER"].flatMap(TimeInterval.init)
         let sample = MobileRecordingActivityPlan.Recording(sessionID: UUID(),
             startedAt: Date().addingTimeInterval(-elapsed), mode: .inRoom)
+        self.observation?.cancel()
         self.observation = nil
-        for action in self.plan.update(sample) {
-            guard case let .start(recording) = action else { continue }
-            self.start(recording, staleDate: staleAfter.map { Date().addingTimeInterval($0) })
-        }
+        self.apply(sample)
     }
     #endif
 
-    /// A nil stale date starts a live activity whose stale date the refresh keeps ahead.
-    private func start(_ recording: MobileRecordingActivityPlan.Recording, staleDate: Date? = nil) {
-        // Live Activities are optional: iPad, a disabled setting or a refusal never affect recording.
+    private func start(_ recording: MobileRecordingActivityPlan.Recording, profile: PrivateProfileSnapshot) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let state = Attributes.ContentState(startedAt: recording.startedAt)
         do {
+            #if DEBUG
+            let reviewDeadline = self.reviewStaleAfter.map { Date().addingTimeInterval($0) }
+            #else
+            let reviewDeadline: Date? = nil
+            #endif
             let activity = try Activity.request(attributes: self.presentation(for: recording),
-                content: ActivityContent(state: state, staleDate: staleDate ?? MobileRecordingActivityPlan.staleDate(refreshedAt: Date())),
+                content: ActivityContent(state: state, staleDate: reviewDeadline ?? MobileRecordingActivityPlan.staleDate(refreshedAt: Date())),
                 pushType: nil)
             self.activity = activity
-            if staleDate == nil { self.keepFresh(activity, state: state) }
+            guard reviewDeadline == nil else { return }
+            let wait = self.waitForRefresh
+            // Cancellation and OS update completion must not need the main actor, which
+            // willTerminate may temporarily block while waiting for the final end request.
+            self.refresh = Task.detached {
+                while !Task.isCancelled {
+                    do { try await wait() } catch { return }
+                    guard !Task.isCancelled, PrivateProfileStorage.acceptsNewWork,
+                          PrivateProfileStorage.isReadable(profile) else { return }
+                    await activity.update(ActivityContent(state: state,
+                        staleDate: MobileRecordingActivityPlan.staleDate(refreshedAt: Date())))
+                }
+            }
         } catch {
             DebugLogger.shared.warning("Recording Live Activity was not started: \(error)", source: "LiveActivity")
-        }
-    }
-
-    private func keepFresh(_ activity: Activity<Attributes>, state: Attributes.ContentState) {
-        self.refresh = Task { [weak self] in
-            while true {
-                do { try await Task.sleep(for: .seconds(MobileRecordingActivityPlan.refreshInterval)) } catch { return }
-                guard let self, self.activity?.id == activity.id else { return }
-                await activity.update(ActivityContent(state: state,
-                    staleDate: MobileRecordingActivityPlan.staleDate(refreshedAt: Date())))
-            }
         }
     }
 
@@ -156,28 +240,38 @@ final class MobileRecordingActivityOwner {
         self.enqueueEnd([activity], after: refresh)
     }
 
-    /// Ends run in order, after any refresh update already in flight for the same activity.
+    /// A concrete background cleanup chain survives main-actor termination waiting.
     private func enqueueEnd(_ activities: [Activity<Attributes>], after refresh: Task<Void, Never>? = nil) {
-        guard !activities.isEmpty else { return }
         let previous = self.pendingEnd
-        self.pendingEnd = Task {
+        self.pendingEnd = Task.detached {
             await previous?.value
             await refresh?.value
-            // A recording indicator must not outlive the recording on the Lock Screen.
             for activity in activities { await activity.end(nil, dismissalPolicy: .immediate) }
         }
     }
 
-    /// A force quit during background recording terminates without a coordinator stop. The bounded
-    /// wait lets the end requests reach the system before the process exits; launch cleanup remains
-    /// the fallback when the process is killed without this notification.
-    nonisolated private static func endAllBeforeExit() {
+    /// Returns false on the OS's bounded termination deadline; startup/stale cleanup remains the fallback.
+    @discardableResult
+    func endBeforeExit(timeout: TimeInterval = 2) -> Bool {
+        self.terminating = true
+        self.concealed = true
+        self.revision = UUID()
+        self.observation?.cancel()
+        self.observation = nil
+        self.pendingStart?.cancel()
+        self.pendingStart = nil
+        let refresh = self.refresh
+        refresh?.cancel()
+        self.refresh = nil
+        var activities = Activity<Attributes>.activities
+        if let activity = self.activity, !activities.contains(where: { $0.id == activity.id }) { activities.append(activity) }
+        self.activity = nil
+        _ = self.plan.update(nil)
+        self.enqueueEnd(activities, after: refresh)
+        let cleanup = self.pendingEnd
         let done = DispatchSemaphore(value: 0)
-        Task.detached {
-            for activity in Activity<Attributes>.activities { await activity.end(nil, dismissalPolicy: .immediate) }
-            done.signal()
-        }
-        _ = done.wait(timeout: .now() + 2)
+        Task.detached { await cleanup?.value; done.signal() }
+        return done.wait(timeout: .now() + max(0, timeout)) == .success
     }
 
     /// Resolves copy, brand and appearance with the same contracts the app interface uses.

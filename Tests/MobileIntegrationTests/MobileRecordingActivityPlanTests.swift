@@ -62,7 +62,7 @@ final class MobileRecordingActivityPlanTests: XCTestCase {
         let session = session()
         var plan = MobileRecordingActivityPlan()
         let recording = try XCTUnwrap(MobileRecordingActivityPlan.recording(state: .recording(session.id), session: session))
-        // The system may refuse the start, for example on iPad. Later state changes do not retry.
+        // The system may refuse the start, for example when disabled in system settings. Later state changes do not retry.
         XCTAssertEqual(plan.update(recording), [.start(recording)])
         XCTAssertEqual(plan.update(recording), [])
         XCTAssertEqual(plan.update(nil), [.end(session.id)])

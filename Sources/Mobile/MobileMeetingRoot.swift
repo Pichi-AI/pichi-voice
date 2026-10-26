@@ -501,12 +501,13 @@ struct MobileMeetingRoot: View {
                             .accessibilityIdentifier("meeting.settings")
                     }
                     if isBusy { ProgressView().accessibilityIdentifier("meeting.preparing") }
-                    // Inline under the button, so it covers no copy and takes the brand tint. Before a
-                    // first setup finishes it is not laid out at all; TipKit hides it once invalidated.
-                    if FirstMeetingTip.setupFinished {
-                        TipView(FirstMeetingTip()).tint(theme.palette.accent)
-                    }
                 }.padding(compactHeight ? 12 : 20).background(theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: theme.metrics.corners.lg))
+                if FirstMeetingTip.setupFinished {
+                    TipView(FirstMeetingTip()).tint(theme.palette.accent)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("meeting.firstMeetingTip")
+                }
                 Label(PichiLocalization.text("Stored on this device. Place the microphone where everyone can be heard."), systemImage: "lock")
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     .accessibilityIdentifier("meeting.storageNote")
