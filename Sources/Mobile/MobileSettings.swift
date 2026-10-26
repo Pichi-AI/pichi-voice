@@ -42,10 +42,10 @@ struct MobileSettingsRoot: View {
                         case .active: Text(PichiLocalization.text("On"))
                         case .enabling: ProgressView().controlSize(.small)
                         case .off: Text(PichiLocalization.text("Off"))
-                        // Still off, but the requested cleanup failed to prepare; the screen explains why.
+                        // The requested cleanup failed to prepare; the screen explains why.
                         case .failed:
                             Label {
-                                Text(PichiLocalization.text("Off"))
+                                Text(PichiLocalization.text("Failed"))
                             } icon: {
                                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(theme.palette.warning)
                             }.labelStyle(.titleAndIcon)

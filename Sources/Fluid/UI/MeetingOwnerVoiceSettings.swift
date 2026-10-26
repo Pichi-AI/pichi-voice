@@ -78,12 +78,22 @@ struct MeetingOwnerVoiceSettingsContent: View {
         }
     }
 
+    /// iOS keeps the accent fill, so a prominent label takes the theme's ink for it, like Start Recording.
+    /// macOS greys prominent buttons in an inactive window and keeps choosing its own label color.
+    @ViewBuilder private func prominent(_ label: Text) -> some View {
+        #if os(iOS)
+        label.foregroundStyle(self.theme.palette.accentForeground)
+        #else
+        label
+        #endif
+    }
+
     @ViewBuilder private var actions: some View {
         if self.model.phase == .recording {
             // Once the sample is long enough, finishing becomes the clear next step.
             if self.model.seconds >= MeetingOwnerVoiceEnrollmentCapture.recommendedSeconds {
                 Button { self.model.finishRecording() } label: {
-                    Text(PichiLocalization.text("Done")).foregroundStyle(self.theme.palette.accentForeground)
+                    self.prominent(Text(PichiLocalization.text("Done")))
                 }.buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.stop")
             } else {
                 Button(PichiLocalization.text("Stop")) { self.model.finishRecording() }
@@ -100,7 +110,7 @@ struct MeetingOwnerVoiceSettingsContent: View {
             }.accessibilityIdentifier("ownerVoice.start")
             if self.model.phase == .ready {
                 Button { self.model.save() } label: {
-                    Text(PichiLocalization.text("Save")).foregroundStyle(self.theme.palette.accentForeground)
+                    self.prominent(Text(PichiLocalization.text("Save")))
                 }.buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.save")
                 Button(PichiLocalization.text("Cancel")) { self.model.discardDraft() }
                     .accessibilityIdentifier("ownerVoice.cancel")
