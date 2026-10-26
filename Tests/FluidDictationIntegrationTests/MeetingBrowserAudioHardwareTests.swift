@@ -575,8 +575,9 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
                 && coordinator.latestCompletedSession?.id == session.id, "Normal coordinator stop did not complete the same meeting.")
             let saved = try await store.load(id: session.id)
             let persisted = try XCTUnwrap(saved)
+            let expectedStoredTracks = try Self.tracksUsingStoreDatePrecision(completed.audioTracks)
             try MeetingBrowserAudioHardwareTests.require(persisted.id == completed.id && persisted.state == .completed
-                && persisted.audioTracks == completed.audioTracks, "The ordinary store did not retain the completed tracks.")
+                && persisted.audioTracks == expectedStoredTracks, "The ordinary store did not retain the completed tracks.")
             try MeetingBrowserAudioHardwareTests.require(persisted.recordingBackendID == session.recordingBackendID
                 && persisted.recordingASRArtifactFingerprint == session.recordingASRArtifactFingerprint
                 && persisted.processingAttempts.last?.asrModel == selectedModelID
@@ -652,6 +653,16 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
         report.status = report.failures.isEmpty ? "passed" : "failed"
         try MeetingBrowserAudioHardwareTests.write(report, to: options.root.appendingPathComponent("outcome.json"))
         XCTAssertTrue(report.failures.isEmpty, report.failures.joined(separator: " "))
+    }
+
+    /// The store persists ISO8601 dates at whole-second precision. Compare the complete
+    /// track value after that same codec round trip, retaining every timing and chunk field.
+    fileprivate static func tracksUsingStoreDatePrecision(_ tracks: [MeetingAudioTrack]) throws -> [MeetingAudioTrack] {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode([MeetingAudioTrack].self, from: encoder.encode(tracks))
     }
 
     /// The real coordinator owns an unstructured stop task. A deadline must shut down that
@@ -1360,6 +1371,31 @@ final class MeetingSystemAudioContinuityProtocolTests: XCTestCase {
 /// opening audio devices, loading a model, or depending on an interactive browser.
 @MainActor
 final class MeetingSystemAudioContinuityFailureEvidenceTests: XCTestCase {
+    func testCompletedTrackComparisonUsesStoreDatePrecisionWithoutIgnoringTrackChanges() async throws {
+        let fixture = try await self.fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory.deletingLastPathComponent().deletingLastPathComponent()) }
+        var completed = fixture.session
+        completed.state = .completed
+        completed.endedAt = fixture.stop.stoppedAt
+        completed.audioTracks = fixture.stop.tracks
+        for index in completed.audioTracks.indices {
+            completed.audioTracks[index].health.lastSampleAt = Date(timeIntervalSince1970: 1_700_000_000.375)
+        }
+        try await fixture.store.save(completed)
+        let saved = try await fixture.store.load(id: completed.id)
+        let persisted = try XCTUnwrap(saved)
+        XCTAssertNotEqual(persisted.audioTracks, completed.audioTracks, "Raw equality must expose the known ISO8601 date precision change.")
+        let expected = try MeetingSystemAudioContinuityHardwareTests.tracksUsingStoreDatePrecision(completed.audioTracks)
+        XCTAssertEqual(persisted.audioTracks, expected)
+
+        var changedChunk = persisted.audioTracks
+        changedChunk[0].chunks[0].byteCount += 1
+        XCTAssertNotEqual(changedChunk, expected, "A persisted chunk change must still fail comparison.")
+        var changedDate = persisted.audioTracks
+        changedDate[0].health.lastSampleAt = try XCTUnwrap(changedDate[0].health.lastSampleAt).addingTimeInterval(1)
+        XCTAssertNotEqual(changedDate, expected, "A whole-second date change must still fail comparison.")
+    }
+
     func testLateFirstPhaseRetainsFinalizedCaptureAndAcceptedProtocolEvidence() async throws {
         let fixture = try await self.fixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory.deletingLastPathComponent().deletingLastPathComponent()) }
