@@ -424,6 +424,20 @@ class DriverTests(unittest.TestCase):
                 self.processes.assert_owned(child)
         self.assertEqual(self.processes.signals, [])
 
+    def test_clone_cache_hit_rejects_file_replaced_during_strict_verification(self):
+        child, parent, bundle, observed = self.clone_child("cache-race-clone")
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run") as verify:
+            self.processes.assert_owned(child)
+            def replace(arguments, **kwargs):
+                if "--deep" in arguments:
+                    observed.write_bytes(b"x" * observed.stat().st_size)
+            verify.side_effect = replace
+            with self.assertRaisesRegex(ProtocolError, "changed during cached"):
+                self.processes.assert_owned(child)
+        self.assertEqual(self.processes.signals, [])
+
     def test_clone_helper_requires_relative_executable_equivalence(self):
         child, parent, bundle, observed = self.clone_child("helper-clone")
         relative = Path("Contents/Frameworks/Google Chrome Helper")

@@ -124,6 +124,8 @@ class OwnedProcesses:
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         key = (child.pid, str(expected), str(observed), stamps)
         if key in self.executable_proofs:
+            if stamps != tuple(self.file_stamp(path) for path in paths):
+                raise ProtocolError("Signed executable changed during cached relocation verification.")
             return self.executable_proofs[key]
         def digest(path):
             result = hashlib.sha256()
