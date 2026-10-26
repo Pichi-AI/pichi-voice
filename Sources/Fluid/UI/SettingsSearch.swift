@@ -71,6 +71,7 @@ enum SettingsSearchTarget: Hashable {
     case fasterLongDictation
     case dictionaryMatcherExperiments
     case historyPerformance
+    case localAPI
 
     var section: SettingsSection {
         switch self {
@@ -127,7 +128,7 @@ enum SettingsSearchTarget: Hashable {
         case .dataAndDiagnostics, .backupAndRestore, .debugLogs:
             return .dataAndDiagnostics
 
-        case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance:
+        case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance, .localAPI:
             return .experimental
         }
     }
@@ -452,6 +453,11 @@ enum SettingsSearchIndex {
             target: .historyPerformance,
             title: "Show Performance in History",
             terms: ["timing speed tokens per second ASR cleanup Fluid Intelligence", AppBrand.text("timing speed tokens per second ASR cleanup Fluid Intelligence")]
+        ),
+        .init(
+            target: .localAPI,
+            title: "Enable Local API",
+            terms: ["experimental loopback http server endpoint port 47733 browser extension integration transcribe"]
         ),
     ] }
 
