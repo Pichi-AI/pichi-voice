@@ -186,8 +186,11 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
                 let deadline = ContinuousClock.now.advanced(by: .seconds(25))
                 while !self.stopRequested, active.capturedSeconds < MeetingOwnerVoiceEnrollmentCapture.maximumSeconds, ContinuousClock.now < deadline {
                     try active.checkFailure()
-                    self.seconds = active.capturedSeconds
-                    self.level = active.recentLevel
+                    // Without new samples the bars fade instead of holding the last level, so a microphone
+                    // that stopped delivering does not look as if it still hears the reader.
+                    let captured = active.capturedSeconds
+                    self.level = captured > self.seconds ? active.recentLevel : self.level / 2
+                    self.seconds = captured
                     try await Task.sleep(for: .milliseconds(100))
                 }
                 self.seconds = active.capturedSeconds

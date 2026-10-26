@@ -203,8 +203,8 @@ struct MobileMeetingRoot: View {
             await refreshMicrophones()
         }
         // iOS mutes haptics while the microphone records, so they mark the Start tap and the end of
-        // capture rather than the recording states themselves.
-        .sensoryFeedback(.start, trigger: startFeedback)
+        // capture rather than the recording states themselves. `.start` and `.stop` play on watchOS only.
+        .sensoryFeedback(.impact(weight: .medium), trigger: startFeedback)
         .sensoryFeedback(trigger: coordinator.state) { previous, state in Self.captureEndFeedback(from: previous, to: state) }
         // The app's UI-ready signal owns the launch sweep; its committed deletions reload History.
         .onChange(of: coordinator.retentionSweepRevision) { _, _ in Task { await refreshHistory() } }
@@ -389,8 +389,8 @@ struct MobileMeetingRoot: View {
                             .accessibilityIdentifier("meeting.settings")
                     }
                     if isBusy { ProgressView().accessibilityIdentifier("meeting.preparing") }
-                    // Inline under the button, so it covers no copy and takes the brand tint. Without a
-                    // freshly finished first setup it is not laid out at all.
+                    // Inline under the button, so it covers no copy and takes the brand tint. Before a
+                    // first setup finishes it is not laid out at all; TipKit hides it once invalidated.
                     if FirstMeetingTip.setupFinished {
                         TipView(FirstMeetingTip()).tint(theme.palette.accent)
                     }
@@ -830,14 +830,14 @@ struct MobileMeetingRoot: View {
         }.accessibilityElement(children: .contain).accessibilityIdentifier("transcript.paragraph.\(paragraph.id)")
     }
 
-    /// A soft tap when capture ends normally and a warning when it ends early; nothing on restore.
+    /// Success when capture ends normally and a warning when it ends early; nothing on restore.
     private static func captureEndFeedback(from previous: MeetingCoordinatorState, to state: MeetingCoordinatorState) -> SensoryFeedback? {
         switch previous {
         case .recording, .recordingDegraded, .stopping: break
         default: return nil
         }
         switch state {
-        case .processing, .completed: return .stop
+        case .processing, .completed: return .success
         case .interrupted, .failed: return .warning
         default: return nil
         }
