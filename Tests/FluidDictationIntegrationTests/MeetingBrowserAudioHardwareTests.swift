@@ -475,6 +475,217 @@ fileprivate final class BrowserCaptureEvents: @unchecked Sendable {
 /// See docs/development/system-audio-continuity-test.md for the atomic command/ack protocol.
 @MainActor
 final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
+    /// Run alone in the exact authorized XCTest application host. This exercises the same
+    /// AppServices singleton composition as the app, but is not an ordinary UI interaction test.
+    /// Add PICHI_SYSTEM_CAPTURE_COORDINATOR_CONSENT=1 to the existing ROOT/RUN_ID protocol.
+    /// DURATION_SECONDS is bounded to 60...100 (default 100); admission and stop each allow 60.
+    /// The host must already select an installed Parakeet v2/v3, enable meetings, and retain audio.
+    /// No settings, provider, capture engine, store, or factory is replaced. Optional
+    /// PICHI_SYSTEM_CAPTURE_VERIFY_ASR=1 requires EXPECTED_TEXT_JSON and checks the normal
+    /// finalized system-track transcript in each externally acknowledged phase window.
+    func testAppServicesSystemAudioSurvivesExternalBrowserRestartWhenEnabled() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_SYSTEM_CAPTURE_COORDINATOR_CONSENT"] == "1" else {
+            throw XCTSkip("Set PICHI_SYSTEM_CAPTURE_COORDINATOR_CONSENT=1 for the real AppServices coordinator probe.")
+        }
+        let options = try SystemContinuityOptions(environment: environment, requiresModelDirectoryForExpectedText: false)
+        try MeetingBrowserAudioHardwareTests.require(options.durationSeconds <= 100, "Coordinator capture is bounded to 100 seconds.")
+        try MeetingBrowserAudioHardwareTests.require(options.modelDirectory == nil, "Coordinator uses the installed selected model, not GIGAAM_MODEL_DIR.")
+        let verifyASR = environment["PICHI_SYSTEM_CAPTURE_VERIFY_ASR"] == "1"
+        try MeetingBrowserAudioHardwareTests.require(verifyASR == !options.expectedText.isEmpty,
+            "VERIFY_ASR=1 and three distinct EXPECTED_TEXT_JSON phrases must be supplied together.")
+        try options.prepareRoot()
+        var report = SystemContinuityReport(runID: options.runID, status: "failed", failures: [])
+        report.probeScope = "xctest-appservices-default-coordinator"
+        var ownedSessionID: UUID?
+        let ownedTitle = "Synthetic coordinator continuity \(options.runID.uuidString)"
+        let coordinator = AppServices.shared.meetingSessionCoordinator
+        let store = MeetingSessionStore.shared
+        var protocolState = SystemContinuityProtocol(runID: options.runID)
+        do {
+            try MeetingBrowserAudioHardwareTests.require(CGPreflightScreenCaptureAccess(), "System audio is not preflight-authorized.")
+            try MeetingBrowserAudioHardwareTests.require(AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+                "Microphone is not preflight-authorized.")
+            let settings = SettingsStore.shared
+            try MeetingBrowserAudioHardwareTests.require(settings.fluidMeetEnabled, "Meetings must already be enabled.")
+            try MeetingBrowserAudioHardwareTests.require([.parakeetTDT, .parakeetTDTv2].contains(settings.selectedSpeechModel)
+                && settings.selectedSpeechModel.isInstalled, "Select an already installed Parakeet v2/v3 before this probe.")
+            let selectedModelID = settings.selectedSpeechModel.rawValue
+            let expectedBackendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: "en",
+                selectedModelID: selectedModelID, savedBackendID: settings.meetingTranscriptionBackendID)
+            try MeetingBrowserAudioHardwareTests.require(settings.meetingAudioRetentionPolicy != .afterTranscription,
+                "Existing retention policy must preserve the finalized PCM evidence.")
+            await coordinator.ensureRestored()
+            try MeetingBrowserAudioHardwareTests.require(coordinator.activeSession == nil && !coordinator.hasPendingStart,
+                "The singleton already owns a session or pending start; it cannot be used by this probe.")
+            switch coordinator.state {
+            case .idle, .completed: break
+            default: throw BrowserCaptureFailure(message: "The singleton is not idle or completed.")
+            }
+            var configuration = try await coordinator.defaultConfiguration(mode: .onlineCall, title: ownedTitle)
+            configuration.timestampDefaultTitle = false
+            configuration.languageCode = "en"
+            configuration.application = nil
+            configuration.applicationAudioScope = .systemAudio
+            configuration.audioStorageMode = .retainedFiles
+            configuration.speakerLabelsEnabled = false
+            configuration.speakerProcessingMode = nil
+            configuration.piiRedactionEnabled = false
+            let frozenConfiguration = configuration
+            report.selectedSpeechModelID = selectedModelID
+            let captureStart = SystemContinuityProtocol.hostSeconds()
+            let session = try await Self.coordinatorOperation(coordinator, ownedTitle: ownedTitle) {
+                try MeetingBrowserAudioHardwareTests.require(SettingsStore.shared.selectedSpeechModel.rawValue == selectedModelID,
+                    "Selected model changed before ordinary recording admission.")
+                return try await coordinator.startRecording(configuration: frozenConfiguration)
+            }
+            ownedSessionID = session.id
+            try MeetingBrowserAudioHardwareTests.require(session.languageCode == "en"
+                && session.recordingBackendID == expectedBackendID.rawValue,
+                "Normal admission did not freeze the selected English Parakeet route.")
+            report.recordingSessionID = session.id
+            report.recordingBackendID = session.recordingBackendID
+            report.recordingASRArtifactFingerprint = session.recordingASRArtifactFingerprint
+            let directory = try await store.sessionDirectory(for: session.id)
+            report.sessionDirectory = directory.path
+            var observations: [SystemContinuityCoordinatorObservation] = []
+            func observeRecording(_ sequence: Int) throws {
+                try MeetingBrowserAudioHardwareTests.require(coordinator.state == .recording(session.id)
+                    && coordinator.activeSession?.id == session.id && coordinator.activeSession?.state == .recording,
+                    "Ordinary coordinator left recording or replaced the session during phase sequence \(sequence).")
+                if observations.last?.sequence != sequence {
+                    observations.append(SystemContinuityCoordinatorObservation(sequence: sequence, sessionID: session.id,
+                        state: "recording", hostSeconds: SystemContinuityProtocol.hostSeconds()))
+                    report.coordinatorObservations = observations
+                }
+            }
+            try observeRecording(0)
+            try MeetingBrowserAudioHardwareTests.write(
+                SystemContinuityReady(runID: options.runID, sessionID: session.id, sessionDirectory: directory.path,
+                    captureStartHostSeconds: captureStart, readyHostSeconds: SystemContinuityProtocol.hostSeconds(),
+                    durationSeconds: options.durationSeconds), to: options.root.appendingPathComponent("capture-ready.json")
+            )
+            try await Self.waitForExternalPhases(options, protocolState: &protocolState, observeRecording: observeRecording)
+            try observeRecording(8)
+            let completed = try await Self.coordinatorOperation(coordinator, ownedTitle: ownedTitle) {
+                try await coordinator.stopAndTranscribe()
+            }
+            try MeetingBrowserAudioHardwareTests.require(completed.id == session.id && completed.state == .completed
+                && coordinator.state == .completed(session.id) && coordinator.activeSession == nil
+                && coordinator.latestCompletedSession?.id == session.id, "Normal coordinator stop did not complete the same meeting.")
+            let saved = try await store.load(id: session.id)
+            let persisted = try XCTUnwrap(saved)
+            try MeetingBrowserAudioHardwareTests.require(persisted.id == completed.id && persisted.state == .completed
+                && persisted.audioTracks == completed.audioTracks, "The ordinary store did not retain the completed tracks.")
+            try MeetingBrowserAudioHardwareTests.require(persisted.recordingBackendID == session.recordingBackendID
+                && persisted.recordingASRArtifactFingerprint == session.recordingASRArtifactFingerprint
+                && persisted.processingAttempts.last?.asrModel == selectedModelID
+                && (persisted.processingAttempts.last?.backendID == session.recordingBackendID
+                    || (expectedBackendID == .legacyCompatibility && persisted.processingAttempts.last?.backendID == nil)),
+                "Normal processing did not retain the admitted model and backend.")
+            let observationsBeforeReport = report.coordinatorObservations
+            report = Self.report(session: persisted, directory: directory, runID: options.runID, captureScope: nil,
+                protocolState: protocolState, events: nil, failures: [], maximumCaptureDuration: options.durationSeconds)
+            report.probeScope = "xctest-appservices-default-coordinator"
+            report.recordingSessionID = session.id
+            report.selectedSpeechModelID = selectedModelID
+            report.recordingBackendID = persisted.recordingBackendID
+            report.recordingASRArtifactFingerprint = persisted.recordingASRArtifactFingerprint
+            report.coordinatorObservations = observationsBeforeReport
+            report.finalProcessingCompleted = true
+            report.transcriptCoverageGaps = persisted.transcriptCoverageGaps ?? []
+            // The coordinator owns capture events. Report its persisted events rather than
+            // installing a second event handler or claiming observed engine diagnostics.
+            report.events = nil
+            var eventSummary = BrowserCaptureEventSummary()
+            for event in persisted.events { eventSummary.interruptionsByKind[event.kind.rawValue, default: 0] += 1 }
+            report.events = eventSummary
+            _ = try await Self.validateSavedPCM(session: persisted, directory: directory, protocolState: protocolState,
+                report: &report, requiresEngineScope: false)
+            if verifyASR {
+                let track = try XCTUnwrap(persisted.audioTracks.first { $0.kind == .applicationAudio })
+                let origin = persisted.transcriptTimeDomain == .meetingRelative
+                    ? try XCTUnwrap(persisted.timebase.firstPresentationTime).seconds : 0
+                for gap in report.transcriptCoverageGaps where protocolState.phases.contains(where: {
+                    gap.end + origin > $0.startHostSeconds && gap.start + origin < $0.endHostSeconds
+                }) {
+                    report.failures.append("Final transcript has a \(gap.reason.rawValue) coverage gap during a speech phase.")
+                }
+                for index in report.phases.indices {
+                    let phase = report.phases[index].phase
+                    let candidates = persisted.transcriptSegments.filter {
+                        $0.sourceTrackID == track.id && $0.end.seconds + origin > phase.startHostSeconds
+                            && $0.start.seconds + origin < phase.endHostSeconds
+                    }
+                    let confined = candidates.filter {
+                        phase.containsTranscript(start: $0.start.seconds, end: $0.end.seconds, origin: origin)
+                    }
+                    if confined.count != candidates.count {
+                        report.failures.append("\(phase.name) contains ambiguous transcript timing outside its phase window.")
+                    }
+                    let text = confined.sorted { $0.start < $1.start }.map(\.text).joined(separator: " ")
+                    report.phases[index].speechText = text
+                    if let expected = options.expectedText[phase.name], !text.localizedCaseInsensitiveContains(expected) {
+                        report.failures.append("\(phase.name) normal finalized transcript lacks its expected synthetic phrase.")
+                    }
+                }
+            }
+            await Self.shutdownOwnedCoordinator(coordinator, title: ownedTitle)
+        } catch {
+            let ownedActiveID = coordinator.activeSession.flatMap { $0.title == ownedTitle ? $0.id : nil }
+            if ownedSessionID != nil || ownedActiveID != nil {
+                await Self.shutdownOwnedCoordinator(coordinator, title: ownedTitle)
+                let sessionID = ownedSessionID ?? ownedActiveID
+                if let sessionID, let saved = try? await store.load(id: sessionID) {
+                    report.sessionState = saved.state.rawValue
+                    report.endedAt = saved.endedAt
+                    report.sessionDirectory = try? await store.sessionDirectory(for: sessionID).path
+                }
+            }
+            report.failures.append(error.localizedDescription)
+        }
+        report.protocolComplete = protocolState.isComplete
+        report.commands = protocolState.commands
+        report.acknowledgements = protocolState.acknowledgements
+        report.phaseWindows = protocolState.phases
+        report.browserAbsentSeconds = protocolState.browserAbsentSeconds
+        report.status = report.failures.isEmpty ? "passed" : "failed"
+        try MeetingBrowserAudioHardwareTests.write(report, to: options.root.appendingPathComponent("outcome.json"))
+        XCTAssertTrue(report.failures.isEmpty, report.failures.joined(separator: " "))
+    }
+
+    /// The real coordinator owns an unstructured stop task. A deadline must shut down that
+    /// owner before the task group joins, otherwise cancelling the wrapper can hang on inference.
+    private static func coordinatorOperation(
+        _ coordinator: MeetingSessionCoordinator, ownedTitle: String,
+        operation: @escaping @MainActor @Sendable () async throws -> MeetingSession
+    ) async throws -> MeetingSession {
+        try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: MeetingSession.self) { group in
+                group.addTask { try await operation() }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 60_000_000_000)
+                    await Self.shutdownOwnedCoordinator(coordinator, title: ownedTitle)
+                    throw BrowserCaptureFailure(message: "Ordinary coordinator operation exceeded 60 seconds.")
+                }
+                defer { group.cancelAll() }
+                guard let result = try await group.next() else { throw CancellationError() }
+                return result
+            }
+        } onCancel: {
+            Task { @MainActor in await Self.shutdownOwnedCoordinator(coordinator, title: ownedTitle) }
+        }
+    }
+
+    private static func shutdownOwnedCoordinator(_ coordinator: MeetingSessionCoordinator, title: String) async {
+        if let active = coordinator.activeSession {
+            guard active.title == title else { return }
+        } else {
+            guard !coordinator.hasPendingStart, coordinator.latestCompletedSession?.title == title else { return }
+        }
+        await coordinator.shutdownForTermination()
+    }
+
     func testSystemAudioSurvivesExternalBrowserRestartWhenEnabled() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["PICHI_SYSTEM_CAPTURE_CONSENT"] == "1" else {
@@ -539,33 +750,7 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
                                       durationSeconds: options.durationSeconds),
                 to: options.root.appendingPathComponent("capture-ready.json")
             )
-            let deadline = SystemContinuityProtocol.hostSeconds() + options.durationSeconds
-            while SystemContinuityProtocol.hostSeconds() < deadline {
-                try Task.checkCancellation()
-                let commandURL = options.root.appendingPathComponent("phase-command.json")
-                if FileManager.default.fileExists(atPath: commandURL.path) {
-                    let handle = try FileHandle(forReadingFrom: commandURL)
-                    let data: Data
-                    do {
-                        data = try handle.read(upToCount: 8193) ?? Data()
-                        try handle.close()
-                    } catch {
-                        try? handle.close()
-                        throw error
-                    }
-                    try MeetingBrowserAudioHardwareTests.require(data.count <= 8192, "Phase command exceeded its size limit.")
-                    let command = try JSONDecoder().decode(SystemContinuityCommand.self, from: data)
-                    if command.sequence > protocolState.sequence {
-                        let ack = try protocolState.accept(command, at: SystemContinuityProtocol.hostSeconds())
-                        try MeetingBrowserAudioHardwareTests.write(ack, to: options.root.appendingPathComponent("phase-ack.json"))
-                    } else {
-                        try MeetingBrowserAudioHardwareTests.require(command.runID == options.runID, "Phase command has another run ID.")
-                    }
-                }
-                if protocolState.isComplete { break }
-                try await Task.sleep(nanoseconds: 25_000_000)
-            }
-            try MeetingBrowserAudioHardwareTests.require(protocolState.isComplete, "External phase protocol did not complete before its deadline.")
+            try await Self.waitForExternalPhases(options, protocolState: &protocolState)
             let sessionID = session.id
             let stop = try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 12) {
                 try await engine.stop(sessionID: sessionID)
@@ -596,41 +781,10 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
             maximumCaptureDuration: options.durationSeconds
         )
         do {
-            if report.applicationAudioScope != "systemAudio" || report.capturedApplication != nil || report.captureScope != "systemAudio" {
-                report.failures.append("Capture/session metadata did not identify the all-system source truthfully.")
-            }
-            if Set(report.tracks.map(\.kind)) != Set(["applicationAudio", "microphone"]) {
-                report.failures.append("Capture did not preserve separate system and microphone tracks.")
-            }
-            for track in report.tracks where track.chunkCount == 0 || track.finalizedChunkCount != track.chunkCount
-                || track.persistedBytes == 0 || track.decodedFrames == 0 || track.nonFiniteSamples != 0 {
-                report.failures.append("\(track.kind) contains missing, unfinished, empty, or invalid PCM.")
-            }
-            let terminal: [MeetingInterruptionKind] = [.writerFailure, .diskExhausted, .permissionRevoked,
-                                                       .captureStoppedUnexpectedly, .applicationExited, .microphoneDisconnected]
-            for kind in terminal where report.events?.interruptionsByKind[kind.rawValue, default: 0] ?? 0 > 0 {
-                report.failures.append("Capture emitted terminal interruption \(kind.rawValue).")
-            }
-            if report.events?.droppedInterruptionDetails ?? 0 > 0 { report.failures.append("Interruption evidence overflowed.") }
-            let track = try XCTUnwrap(session.audioTracks.first { $0.kind == .applicationAudio })
-            if track.sourceIdentifier != "system-audio" { report.failures.append("System track has an application-specific identifier.") }
-            // Epoch clock resets can alter the writer's canonical PTS mapping. This probe deliberately
-            // rejects ambiguous evidence instead of assigning old audio to a later external phase.
-            if track.chunks.contains(where: { $0.discontinuities.contains { $0.kind == .clockDiscontinuity } }) {
-                report.failures.append("Clock reset prevents unambiguous host-time phase matching in this probe.")
-            }
-            var phaseSamples: [[Float]] = []
-            for phase in protocolState.phases {
-                let saved = try await Self.samples(in: phase, track: track, directory: directory)
-                let samples = saved.samples
-                let metrics = SystemContinuityPhaseMetrics(phase: phase, samples: samples, chunkCount: saved.chunkCount)
-                report.phases.append(metrics)
-                phaseSamples.append(samples)
-                if metrics.rms <= 0.001 || metrics.peak <= 0.01 || metrics.nonSilentSeconds < 0.5
-                    || metrics.nonFiniteSamples != 0 || metrics.decodedSeconds < 0.5 {
-                    report.failures.append("\(phase.name) has no valid speech signal in its own persisted system-audio time window.")
-                }
-            }
+            let phaseSamples = try await Self.validateSavedPCM(
+                session: session, directory: directory, protocolState: protocolState, report: &report,
+                requiresEngineScope: true
+            )
             if let modelDirectory = options.modelDirectory {
                 let modelStore = PichiGigaAMModelStore(directory: modelDirectory)
                 let fingerprint = try modelStore.installedModelFingerprint()
@@ -666,6 +820,83 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
         }
         report.status = report.failures.isEmpty ? "passed" : "failed"
         return report
+    }
+
+    private static func waitForExternalPhases(
+        _ options: SystemContinuityOptions, protocolState: inout SystemContinuityProtocol,
+        observeRecording: (Int) throws -> Void = { _ in }
+    ) async throws {
+        let deadline = SystemContinuityProtocol.hostSeconds() + options.durationSeconds
+        while SystemContinuityProtocol.hostSeconds() < deadline {
+            try Task.checkCancellation()
+            try observeRecording(protocolState.sequence)
+            let commandURL = options.root.appendingPathComponent("phase-command.json")
+            if FileManager.default.fileExists(atPath: commandURL.path) {
+                let handle = try FileHandle(forReadingFrom: commandURL)
+                let data: Data
+                do {
+                    data = try handle.read(upToCount: 8193) ?? Data()
+                    try handle.close()
+                } catch {
+                    try? handle.close()
+                    throw error
+                }
+                try MeetingBrowserAudioHardwareTests.require(data.count <= 8192, "Phase command exceeded its size limit.")
+                let command = try JSONDecoder().decode(SystemContinuityCommand.self, from: data)
+                if command.sequence > protocolState.sequence {
+                    let ack = try protocolState.accept(command, at: SystemContinuityProtocol.hostSeconds())
+                    try observeRecording(protocolState.sequence)
+                    try MeetingBrowserAudioHardwareTests.write(ack, to: options.root.appendingPathComponent("phase-ack.json"))
+                } else {
+                    try MeetingBrowserAudioHardwareTests.require(command.runID == options.runID, "Phase command has another run ID.")
+                }
+            }
+            if protocolState.isComplete { break }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        try MeetingBrowserAudioHardwareTests.require(protocolState.isComplete, "External phase protocol did not complete before its deadline.")
+    }
+
+    private static func validateSavedPCM(
+        session: MeetingSession, directory: URL, protocolState: SystemContinuityProtocol,
+        report: inout SystemContinuityReport, requiresEngineScope: Bool
+    ) async throws -> [[Float]] {
+        if report.applicationAudioScope != "systemAudio" || report.capturedApplication != nil || (requiresEngineScope && report.captureScope != "systemAudio") {
+            report.failures.append("Capture/session metadata did not identify the all-system source truthfully.")
+        }
+        if Set(report.tracks.map(\.kind)) != Set(["applicationAudio", "microphone"]) {
+            report.failures.append("Capture did not preserve separate system and microphone tracks.")
+        }
+        for track in report.tracks where track.chunkCount == 0 || track.finalizedChunkCount != track.chunkCount
+            || track.persistedBytes == 0 || track.decodedFrames == 0 || track.nonFiniteSamples != 0 {
+            report.failures.append("\(track.kind) contains missing, unfinished, empty, or invalid PCM.")
+        }
+        let terminal: [MeetingInterruptionKind] = [.writerFailure, .diskExhausted, .permissionRevoked,
+                                                   .captureStoppedUnexpectedly, .applicationExited, .microphoneDisconnected]
+        for kind in terminal where report.events?.interruptionsByKind[kind.rawValue, default: 0] ?? 0 > 0 {
+            report.failures.append("Capture emitted terminal interruption \(kind.rawValue).")
+        }
+        if report.events?.droppedInterruptionDetails ?? 0 > 0 { report.failures.append("Interruption evidence overflowed.") }
+        let track = try XCTUnwrap(session.audioTracks.first { $0.kind == .applicationAudio })
+        if track.sourceIdentifier != "system-audio" { report.failures.append("System track has an application-specific identifier.") }
+        // Epoch clock resets can alter the writer's canonical PTS mapping. This probe deliberately
+        // rejects ambiguous evidence instead of assigning old audio to a later external phase.
+        if track.chunks.contains(where: { $0.discontinuities.contains { $0.kind == .clockDiscontinuity } }) {
+            report.failures.append("Clock reset prevents unambiguous host-time phase matching in this probe.")
+        }
+        var phaseSamples: [[Float]] = []
+        for phase in protocolState.phases {
+            let saved = try await Self.samples(in: phase, track: track, directory: directory)
+            let samples = saved.samples
+            let metrics = SystemContinuityPhaseMetrics(phase: phase, samples: samples, chunkCount: saved.chunkCount)
+            report.phases.append(metrics)
+            phaseSamples.append(samples)
+            if metrics.rms <= 0.001 || metrics.peak <= 0.01 || metrics.nonSilentSeconds < 0.5
+                || metrics.nonFiniteSamples != 0 || metrics.decodedSeconds < 0.5 {
+                report.failures.append("\(phase.name) has no valid speech signal in its own persisted system-audio time window.")
+            }
+        }
+        return phaseSamples
     }
 
     /// Stop returns authoritative finalized tracks, including when runtime stop itself failed.
@@ -723,7 +954,7 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
 
     fileprivate static func report(
         session: MeetingSession, directory: URL, runID: UUID, captureScope: MeetingCaptureScope?,
-        protocolState: SystemContinuityProtocol, events: BrowserCaptureEvents, failures: [String], maximumCaptureDuration: Double
+        protocolState: SystemContinuityProtocol, events: BrowserCaptureEvents?, failures: [String], maximumCaptureDuration: Double
     ) -> SystemContinuityReport {
         var report = SystemContinuityReport(runID: runID, status: "failed", failures: failures)
         report.sessionDirectory = directory.path
@@ -737,7 +968,7 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
         report.commands = protocolState.commands
         report.acknowledgements = protocolState.acknowledgements
         report.phaseWindows = protocolState.phases
-        report.events = events.summary()
+        report.events = events?.summary()
         for track in session.audioTracks {
             do { report.tracks.append(try MeetingBrowserAudioHardwareTests.measure(track, in: directory, maximumCaptureDuration: maximumCaptureDuration)) }
             catch { report.failures.append("\(track.kind.rawValue) saved PCM measurement failed: \(error.localizedDescription)") }
@@ -789,7 +1020,7 @@ private struct SystemContinuityOptions {
     let modelDirectory: URL?
     let expectedText: [String: String]
 
-    init(environment: [String: String]) throws {
+    init(environment: [String: String], requiresModelDirectoryForExpectedText: Bool = true) throws {
         let prefix = "PICHI_SYSTEM_CAPTURE_"
         guard let path = environment[prefix + "ROOT"], path.hasPrefix("/"),
               let rawID = environment[prefix + "RUN_ID"], let runID = UUID(uuidString: rawID) else {
@@ -814,10 +1045,10 @@ private struct SystemContinuityOptions {
         if let json = environment[prefix + "EXPECTED_TEXT_JSON"] {
             guard json.utf8.count <= 8192 else { throw BrowserCaptureFailure(message: "Expected phrase map exceeded its size limit.") }
             self.expectedText = try JSONDecoder().decode([String: String].self, from: Data(json.utf8))
-            guard self.modelDirectory != nil, Set(self.expectedText.keys) == Set(SystemContinuityProtocol.phaseNames),
+            guard (!requiresModelDirectoryForExpectedText || self.modelDirectory != nil), Set(self.expectedText.keys) == Set(SystemContinuityProtocol.phaseNames),
                   self.expectedText.values.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
                   Set(self.expectedText.values.map { $0.lowercased() }).count == 3 else {
-                throw BrowserCaptureFailure(message: "Expected text requires an installed model and three distinct nonempty phase phrases.")
+                throw BrowserCaptureFailure(message: "Expected text requires the requested installed model and three distinct nonempty phase phrases.")
             }
         } else { self.expectedText = [:] }
     }
@@ -870,6 +1101,11 @@ fileprivate struct SystemContinuityPhase: Encodable {
     let processID: Int32
     let startHostSeconds: Double
     var endHostSeconds: Double
+
+    func containsTranscript(start: Double, end: Double, origin: Double) -> Bool {
+        start.isFinite && end.isFinite && origin.isFinite && end > start
+            && start + origin >= self.startHostSeconds && end + origin <= self.endHostSeconds
+    }
 }
 
 /// Only external phase evidence is trusted here, never inferred from RMS or ASR timing.
@@ -1002,10 +1238,39 @@ fileprivate struct SystemContinuityReport: Encodable {
     var tracks: [BrowserCaptureTrackMetrics] = []
     var phases: [SystemContinuityPhaseMetrics] = []
     var events: BrowserCaptureEventSummary?
+    var probeScope: String?
+    var recordingSessionID: UUID?
+    var selectedSpeechModelID: String?
+    var recordingBackendID: String?
+    var recordingASRArtifactFingerprint: String?
+    var coordinatorObservations: [SystemContinuityCoordinatorObservation] = []
+    var finalProcessingCompleted: Bool?
+    var transcriptCoverageGaps: [MeetingTranscriptCoverageGap] = []
+}
+
+fileprivate struct SystemContinuityCoordinatorObservation: Encodable {
+    let sequence: Int
+    let sessionID: UUID
+    let state: String
+    let hostSeconds: Double
 }
 
 /// Pure operator-evidence validation. No microphone, browser, permission, or model dependency.
 final class MeetingSystemAudioContinuityProtocolTests: XCTestCase {
+    func testTranscriptSpanningDistinctPhasesCannotSupplyPhaseLocalASREvidence() {
+        let phases = (0..<3).map { index in
+            SystemContinuityPhase(name: SystemContinuityProtocol.phaseNames[index], bundleID: nil,
+                executablePath: "/synthetic/source", processID: 1,
+                startHostSeconds: 100 + Double(index * 10), endHostSeconds: 105 + Double(index * 10))
+        }
+        // Even if this one segment contains every expected phrase, its envelope cannot locate
+        // any phrase in one phase. Canonical relative timing must use the same strict rule.
+        XCTAssertTrue(phases.allSatisfy { !$0.containsTranscript(start: 99, end: 126, origin: 0) })
+        XCTAssertTrue(phases.allSatisfy { !$0.containsTranscript(start: 0, end: 27, origin: 99) })
+        XCTAssertTrue(phases[0].containsTranscript(start: 1, end: 4, origin: 100))
+        XCTAssertFalse(phases[1].containsTranscript(start: 1, end: 4, origin: 100))
+    }
+
     func testNewProtocolHasNoAcceptedOperatorEvidence() {
         let runID = UUID()
         let state = SystemContinuityProtocol(runID: runID)
