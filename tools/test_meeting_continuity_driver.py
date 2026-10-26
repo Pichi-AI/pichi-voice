@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Owned fixture control on private mock protocol files. Never launches an app."""
 import json
+import hashlib
+import os
 from pathlib import Path
 import signal
 import subprocess
@@ -9,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import uuid
+from types import SimpleNamespace
 
 from meeting_continuity_driver import Child, Driver, OwnedProcesses
 from meeting_continuity_fixture import ProtocolError, atomic_json, read_json
@@ -37,6 +40,7 @@ class MockProcesses(OwnedProcesses):
         self.wave = Path("/synthetic/second.wav")
         self.children, self.statuses, self.metadata = {}, {}, {}
         self.identity_receipt = None
+        self.relocated_bundles, self.executable_proofs, self.proven_candidate_pids = {}, {}, set()
         self.signals, self.launches = [], []
         self.after_resume = lambda: None
 
@@ -285,26 +289,181 @@ class DriverTests(unittest.TestCase):
 
     def test_real_copy_scan_finds_detached_helper_without_signalling(self):
         self.processes.metadata[900] = dict(group=901, executable=str(self.processes.chrome_app / "crashpad"))
-        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S\n"):
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S Google Chrome Helper\n"):
             remaining = OwnedProcesses.copied_bundle_processes(self.processes, float("inf"))
         self.assertEqual(remaining[0]["processID"], 900)
         self.assertEqual(remaining[0]["processGroup"], 901)
         self.assertEqual(self.processes.signals, [])
 
-    def test_copy_scan_failed_lookup_of_live_pid_cannot_claim_cleanup(self):
-        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S\n"), \
+    def test_copy_scan_failed_lookup_of_unknown_foreign_pid_is_reported_without_signals(self):
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S Google Chrome\n"), \
              patch.object(self.processes, "executable_for", side_effect=ProtocolError("Unreadable")), \
              patch.object(self.processes, "group_for", return_value=901):
+            self.assertEqual(OwnedProcesses.copied_bundle_processes(self.processes, float("inf")), [])
+        value = read_json(self.driver.state_path)
+        self.assertEqual(value["step"], "unknown-foreign-process-inspection")
+        self.assertFalse(value["owned"])
+        self.assertFalse(value["signalled"])
+        self.assertEqual(self.processes.signals, [])
+
+    def test_copy_scan_unknown_owned_group_member_still_fails_cleanup(self):
+        child = self.processes.child("chrome")
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value=f"900 {child.pid} S Google Chrome\n"), \
+             patch.object(self.processes, "executable_for", side_effect=ProtocolError("Unreadable")):
             with self.assertRaisesRegex(ProtocolError, "cleanup is unverified"):
                 OwnedProcesses.copied_bundle_processes(self.processes, float("inf"))
         self.assertEqual(self.processes.signals, [])
 
+    def test_copy_scan_does_not_inspect_unrelated_command(self):
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="4393 4393 S Other App\n"), \
+             patch.object(self.processes, "executable_for", side_effect=AssertionError("Unrelated PID must not be inspected")):
+            self.assertEqual(OwnedProcesses.copied_bundle_processes(self.processes, float("inf")), [])
+
     def test_copy_scan_snapshot_racing_exit_is_not_signalled_or_reported_live(self):
-        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S\n"), \
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S Google Chrome\n"), \
              patch.object(self.processes, "executable_for", side_effect=ProtocolError("Exited")), \
              patch.object(self.processes, "group_for", side_effect=ProcessLookupError("Gone")):
             self.assertEqual(OwnedProcesses.copied_bundle_processes(self.processes, float("inf")), [])
         self.assertEqual(self.processes.signals, [])
+
+    def clone_child(self, label):
+        base = self.root / label
+        self.processes = MockProcesses(self.clock)
+        self.driver.processes = self.processes
+        self.processes.identity_receipt = self.driver.receipt
+        self.processes.chrome_app = base / "owned/Google Chrome.app"
+        self.processes.executable = self.processes.chrome_app / "Contents/MacOS/Google Chrome"
+        self.processes.profile = base / "owned/profile"
+        parent = base / "os/X/com.google.Chrome.code_sign_clone"
+        bundle = parent / "code_sign_clone.Bci7d2/Google Chrome.app.bundle"
+        observed = bundle / "Contents/MacOS/Google Chrome"
+        for path in (self.processes.executable, observed):
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"approved synthetic executable")
+        for app in (self.processes.chrome_app, bundle):
+            for relative in ("Contents/Info.plist", "Contents/_CodeSignature/CodeResources"):
+                path = app / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"synthetic signed metadata")
+        self.processes.launch_executable_sha256 = hashlib.sha256(self.processes.executable.read_bytes()).hexdigest()
+        self.processes.launch_signature = dict(CDHash="a" * 40, TeamIdentifier="TEAM123456",
+                                               designatedRequirement='identifier "com.google.Chrome" and anchor apple generic')
+        initial = self.processes.child("chrome")
+        process = SimpleNamespace(pid=initial.pid, poll=lambda: self.processes.statuses[initial.pid])
+        child = Child(initial.pid, initial.args, initial.kind, process)
+        self.processes.children[child.pid] = child
+        self.processes.metadata[child.pid]["executable"] = str(observed)
+        return child, parent, bundle, observed
+
+    def test_owned_signed_os_clone_preserves_original_launch_predicates(self):
+        child, parent, bundle, observed = self.clone_child("positive-clone")
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run") as verify:
+            self.assertEqual(self.processes.assert_owned(child), [child.pid])
+        events = [json.loads(line) for line in (self.root / "driver-events.jsonl").read_text().splitlines()]
+        identity = next(value for value in events if value["step"] == "ownership-identity")
+        self.assertFalse(identity["predicates"]["executableMatches"])
+        self.assertTrue(identity["predicates"]["relocatedExecutableMatches"])
+        self.assertTrue(identity["predicates"]["launchedExecutableMatches"])
+        self.assertEqual(self.processes.relocated_bundles[child.pid], bundle)
+        self.assertTrue(any("--deep" in call.args[0] for call in verify.call_args_list))
+        self.assertEqual(self.processes.signals, [])
+
+    def test_clone_rejects_altered_bytes_signature_profile_group_foreign_path_and_lifetime(self):
+        faults = ("bytes", "reference-bytes", "cdhash", "team", "requirement", "strict", "profile", "group", "foreign-clone", "symlink", "lifetime")
+        for fault in faults:
+            with self.subTest(fault=fault):
+                child, parent, bundle, observed = self.clone_child("clone-fault-" + fault)
+                identity = dict(self.processes.launch_signature)
+                if fault == "bytes": observed.write_bytes(b"x" * observed.stat().st_size)
+                if fault == "reference-bytes":
+                    observed.write_bytes(b"x" * observed.stat().st_size)
+                    self.processes.executable.write_bytes(observed.read_bytes())
+                if fault == "cdhash": identity["CDHash"] = "b" * 40
+                if fault == "team": identity["TeamIdentifier"] = "OTHER12345"
+                if fault == "requirement": identity["designatedRequirement"] = "different requirement"
+                if fault == "profile": self.processes.metadata[child.pid]["arguments"] = "chrome --user-data-dir=/foreign"
+                if fault == "group": self.processes.metadata[child.pid]["group"] = 999
+                if fault == "foreign-clone": parent = self.root / "some-other-user/X/com.google.Chrome.code_sign_clone"
+                if fault == "symlink":
+                    actual = observed.with_name("Actual Chrome")
+                    observed.rename(actual)
+                    observed.symlink_to(actual)
+                if fault == "lifetime": child.process.poll = lambda: 0
+                def signature(path, deadline):
+                    return self.processes.launch_signature if Path(path) == self.processes.executable else identity
+                with patch.object(self.processes, "clone_parent", return_value=parent), \
+                     patch.object(self.processes, "signature_identity", side_effect=signature), \
+                     patch("meeting_continuity_driver.subprocess.run", side_effect=subprocess.CalledProcessError(1, "codesign") if fault == "strict" else None):
+                    with self.assertRaises((ProtocolError, subprocess.CalledProcessError)):
+                        self.processes.assert_owned(child)
+                self.assertEqual(self.processes.signals, [])
+
+    def test_clone_cached_proof_invalidates_changed_bytes_with_restored_mtime(self):
+        child, parent, bundle, observed = self.clone_child("cache-clone")
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run"):
+            self.processes.assert_owned(child)
+            before = observed.stat()
+            observed.write_bytes(b"x" * before.st_size)
+            os.utime(observed, ns=(before.st_atime_ns, before.st_mtime_ns))
+            with self.assertRaisesRegex(ProtocolError, "bytes differ"):
+                self.processes.assert_owned(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_clone_cached_proof_does_not_skip_nested_signature_verification(self):
+        child, parent, bundle, observed = self.clone_child("nested-clone")
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run") as verify:
+            self.processes.assert_owned(child)
+            verify.side_effect = subprocess.CalledProcessError(1, "codesign")
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.processes.assert_owned(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_clone_helper_requires_relative_executable_equivalence(self):
+        child, parent, bundle, observed = self.clone_child("helper-clone")
+        relative = Path("Contents/Frameworks/Google Chrome Helper")
+        for app, content in ((self.processes.chrome_app, b"approved helper"), (bundle, b"forged__ helper")):
+            path = app / relative
+            path.parent.mkdir(parents=True)
+            path.write_bytes(content)
+        self.processes.metadata[900] = dict(group=child.pid, executable=str(bundle / relative))
+        self.processes.statuses[900] = None
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run"):
+            with self.assertRaisesRegex(ProtocolError, "bytes differ"):
+                self.processes.assert_owned(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_clone_helper_with_positive_byte_and_signature_proof_is_verified(self):
+        child, parent, bundle, observed = self.clone_child("valid-helper-clone")
+        relative = Path("Contents/Frameworks/Google Chrome Helper")
+        for app in (self.processes.chrome_app, bundle):
+            path = app / relative
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"approved helper")
+        self.processes.metadata[900] = dict(group=child.pid, executable=str(bundle / relative))
+        self.processes.statuses[900] = None
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run"):
+            self.assertEqual(self.processes.assert_owned(child), [child.pid, 900])
+        self.assertIn(900, self.processes.proven_candidate_pids)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_signature_identity_requires_all_equivalence_fields(self):
+        metadata = "CDHash=" + "a" * 40 + "\nTeamIdentifier=TEAM123456\ndesignated => identifier Chrome\n"
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value=metadata):
+            identity = OwnedProcesses.signature_identity(self.processes, Path("/synthetic/Chrome"), None)
+        self.assertEqual(identity["designatedRequirement"], "identifier Chrome")
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="CDHash=" + "a" * 40):
+            with self.assertRaisesRegex(ProtocolError, "complete CDHash"):
+                OwnedProcesses.signature_identity(self.processes, Path("/synthetic/Chrome"), None)
 
     def test_native_failure_prevents_second_source_process_start(self):
         def fail(sequence):

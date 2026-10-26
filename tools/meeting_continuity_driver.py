@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import signal
 import subprocess
 import sys
@@ -66,6 +67,123 @@ class OwnedProcesses:
         self.children = {}
         self.statuses = {}
         self.identity_receipt = None
+        self.relocated_bundles = {}
+        self.executable_proofs = {}
+        self.proven_candidate_pids = set()
+        self.launch_executable_sha256 = digest(self.executable)
+        self.launch_signature = self.signature_identity(self.executable, None)
+
+    def clone_parent(self, deadline):
+        temporary = subprocess.check_output(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], text=True,
+                                            timeout=self.process_timeout(deadline)).strip()
+        directory = Path(temporary).resolve(strict=True)
+        if directory.name != "T" or directory.stat().st_uid != os.getuid():
+            raise ProtocolError("Cannot establish this user's OS-managed clone directory.")
+        return directory.parent / "X" / "com.google.Chrome.code_sign_clone"
+
+    def file_stamp(self, path):
+        info = regular_file(path)
+        if path.resolve(strict=True) != path:
+            raise ProtocolError("Signed executable proof requires canonical regular files.")
+        return (info.st_dev, info.st_ino, info.st_uid, info.st_mode, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+
+    def signature_identity(self, path, deadline):
+        output = subprocess.check_output(["/usr/bin/codesign", "--display", "--verbose=4", "-r-", str(path)],
+                                         stderr=subprocess.STDOUT, text=True,
+                                         timeout=self.process_timeout(deadline))
+        identity = {}
+        for line in output.splitlines():
+            for field in ("CDHash", "TeamIdentifier"):
+                if line.startswith(field + "="):
+                    identity[field] = line.split("=", 1)[1]
+            if line.startswith("designated => "):
+                identity["designatedRequirement"] = line.removeprefix("designated => ")
+        if (not re.fullmatch(r"[0-9a-fA-F]{40}", identity.get("CDHash", ""))
+                or not re.fullmatch(r"[A-Z0-9]{10}", identity.get("TeamIdentifier", ""))
+                or not identity.get("designatedRequirement")):
+            raise ProtocolError("Signed executable lacks a complete CDHash, team or designated requirement.")
+        return identity
+
+    def equivalent_executable(self, child, expected, observed, deadline, bundle=None):
+        expected, observed = Path(expected), Path(observed)
+        # Signature bytes are in the executable. Include resource-seal/Info stamps for a
+        # bundle proof, and inode/ctime so writes or replacements invalidate cached proof.
+        paths = [expected, observed]
+        if bundle is not None:
+            paths += [app / "Contents" / name for app in (self.chrome_app, bundle)
+                      for name in ("Info.plist", "_CodeSignature/CodeResources")]
+        stamps = tuple(self.file_stamp(path) for path in paths)
+        if stamps[0][4] != stamps[1][4]:
+            raise ProtocolError("Relocated executable size differs from the verified owned copy.")
+        if bundle is not None:
+            # A seal's own stamp cannot establish that all sealed nested files stayed
+            # unchanged. Revalidate the whole clone on every leader guard, even on cache hits.
+            subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(bundle)],
+                           check=True, timeout=self.process_timeout(deadline), stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        key = (child.pid, str(expected), str(observed), stamps)
+        if key in self.executable_proofs:
+            return self.executable_proofs[key]
+        def digest(path):
+            result = hashlib.sha256()
+            with path.open("rb") as stream:
+                while block := stream.read(1024 * 1024):
+                    self.process_timeout(deadline)
+                    result.update(block)
+            return result.hexdigest()
+        expected_hash, observed_hash = digest(expected), digest(observed)
+        if expected_hash != observed_hash or (expected == self.executable and expected_hash != self.launch_executable_sha256):
+            raise ProtocolError("Relocated executable bytes differ from the verified owned copy.")
+        for target in (expected, observed):
+            arguments = ["/usr/bin/codesign", "--verify", "--strict"]
+            subprocess.run(arguments + [str(target)], check=True, timeout=self.process_timeout(deadline),
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        identity = self.signature_identity(expected, deadline)
+        if (self.signature_identity(observed, deadline) != identity
+                or (expected == self.executable and identity != self.launch_signature)):
+            raise ProtocolError("Relocated executable signature differs from the verified owned copy.")
+        if stamps != tuple(self.file_stamp(path) for path in paths):
+            raise ProtocolError("Signed executable changed during relocation verification.")
+        proof = dict(sha256=expected_hash, **identity)
+        self.executable_proofs[key] = proof
+        return proof
+
+    def prove_relocated_leader(self, child, executable, deadline):
+        if (child.process is None or child.process.pid != child.pid or child.process.poll() is not None
+                or self.children.get(child.pid) is not child):
+            raise ProtocolError("Relocation requires the live owned spawned Chrome child.")
+        observed = Path(executable)
+        bundle = observed.parent.parent.parent
+        if (observed != bundle / "Contents/MacOS/Google Chrome"
+                or bundle.name != "Google Chrome.app.bundle"
+                or not re.fullmatch(r"code_sign_clone\.[A-Za-z0-9]{6}", bundle.parent.name)
+                or bundle.parent.parent != self.clone_parent(deadline)
+                or observed.resolve(strict=True) != observed):
+            raise ProtocolError("Executable is not this user's canonical OS-managed Chrome clone.")
+        proof = self.equivalent_executable(child, self.executable, observed, deadline, bundle=bundle)
+        if self.poll(child) is not None or self.group_for(child.pid) != child.pid:
+            raise ProtocolError("Owned Chrome lifetime changed during relocation verification.")
+        self.relocated_bundles[child.pid] = bundle
+        self.proven_candidate_pids.add(child.pid)
+        self.record_identity("owned-executable-relocation-proven", processID=child.pid,
+                             originalExecutable=str(self.executable), relocatedExecutable=executable,
+                             relocatedBundle=str(bundle), **proof)
+        return True
+
+    def relocated_member(self, child, pid, executable, deadline):
+        bundle = self.relocated_bundles.get(child.pid)
+        if bundle is None:
+            return False
+        observed = Path(executable)
+        try:
+            relative = observed.relative_to(bundle)
+        except ValueError:
+            return False
+        self.equivalent_executable(child, self.chrome_app / relative, observed, deadline,
+                                   bundle=bundle if pid == child.pid else None)
+        self.proven_candidate_pids.add(pid)
+        return True
 
     def chrome(self, url):
         parsed = urlsplit(url)
@@ -177,13 +295,18 @@ class OwnedProcesses:
                 observation["expectedProfileArgument"] = profile
                 predicates.update(launchedProfileMatches=profile in child.args,
                                   observedProfileMatches=profile in arguments)
+                if not predicates["executableMatches"] and all(value for name, value in predicates.items()
+                                                                 if name != "executableMatches"):
+                    predicates["relocatedExecutableMatches"] = self.prove_relocated_leader(
+                        child, observation["observedExecutable"], deadline)
             observation["predicates"] = predicates
         except Exception as error:
             observation["observationError"] = str(error)
             self.record_identity("ownership-identity", **observation)
             raise
         self.record_identity("ownership-identity", **observation)
-        failed = [name for name, matches in predicates.items() if not matches]
+        failed = [name for name, matches in predicates.items() if not matches
+                  and not (name == "executableMatches" and predicates.get("relocatedExecutableMatches"))]
         if failed:
             raise ProtocolError("Owned process identity does not match: " + ", ".join(failed) + ".")
         verified = self.verify_members(child, self.group_members(child.pid, deadline), deadline)
@@ -198,24 +321,28 @@ class OwnedProcesses:
     def copied_bundle_processes(self, deadline):
         """Report surviving copy users, including detached helpers; never signal them."""
         output = subprocess.check_output(
-            ["/bin/ps", "-U", str(os.getuid()), "-o", "pid=,pgid=,stat="], text=True,
+            ["/bin/ps", "-U", str(os.getuid()), "-o", "pid=,pgid=,stat=,comm="], text=True,
             timeout=self.process_timeout(deadline))
         remaining = []
         for row in output.splitlines():
             if time.monotonic() >= deadline:
                 raise ProtocolError("Copied Chrome cleanup inspection deadline expired.")
-            pid, group, state = row.split()
+            pid, group, state, command = row.split(None, 3)
             if state.startswith("Z"):
+                continue
+            known = int(group) in self.children or int(pid) in self.proven_candidate_pids
+            if not known and "Google Chrome" not in command and "chrome_crashpad_handler" not in command:
                 continue
             try:
                 executable = self.executable_for(int(pid))
             except (ProtocolError, ProcessLookupError) as error:
-                try:
-                    self.group_for(int(pid))
-                except ProcessLookupError:
-                    continue  # The snapshot raced exit; no signal is justified.
-                raise ProtocolError(f"Cannot inspect live same-user PID {pid}; copied Chrome cleanup is unverified.") from error
-            if executable.startswith(str(self.chrome_app) + "/"):
+                if known:
+                    raise ProtocolError(f"Cannot inspect an owned candidate PID {pid}; cleanup is unverified.") from error
+                self.record_identity("unknown-foreign-process-inspection", processID=int(pid), processGroup=int(group),
+                                     owned=False, signalled=False)
+                continue
+            if (executable.startswith(str(self.chrome_app) + "/")
+                    or any(executable.startswith(str(bundle) + "/") for bundle in self.relocated_bundles.values())):
                 remaining.append(dict(processID=int(pid), processGroup=int(group), executablePath=executable))
         return remaining
 
@@ -244,6 +371,8 @@ class OwnedProcesses:
                 continue
             owned_player = child.kind == "player" and pid == child.pid and executable == "/usr/bin/afplay"
             owned_chrome = child.kind == "chrome" and executable.startswith(str(self.chrome_app) + "/")
+            if child.kind == "chrome" and not owned_chrome:
+                owned_chrome = self.relocated_member(child, pid, executable, deadline)
             if not (owned_player or owned_chrome):
                 raise ProtocolError("Refuse to signal an unverified process group member.")
             verified.append(pid)
