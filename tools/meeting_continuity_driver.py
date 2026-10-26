@@ -303,10 +303,10 @@ class OwnedProcesses:
                                   observedProfileMatches=profile in arguments)
                 if not predicates["executableMatches"] and all(value for name, value in predicates.items()
                                                                  if name != "executableMatches"):
+                    observed_stamp = self.file_stamp(Path(observation["observedExecutable"]))
                     predicates["relocatedExecutableMatches"] = self.prove_relocated_leader(
                         child, observation["observedExecutable"], deadline)
-                    leader_proof = (child, observation["observedExecutable"],
-                                    self.file_stamp(Path(observation["observedExecutable"])))
+                    leader_proof = (child, observation["observedExecutable"], observed_stamp)
             observation["predicates"] = predicates
         except Exception as error:
             observation["observationError"] = str(error)
@@ -379,8 +379,8 @@ class OwnedProcesses:
                 pending, verified, leader_proof = list(current), [], None
                 continue
             owned_player = child.kind == "player" and pid == child.pid and executable == "/usr/bin/afplay"
-            owned_chrome = child.kind == "chrome" and executable.startswith(str(self.chrome_app) + "/")
-            if child.kind == "chrome" and not owned_chrome:
+            owned_chrome = False
+            if child.kind == "chrome":
                 if pid == child.pid and leader_proof is not None:
                     # Reuse only the full clone verification performed earlier in this
                     # assert_owned call. Never persist this proof across guards.
@@ -395,6 +395,8 @@ class OwnedProcesses:
                             or profile not in child.args
                             or profile not in self.arguments_for(pid, deadline).split()):
                         raise ProtocolError("Owned leader changed after signed-clone verification.")
+                    owned_chrome = True
+                elif executable.startswith(str(self.chrome_app) + "/"):
                     owned_chrome = True
                 else:
                     owned_chrome = self.relocated_member(child, pid, executable, deadline)

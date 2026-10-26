@@ -411,12 +411,28 @@ class DriverTests(unittest.TestCase):
             self.assertEqual(sum("--deep" in call.args[0] for call in verify.call_args_list), 2)
         self.assertEqual(self.processes.signals, [])
 
+    def test_local_proof_cannot_adopt_a_stamp_changed_just_after_deep_verification(self):
+        child, parent, bundle, observed = self.clone_child("proof-post-verification-race")
+        prove = self.processes.prove_relocated_leader
+        def change_after_proof(*args):
+            result = prove(*args)
+            observed.write_bytes(b"x" * observed.stat().st_size)
+            return result
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch.object(self.processes, "prove_relocated_leader", side_effect=change_after_proof), \
+             patch("meeting_continuity_driver.subprocess.run"):
+            with self.assertRaisesRegex(ProtocolError, "changed after signed-clone"):
+                self.processes.assert_owned(child)
+        self.assertEqual(self.processes.signals, [])
+
     def test_same_guard_leader_proof_requires_fresh_unchanged_identity(self):
-        for fault in ("bytes", "profile", "group", "lifetime", "child"):
+        for fault in ("bytes", "path", "profile", "group", "lifetime", "child"):
             with self.subTest(fault=fault):
                 child, parent, bundle, observed = self.clone_child("same-guard-" + fault)
                 def snapshot(group, deadline):
                     if fault == "bytes": observed.write_bytes(b"x" * observed.stat().st_size)
+                    if fault == "path": self.processes.metadata[child.pid]["executable"] = str(self.processes.executable)
                     if fault == "profile": self.processes.metadata[child.pid]["arguments"] = "chrome --user-data-dir=/foreign"
                     if fault == "group": self.processes.metadata[child.pid]["group"] = 999
                     if fault == "lifetime": child.process.poll = lambda: 0
