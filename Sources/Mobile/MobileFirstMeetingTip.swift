@@ -7,7 +7,7 @@ struct FirstMeetingTip: Tip {
     @Parameter static var setupFinished: Bool = false
 
     var title: Text { Text(PichiLocalization.text("Start your first meeting")) }
-    var message: Text? { Text(PichiLocalization.text("Recording settings control when the transcript is processed and whether speakers are labelled.")) }
+    var message: Text? { Text(PichiLocalization.text("Record a meeting and return to its transcript.")) }
     var image: Image? { Image(systemName: "waveform") }
     var rules: [Rule] { [#Rule(Self.$setupFinished) { $0 }] }
 

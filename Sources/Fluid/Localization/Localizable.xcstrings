@@ -1,23 +1,6 @@
 {
   "sourceLanguage": "en",
   "strings": {
-      "Recording settings control when the transcript is processed and whether speakers are labelled.": {
-        "extractionState": "manual",
-        "localizations": {
-          "en": {
-            "stringUnit": {
-              "state": "translated",
-              "value": "Recording settings control when the transcript is processed and whether speakers are labelled."
-            }
-          },
-          "ru": {
-            "stringUnit": {
-              "state": "translated",
-              "value": "Настройки записи определяют, когда обрабатывается текст и будут ли обозначены участники."
-            }
-          }
-        }
-      },
     "cloud.assessment.cancel": {
       "extractionState": "manual",
       "localizations": {
@@ -55587,19 +55570,19 @@
         }
       }
     },
-    "The transcript and participants appear as people speak.": {
+    "Record a meeting and return to its transcript.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The transcript and participants appear as people speak."
+            "value": "Record a meeting and return to its transcript."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Текст и участники появятся по мере того, как люди говорят."
+            "value": "Запишите встречу и вернитесь к её тексту."
           }
         }
       }

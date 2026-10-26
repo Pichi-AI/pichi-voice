@@ -501,19 +501,25 @@ struct MobileMeetingRoot: View {
                             .accessibilityIdentifier("meeting.settings")
                     }
                     if isBusy { ProgressView().accessibilityIdentifier("meeting.preparing") }
+                    if FirstMeetingTip.setupFinished {
+                        TipView(FirstMeetingTip()).tint(theme.palette.accent)
+                    }
                 }.padding(compactHeight ? 12 : 20).background(theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: theme.metrics.corners.lg))
-                if FirstMeetingTip.setupFinished {
-                    TipView(FirstMeetingTip()).tint(theme.palette.accent)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("meeting.firstMeetingTip")
-                }
-                Label(PichiLocalization.text("Stored on this device. Place the microphone where everyone can be heard."), systemImage: "lock")
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                    .accessibilityIdentifier("meeting.storageNote")
             }.padding(compactHeight ? 12 : 24).frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
-        }.safeAreaPadding(.bottom, compactHeight ? 48 : 0)
-            .accessibilityIdentifier("meeting.ready")
+        }
+        .accessibilityIdentifier("meeting.ready")
+        // Like the recording controls, this footer belongs to the native navigation safe area.
+        // A long first-meeting tip scrolls above it instead of pushing the note under the tab bar.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Label(PichiLocalization.text("Stored on this device. Place the microphone where everyone can be heard."), systemImage: "lock")
+                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("meeting.storageNote")
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
+                .padding(.horizontal, 24).padding(.vertical, 12)
+                .background(theme.palette.toolbarBackground)
+        }
     }
 
     private func recording(_ session: MeetingSession) -> some View {
