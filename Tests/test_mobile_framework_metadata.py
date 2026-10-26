@@ -36,6 +36,7 @@ class FrameworkMetadataTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.framework = self.root / "App.app/Frameworks/onnxruntime.framework"
         self.framework.mkdir(parents=True)
+        (self.root / "App.app/Info.plist").write_bytes(plistlib.dumps({"MinimumOSVersion": "17.0"}))
         self.binary = self.framework / "onnxruntime"
         self.binary.write_bytes(macho())
         self.plist = self.framework / "Info.plist"
@@ -112,6 +113,12 @@ class FrameworkMetadataTests(unittest.TestCase):
         with self.assertRaisesRegex(metadata.MetadataError, "Other.framework"):
             metadata.check(self.root / "App.app")
         self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()})
+
+    def test_generic_preflight_rejects_framework_newer_than_app(self):
+        self.binary.write_bytes(macho(0x120000))
+        self.plist.write_bytes(plistlib.dumps({**self.info, "MinimumOSVersion": "18.0"}))
+        with self.assertRaisesRegex(metadata.MetadataError, "newer OS than the containing app"):
+            metadata.check(self.root / "App.app")
 
     def test_truncated_static_and_unexpected_platform_are_rejected(self):
         for data in [b"!<arch>\n", macho()[:-1], struct.pack(">II", 0xCAFEBABE, 100),

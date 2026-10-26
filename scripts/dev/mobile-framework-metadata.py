@@ -115,6 +115,8 @@ def framework_metadata(framework):
 
 
 def check(root):
+    app_info = plistlib.loads((root / "Info.plist").read_bytes())
+    app_minimum = version(app_info.get("MinimumOSVersion"))
     frameworks = sorted(root.rglob("*.framework"))
     if not frameworks:
         raise MetadataError("No embedded frameworks found")
@@ -123,6 +125,8 @@ def check(root):
         declared = version(info.get("MinimumOSVersion"))
         if any(declared < version(minimum) for _, minimum in minimums):
             raise MetadataError(str(framework.relative_to(root)) + ": plist minimum is below Mach-O minimum")
+        if declared > app_minimum or any(version(minimum) > app_minimum for _, minimum in minimums):
+            raise MetadataError(str(framework.relative_to(root)) + ": requires a newer OS than the containing app")
     return len(frameworks)
 
 
