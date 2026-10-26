@@ -475,14 +475,16 @@ fileprivate final class BrowserCaptureEvents: @unchecked Sendable {
 /// See docs/development/system-audio-continuity-test.md for the atomic command/ack protocol.
 @MainActor
 final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
+    private var phaseReplayProvider: (any TranscriptionProvider)?
     /// Run alone in the exact authorized XCTest application host. This exercises the same
     /// AppServices singleton composition as the app, but is not an ordinary UI interaction test.
     /// Add PICHI_SYSTEM_CAPTURE_COORDINATOR_CONSENT=1 to the existing ROOT/RUN_ID protocol.
     /// DURATION_SECONDS is bounded to 60...100 (default 100); admission and stop each allow 60.
     /// The host must already select an installed Parakeet v2/v3, enable meetings, and retain audio.
     /// No settings, provider, capture engine, store, or factory is replaced. Optional
-    /// PICHI_SYSTEM_CAPTURE_VERIFY_ASR=1 requires EXPECTED_TEXT_JSON and checks the normal
-    /// finalized system-track transcript in each externally acknowledged phase window.
+    /// PICHI_SYSTEM_CAPTURE_VERIFY_ASR=1 requires EXPECTED_TEXT_JSON. It checks the normal
+    /// final transcript and independently transcribes each exact persisted phase PCM range;
+    /// coarse final utterance envelopes never supply phase-local evidence.
     func testAppServicesSystemAudioSurvivesExternalBrowserRestartWhenEnabled() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["PICHI_SYSTEM_CAPTURE_COORDINATOR_CONSENT"] == "1" else {
@@ -511,6 +513,20 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
             try MeetingBrowserAudioHardwareTests.require([.parakeetTDT, .parakeetTDTv2].contains(settings.selectedSpeechModel)
                 && settings.selectedSpeechModel.isInstalled, "Select an already installed Parakeet v2/v3 before this probe.")
             let selectedModelID = settings.selectedSpeechModel.rawValue
+            let replayDescriptor = try XCTUnwrap(settings.selectedSpeechModel.parakeetDescriptor)
+            let replayDirectory = replayDescriptor.cacheDirectory(in: AppBrand.modelsDirectory)
+            try MeetingBrowserAudioHardwareTests.require(replayDescriptor.artifactsAreComplete(at: replayDirectory),
+                "The phase replay must use a complete installed export without downloading or repairing it.")
+            let fingerprintTask = Task.detached(priority: .utility) {
+                try replayDescriptor.installedArtifactFingerprint(at: replayDirectory)
+            }
+            let replayFingerprintValue = try await withTaskCancellationHandler {
+                try await fingerprintTask.value
+            } onCancel: { fingerprintTask.cancel() }
+            let replayFingerprint = try XCTUnwrap(replayFingerprintValue, "The installed replay export must have a content fingerprint.")
+            let replayConfiguration = MeetingFinalProcessingConfiguration(asrModel: selectedModelID,
+                asrArtifactFingerprint: replayFingerprint, asrArtifactDirectory: replayDirectory,
+                languageCode: "en", speakerLabelsEnabled: false)
             let expectedBackendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: "en",
                 selectedModelID: selectedModelID, savedBackendID: settings.meetingTranscriptionBackendID)
             try MeetingBrowserAudioHardwareTests.require(settings.meetingAudioRetentionPolicy != .afterTranscription,
@@ -601,34 +617,58 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
             var eventSummary = BrowserCaptureEventSummary()
             for event in persisted.events { eventSummary.interruptionsByKind[event.kind.rawValue, default: 0] += 1 }
             report.events = eventSummary
-            _ = try await Self.validateSavedPCM(session: persisted, directory: directory, protocolState: protocolState,
+            let phaseSamples = try await Self.validateSavedPCM(session: persisted, directory: directory, protocolState: protocolState,
                 report: &report, requiresEngineScope: false)
             if verifyASR {
                 let track = try XCTUnwrap(persisted.audioTracks.first { $0.kind == .applicationAudio })
                 let origin = persisted.transcriptTimeDomain == .meetingRelative
                     ? try XCTUnwrap(persisted.timebase.firstPresentationTime).seconds : 0
-                for gap in report.transcriptCoverageGaps where protocolState.phases.contains(where: {
+                for gap in report.transcriptCoverageGaps where gap.trackID == track.id && protocolState.phases.contains(where: {
                     gap.end + origin > $0.startHostSeconds && gap.start + origin < $0.endHostSeconds
                 }) {
-                    report.failures.append("Final transcript has a \(gap.reason.rawValue) coverage gap during a speech phase.")
+                    report.failures.append("Final system transcript has a \(gap.reason.rawValue) coverage gap during a speech phase.")
                 }
+                let systemSegments = persisted.transcriptSegments.filter { $0.sourceTrackID == track.id }
+                let finalText = systemSegments.sorted { $0.start < $1.start }.map(\.text).joined(separator: " ")
                 for index in report.phases.indices {
                     let phase = report.phases[index].phase
-                    let candidates = persisted.transcriptSegments.filter {
-                        $0.sourceTrackID == track.id && $0.end.seconds + origin > phase.startHostSeconds
+                    let candidates = systemSegments.filter {
+                        $0.end.seconds + origin > phase.startHostSeconds
                             && $0.start.seconds + origin < phase.endHostSeconds
                     }
-                    let confined = candidates.filter {
-                        phase.containsTranscript(start: $0.start.seconds, end: $0.end.seconds, origin: origin)
+                    report.normalFinalCrossingSegmentCounts[phase.name] = candidates.filter {
+                        !phase.containsTranscript(start: $0.start.seconds, end: $0.end.seconds, origin: origin)
+                    }.count
+                    if let expected = options.expectedText[phase.name] {
+                        let present = finalText.localizedCaseInsensitiveContains(expected)
+                        report.normalFinalTranscriptMarkers[phase.name] = present
+                        if !present { report.failures.append("Normal finalized system transcript lacks the \(phase.name) marker.") }
                     }
-                    if confined.count != candidates.count {
-                        report.failures.append("\(phase.name) contains ambiguous transcript timing outside its phase window.")
+                }
+                // Join the ordinary owner before a separate, task-owned provider verifies the
+                // saved PCM. Its pinned directory forces local-only loading through the existing adapter.
+                await Self.shutdownOwnedCoordinator(coordinator, title: ownedTitle)
+                self.phaseReplayProvider = try PichiMeetingProviderFactory.make(replayConfiguration)
+                do {
+                    try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 30) { @MainActor [self] in
+                        try await XCTUnwrap(self.phaseReplayProvider).prepare(progressHandler: nil)
                     }
-                    let text = confined.sorted { $0.start < $1.start }.map(\.text).joined(separator: " ")
-                    report.phases[index].speechText = text
-                    if let expected = options.expectedText[phase.name], !text.localizedCaseInsensitiveContains(expected) {
-                        report.failures.append("\(phase.name) normal finalized transcript lacks its expected synthetic phrase.")
+                    let names = report.phases.map { $0.phase.name }
+                    let texts = try await Self.verifyPhaseSpeech(samples: phaseSamples, names: names,
+                        expected: options.expectedText) { @MainActor [self] samples in
+                        try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 30) { @MainActor [self] in
+                            try await XCTUnwrap(self.phaseReplayProvider).transcribeFinal(samples).text
+                        }
                     }
+                    for index in texts.indices { report.phases[index].speechText = texts[index] }
+                    report.phaseASREvidenceSource = "persisted-system-pcm-replay"
+                    report.phaseReplayArtifactFingerprint = replayFingerprint
+                    await self.phaseReplayProvider?.releaseResidency()
+                    self.phaseReplayProvider = nil
+                } catch {
+                    await self.phaseReplayProvider?.releaseResidency()
+                    self.phaseReplayProvider = nil
+                    throw error
                 }
             }
             await Self.shutdownOwnedCoordinator(coordinator, title: ownedTitle)
@@ -653,6 +693,31 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
         report.status = report.failures.isEmpty ? "passed" : "failed"
         try MeetingBrowserAudioHardwareTests.write(report, to: options.root.appendingPathComponent("outcome.json"))
         XCTAssertTrue(report.failures.isEmpty, report.failures.joined(separator: " "))
+    }
+
+    /// A final transcript marker alone cannot prove where its coarse utterance was captured.
+    /// Only transcription of that phase's already validated, cropped PCM supplies this evidence.
+    fileprivate static func verifyPhaseSpeech(
+        samples: [[Float]], names: [String], expected: [String: String],
+        transcribe: @MainActor ([Float]) async throws -> String
+    ) async throws -> [String] {
+        try MeetingBrowserAudioHardwareTests.require(samples.count == names.count && Set(names).count == names.count
+            && names.allSatisfy { expected[$0]?.isEmpty == false }, "Phase PCM or expected-marker count is inconsistent.")
+        var texts: [String] = []
+        for index in samples.indices {
+            let pcm = samples[index]
+            try MeetingBrowserAudioHardwareTests.require((8_000...960_000).contains(pcm.count)
+                && pcm.allSatisfy(\.isFinite), "Phase replay PCM is empty, oversized or non-finite.")
+            let text = try await transcribe(pcm)
+            let own = try XCTUnwrap(expected[names[index]])
+            try MeetingBrowserAudioHardwareTests.require(text.localizedCaseInsensitiveContains(own)
+                && names.filter { $0 != names[index] }.allSatisfy {
+                    expected[$0].map { !text.localizedCaseInsensitiveContains($0) } ?? false
+                },
+                "\(names[index]) exact saved PCM lacks its own marker or contains another phase marker.")
+            texts.append(text)
+        }
+        return texts
     }
 
     /// The store persists ISO8601 dates at whole-second precision. Compare the complete
@@ -1257,6 +1322,10 @@ fileprivate struct SystemContinuityReport: Encodable {
     var coordinatorObservations: [SystemContinuityCoordinatorObservation] = []
     var finalProcessingCompleted: Bool?
     var transcriptCoverageGaps: [MeetingTranscriptCoverageGap] = []
+    var normalFinalTranscriptMarkers: [String: Bool] = [:]
+    var normalFinalCrossingSegmentCounts: [String: Int] = [:]
+    var phaseASREvidenceSource: String?
+    var phaseReplayArtifactFingerprint: String?
 }
 
 fileprivate struct SystemContinuityCoordinatorObservation: Encodable {
@@ -1371,6 +1440,44 @@ final class MeetingSystemAudioContinuityProtocolTests: XCTestCase {
 /// opening audio devices, loading a model, or depending on an interactive browser.
 @MainActor
 final class MeetingSystemAudioContinuityFailureEvidenceTests: XCTestCase {
+    func testPhasePCMReplayRequiresItsOwnSamplesAndRejectsCorruptionOrAnotherPhaseMarker() async throws {
+        let names = SystemContinuityProtocol.phaseNames
+        let markers = ["orange garden", "purple mountain", "green river"]
+        let expected = Dictionary(uniqueKeysWithValues: zip(names, markers))
+        let pcm = (1...3).map { [Float](repeating: Float($0), count: 8_000) }
+        let recognize: @MainActor ([Float]) async throws -> String = { samples in
+            let index = Int(samples[0]) - 1
+            return markers[index]
+        }
+        let accepted = try await MeetingSystemAudioContinuityHardwareTests.verifyPhaseSpeech(
+            samples: pcm, names: names, expected: expected, transcribe: recognize
+        )
+        XCTAssertEqual(accepted, markers)
+
+        var switched = pcm
+        switched.swapAt(0, 1)
+        do {
+            _ = try await MeetingSystemAudioContinuityHardwareTests.verifyPhaseSpeech(
+                samples: switched, names: names, expected: expected, transcribe: recognize
+            )
+            XCTFail("Another phase's PCM must not supply the requested marker.")
+        } catch {}
+        var corrupt = pcm
+        corrupt[0][0] = .nan
+        do {
+            _ = try await MeetingSystemAudioContinuityHardwareTests.verifyPhaseSpeech(
+                samples: corrupt, names: names, expected: expected
+            ) { _ in XCTFail("Corrupt PCM must be rejected before ASR."); return markers[0] }
+            XCTFail("Non-finite PCM must fail phase verification.")
+        } catch {}
+        do {
+            _ = try await MeetingSystemAudioContinuityHardwareTests.verifyPhaseSpeech(
+                samples: pcm, names: names, expected: expected
+            ) { _ in markers.joined(separator: " ") }
+            XCTFail("One coarse transcript containing every marker must not prove three phases.")
+        } catch {}
+    }
+
     func testCompletedTrackComparisonUsesStoreDatePrecisionWithoutIgnoringTrackChanges() async throws {
         let fixture = try await self.fixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory.deletingLastPathComponent().deletingLastPathComponent()) }
