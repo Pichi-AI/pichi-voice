@@ -280,6 +280,7 @@ class OwnedProcesses:
                 raise ProtocolError("Refuse to signal an exited process.")
             return []
         expected = str(self.executable) if child.kind == "chrome" else "/usr/bin/afplay"
+        leader_proof = None
         observation = dict(processID=child.pid, kind=child.kind, expectedExecutable=expected,
                            expectedProcessGroup=child.pid, launchedExecutable=child.args[0])
         try:
@@ -304,6 +305,8 @@ class OwnedProcesses:
                                                                  if name != "executableMatches"):
                     predicates["relocatedExecutableMatches"] = self.prove_relocated_leader(
                         child, observation["observedExecutable"], deadline)
+                    leader_proof = (child, observation["observedExecutable"],
+                                    self.file_stamp(Path(observation["observedExecutable"])))
             observation["predicates"] = predicates
         except Exception as error:
             observation["observationError"] = str(error)
@@ -314,7 +317,8 @@ class OwnedProcesses:
                   and not (name == "executableMatches" and predicates.get("relocatedExecutableMatches"))]
         if failed:
             raise ProtocolError("Owned process identity does not match: " + ", ".join(failed) + ".")
-        verified = self.verify_members(child, self.group_members(child.pid, deadline), deadline)
+        verified = self.verify_members(child, self.group_members(child.pid, deadline), deadline,
+                                       leader_proof=leader_proof)
         if require_live:
             self.require_live_owner(child, verified)
         return verified
@@ -355,7 +359,7 @@ class OwnedProcesses:
         if self.children.get(child.pid) is not child or child.pid not in verified or self.poll(child) is not None:
             raise ProtocolError("Owned live leader disappeared during verification.")
 
-    def verify_members(self, child, members, deadline=None):
+    def verify_members(self, child, members, deadline=None, leader_proof=None):
         deadline = deadline if deadline is not None else time.monotonic() + 30
         pending, verified = list(members), []
         while pending:
@@ -372,12 +376,28 @@ class OwnedProcesses:
                     raise ProtocolError("Refuse an unverified live or reused group member.") from error
                 # The old PS snapshot raced exit. Reverify the complete fresh snapshot,
                 # including any newly observed members, before allowing a group signal.
-                pending, verified = list(current), []
+                pending, verified, leader_proof = list(current), [], None
                 continue
             owned_player = child.kind == "player" and pid == child.pid and executable == "/usr/bin/afplay"
             owned_chrome = child.kind == "chrome" and executable.startswith(str(self.chrome_app) + "/")
             if child.kind == "chrome" and not owned_chrome:
-                owned_chrome = self.relocated_member(child, pid, executable, deadline)
+                if pid == child.pid and leader_proof is not None:
+                    # Reuse only the full clone verification performed earlier in this
+                    # assert_owned call. Never persist this proof across guards.
+                    proven_child, proven_path, proven_stamp = leader_proof
+                    profile = f"--user-data-dir={self.profile}"
+                    if (proven_child is not child or self.children.get(pid) is not child
+                            or child.process is None or child.process.pid != pid
+                            or child.process.poll() is not None or self.poll(child) is not None
+                            or executable != proven_path
+                            or self.file_stamp(Path(executable)) != proven_stamp
+                            or self.group_for(pid) != child.pid
+                            or profile not in child.args
+                            or profile not in self.arguments_for(pid, deadline).split()):
+                        raise ProtocolError("Owned leader changed after signed-clone verification.")
+                    owned_chrome = True
+                else:
+                    owned_chrome = self.relocated_member(child, pid, executable, deadline)
             if not (owned_player or owned_chrome):
                 raise ProtocolError("Refuse to signal an unverified process group member.")
             verified.append(pid)

@@ -385,6 +385,36 @@ class DriverTests(unittest.TestCase):
                 shallow = [call for call in verify.call_args_list if "--deep" not in call.args[0]]
                 self.assertTrue(all(call.kwargs["timeout"] == min(5, expected_timeout) for call in shallow))
 
+    def test_full_clone_proof_is_once_per_guard_and_not_reused_by_standalone_member_check(self):
+        child, parent, bundle, observed = self.clone_child("proof-scope")
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run") as verify:
+            for expected in (1, 2):
+                self.assertEqual(self.processes.assert_owned(child), [child.pid])
+                self.assertEqual(sum("--deep" in call.args[0] for call in verify.call_args_list), expected)
+            self.assertEqual(self.processes.verify_members(child, [child.pid]), [child.pid])
+            self.assertEqual(sum("--deep" in call.args[0] for call in verify.call_args_list), 3)
+
+    def test_same_guard_leader_proof_requires_fresh_unchanged_identity(self):
+        for fault in ("bytes", "profile", "group", "lifetime", "child"):
+            with self.subTest(fault=fault):
+                child, parent, bundle, observed = self.clone_child("same-guard-" + fault)
+                def snapshot(group, deadline):
+                    if fault == "bytes": observed.write_bytes(b"x" * observed.stat().st_size)
+                    if fault == "profile": self.processes.metadata[child.pid]["arguments"] = "chrome --user-data-dir=/foreign"
+                    if fault == "group": self.processes.metadata[child.pid]["group"] = 999
+                    if fault == "lifetime": child.process.poll = lambda: 0
+                    if fault == "child": self.processes.children[child.pid] = Child(child.pid, child.args, child.kind)
+                    return [child.pid]
+                with patch.object(self.processes, "clone_parent", return_value=parent), \
+                     patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+                     patch.object(self.processes, "group_members", side_effect=snapshot), \
+                     patch("meeting_continuity_driver.subprocess.run"):
+                    with self.assertRaisesRegex(ProtocolError, "changed after signed-clone"):
+                        self.processes.assert_owned(child)
+                self.assertEqual(self.processes.signals, [])
+
     def test_clone_rejects_altered_bytes_signature_profile_group_foreign_path_and_lifetime(self):
         faults = ("bytes", "reference-bytes", "cdhash", "team", "requirement", "strict", "profile", "group", "foreign-clone", "symlink", "lifetime")
         for fault in faults:
