@@ -273,6 +273,7 @@ builds/
 !/docs/development/mobile-meetings.md
 !/docs/development/ipad-demo-install-via-mac.md
 !/docs/development/ipad-demo-testflight.md
+!/docs/development/mobile-testflight-packaging.md
 !/scripts/
 /scripts/*
 !/scripts/dev/

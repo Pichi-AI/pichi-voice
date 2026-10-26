@@ -150,20 +150,8 @@ activity_dependency = obj("Mobile activity dependency", f"isa = PBXTargetDepende
 activity_embed = obj("Mobile embed PichiVoiceMobileActivity.appex", f"isa = PBXBuildFile; fileRef = {activity_product}; settings = {{ATTRIBUTES = (RemoveHeadersOnCopy, ); }};")
 embed_phase = obj("Mobile Embed Foundation Extensions", f'isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 13; files = {arr([activity_embed])}; name = "Embed Foundation Extensions"; runOnlyForDeploymentPostprocessing = 0;')
 
-# Xcode's automatic SPM embed replaces the static ONNX executable with a dynamic
-# placeholder but retains the package's older MinimumOSVersion. Repair only that
-# copied framework, retaining script sandboxing and the existing signing identity.
-onnx_product = "$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/onnxruntime.framework"
-metadata_script = "$(SRCROOT)/scripts/dev/mobile-framework-metadata.py"
-metadata_shell = ('set -eu\n/usr/bin/python3 -B -S "$SRCROOT/scripts/dev/mobile-framework-metadata.py" '
-                  'normalize-onnx "$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH/onnxruntime.framework"\n')
-metadata_inputs = arr([quoted(metadata_script), quoted(onnx_product)])
-metadata_outputs = arr([quoted(onnx_product + suffix) for suffix in
-                        ("/Info.plist", "/onnxruntime", "/onnxruntime.cstemp", "/_CodeSignature")])
-metadata_phase = obj("Mobile ONNX framework metadata", f'isa = PBXShellScriptBuildPhase; alwaysOutOfDate = 1; buildActionMask = 2147483647; files = (); inputPaths = {metadata_inputs}; outputPaths = {metadata_outputs}; name = "Normalize copied ONNX framework metadata"; runOnlyForDeploymentPostprocessing = 0; shellPath = /bin/sh; shellScript = {quoted(metadata_shell)};')
-
 app_config = configs("Mobile")
-app_target = obj("PichiVoiceMobile", f"isa = PBXNativeTarget; buildConfigurationList = {app_config}; buildPhases = {arr([source_phase, framework_phase, resource_phase, embed_phase, metadata_phase])}; buildRules = (); dependencies = {arr([activity_dependency])}; name = PichiVoiceMobile; packageProductDependencies = {arr(package_products)}; productName = PichiVoiceMobile; productReference = {product_ref}; productType = \"com.apple.product-type.application\";")
+app_target = obj("PichiVoiceMobile", f"isa = PBXNativeTarget; buildConfigurationList = {app_config}; buildPhases = {arr([source_phase, framework_phase, resource_phase, embed_phase])}; buildRules = (); dependencies = {arr([activity_dependency])}; name = PichiVoiceMobile; packageProductDependencies = {arr(package_products)}; productName = PichiVoiceMobile; productReference = {product_ref}; productType = \"com.apple.product-type.application\";")
 
 test_builds = []
 for path in sorted((ROOT / "Tests/MobileUITests").glob("*.swift")):
