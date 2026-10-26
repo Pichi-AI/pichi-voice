@@ -23298,6 +23298,210 @@
         }
       }
     },
+    "Another meeting recording is already active.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another meeting recording is already active."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Уже идёт запись другой встречи."
+          }
+        }
+      }
+    },
+    "There is no active meeting recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is no active meeting recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас нет активной записи встречи."
+          }
+        }
+      }
+    },
+    "A different meeting recording is active.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A different meeting recording is active."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас активна запись другой встречи."
+          }
+        }
+      }
+    },
+    "No display is available for meeting-audio capture.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No display is available for meeting-audio capture."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет доступного дисплея для записи звука встречи."
+          }
+        }
+      }
+    },
+    "The selected microphone is unavailable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected microphone is unavailable."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранный микрофон недоступен."
+          }
+        }
+      }
+    },
+    "Microphone permission is required to record this meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone permission is required to record this meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы записать эту встречу, разрешите доступ к микрофону."
+          }
+        }
+      }
+    },
+    "Screen & System Audio permission is required. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen & System Audio permission is required. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужен доступ к экрану и системному аудио. %@"
+          }
+        }
+      }
+    },
+    "Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Недостаточно свободного места для записи встречи. Освободите место хотя бы для часа записи и её обработки, затем повторите попытку."
+          }
+        }
+      }
+    },
+    "Meeting recording could not start. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting recording could not start. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось начать запись встречи. %@"
+          }
+        }
+      }
+    },
+    "Meeting recording could not stop cleanly. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting recording could not stop cleanly. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось корректно остановить запись встречи. %@"
+          }
+        }
+      }
+    },
+    "The selected audio source uses an unsupported format.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected audio source uses an unsupported format."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранный источник звука использует неподдерживаемый формат."
+          }
+        }
+      }
+    },
+    "Meeting audio could not be saved. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting audio could not be saved. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить звук встречи. %@"
+          }
+        }
+      }
+    },
     "Meeting recording in progress": {
       "extractionState": "manual",
       "localizations": {
