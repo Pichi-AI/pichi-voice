@@ -120,7 +120,7 @@ class OwnedProcesses:
             # A seal's own stamp cannot establish that all sealed nested files stayed
             # unchanged. Revalidate the whole clone on every leader guard, even on cache hits.
             subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(bundle)],
-                           check=True, timeout=self.process_timeout(deadline), stdin=subprocess.DEVNULL,
+                           check=True, timeout=self.process_timeout(deadline, limit=20), stdin=subprocess.DEVNULL,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         key = (child.pid, str(expected), str(observed), stamps)
         if key in self.executable_proofs:
@@ -253,12 +253,13 @@ class OwnedProcesses:
     def group_for(self, pid):
         return os.getpgid(pid)
 
-    def process_timeout(self, deadline):
-        # Process inspection can be delayed by host load; retain the caller's tighter cleanup deadline.
-        remaining = 5 if deadline is None else deadline - time.monotonic()
+    def process_timeout(self, deadline, limit=5):
+        # Deep bundle verification is slower than process inspection; neither may
+        # extend an explicit absolute ownership or cleanup deadline.
+        remaining = limit if deadline is None else deadline - time.monotonic()
         if remaining <= 0:
             raise ProtocolError("Owned process verification deadline expired.")
-        return min(5, remaining)
+        return min(limit, remaining)
 
     def arguments_for(self, pid, deadline=None):
         return subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "command="], text=True,
@@ -271,6 +272,7 @@ class OwnedProcesses:
                 if int(pgid) == group and not state.startswith("Z")]
 
     def assert_owned(self, child, deadline=None, require_live=True):
+        deadline = deadline if deadline is not None else time.monotonic() + 30
         if self.children.get(child.pid) is not child:
             raise ProtocolError("Refuse to signal a foreign process.")
         if self.poll(child) is not None:
@@ -354,7 +356,7 @@ class OwnedProcesses:
             raise ProtocolError("Owned live leader disappeared during verification.")
 
     def verify_members(self, child, members, deadline=None):
-        deadline = deadline if deadline is not None else time.monotonic() + 3
+        deadline = deadline if deadline is not None else time.monotonic() + 30
         pending, verified = list(members), []
         while pending:
             if time.monotonic() >= deadline:
@@ -392,7 +394,8 @@ class OwnedProcesses:
     def stop(self, child):
         if self.children.get(child.pid) is not child:
             raise ProtocolError("Refuse cleanup of a foreign process.")
-        deadline = time.monotonic() + 3
+        # One absolute budget includes full signed-clone proof, signalling and join.
+        deadline = time.monotonic() + 30
         if self.poll(child) is None:
             verified = self.assert_owned(child, deadline, require_live=False)
             if child.pid in verified and self.poll(child) is None:
@@ -414,6 +417,8 @@ class OwnedProcesses:
         raise ProtocolError("Owned process group did not join after termination.")
 
     def kill_group(self, child, deadline=None):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ProtocolError("Owned process termination deadline expired.")
         try:
             self.send_group(child.pid, signal.SIGKILL)
         except ProcessLookupError:

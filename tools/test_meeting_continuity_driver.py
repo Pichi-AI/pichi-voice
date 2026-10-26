@@ -370,6 +370,21 @@ class DriverTests(unittest.TestCase):
         self.assertTrue(any("--deep" in call.args[0] for call in verify.call_args_list))
         self.assertEqual(self.processes.signals, [])
 
+    def test_deep_bundle_verification_has_its_own_cap_and_honors_a_tighter_deadline(self):
+        for deadline, expected_timeout in ((None, 20), (12, 2)):
+            with self.subTest(deadline=deadline):
+                child, parent, bundle, observed = self.clone_child("budget-" + str(deadline))
+                with patch("meeting_continuity_driver.time.monotonic", return_value=10), \
+                     patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+                     patch("meeting_continuity_driver.subprocess.run") as verify:
+                    self.processes.equivalent_executable(child, self.processes.executable,
+                                                         observed, deadline, bundle=bundle)
+                deep = [call for call in verify.call_args_list if "--deep" in call.args[0]]
+                self.assertEqual(len(deep), 1)
+                self.assertEqual(deep[0].kwargs["timeout"], expected_timeout)
+                shallow = [call for call in verify.call_args_list if "--deep" not in call.args[0]]
+                self.assertTrue(all(call.kwargs["timeout"] == min(5, expected_timeout) for call in shallow))
+
     def test_clone_rejects_altered_bytes_signature_profile_group_foreign_path_and_lifetime(self):
         faults = ("bytes", "reference-bytes", "cdhash", "team", "requirement", "strict", "profile", "group", "foreign-clone", "symlink", "lifetime")
         for fault in faults:
@@ -613,7 +628,7 @@ class DriverTests(unittest.TestCase):
                 with self.assertRaisesRegex(ProtocolError, "deadline"):
                     self.processes.process_timeout(deadline)
 
-    def test_cleanup_refresh_and_ps_timeout_keep_existing_three_second_deadline(self):
+    def test_cleanup_refresh_and_ps_timeout_honor_explicit_shorter_deadline(self):
         child = self.processes.child("chrome")
         self.processes.statuses[child.pid] = -9
         with patch("meeting_continuity_driver.time.monotonic", return_value=10):
@@ -622,6 +637,25 @@ class DriverTests(unittest.TestCase):
                 self.processes.process_timeout(10)
             with self.assertRaisesRegex(ProtocolError, "timed out"):
                 self.processes.verify_members(child, [900], deadline=10)
+
+    def test_stop_uses_one_absolute_budget_for_verification_and_signalling(self):
+        child = self.processes.child("chrome")
+        with patch("meeting_continuity_driver.time.monotonic", return_value=10), \
+             patch.object(self.processes, "assert_owned", return_value=[child.pid]) as verify, \
+             patch.object(self.processes, "kill_group") as kill:
+            def joined(*args):
+                self.processes.statuses[child.pid] = -9
+            kill.side_effect = joined
+            self.processes.stop(child)
+        verify.assert_called_once_with(child, 40, require_live=False)
+        kill.assert_called_once_with(child, 40)
+
+    def test_expired_cleanup_budget_never_signals(self):
+        child = self.processes.child("chrome")
+        with patch("meeting_continuity_driver.time.monotonic", return_value=40):
+            with self.assertRaisesRegex(ProtocolError, "termination deadline"):
+                self.processes.kill_group(child, deadline=40)
+        self.assertEqual(self.processes.signals, [])
 
     def test_failed_ack_does_not_progress_and_cancellation_joins_owned_children(self):
         with patch("meeting_continuity_driver.wait_ack", side_effect=ProtocolError("ack failed")):
