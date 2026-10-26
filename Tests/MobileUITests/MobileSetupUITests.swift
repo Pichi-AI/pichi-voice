@@ -15,6 +15,40 @@ final class MobileSetupUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Presentation acceptance of the ordinary guest distribution, without
+    /// preparing ASR, enrolling a voice or starting microphone capture.
+    func testGuestDistributionSetupPagesWithoutAccount() throws {
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        for (language, appearance) in [("en", "light"), ("ru", "dark")] {
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                   "-MobileSetupVersion", "0", "-MobileSetupStep", "0"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 15))
+            XCTAssertEqual(app.alerts.count, 0)
+            capture("guest-\(language)-welcome")
+            let next = app.buttons["onboarding.next"]
+            XCTAssertTrue(next.isHittable && next.isEnabled)
+            next.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.1"].firstMatch.waitForExistence(timeout: 10))
+            capture("guest-\(language)-voice-choice")
+            app.terminate()
+
+            // Inspect the final setup page without downloading or accepting
+            // any models. This is a page review, not a completed setup test.
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                   "-MobileSetupVersion", "0", "-MobileSetupStep", "6"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.6"].firstMatch.waitForExistence(timeout: 15))
+            XCTAssertFalse(app.buttons["account.signIn"].exists,
+                           "The guest distribution must not offer an unconfigured or local SSO server")
+            XCTAssertFalse(app.buttons["account.continueAsGuest"].exists)
+            XCTAssertEqual(app.alerts.count, 0)
+            capture("guest-\(language)-ready-page")
+            app.terminate()
+        }
+    }
+
     func testFirstRunPreparesActualResourcesSkipsMicrophoneAndEntersApp() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light"]
