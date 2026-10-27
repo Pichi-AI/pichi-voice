@@ -36,6 +36,8 @@ final class MobileKioskRecordingTests: XCTestCase {
             XCTAssertEqual(fixture.settings.selectedSpeechModel, .whisperSmall)
             XCTAssertEqual(fixture.settings.meetingAudioRetentionPolicy, .never)
             XCTAssertTrue(fixture.settings.meetingSaveAudio)
+            try await Task.sleep(for: .milliseconds(1100))
+            XCTAssertGreaterThanOrEqual(fixture.coordinator.elapsedTime, 1)
             try await settle()
             try host.assertRestricted(expected: "kiosk.stop")
             XCTAssertTrue(host.identifiers().contains("kiosk.timer"))
@@ -308,6 +310,12 @@ final class MobileKioskRecordingTests: XCTestCase {
                 result.append(object)
                 for child in (object.accessibilityElements ?? []) + (object.automationElements ?? []) {
                     if let child = child as? NSObject { visit(child) }
+                }
+                let count = object.accessibilityElementCount()
+                if count > 0 && count < 2_000 {
+                    for index in 0..<count {
+                        if let child = object.accessibilityElement(at: index) as? NSObject { visit(child) }
+                    }
                 }
                 if let view = object as? UIView { for child in view.subviews { visit(child) } }
             }

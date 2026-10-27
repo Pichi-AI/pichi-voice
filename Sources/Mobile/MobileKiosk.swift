@@ -67,12 +67,14 @@ struct MobileKioskRoot: View {
                         if coordinator.isRecording {
                             Button { stop() } label: {
                                 Label(PichiLocalization.text("Stop Recording"), systemImage: "stop.fill")
+                                    .foregroundStyle(theme.palette.accentForeground)
                                     .frame(maxWidth: .infinity).padding(.vertical, 12)
                             }.buttonStyle(.borderedProminent)
                                 .disabled(isBusy).accessibilityIdentifier("kiosk.stop")
                         } else if coordinator.isQuiescent && !isBusy {
                             Button { start() } label: {
                                 Label(PichiLocalization.text("Start Recording"), systemImage: "record.circle")
+                                    .foregroundStyle(theme.palette.accentForeground)
                                     .frame(maxWidth: .infinity).padding(.vertical, 12)
                             }.buttonStyle(.borderedProminent)
                                 .disabled(!access.isAvailable).accessibilityIdentifier("kiosk.start")
