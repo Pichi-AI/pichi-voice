@@ -293,7 +293,7 @@ nonisolated enum MobileAccountCopy {
         case .staleOperation: fallback = "Your account changed. Please try again from the current account."
         case .revocationUnavailable: fallback = "Signed out on this device. The server could not confirm revocation of this device's session."
         case .previousAccountReturned: fallback = "The same account was returned. Try switching again and choose a different account."
-        case .captchaRequired: fallback = "A browser verification is required. Complete the account check on the destination website, then try again."
+        case .captchaRequired: fallback = "This sign-in requires a browser verification that this app cannot complete. Wait for the sign-in limit to expire before trying again."
         case .browserLoginRequired: fallback = "This account requires browser sign-in. Password sign-in is unavailable for this account."
         case .rateLimited: fallback = "Too many sign-in attempts. Wait before trying again."
         }

@@ -58510,13 +58510,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A browser verification is required. Complete the account check on the destination website, then try again."
+            "value": "This sign-in requires a browser verification that this app cannot complete. Wait for the sign-in limit to expire before trying again."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Требуется проверка в браузере. Пройдите проверку учётной записи на сайте сервера и повторите попытку."
+            "value": "Для входа нужна проверка в браузере, которую это приложение пока не поддерживает. Повторите попытку после окончания ограничения на вход."
           }
         }
       }
