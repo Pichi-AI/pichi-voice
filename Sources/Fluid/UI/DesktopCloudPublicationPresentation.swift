@@ -321,7 +321,7 @@ nonisolated enum DesktopCloudPublicationPolicy {
         return switch snapshot.availability {
         case .ready, .paused, .storageUnavailable: true
         case .transportUnavailable: snapshot.cloudSyncEnabled
-        case .unconfigured, .signedOut, .profileUnavailable, .pausing: false
+        case .unconfigured, .signedOut, .profileUnavailable, .pausing, .protectedDataUnavailable: false
         }
     }
 

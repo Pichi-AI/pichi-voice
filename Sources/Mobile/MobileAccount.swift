@@ -395,7 +395,11 @@ private struct MobileAccountPanel: View {
 
     var body: some View {
         Group {
-            if !privateProfile.isPrivateDataVisible {
+            if session.isAwaitingProtectedData {
+                Text(PichiLocalization.text("account.legacy.protectedData", defaultValue: "Unlock this device to restore your account and protected recordings."))
+                    .font(theme.typography.bodySmall).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("account.protectedDataUnavailable")
+            } else if !privateProfile.isPrivateDataVisible {
                 if privateProfile.isTransitioning {
                     ProgressView(PichiLocalization.text("account.state.updating", defaultValue: "Updating account"))
                         .accessibilityIdentifier("account.updating")
@@ -735,7 +739,7 @@ struct MobileCloudSyncSettings: View {
     private var isBusy: Bool { interaction.action != nil || service.snapshot.availability == .pausing }
     private var unavailable: Bool {
         switch service.snapshot.availability {
-        case .unconfigured, .signedOut, .profileUnavailable: return true
+        case .unconfigured, .signedOut, .profileUnavailable, .protectedDataUnavailable: return true
         default: return false
         }
     }
@@ -829,7 +833,7 @@ struct MobileCloudRecordingStatus: View {
 
     private var canLoad: Bool {
         switch service.snapshot.availability {
-        case .unconfigured, .signedOut, .profileUnavailable, .pausing: return false
+        case .unconfigured, .signedOut, .profileUnavailable, .pausing, .protectedDataUnavailable: return false
         default: return true
         }
     }

@@ -245,7 +245,7 @@ private enum AutomaticFixtureFailure: Error { case timeout, busy }
             try await store.save(current)
         }
         if let current = try await store.loadTranscript(id: id) {
-            guard try PichiProtectedPublicationSource.prepare(for: current).sourceSHA256 == expectedSourceSHA256 else {
+            guard try PichiProtectedPublicationSource.localFingerprint(for: current) == expectedSourceSHA256 else {
                 throw PichiPublicationOutboxFailure.receiptConflict
             }
         }

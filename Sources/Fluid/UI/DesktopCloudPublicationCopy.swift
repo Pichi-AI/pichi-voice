@@ -28,6 +28,7 @@ nonisolated enum DesktopCloudPublicationCopy {
         case .paused: PichiLocalization.text("cloud.availability.paused", language: language, bundle: bundle, defaultValue: "Cloud uploads paused")
         case .transportUnavailable: PichiLocalization.text("cloud.availability.transportUnavailable", language: language, bundle: bundle, defaultValue: "Cloud connection unavailable")
         case .storageUnavailable: PichiLocalization.text("cloud.availability.storageUnavailable", language: language, bundle: bundle, defaultValue: "Cloud storage unavailable. Transfers are paused.")
+        case .protectedDataUnavailable: PichiLocalization.text("cloud.availability.protectedDataUnavailable", language: language, bundle: bundle, defaultValue: "Unlock this device to resume protected delivery.")
         }
     }
     static func pause(_ value: PichiPublicationPauseReason) -> String {

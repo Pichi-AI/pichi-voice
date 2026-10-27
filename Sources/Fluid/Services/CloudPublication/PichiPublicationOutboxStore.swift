@@ -502,7 +502,9 @@ actor PichiPublicationOutboxStore {
               record.serverRetryNotBefore?.timeIntervalSince1970.isFinite != false else {
             throw PichiPublicationOutboxFailure.corruptRecord
         }
+        if let localDigest = record.localSourceSHA256, !Self.validDigest(localDigest) { throw PichiPublicationOutboxFailure.corruptRecord }
         let automatic = record.automaticAccountContext == true
+        if automatic, record.transcriptBytes != nil, !Self.validDigest(record.localSourceSHA256) { throw PichiPublicationOutboxFailure.corruptRecord }
         let purged = record.sourcePurged == true
         if automatic {
             guard case .legacy = configuration, record.automaticConsent,
@@ -738,7 +740,7 @@ actor PichiPublicationOutboxStore {
                 && lhs.canonicalSourceSHA256 == rhs.canonicalSourceSHA256)
         return lhs.sessionID == rhs.sessionID && lhs.operationID == rhs.operationID && lhs.owner == rhs.owner
             && lhs.configuration == rhs.configuration && lhs.automaticConsent == rhs.automaticConsent
-            && sameContent && lhs.sourceSHA256 == rhs.sourceSHA256
+            && sameContent && lhs.sourceSHA256 == rhs.sourceSHA256 && lhs.localSourceSHA256 == rhs.localSourceSHA256
             && lhs.canonicalSourceSHA256 == rhs.canonicalSourceSHA256
             && lhs.legacySelection == rhs.legacySelection && lhs.legacyBodySHA256 == rhs.legacyBodySHA256
             && lhs.automaticAccountContext == rhs.automaticAccountContext

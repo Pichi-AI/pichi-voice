@@ -58707,6 +58707,40 @@
           }
         }
       }
+    },
+    "cloud.availability.protectedDataUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unlock this device to resume protected delivery."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разблокируйте устройство, чтобы продолжить защищённую отправку."
+          }
+        }
+      }
+    },
+    "account.legacy.protectedData": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unlock this device to restore your account and protected recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разблокируйте устройство, чтобы восстановить учётную запись и защищённые записи."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
