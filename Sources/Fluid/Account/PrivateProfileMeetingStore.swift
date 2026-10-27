@@ -18,6 +18,7 @@ extension MeetingSessionStore {
 /// N5 receives this frozen source at recording admission, separately from its own consent snapshot.
 nonisolated struct MeetingPrivateProfileAdmission: Sendable {
     let profile: PrivateProfileSnapshot
+    var requiresEncryptedPersistence = false
     var ownership: MeetingProfileOwnership { .init(profile: profile) }
 }
 
@@ -25,11 +26,15 @@ nonisolated struct MeetingPrivateProfileAdmission: Sendable {
 /// network/model work. Delivery failures must never prevent a local recording from being saved.
 nonisolated protocol PrivateProfileRecordingObserver: Sendable {
     func captureAdmitted(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
+    func prepareRequiredCapture(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async throws
     func sourceDidPersist(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
     func captureAdmissionCancelled(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
 }
 
 extension PrivateProfileRecordingObserver {
+    nonisolated func prepareRequiredCapture(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async throws {
+        throw CocoaError(.featureUnsupported)
+    }
     nonisolated func captureAdmissionCancelled(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async {}
 }
 
@@ -40,6 +45,7 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     private var stores: [String: MeetingSessionStore] = [:]
     private var admissions: [MeetingSessionID: MeetingPrivateProfileAdmission] = [:]
     private var recordingObserver: (any PrivateProfileRecordingObserver)?
+    private var encryptedProfiles = Set<String>()
 
     func installRecordingObserver(_ observer: any PrivateProfileRecordingObserver) throws {
         guard recordingObserver == nil else { throw AccountError.busy }
@@ -53,11 +59,51 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     }
 
     func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership? {
+        try await captureOwnership(for: id, configuration: nil)
+    }
+
+    func captureOwnership(for id: MeetingSessionID, configuration: MeetingCaptureConfiguration) async throws -> MeetingProfileOwnership? {
+        try await captureOwnership(for: id, configuration: Optional(configuration))
+    }
+
+    private func captureOwnership(for id: MeetingSessionID, configuration: MeetingCaptureConfiguration?) async throws -> MeetingProfileOwnership? {
         guard admissions[id] == nil else { throw AccountError.busy }
-        let captured = try admission()
+        var captured = try admission()
+        captured.requiresEncryptedPersistence = configuration?.requiresEncryptedPersistence == true
+        if captured.requiresEncryptedPersistence {
+            guard !captured.profile.isGuest, encryptedProfiles.contains(captured.profile.id),
+                  configuration?.audioStorageMode == .memoryOnly,
+                  configuration?.piiRedactionEnabled == true, recordingObserver != nil else {
+                throw MeetingRecordingCipher.Failure.invalidConfiguration
+            }
+        }
         admissions[id] = captured
-        await recordingObserver?.captureAdmitted(id: id, admission: captured)
-        return captured.ownership
+        do {
+            if captured.requiresEncryptedPersistence {
+                try await recordingObserver?.prepareRequiredCapture(id: id, admission: captured)
+            } else { await recordingObserver?.captureAdmitted(id: id, admission: captured) }
+            try checkReadable(captured.profile)
+            return captured.ownership
+        } catch {
+            admissions.removeValue(forKey: id)
+            await recordingObserver?.captureAdmissionCancelled(id: id, admission: captured)
+            throw error
+        }
+    }
+
+    /// Composition installs the off-main Keychain result before admitting a protected capture.
+    func installEncryptionCipher(_ cipher: MeetingRecordingCipher, for profile: PrivateProfileSnapshot) async throws {
+        guard PrivateProfileStorage.isReadable(profile), cipher.profileID == profile.id else { throw AccountError.staleOperation }
+        try await store(for: profile).installEncryptionCipher(cipher)
+        guard PrivateProfileStorage.isReadable(profile) else { throw AccountError.staleOperation }
+        encryptedProfiles.insert(profile.id)
+    }
+
+    func hasEncryptedPersistenceData(in profile: PrivateProfileSnapshot) async throws -> Bool {
+        guard PrivateProfileStorage.isReadable(profile) else { throw AccountError.staleOperation }
+        let result = try await store(for: profile).hasEncryptedPersistenceData()
+        guard PrivateProfileStorage.isReadable(profile) else { throw AccountError.staleOperation }
+        return result
     }
 
     func cancelCaptureAdmission(for id: MeetingSessionID) async {
@@ -72,14 +118,20 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
         var session = source
         if let owner = session.profileOwnership, !owner.matches(admitted.profile) { throw AccountError.staleOperation }
         session.profileOwnership = admitted.ownership
+        guard (session.requiresEncryptedPersistence == true) == admitted.requiresEncryptedPersistence else { throw AccountError.staleOperation }
         admissions[session.id] = admitted
         do { try await store(for: admitted.profile).create(session) }
-        catch { admissions.removeValue(forKey: session.id); throw error }
+        catch {
+            admissions.removeValue(forKey: session.id)
+            if admitted.requiresEncryptedPersistence { await recordingObserver?.captureAdmissionCancelled(id: session.id, admission: admitted) }
+            throw error
+        }
     }
 
     func save(_ source: MeetingSession) async throws {
         let profile: PrivateProfileSnapshot
         if let admitted = admissions[source.id] {
+            guard (source.requiresEncryptedPersistence == true) == admitted.requiresEncryptedPersistence else { throw AccountError.staleOperation }
             profile = admitted.profile
         } else {
             profile = try readableProfile()
@@ -164,6 +216,19 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
         admissions.removeValue(forKey: id)
     }
 
+    /// A frozen current-profile owner permits an idempotent cleanup retry even when a
+    /// prior filesystem removal deleted the manifest before returning an error.
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
+        let profile = try readableProfile()
+        guard expectedOwnership.matches(profile) else { throw AccountError.staleOperation }
+        if let session = try await store(for: profile).load(id: id) {
+            guard permits(session, in: profile), session.profileOwnership == expectedOwnership else { throw AccountError.staleOperation }
+        }
+        try checkReadable(profile)
+        try await store(for: profile).delete(id: id)
+        admissions.removeValue(forKey: id)
+    }
+
     func deleteAudioFiles(for id: MeetingSessionID) async throws {
         let profile = try readableProfile()
         guard let session = try await store(for: profile).load(id: id), permits(session, in: profile) else { return }
@@ -182,7 +247,7 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     }
 
     /// Lifecycle calls only after coordinator capture/finalization and private mutations join.
-    func finishProfileTransition() { admissions.removeAll(); stores.removeAll() }
+    func finishProfileTransition() { admissions.removeAll(); stores.removeAll(); encryptedProfiles.removeAll() }
 
     private func store(for profile: PrivateProfileSnapshot) -> MeetingSessionStore {
         if let existing = stores[profile.id] { return existing }
