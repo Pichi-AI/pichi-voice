@@ -38,7 +38,8 @@ extension PichiPublicationOutboxTests {
         await account.signIn(email: "a@synthetic.example", password: "synthetic-only")
         check(try await service.prepareAutomaticCapture() == false && keyOwner.loads == 0,
               "Signed-in accounts without a selected workspace keep ordinary local recording available")
-        try await service.refresh()
+        do { try await service.refresh(); check(false, "An unselected publication workspace remains an explicit configuration error") }
+        catch AccountError.workspaceUnavailable { check(true, "Workspace configuration failure is typed without constructing storage") }
         let unselectedRoot = PrivateProfileStorage.current.rootDirectory
         check(service.snapshot.availability == .unconfigured
             && !manager.fileExists(atPath: unselectedRoot.appendingPathComponent("CloudPublication").path),
