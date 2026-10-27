@@ -114,7 +114,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     func notifyServerAvailabilityChanged() async {
         // Restoration may invoke the existing profile lifecycle. It must never be
         // enclosed by a publication task that the lifecycle would then try to join.
-        if account.isAwaitingLegacyServerValidation {
+        if account.isAwaitingLegacyServerValidation || account.isAwaitingProtectedData {
             await joinOwnedWork()
             await account.restoreAfterConnectivity()
         }

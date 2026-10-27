@@ -62,5 +62,6 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/CloudPublication/PichiPublicationConsentStore.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationHTTPClient.swift \
     Sources/Fluid/Services/CloudPublication/PichiCloudPublicationService.swift \
+    Sources/Fluid/Services/CloudPublication/PichiCloudPublicationActivation.swift \
     Tests/PichiPublicationOutboxTests.swift Tests/PichiCloudPublicationServiceTests.swift Tests/PichiLegacyCloudPublicationServiceTests.swift Tests/PichiAutomaticCloudPublicationTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests" "$task_test_dir/fixtures-$(uuidgen)"
