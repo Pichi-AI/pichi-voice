@@ -9,7 +9,10 @@ extension AccountSessionService {
            let transport = try? LegacyAccountHTTPTransport(configuration: legacy) {
             return AccountSessionService(configuration: nil, browser: AccountSystemBrowser(policy: browserSessionPolicy),
                 transport: UnconfiguredAccountTransport(), credentials: UnconfiguredAccountCredentials(),
-                legacyConfiguration: legacy, legacyTransport: transport)
+                restoration: AccountRestorationPolicy(defaults: .standard,
+                    scope: "legacy-session-" + LegacyAccountKeychainStore.scope(configuration: legacy)),
+                legacyConfiguration: legacy, legacyTransport: transport,
+                legacyCredentials: LegacyAccountKeychainStore(configuration: legacy))
         }
         let candidate = distribution.account
         let schemes = (bundle.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]])?

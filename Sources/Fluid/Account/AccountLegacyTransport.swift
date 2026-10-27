@@ -15,7 +15,19 @@ nonisolated protocol LegacyAccountTransporting: Sendable {
     func logout() async throws
     func clearSession() async
     func shutdown() async
+    func sessionCookie() async throws -> LegacyAccountCookie?
+    func restoreSession(_ cookie: LegacyAccountCookie) async throws
+    func refreshSession() async throws
 }
+
+/// Existing injected memory-only adapters do not opt in to durable credentials.
+extension LegacyAccountTransporting {
+    nonisolated func sessionCookie() async throws -> LegacyAccountCookie? { nil }
+    nonisolated func restoreSession(_ cookie: LegacyAccountCookie) async throws { throw AccountError.invalidState }
+    nonisolated func refreshSession() async throws { throw AccountError.invalidState }
+}
+
+nonisolated enum LegacyAccountConnectivityFailure: Error, Sendable { case unavailable }
 
 private nonisolated final class LegacyAccountRedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -31,6 +43,7 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
     private let configuration: LegacyAccountConfiguration
     private let session: URLSession
     private var cookie: HTTPCookie?
+    private var cookieReceivedAt: Date?
     private var active: [UUID: Task<LegacyAccountHTTPResponse, Error>] = [:]
     private var closed = false
     private var sessionGeneration = UUID()
@@ -104,14 +117,37 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
         return try await account()
     }
 
+    func sessionCookie() throws -> LegacyAccountCookie? {
+        guard let cookie, let cookieReceivedAt, let expiresAt = cookie.expiresDate else { return nil }
+        let value = LegacyAccountCookie(value: cookie.value, receivedAt: cookieReceivedAt, expiresAt: expiresAt)
+        try value.validate()
+        return value
+    }
+    func restoreSession(_ saved: LegacyAccountCookie) async throws {
+        try saved.validate()
+        await clearSession()
+        guard !closed else { throw AccountError.staleOperation }
+        try Task.checkCancellation()
+        guard let host = configuration.apiBaseURL.host,
+              let restored = HTTPCookie(properties: [.name: "auth_token", .value: saved.value, .domain: host,
+                .path: "/", .secure: "TRUE", HTTPCookiePropertyKey("HttpOnly"): "TRUE", .expires: saved.expiresAt]) else {
+            throw AccountError.invalidAccount
+        }
+        cookie = restored; cookieReceivedAt = saved.receivedAt
+    }
+    func refreshSession() async throws {
+        guard let cookie, cookie.expiresDate.map({ $0 > Date() }) != false else { throw AccountError.reauthenticationRequired }
+        _ = try await checked(path: "/api/auth/refresh", method: "POST")
+    }
+
     func logout() async throws {
         // The server revokes every session for this user. UI exposes that effect.
-        defer { cookie = nil }
+        defer { cookie = nil; cookieReceivedAt = nil }
         if cookie != nil { _ = try await checked(path: "/api/auth/logout", method: "POST") }
     }
     func clearSession() async {
         if let clearing { await clearing.value; return }
-        sessionGeneration = UUID(); cookie = nil
+        sessionGeneration = UUID(); cookie = nil; cookieReceivedAt = nil
         let tasks = Array(active.values)
         tasks.forEach { $0.cancel() }
         let task = Task { for request in tasks { _ = try? await request.value } }
@@ -152,7 +188,7 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
         var request = original
         if let cookie {
             guard cookie.expiresDate.map({ $0 > Date() }) != false else {
-                self.cookie = nil; throw AccountError.reauthenticationRequired
+                self.cookie = nil; self.cookieReceivedAt = nil; throw AccountError.reauthenticationRequired
             }
             request.setValue("auth_token=" + cookie.value, forHTTPHeaderField: "Cookie")
         }
@@ -173,6 +209,12 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
                 return .init(status: response.statusCode, body: result, retryAfter: response.value(forHTTPHeaderField: "Retry-After"))
             } catch let error as AccountError { throw error }
             catch is CancellationError { throw CancellationError() }
+            catch let error as URLError {
+                if [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed].contains(error.code) {
+                    throw LegacyAccountConnectivityFailure.unavailable
+                }
+                throw AccountError.networkUnavailable
+            }
             catch { throw AccountError.networkUnavailable }
         }
         active[id] = task
@@ -193,6 +235,7 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
               next.isHTTPOnly, next.value.utf8.count <= 32_768,
               next.value.rangeOfCharacter(from: .controlCharacters) == nil else { throw AccountError.invalidResponse }
         cookie = next.value.isEmpty || next.expiresDate.map({ $0 <= Date() }) == true ? nil : next
+        cookieReceivedAt = cookie == nil ? nil : Date()
     }
 
     private func validate(_ request: URLRequest) throws {
