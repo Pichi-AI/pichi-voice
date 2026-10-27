@@ -317,6 +317,11 @@ final class AppServices: ObservableObject {
         await updateIdlePreparation()
     }
 
+    func protectedDataDidBecomeAvailable() async {
+        await accountSession.restoreAfterConnectivity()
+        cloudPublication?.notifyServerAvailabilityChanged()
+    }
+
     func didReceiveMemoryWarning() async {
         await idlePreparation.didReceiveMemoryWarning()
     }
@@ -467,6 +472,9 @@ struct PichiVoiceMobileApp: App {
             // captured scene cannot overwrite a newer foreground event after restore.
             .onChange(of: scenePhase, initial: true) { _, phase in
                 Task { await services.setSceneActive(phase == .active) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+                Task { await services.protectedDataDidBecomeAvailable() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                 Task { await services.didReceiveMemoryWarning() }

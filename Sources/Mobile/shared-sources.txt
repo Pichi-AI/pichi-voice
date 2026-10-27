@@ -139,6 +139,7 @@ Sources/Fluid/Services/Meeting/MeetingSessionPersistenceQueue.swift
 Sources/Fluid/Services/Meeting/MeetingSessionStore.swift
 Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift
 Sources/Fluid/Services/Meeting/MeetingRecordingKeychainStore.swift
+Sources/Fluid/Persistence/ProtectedDataAccessError.swift
 Sources/Fluid/Services/Meeting/MeetingSignalDomainGate.swift
 Sources/Fluid/Services/Meeting/MeetingSpeechActivityDetector.swift
 Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift
