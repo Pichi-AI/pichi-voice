@@ -362,5 +362,7 @@ struct PichiPublicationOutboxTests {
         print("Pichi publication outbox: \(checks) synthetic checks passed")
         let facadeChecks = try await Self.checkCloudPublicationService(root: root.appendingPathComponent("facade", isDirectory: true))
         print("Pichi publication facade: \(facadeChecks) synthetic integration checks passed; no live transport")
+        let legacyChecks = try await Self.checkLegacyCloudPublicationService(root: root.appendingPathComponent("legacy-facade", isDirectory: true))
+        print("Pichi legacy facade: \(legacyChecks) synthetic integration checks passed; no live transport")
     }
 }

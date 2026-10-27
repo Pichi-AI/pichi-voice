@@ -8,7 +8,7 @@ xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/AccountPKCE.swift \
-    Sources/Fluid/Account/AccountLegacyTransport.swift Sources/Fluid/Account/AccountSessionService.swift \
+    Sources/Fluid/Account/AccountPublicationConfiguration.swift Sources/Fluid/Account/AccountLegacyTransport.swift Sources/Fluid/Account/AccountSessionService.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationConsentStore.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationWire.swift \
     Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift \

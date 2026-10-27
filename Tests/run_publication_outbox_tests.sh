@@ -41,7 +41,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/AccountPKCE.swift \
-    Sources/Fluid/Account/AccountLegacyTransport.swift Sources/Fluid/Account/AccountSessionService.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/AccountPublicationConfiguration.swift Sources/Fluid/Account/AccountLegacyTransport.swift Sources/Fluid/Account/AccountSessionService.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Account/PrivateProfileService.swift Sources/Fluid/Account/PrivateProfileMeetingStore.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
@@ -60,5 +60,5 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/CloudPublication/PichiPublicationConsentStore.swift \
     Sources/Fluid/Services/CloudPublication/PichiPublicationHTTPClient.swift \
     Sources/Fluid/Services/CloudPublication/PichiCloudPublicationService.swift \
-    Tests/PichiPublicationOutboxTests.swift Tests/PichiCloudPublicationServiceTests.swift -o "$task_test_dir/tests"
+    Tests/PichiPublicationOutboxTests.swift Tests/PichiCloudPublicationServiceTests.swift Tests/PichiLegacyCloudPublicationServiceTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests" "$task_test_dir/fixtures-$(uuidgen)"
