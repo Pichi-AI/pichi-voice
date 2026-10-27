@@ -707,16 +707,28 @@ extension AccountSessionService {
             let response = try await legacyTransport.perform(request)
             try Task.checkCancellation()
             guard isCurrent(expected) else { throw AccountError.staleOperation }
-            if response.status == 401 { state = .reauthenticationRequired; presentationError = .reauthenticationRequired }
+            if response.status == 401 { await invalidateLegacyRestoration(for: expected, failure: .reauthenticationRequired) }
             return response
         } catch {
             let failure = sanitized(error)
             if error is LegacyAccountConnectivityFailure, isCurrent(expected) { isAwaitingLegacyServerValidation = true }
             if isCurrent(expected), [.reauthenticationRequired, .invalidAccount, .permissionDenied].contains(failure) {
-                state = .reauthenticationRequired; presentationError = failure
+                await invalidateLegacyRestoration(for: expected, failure: failure)
             }
             throw error
         }
+    }
+
+    /// A known revocation cannot later become an offline cached admission. This
+    /// performs no profile lifecycle transition from inside a publication request,
+    /// whose caller already owns that joined work; it closes new network admission.
+    private func invalidateLegacyRestoration(for expected: AccountContext, failure: AccountError) async {
+        guard context == expected, generation == expected.generation else { return }
+        state = .reauthenticationRequired; presentationError = failure
+        isAwaitingLegacyServerValidation = false; legacyStoredSession = nil
+        do { try restoration.inhibit() } catch { cleanupRequired = true; presentationError = .credentialsUnavailable }
+        do { try await legacyCredentials?.clear() }
+        catch { cleanupRequired = true; presentationError = .credentialsUnavailable }
     }
 
     private static func isLegacyPublicationRequest(_ request: URLRequest, workspace: String, origin: URL) -> Bool {

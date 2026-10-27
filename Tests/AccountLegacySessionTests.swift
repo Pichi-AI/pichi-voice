@@ -49,7 +49,11 @@ private nonisolated struct LegacyUnusedOIDC: AccountTransporting {
 @MainActor private final class LegacyLifecycle: AccountSessionLifecycle {
     var isAccountIsolationReady = true
     var transitions = 0
-    func transition(from: AccountContext?, to: AccountContext?, generation: UUID) { transitions += 1 }
+    var activatedIdentities: [AccountIdentity] = []
+    func transition(from: AccountContext?, to: AccountContext?, generation: UUID) {
+        transitions += 1
+        if let to { activatedIdentities.append(to.identity) }
+    }
 }
 
 @MainActor enum AccountLegacySessionChecks {
@@ -142,11 +146,16 @@ private nonisolated final class LegacyHTTPFixtureProtocol: URLProtocol, @uncheck
         var loginBody = "{}"
         var cookie = "auth_token=synthetic-cookie; Path=/; HttpOnly; Secure"
         var permission = "edit"
+        var offline = false
+        var userID = 41
+        var meStatus = 200
+        var recordingStatus = 200
     }
     private static let state = State()
-    static func configure(status: Int = 200, body: String = "{}", cookie: String = "auth_token=synthetic-cookie; Path=/; HttpOnly; Secure", permission: String = "edit") {
+    static func configure(status: Int = 200, body: String = "{}", cookie: String = "auth_token=synthetic-cookie; Path=/; HttpOnly; Secure", permission: String = "edit", offline: Bool = false, userID: Int = 41, meStatus: Int = 200, recordingStatus: Int = 200) {
         state.lock.lock(); defer { state.lock.unlock() }
         state.requests = []; state.loginStatus = status; state.loginBody = body; state.cookie = cookie; state.permission = permission
+        state.offline = offline; state.userID = userID; state.meStatus = meStatus; state.recordingStatus = recordingStatus
     }
     static var requests: [URLRequest] { state.lock.lock(); defer { state.lock.unlock() }; return state.requests }
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -155,14 +164,18 @@ private nonisolated final class LegacyHTTPFixtureProtocol: URLProtocol, @uncheck
         Self.state.lock.lock()
         Self.state.requests.append(request)
         let status = Self.state.loginStatus, loginBody = Self.state.loginBody, cookie = Self.state.cookie, permission = Self.state.permission
+        let offline = Self.state.offline, userID = Self.state.userID, meStatus = Self.state.meStatus, recordingStatus = Self.state.recordingStatus
         Self.state.lock.unlock()
+        if offline { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
         var responseStatus = 200, headers = ["Content-Type": "application/json"], body = "{}"
         switch request.url!.path {
         case "/api/auth/login": responseStatus = status; body = loginBody; if status == 200 { headers["Set-Cookie"] = cookie }
-        case "/api/auth/me": body = #"{"user":{"id":41,"fullName":"Synthetic","organizationId":7}}"#
+        case "/api/auth/me": responseStatus = meStatus; body = "{\"user\":{\"id\":\(userID),\"fullName\":\"Synthetic\",\"organizationId\":7}}"
         case "/api/auth/organizations": body = #"{"organizations":[{"id":7,"name":"Demo"}],"currentOrganizationId":7}"#
         case "/api/workspaces": body = #"{"organization":{"id":7},"workspaces":[{"id":9,"name":"Demo","organizationId":7}]}"#
         case "/api/workspaces/9/user-permission": body = "{\"permission\":\"" + permission + "\"}"
+        case "/api/recordings/transcript": responseStatus = recordingStatus
+        case "/api/auth/refresh": headers["Set-Cookie"] = cookie
         case "/api/auth/logout": headers["Set-Cookie"] = "auth_token=; Path=/; HttpOnly; Max-Age=0"
         default: break
         }
@@ -214,6 +227,166 @@ extension AccountLegacySessionChecks {
         let foreign = try transport()
         do { _ = try await foreign.login(email: "synthetic@example.invalid", password: "synthetic-only", captchaToken: nil); fatalError("foreign cookie accepted") } catch { checks += 1 }
         await foreign.shutdown()
+        LegacyHTTPFixtureProtocol.configure()
+        return checks
+    }
+}
+
+private actor LegacyMemorySessionStore: LegacyAccountSessionStoring {
+    var session: LegacyAccountStoredSession?
+    var failLoad = false
+    var failClear = false
+    var holdLoad = false
+    var loadGate: CheckedContinuation<Void, Never>?
+    init(_ session: LegacyAccountStoredSession? = nil) { self.session = session }
+    func load() async throws -> LegacyAccountStoredSession? {
+        if holdLoad { await withCheckedContinuation { loadGate = $0 } }
+        if failLoad { throw AccountError.credentialsUnavailable }
+        return session
+    }
+    func save(_ session: LegacyAccountStoredSession) { self.session = session }
+    func clear() throws { if failClear { throw AccountError.credentialsUnavailable }; session = nil }
+    func corrupt() { failLoad = true }
+    func holdRead() { holdLoad = true }
+    var waiting: Bool { loadGate != nil }
+    func releaseRead() { holdLoad = false; loadGate?.resume(); loadGate = nil }
+}
+
+extension AccountLegacySessionChecks {
+    static func persistence() async throws -> Int {
+        var checks = 0
+        func expect(_ value: Bool, _ label: String) { precondition(value, label); checks += 1 }
+        let config = LegacyAccountConfiguration(apiBaseURL: URL(string: "https://legacy.example")!, bundleIdentifier: "ai.example.voice")
+        func make(_ store: LegacyMemorySessionStore, lifecycle: LegacyLifecycle = LegacyLifecycle()) throws -> AccountSessionService {
+            let policy = URLSessionConfiguration.ephemeral; policy.protocolClasses = [LegacyHTTPFixtureProtocol.self]
+            return AccountSessionService(configuration: nil, browser: LegacyUnusedBrowser(), transport: LegacyUnusedOIDC(),
+                credentials: LegacyUnusedCredentials(), lifecycle: lifecycle, legacyConfiguration: config,
+                legacyTransport: try LegacyAccountHTTPTransport(configuration: config, sessionConfiguration: policy), legacyCredentials: store)
+        }
+        let cookie = "auth_token=synthetic-persistent-cookie; Path=/; HttpOnly; Secure; Max-Age=604800"
+        LegacyHTTPFixtureProtocol.configure(cookie: cookie)
+        let store = LegacyMemorySessionStore(), first = try make(store)
+        await first.signIn(email: "synthetic@example.invalid", password: "password-stays-in-memory")
+        expect(first.state == .signedIn, "persistent legacy login admitted")
+        try await first.selectWorkspace(organizationID: "7", workspaceID: "9")
+        let saved = await store.session!
+        expect(saved.organizationID == "7" && saved.workspaceID == "9", "workspace persisted after service commit")
+        let bytes = try JSONEncoder().encode(saved)
+        expect(!String(decoding: bytes, as: UTF8.self).contains("password-stays-in-memory"), "envelope never stores password")
+        expect(try LegacyAccountStoredSession.decode(bytes, configuration: config) == saved, "bounded session codec roundtrip")
+        await first.shutdown()
+        expect(await store.session != nil, "shutdown preserves restart credential")
+
+        LegacyHTTPFixtureProtocol.configure(offline: true)
+        let recoveredLifecycle = LegacyLifecycle(), recovered = try make(store, lifecycle: recoveredLifecycle)
+        await recovered.restore()
+        expect(recovered.state == .signedIn && recovered.isAwaitingLegacyServerValidation, "offline restart admits local cached profile")
+        expect(recovered.context?.identity == saved.snapshot.stableIdentity && recovered.context?.workspaceID == "9", "offline recovery stays in same identity and workspace")
+        expect(await store.session?.cookie.expiresAt == saved.cookie.expiresAt, "offline recovery never extends server cookie TTL")
+        let offlineOwner = recovered.context!
+        var request = URLRequest(url: config.apiBaseURL.appendingPathComponent("api/recordings/transcript")); request.httpMethod = "POST"; request.httpBody = Data("{}".utf8)
+        do { _ = try await recovered.performAuthorizedLegacyRequest(for: offlineOwner, request: request); fatalError("cached ACL authorized upload") } catch { checks += 1 }
+        expect(!LegacyHTTPFixtureProtocol.requests.contains { $0.url?.path == "/api/recordings/transcript" }, "cached ACL never authorizes remote upload")
+        LegacyHTTPFixtureProtocol.configure()
+        await recovered.restoreAfterConnectivity()
+        expect(recovered.state == .signedIn && !recovered.isAwaitingLegacyServerValidation && recovered.context == offlineOwner, "connectivity validation preserves admitted capture generation")
+        _ = try await recovered.performAuthorizedLegacyRequest(for: offlineOwner, request: request)
+        expect(LegacyHTTPFixtureProtocol.requests.contains { $0.url?.path == "/api/recordings/transcript" }, "fresh me and ACL allow remote upload after recovery")
+
+        LegacyHTTPFixtureProtocol.configure(offline: true)
+        do { _ = try await recovered.performAuthorizedLegacyRequest(for: offlineOwner, request: request) } catch {}
+        LegacyHTTPFixtureProtocol.configure(userID: 42)
+        await recovered.restoreAfterConnectivity()
+        expect(recovered.state == .reauthenticationRequired && recovered.context == nil, "fresh different identity fails closed")
+        expect(recoveredLifecycle.activatedIdentities.allSatisfy { $0.internalUserID == "41" }, "server B can never activate through A restore")
+        expect(await store.session == nil, "identity mismatch clears durable cookie")
+        await recovered.shutdown()
+
+        for failure in [401, 403, 500] {
+            LegacyHTTPFixtureProtocol.configure(meStatus: failure)
+            let rejectedStore = LegacyMemorySessionStore(saved), rejected = try make(rejectedStore)
+            await rejected.restore()
+            expect(rejected.context == nil && rejected.state == .reauthenticationRequired && !rejected.isAwaitingLegacyServerValidation, "server rejection is never offline admission")
+            expect(await rejectedStore.session == nil, "rejected restart clears cookie")
+            await rejected.shutdown()
+        }
+        LegacyHTTPFixtureProtocol.configure(permission: "view")
+        let revokedStore = LegacyMemorySessionStore(saved), revoked = try make(revokedStore)
+        await revoked.restore()
+        expect(revoked.context == nil && revoked.state == .reauthenticationRequired, "removed edit permission cannot restore selected workspace")
+        await revoked.shutdown()
+
+        LegacyHTTPFixtureProtocol.configure()
+        let expiredCookie = LegacyAccountCookie(value: saved.cookie.value, receivedAt: Date().addingTimeInterval(-3600), expiresAt: Date().addingTimeInterval(-1))
+        let expired = LegacyAccountStoredSession(schemaVersion: 1, configuration: config, cookie: expiredCookie, snapshot: saved.snapshot,
+            verifiedAt: Date().addingTimeInterval(-3600), organizationID: "7", workspaceID: "9")
+        let expiredStore = LegacyMemorySessionStore(expired), expiredService = try make(expiredStore)
+        await expiredService.restore()
+        expect(expiredService.state == .reauthenticationRequired && LegacyHTTPFixtureProtocol.requests.isEmpty, "expired session neither restores nor refreshes")
+        await expiredService.shutdown()
+        let corruptStore = LegacyMemorySessionStore(saved); await corruptStore.corrupt()
+        let corrupt = try make(corruptStore); await corrupt.restore()
+        expect(corrupt.context == nil && corrupt.state == .reauthenticationRequired, "corrupt credential fails closed")
+        await corrupt.shutdown()
+        do { _ = try LegacyAccountStoredSession.decode(Data("invalid".utf8), configuration: config); fatalError("corrupt data decoded") } catch { checks += 1 }
+        let foreign = LegacyAccountConfiguration(apiBaseURL: URL(string: "https://other.example")!, bundleIdentifier: config.bundleIdentifier)
+        do { _ = try LegacyAccountStoredSession.decode(bytes, configuration: foreign); fatalError("foreign origin restored") } catch { checks += 1 }
+        let tooLong = LegacyAccountCookie(value: "synthetic", receivedAt: Date(), expiresAt: Date().addingTimeInterval(8 * 86400))
+        do { try tooLong.validate(); fatalError("invented cookie TTL accepted") } catch { checks += 1 }
+
+        LegacyHTTPFixtureProtocol.configure(cookie: cookie)
+        let logoutStore = LegacyMemorySessionStore(), logout = try make(logoutStore)
+        await logout.signIn(email: "synthetic@example.invalid", password: "memory-only")
+        await logout.logout()
+        expect(await logoutStore.session == nil && LegacyHTTPFixtureProtocol.requests.contains { $0.url?.path == "/api/auth/logout" }, "explicit logout clears durable credential and calls all-session revoke")
+        let noResurrection = try make(logoutStore); await noResurrection.restore()
+        expect(noResurrection.context == nil && noResurrection.state == .signedOut, "logged-out session cannot resurrect after restart")
+        await logout.shutdown(); await noResurrection.shutdown()
+
+        LegacyHTTPFixtureProtocol.configure(offline: true)
+        let guestStore = LegacyMemorySessionStore(saved), guest = try make(guestStore)
+        await guest.restore(); await guest.retireLegacySession()
+        expect(await guestStore.session == nil && !LegacyHTTPFixtureProtocol.requests.contains { $0.url?.path == "/api/auth/logout" }, "guest continuation clears durable local credential without global revoke")
+        await guest.shutdown()
+
+        LegacyHTTPFixtureProtocol.configure()
+        let heldStore = LegacyMemorySessionStore(saved); await heldStore.holdRead()
+        let held = try make(heldStore)
+        let restoring = Task { await held.restore() }
+        await until { await heldStore.waiting }
+        let retiring = Task { await held.retireLegacySession() }
+        for _ in 0..<20 { await Task.yield() }
+        await heldStore.releaseRead()
+        await restoring.value; await retiring.value
+        expect(await heldStore.session == nil && held.context == nil && held.state == .signedOut, "joined retirement fences late durable restore")
+        await held.shutdown()
+        LegacyHTTPFixtureProtocol.configure(cookie: cookie)
+        let invalidatedStore = LegacyMemorySessionStore(), invalidated = try make(invalidatedStore)
+        await invalidated.signIn(email: "synthetic@example.invalid", password: "memory-only")
+        try await invalidated.selectWorkspace(organizationID: "7", workspaceID: "9")
+        LegacyHTTPFixtureProtocol.configure(recordingStatus: 401)
+        _ = try await invalidated.performAuthorizedLegacyRequest(for: invalidated.context!, request: request)
+        expect(await invalidatedStore.session == nil && invalidated.state == .reauthenticationRequired, "runtime401 inhibits and clears cached restart admission")
+        LegacyHTTPFixtureProtocol.configure(offline: true)
+        let invalidatedRestart = try make(invalidatedStore); await invalidatedRestart.restore()
+        expect(invalidatedRestart.context == nil, "known revoked session cannot resurrect offline")
+        await invalidated.shutdown(); await invalidatedRestart.shutdown()
+
+        LegacyHTTPFixtureProtocol.configure(cookie: "auth_token=synthetic-short; Path=/; HttpOnly; Secure; Max-Age=30")
+        let refreshStore = LegacyMemorySessionStore(), refreshing = try make(refreshStore)
+        await refreshing.signIn(email: "synthetic@example.invalid", password: "memory-only")
+        LegacyHTTPFixtureProtocol.configure(cookie: "auth_token=synthetic-refreshed; Path=/; HttpOnly; Secure; Max-Age=604800")
+        try await refreshing.selectWorkspace(organizationID: "7", workspaceID: "9")
+        expect(LegacyHTTPFixtureProtocol.requests.contains { $0.url?.path == "/api/auth/refresh" && $0.value(forHTTPHeaderField: "Cookie") == "auth_token=synthetic-short" }, "refresh requires still-valid original cookie")
+        let refreshed = await refreshStore.session!
+        expect(refreshed.cookie.value == "synthetic-refreshed" && refreshed.cookie.expiresAt.timeIntervalSince(refreshed.cookie.receivedAt) <= 7 * 86400 + 2, "refresh persists only actual server cookie expiry")
+        await refreshing.shutdown()
+
+        LegacyHTTPFixtureProtocol.configure()
+        let sessionOnlyStore = LegacyMemorySessionStore(), sessionOnly = try make(sessionOnlyStore)
+        await sessionOnly.signIn(email: "synthetic@example.invalid", password: "memory-only")
+        expect(await sessionOnlyStore.session == nil && sessionOnly.state != .signedIn, "session cookie without server expiry never gets invented durable TTL")
+        await sessionOnly.shutdown()
         LegacyHTTPFixtureProtocol.configure()
         return checks
     }

@@ -147,6 +147,7 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         try await transportTests(configuration)
         count += try await AccountLegacySessionChecks.run()
         count += try await AccountLegacySessionChecks.http()
+        count += try await AccountLegacySessionChecks.persistence()
         await commandPreflightCancellationTests(configuration)
         await callerCancellationDuringAdmissionTests(configuration)
         let browser = FakeBrowser(), transport = FakeTransport(), credentials = MemoryCredentials(), lifecycle = Lifecycle()
