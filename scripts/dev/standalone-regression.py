@@ -239,35 +239,40 @@ class Probe:
 
 # Registration is explicit: a new probe needs a reviewed interpreter/UI classification.
 SHELL_PROBES = (
-    "analytics_config", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
+    "account_session", "mobile_account", "admitted_history_writes", "admitted_pronunciation_read", "analytics_config", "analytics_private_profile", "app_search_private_profile", "apple_speech_lifecycle", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
     "command_archive_search", "command_cancellation", "command_markdown",
     "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
-    "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export",
+    "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export", "file_operation_isolation",
     "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
     "local_text_model_catalog", "meeting_capture_pcm", "meeting_capture_activity", "meeting_microphone_capture_contracts", "meeting_pending_speech", "native_window_appearance",
-    "meeting_summary_evidence", "onboarding",
-    "page_presentation", "participant_input_contrast", "paste_key_cache", "private_ai_idle_unloader",
+    "meeting_private_view", "n4_file_private_projection", "meeting_summary_evidence", "meeting_audio_export", "onboarding",
+    "page_presentation", "participant_input_contrast", "paste_key_cache", "private_profile_defaults", "private_profile_logging", "private_profile_stores", "private_ai_idle_unloader", "provider_dictation_capture_options",
     "release_highlights", "settings_owned_copy", "settings_viewport", "speech_model_provider_presentation", "ui_contrast",
-    "stats_snapshot", "voice_edit_cancellation",
+    "stats_snapshot", "terminal_service_lifecycle", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
-    "delivery_failure_copy", "diarization_repeatability", "dictionary_training_save", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
-    "meeting_speaker_attribution",
-    "settings_backup_concurrency",
+    "delivery_failure_copy", "dictation_context_profile", "diarization_repeatability", "dictionary_training_save", "dictation_capture_admission", "fluid_audio_capture_options", "gigaam_artifact_ownership", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
+    "meeting_speaker_attribution", "mobile_recording_activity_lifecycle",
+    "private_capture_feedback", "private_profile_activation_summary", "private_panel_concealment", "settings_backup_concurrency",
 )
 PROBES = tuple(sorted(
     [Probe(f"Tests/run_{name}_tests.sh", "sh") for name in SHELL_PROBES]
     + [Probe(f"Tests/run_{name}_tests.py", "python3") for name in PYTHON_PROBES]
     + [Probe("Tests/run_clipboard_backup_reproduction.sh", "sh"),
        Probe("Tests/run_overlay_captions.sh", "sh"),
+       Probe("Tests/run_history_private_projection_tests.sh", "bash"),
+       Probe("Tests/run_history_inline_audio_private_tests.sh", "bash"),
        Probe("Tests/run_meeting_asr_prepared_provider_tests.sh", "bash"),
        Probe("Tests/run_meeting_idle_prepared_resource_tests.sh", "bash"),
        Probe("Tests/run_meeting_privacy_context_tests.sh", "bash"),
        Probe("Tests/run_meeting_session_store_checkpoint_tests.sh", "bash"),
        Probe("Tests/run_meeting_timeline_trace_tests.sh", "sh"),
        Probe("Tests/run_process_cpu_diagnostics_tests.sh", "bash"),
+       Probe("Tests/run_publication_composition_tests.sh", "bash"),
+       Probe("Tests/run_publication_consent_tests.sh", "bash"),
+       Probe("Tests/run_publication_outbox_tests.sh", "bash"),
        Probe("Tests/run_transcript_privacy_tests.sh", "bash"),
        Probe("Tests/run_privacy_idle_preparation_tests.sh", "bash"),
        Probe("Tests/run_upstream_sync_tests.sh", "bash"),

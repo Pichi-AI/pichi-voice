@@ -92,7 +92,7 @@ struct HistoryPresentationTests {
         precondition(parent.contains(".onChange(of: self.historyStore.searchSelectionRequest)"), "External selection must be observed outside the conditionally absent list")
         precondition(!parent.contains(".onChange(of: self.historyStore.selectedEntryID)"), "Local selection must not become an external reveal event")
         precondition(parent.contains("self.revealExternalSelection()"), "Parent must use the tested policy")
-        precondition(parent.contains("self.audioAvailabilityRevision = UUID()\n            self.revealExternalSelection()"), "Initial appearance must reveal the already-selected row")
+        precondition(parent.contains("self.projection.audioAvailabilityRevision = UUID()\n            self.revealExternalSelection()"), "Initial appearance must reveal the already-selected row")
         precondition(!parent.contains("filteredEntries.map(\\.id), initial: true"), "Initial filter fallback must not erase an external selection before appearance")
         let contentSource = try String(contentsOfFile: "Sources/Fluid/ContentView.swift", encoding: .utf8)
         precondition(contentSource.contains("TranscriptionHistoryStore.shared.selectEntryFromSearch(id: id)"), "Sidebar navigation must produce the explicit request before opening History")

@@ -7,6 +7,8 @@ import Foundation
 @MainActor
 final class MeetingOwnerVoiceEnrollmentCapture {
     static let maximumSeconds: Double = 20
+    /// The reading prompt asks for 15 to 20 seconds; from here the sample is long enough to finish.
+    static let recommendedSeconds: Double = 15
     private let samples: MeetingOwnerVoiceSampleBuffer
     #if os(iOS)
     private var runtime: IOSMeetingMicrophoneRuntime?
@@ -17,6 +19,7 @@ final class MeetingOwnerVoiceEnrollmentCapture {
     init() throws { self.samples = try MeetingOwnerVoiceSampleBuffer() }
 
     var capturedSeconds: Double { self.samples.capturedSeconds }
+    var recentLevel: Float { self.samples.recentLevel }
     func checkFailure() throws { try self.samples.checkFailure() }
 
     func start(microphone: MeetingMicrophoneIdentity) async throws {
@@ -93,6 +96,15 @@ final nonisolated class MeetingOwnerVoiceSampleBuffer: MeetingMemoryAudioConsumi
     }
 
     var capturedSeconds: Double { self.lock.withLock { Double(self.samples.count) / 16_000 } }
+
+    /// RMS of the last tenth of a second, so the reader can see that the microphone hears them.
+    var recentLevel: Float {
+        self.lock.withLock {
+            let tail = self.samples.suffix(1_600)
+            guard !tail.isEmpty else { return 0 }
+            return (tail.reduce(0) { $0 + $1 * $1 } / Float(tail.count)).squareRoot()
+        }
+    }
 
     func enqueue(_ sampleBuffer: CMSampleBuffer) -> Bool {
         let admitted = self.lock.withLock {

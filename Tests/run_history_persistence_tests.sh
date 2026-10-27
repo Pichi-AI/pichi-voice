@@ -15,6 +15,9 @@ sed '/^nonisolated final class BrandPackageStore:/,$d' Sources/Fluid/Branding/Br
 # unrelated file-transcript/chat stores and their app dependencies.
 sed '/^extension FileTranscriptionEntry/,$d' \
     Sources/Fluid/Persistence/Search/SearchIndexRecord.swift > "$task_test_dir/HistorySearchRecord.swift"
+# Reuse the exact immutable PCM value type; this persistence-only probe keeps WAV I/O inert.
+sed '/^nonisolated struct DictationAudioMetadata:/,$d' \
+    Sources/Fluid/Persistence/DictationAudioHistoryStore.swift > "$task_test_dir/DictationAudioSnapshot.swift"
 xcrun swiftc -O -parse-as-library \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Branding/AppBrand.swift \
@@ -22,6 +25,9 @@ xcrun swiftc -O -parse-as-library \
     Tests/Support/StandaloneBrandPackageStore.swift \
     Sources/Fluid/Branding/BrandDistribution.swift \
     "$task_test_dir/HistorySearchRecord.swift" \
+    Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileDefaults.swift \
+    "$task_test_dir/DictationAudioSnapshot.swift" \
     Sources/Fluid/Persistence/TranscriptionHistoryDatabase.swift \
     Sources/Fluid/Persistence/TranscriptionHistoryStore.swift \
     Tests/HistoryPersistenceBoundaryTests.swift \

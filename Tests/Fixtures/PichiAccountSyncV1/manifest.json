@@ -1,0 +1,51 @@
+{
+  "contract": {
+    "repository": "Pichi-AI/pichi-voice",
+    "commit": "f3ea4b15160b92c095d9d83036e6a66e3be81c34",
+    "path": "docs/development/pichi-account-sync-contract-v1.md"
+  },
+  "source": {
+    "repository": "Pichi-AI/pichi-voice",
+    "commit": "85943ce799bc287097004f72feea7e318d443b97",
+    "path": "Tests/Fixtures/protected-transcript-v1.json",
+    "file": "protected-transcript.json",
+    "sha256": "69fe4361b0ac24d1ae904d23e79d21ec929aff6cd545399acd5f7785952cde10",
+    "byteLength": 1392
+  },
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/recordings/imports",
+    "headers": {
+      "Idempotency-Key": "00000000-0000-4000-8000-000000000201",
+      "Content-Type": "multipart/form-data; boundary=pichi-synthetic-protected-import-v1"
+    },
+    "bodyFile": "pending-criteria.multipart",
+    "fields": {
+      "schemaVersion": "1",
+      "organizationID": "17",
+      "workspaceID": "9",
+      "sourceRevision": "1",
+      "sourceSHA256": "69fe4361b0ac24d1ae904d23e79d21ec929aff6cd545399acd5f7785952cde10",
+      "assessment": "{\"participantID\":\"00000000-0000-4000-8000-000000000003\",\"criteriaIDs\":[]}"
+    }
+  },
+  "expected": {
+    "firstStatus": 202,
+    "retryStatus": 200,
+    "receiptFile": "receipt-pending-criteria.json",
+    "statusPath": "/api/v1/recordings/imports/synthetic-import-201",
+    "assessmentPath": "/api/v1/recordings/imports/synthetic-import-201/assessment"
+  },
+  "syntheticOnly": true,
+  "notes": [
+    "No bearer credential is stored. A controlled harness must inject a W1-verified representative principal with current access to organization 17/workspace 9.",
+    "Receipt IDs are example opaque strings. The server generates real IDs; identical retries must preserve them.",
+    "The selected participant is explicitly the second speaker, whose isLocalUser is false. It does not infer an employee identity.",
+    "protocol-candidate.json records coordinator-approved error/billing/pending/PATCH semantics. Runtime implementation/verification and own-read contract approval remain pending."
+  ],
+  "consumer": "N5 native durable outbox (SSO8)",
+  "protocolCandidateFile": "protocol-candidate.json",
+  "statusReceiptFile": "status-receipts.json",
+  "ownReadSliceCandidateFile": "own-read-slice-candidate.json",
+  "resolutionCasesFile": "resolution-cases.json"
+}

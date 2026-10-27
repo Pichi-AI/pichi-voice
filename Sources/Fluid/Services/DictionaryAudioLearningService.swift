@@ -6,7 +6,9 @@ import Foundation
 /// Existing correction UI owns approval. This service owns only the optional background evidence.
 @MainActor
 final class DictionaryAudioLearningService {
-    static let shared = DictionaryAudioLearningService()
+    static var shared: DictionaryAudioLearningService {
+        PrivateProfileObjectCache.value(key: "DictionaryAudioLearningService") { DictionaryAudioLearningService() }
+    }
     typealias Extractor = @Sendable (DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture
 
     private struct Request {
@@ -25,6 +27,8 @@ final class DictionaryAudioLearningService {
     private var queue: [Request] = []
     private var task: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
+    private var retired = false
+    private let profile = PrivateProfileStorage.current
     var pendingCount: Int { self.queue.count }
 
     init(
@@ -51,12 +55,22 @@ final class DictionaryAudioLearningService {
     func cancelForRecording() { self.task?.cancel() }
     func activityDidEnd() { self.drain() }
 
+    func prepareForPrivateProfileTransition() async {
+        retired = true
+        queue.removeAll()
+        let work = task, expiry = expiryTask
+        work?.cancel(); expiry?.cancel()
+        await work?.value; await expiry?.value
+        task = nil; expiryTask = nil
+    }
+
     func learn(
         entry: SettingsStore.CustomDictionaryEntry,
         evidenceID: UUID,
         evidence: DictionaryLearningAudioEvidence
     ) {
-        guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { return }
+        guard !retired, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              DictionaryMatcherExperiment.sharedFeaturesEnabled else { return }
         guard !evidence.samples.isEmpty, evidence.samples.count <= 238_080 else { return }
         guard !self.queue.contains(where: { $0.evidenceID == evidenceID }) else { return }
         self.pruneExpired()
@@ -81,7 +95,8 @@ final class DictionaryAudioLearningService {
 
     private func drain() {
         self.pruneExpired()
-        guard self.task == nil, self.canProcess(), let request = self.queue.first else { return }
+        guard !retired, PrivateProfileStorage.isReadable(profile), self.task == nil,
+              self.canProcess(), let request = self.queue.first else { return }
         self.task = Task(priority: .utility) { [weak self] in
             guard let self else { return }
             var retry = false

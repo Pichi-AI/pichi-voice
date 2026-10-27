@@ -4,7 +4,9 @@ import CryptoKit
 import Foundation
 
 @MainActor
-final class RewriteModeService: ObservableObject {
+final class RewriteModeService: ObservableObject, PrivateProfileTransitionParticipant {
+    private let privateOperations = PrivateProfileOperationOwner()
+    init() { PrivateProfileService.shared.register(self) }
     @Published var originalText: String = ""
     @Published var selectedContextText: String = ""
     @Published var rewrittenText: String = ""
@@ -35,11 +37,11 @@ final class RewriteModeService: ObservableObject {
         if ProcessInfo.processInfo.environment["FLUID_REWRITE_DIAGNOSTICS"] == "1" {
             return true
         }
-        return UserDefaults.standard.bool(forKey: "RewriteModeDiagnosticsEnabled")
+        return PrivateProfileDefaults.shared.bool(forKey: "RewriteModeDiagnosticsEnabled")
     }
 
     private var shouldTracePromptProcessing: Bool {
-        if let explicit = UserDefaults.standard.object(forKey: "RewriteModePromptTraceEnabled") as? Bool {
+        if let explicit = PrivateProfileDefaults.shared.object(forKey: "RewriteModePromptTraceEnabled") as? Bool {
             return explicit
         }
         // Default OFF to avoid logging prompt/context content in normal usage.
@@ -92,6 +94,10 @@ final class RewriteModeService: ObservableObject {
     }
 
     func processRewriteRequest(_ prompt: String) async {
+        _ = try? await privateOperations.perform { await self.processRewriteRequestBound(prompt) }
+    }
+
+    private func processRewriteRequestBound(_ prompt: String) async {
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             MeetingSummaryActivityCoordinator.presentBusyError()
             return
@@ -146,6 +152,7 @@ final class RewriteModeService: ObservableObject {
 
         do {
             let response = try await callLLM(messages: conversationHistory, isWriteMode: isWriteMode)
+            guard privateOperations.isCurrent, !Task.isCancelled else { return }
             self.conversationHistory.append(Message(role: .assistant, content: response))
             self.rewrittenText = response
             self.isProcessing = false
@@ -154,6 +161,7 @@ final class RewriteModeService: ObservableObject {
             )
 
         } catch {
+            guard privateOperations.isCurrent, !Task.isCancelled else { return }
             self.conversationHistory.append(Message(role: .assistant, content: "Error: \(error.localizedDescription)"))
             self.isProcessing = false
             self.appendDiagnosticLog(
@@ -168,6 +176,14 @@ final class RewriteModeService: ObservableObject {
         targetContext: TypingService.RecordingTargetContext?,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
+        (try? await privateOperations.perform {
+            await self.acceptRewriteBound(text, targetContext: targetContext,
+                isOutputValid: { self.privateOperations.isCurrent && isOutputValid() })
+        }) ?? .cancelled
+    }
+
+    private func acceptRewriteBound(_ text: String, targetContext: TypingService.RecordingTargetContext?,
+        isOutputValid: @escaping @MainActor () -> Bool) async -> TextDeliveryResult {
         guard !Task.isCancelled, isOutputValid(), !self.isAcceptingRewrite else { return .cancelled }
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             MeetingSummaryActivityCoordinator.presentBusyError()
@@ -227,6 +243,11 @@ final class RewriteModeService: ObservableObject {
         self.isWriteMode = false
         self.thinkingBuffer = []
         self.promptAppBundleID = nil
+    }
+
+    func prepareForPrivateProfileTransition() async throws {
+        await privateOperations.retireAndJoin()
+        clearState(); isProcessing = false; isAcceptingRewrite = false
     }
 
     func setPromptAppBundleID(_ bundleID: String?) {

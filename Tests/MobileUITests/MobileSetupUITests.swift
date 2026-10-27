@@ -15,6 +15,40 @@ final class MobileSetupUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Presentation acceptance of the ordinary guest distribution, without
+    /// preparing ASR, enrolling a voice or starting microphone capture.
+    func testGuestDistributionSetupPagesWithoutAccount() throws {
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        for (language, appearance) in [("en", "light"), ("ru", "dark")] {
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                   "-MobileSetupVersion", "0", "-MobileSetupStep", "0"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 15))
+            XCTAssertEqual(app.alerts.count, 0)
+            capture("guest-\(language)-welcome")
+            let next = app.buttons["onboarding.next"]
+            XCTAssertTrue(next.isHittable && next.isEnabled)
+            next.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.1"].firstMatch.waitForExistence(timeout: 10))
+            capture("guest-\(language)-voice-choice")
+            app.terminate()
+
+            // Inspect the final setup page without downloading or accepting
+            // any models. This is a page review, not a completed setup test.
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                   "-MobileSetupVersion", "0", "-MobileSetupStep", "6"]
+            app.launch()
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.6"].firstMatch.waitForExistence(timeout: 15))
+            XCTAssertFalse(app.buttons["account.signIn"].exists,
+                           "The guest distribution must not offer an unconfigured or local SSO server")
+            XCTAssertFalse(app.buttons["account.continueAsGuest"].exists)
+            XCTAssertEqual(app.alerts.count, 0)
+            capture("guest-\(language)-ready-page")
+            app.terminate()
+        }
+    }
+
     func testFirstRunPreparesActualResourcesSkipsMicrophoneAndEntersApp() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light"]
@@ -68,12 +102,48 @@ final class MobileSetupUITests: XCTestCase {
         capture("flow-08-skipped-location")
         app.buttons["onboarding.next"].tap()
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["Начните первую встречу"].firstMatch.waitForExistence(timeout: 10),
+                      "Completing actual first setup must arm the tip without the screenshot-only launch flag")
         capture("flow-09-normal-app")
         app.terminate()
         app.launch()
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
         XCTAssertFalse(app.buttons["onboarding.next"].exists)
         capture("flow-10-restart")
+        try assertFirstMeetingTipLayoutInBothLanguagesAndAppearances(app)
+    }
+
+    /// Reuses the tip armed by real setup, including its persisted state across launches.
+    /// The native bottom safe area protects the note in tab and split navigation layouts.
+    private func assertFirstMeetingTipLayoutInBothLanguagesAndAppearances(_ app: XCUIApplication) throws {
+        defer { XCUIDevice.shared.orientation = .portrait; app.terminate() }
+        for language in ["en", "ru"] {
+            for appearance in ["light", "dark"] {
+                app.terminate()
+                app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+                app.launch()
+                let title = language == "ru" ? "Начните первую встречу" : "Start your first meeting"
+                XCTAssertTrue(app.staticTexts[title].firstMatch.waitForExistence(timeout: 10))
+                for (orientation, name) in [(UIDeviceOrientation.portrait, "portrait"), (.landscapeLeft, "landscape")] {
+                    XCUIDevice.shared.orientation = orientation
+                    let predicate = NSPredicate { _, _ in
+                        let frame = app.windows.firstMatch.frame
+                        return orientation == .portrait ? frame.height > frame.width : frame.width > frame.height
+                    }
+                    XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 10), .completed)
+                    XCTAssertTrue(app.buttons["meeting.start"].isHittable, "Start must remain reachable above the native footer")
+                    let caption = app.descendants(matching: .any)["meeting.storageNote"].firstMatch
+                    XCTAssertTrue(caption.waitForExistence(timeout: 5))
+                    XCTAssertTrue(caption.isHittable)
+                    XCTAssertTrue(app.windows.firstMatch.frame.contains(caption.frame), "The whole note must remain visible")
+                    if app.tabBars.firstMatch.exists {
+                        XCTAssertTrue(caption.frame.intersection(app.tabBars.firstMatch.frame).isEmpty,
+                                      "The floating tab bar must not cover the first-meeting storage caption")
+                    }
+                    capture("first-tip-\(language)-\(appearance)-\(name)")
+                }
+            }
+        }
     }
 
     /// Argument-domain page selection is only a native layout review. It does not

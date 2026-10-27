@@ -57,7 +57,10 @@ extension ChatHistoryStore {
 }
 SWIFT
 
+python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift" --synthetic-brand
 xcrun swiftc -parse-as-library \
+    "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Tests/Support/StandaloneGuestProfileDefaults.swift \
     "$task_test_dir/CommandModeService.swift" \
     "$task_test_dir/ChatHistoryStore.swift" \
     Sources/Fluid/Persistence/PersistedHistory.swift \

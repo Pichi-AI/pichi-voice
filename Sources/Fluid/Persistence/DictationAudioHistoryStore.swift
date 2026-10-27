@@ -1,6 +1,6 @@
 import Foundation
 
-struct DictationAudioSnapshot: Sendable {
+nonisolated struct DictationAudioSnapshot: Sendable {
     let samples: [Float]
     let sampleRate: Int
     let channels: Int
@@ -12,7 +12,7 @@ struct DictationAudioSnapshot: Sendable {
     }
 }
 
-struct DictationAudioMetadata: Codable, Equatable, Sendable {
+nonisolated struct DictationAudioMetadata: Codable, Equatable, Sendable {
     let fileName: String
     let durationMilliseconds: Int
     let byteCount: Int
@@ -41,54 +41,226 @@ enum DictationAudioHistoryError: LocalizedError {
     }
 }
 
-final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
-    static let shared = DictationAudioHistoryStore()
+/// A concrete reserved audio destination. Construction is confined to the store's checked
+/// admission path, before a background worker is scheduled. Complete after metadata enqueue.
+nonisolated final class DictationAudioSaveAdmission: @unchecked Sendable {
+    let fileName: String
+    let entryID: UUID
+    fileprivate let id = UUID()
+    fileprivate let store: DictationAudioHistoryStore
+    fileprivate let history: TranscriptionHistoryWriteAdmission?
+    fileprivate let profile: PrivateProfileSnapshot
+    fileprivate init(store: DictationAudioHistoryStore, entryID: UUID, fileName: String,
+                     history: TranscriptionHistoryWriteAdmission?, profile: PrivateProfileSnapshot) {
+        self.store = store; self.entryID = entryID; self.fileName = fileName
+        self.history = history; self.profile = profile
+    }
+    func save(snapshot: DictationAudioSnapshot, model: String?) throws -> DictationAudioMetadata {
+        try self.store.save(snapshot: snapshot, model: model, admission: self)
+    }
+    func complete() { self.store.complete(self) }
+    func abortIfUnstarted() { self.store.abortIfUnstarted(self) }
+    func discardUnattached() { self.store.discardUnattached(self) }
+    func waitUntilCompleted() async { await self.store.waitUntilCompleted(self) }
+}
 
-    private let appSupportFolder = AppBrand.storageNamespace
+final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
+    private static let cache = PrivateProfileStoreCache<DictationAudioHistoryStore>()
+    static var shared: DictationAudioHistoryStore { scoped(to: PrivateProfileStorage.current) }
+    static func scoped(to profile: PrivateProfileSnapshot) -> DictationAudioHistoryStore {
+        cache.value(for: profile) { profile in DictationAudioHistoryStore(rootDirectory: profile.rootDirectory, profile: profile) }
+    }
+
+    private let rootDirectory: URL
+    private let profile: PrivateProfileSnapshot?
+    private var retired = false
+    private var transitionWaiters: [CheckedContinuation<Void, Never>] = []
     private let audioFolder = "DictationAudioHistory"
     private let fileManager = FileManager.default
     private let pendingSaveLock = NSLock()
     private var pendingSaveFileNames: Set<String> = []
+    private struct PendingSave {
+        let admission: DictationAudioSaveAdmission
+        var isWriting = false
+        var didWrite = false
+        var metadataAttached = false
+        var metadata: DictationAudioMetadata?
+        var completionRequested = false
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+    private var pendingSaves: [UUID: PendingSave] = [:]
 
-    private init() {}
-
-    func save(
-        snapshot: DictationAudioSnapshot,
-        entryID: UUID,
-        timestamp: Date,
-        model: String?
-    ) throws -> DictationAudioMetadata {
-        let directory = try self.audioDirectory()
-        let fileName = self.pendingSaveLock.withLock { () -> String in
-            let fileName = self.audioFileName(entryID: entryID, timestamp: timestamp)
-            self.pendingSaveFileNames.insert(fileName)
-            return fileName
-        }
-        let url = directory.appendingPathComponent(fileName, isDirectory: false)
-        let data: Data
-        do {
-            data = Self.wavData(from: snapshot)
-            try data.write(to: url, options: .atomic)
-        } catch {
-            self.completePendingSave(fileName: fileName)
-            throw error
-        }
-
-        return DictationAudioMetadata(
-            fileName: fileName,
-            durationMilliseconds: snapshot.durationMilliseconds,
-            byteCount: data.count,
-            sampleRate: snapshot.sampleRate,
-            channels: snapshot.channels,
-            model: model
-        )
+    init(rootDirectory: URL? = nil, profile: PrivateProfileSnapshot? = nil) {
+        let selected = profile ?? (rootDirectory == nil ? PrivateProfileStorage.current : nil)
+        self.profile = selected
+        self.rootDirectory = rootDirectory ?? selected!.rootDirectory
     }
 
-    /// Keeps a completed WAV protected from orphan cleanup until its history
-    /// metadata has attached on the main actor.
+    /// New saves are denied while admitted saves finish metadata attachment.
+    func prepareForProfileTransition() async {
+        await withCheckedContinuation { continuation in
+            self.pendingSaveLock.withLock {
+                self.retired = true
+                if self.pendingSaveFileNames.isEmpty { continuation.resume() }
+                else { self.transitionWaiters.append(continuation) }
+            }
+        }
+    }
+
+    /// A rejected transition must leave the selected profile's recording path usable.
+    @discardableResult
+    func resumeAfterFailedProfileTransition() -> Bool {
+        self.pendingSaveLock.withLock {
+            guard self.pendingSaveFileNames.isEmpty,
+                  self.profile.map(PrivateProfileStorage.isReadable) != false else { return false }
+            self.retired = false
+            return true
+        }
+    }
+
+    /// Called through a history recording capability, including after conceal. It grants
+    /// only one concrete entry's reserved file, never a general hidden audio-store privilege.
+    func admitSave(for history: TranscriptionHistoryWriteAdmission, timestamp: Date) throws -> DictationAudioSaveAdmission {
+        guard history.isActiveForCurrentOwner,
+              self.profile.map({ $0.id == history.profile.id && $0.generation == history.profile.generation }) != false
+        else { throw CancellationError() }
+        return try self.reserve(entryID: history.entryID, timestamp: timestamp, history: history, profile: history.profile)
+    }
+
+    private func reserve(entryID: UUID, timestamp: Date, history: TranscriptionHistoryWriteAdmission?,
+                         profile: PrivateProfileSnapshot) throws -> DictationAudioSaveAdmission {
+        try self.pendingSaveLock.withLock {
+            guard !self.retired else { throw CancellationError() }
+            let name = self.audioFileName(entryID: entryID, timestamp: timestamp)
+            // A reservation owns a unique path even when caller-supplied entry prefixes collide.
+            let fileName = history == nil ? name : String(name.dropLast(4)) + "_" + UUID().uuidString + ".wav"
+            let admission = DictationAudioSaveAdmission(store: self, entryID: entryID,
+                fileName: fileName, history: history, profile: profile)
+            self.pendingSaves[admission.id] = PendingSave(admission: admission)
+            self.pendingSaveFileNames.insert(admission.fileName)
+            return admission
+        }
+    }
+
+    func save(snapshot: DictationAudioSnapshot, entryID: UUID, timestamp: Date, model: String?) throws -> DictationAudioMetadata {
+        guard PrivateProfileStorage.acceptsNewWork, self.profile.map(PrivateProfileStorage.isReadable) != false else {
+            throw CancellationError()
+        }
+        let admission = try self.reserve(entryID: entryID, timestamp: timestamp, history: nil,
+            profile: self.profile ?? PrivateProfileStorage.current)
+        return try admission.save(snapshot: snapshot, model: model)
+    }
+
+    fileprivate func save(snapshot: DictationAudioSnapshot, model: String?,
+                          admission: DictationAudioSaveAdmission) throws -> DictationAudioMetadata {
+        try self.pendingSaveLock.withLock {
+            let current = PrivateProfileStorage.current
+            guard admission.store === self, var pending = self.pendingSaves[admission.id],
+                  !pending.isWriting, !pending.didWrite, !pending.completionRequested,
+                  current.id == admission.profile.id, current.generation == admission.profile.generation,
+                  admission.history?.isActiveForCurrentOwner != false else { throw CancellationError() }
+            pending.isWriting = true; self.pendingSaves[admission.id] = pending
+        }
+        do {
+            let directory = self.rootDirectory.appendingPathComponent(self.audioFolder, isDirectory: true)
+            try self.fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            let data = Self.wavData(from: snapshot)
+            try data.write(to: directory.appendingPathComponent(admission.fileName), options: .atomic)
+            let metadata = DictationAudioMetadata(fileName: admission.fileName, durationMilliseconds: snapshot.durationMilliseconds,
+                byteCount: data.count, sampleRate: snapshot.sampleRate, channels: snapshot.channels, model: model)
+            self.pendingSaveLock.withLock {
+                guard var pending = self.pendingSaves[admission.id] else { return }
+                pending.isWriting = false; pending.didWrite = true; pending.metadata = metadata
+                self.pendingSaves[admission.id] = pending
+                if pending.completionRequested { self.removePending(admission) }
+            }
+            return metadata
+        } catch {
+            self.pendingSaveLock.withLock {
+                if var pending = self.pendingSaves[admission.id] {
+                    pending.isWriting = false; self.pendingSaves[admission.id] = pending
+                }
+                self.removePending(admission)
+            }
+            throw error
+        }
+    }
+
+    /// Claims metadata once while the reserved WAV still has pending-save protection.
+    func claimMetadata(_ metadata: DictationAudioMetadata, from audio: DictationAudioSaveAdmission,
+                       history: TranscriptionHistoryWriteAdmission) -> Bool {
+        self.pendingSaveLock.withLock {
+            guard audio.store === self, audio.history === history, audio.entryID == history.entryID,
+                  metadata.fileName == audio.fileName, history.isActiveForCurrentOwner,
+                  var pending = self.pendingSaves[audio.id], pending.didWrite, !pending.isWriting,
+                  pending.metadata == metadata, !pending.completionRequested, !pending.metadataAttached else { return false }
+            pending.metadataAttached = true; self.pendingSaves[audio.id] = pending
+            return true
+        }
+    }
+
+    fileprivate func discardUnattached(_ admission: DictationAudioSaveAdmission) {
+        self.pendingSaveLock.withLock {
+            guard admission.store === self, let pending = self.pendingSaves[admission.id],
+                  pending.didWrite, !pending.isWriting, !pending.metadataAttached else { return }
+            // This exact random reservation path was written by this capability. Never
+            // resolve a current-profile root or delete a different reservation's file.
+            try? self.fileManager.removeItem(at: self.rootDirectory.appendingPathComponent(self.audioFolder)
+                .appendingPathComponent(admission.fileName))
+        }
+    }
+
+    fileprivate func abortIfUnstarted(_ admission: DictationAudioSaveAdmission) {
+        self.pendingSaveLock.withLock {
+            guard let pending = self.pendingSaves[admission.id], !pending.isWriting, !pending.didWrite else { return }
+            self.removePending(admission)
+        }
+    }
+
+    fileprivate func complete(_ admission: DictationAudioSaveAdmission) {
+        self.pendingSaveLock.withLock {
+            guard admission.store === self, var pending = self.pendingSaves[admission.id] else { return }
+            if pending.isWriting {
+                pending.completionRequested = true; self.pendingSaves[admission.id] = pending
+            } else { self.removePending(admission) }
+        }
+    }
+
+    /// Caller holds pendingSaveLock. A never-started canceled worker releases here as well.
+    private func removePending(_ admission: DictationAudioSaveAdmission) {
+        guard let pending = self.pendingSaves.removeValue(forKey: admission.id) else { return }
+        if pending.admission.history != nil, pending.didWrite, !pending.metadataAttached {
+            try? self.fileManager.removeItem(at: self.rootDirectory.appendingPathComponent(self.audioFolder)
+                .appendingPathComponent(admission.fileName))
+        }
+        if !self.pendingSaves.values.contains(where: { $0.admission.fileName == admission.fileName }) {
+            self.pendingSaveFileNames.remove(admission.fileName)
+        }
+        for waiter in pending.waiters { waiter.resume() }
+        if self.pendingSaves.isEmpty {
+            let waiters = self.transitionWaiters; self.transitionWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+    }
+
+    fileprivate func waitUntilCompleted(_ admission: DictationAudioSaveAdmission) async {
+        await withCheckedContinuation { continuation in
+            self.pendingSaveLock.withLock {
+                guard var pending = self.pendingSaves[admission.id] else { continuation.resume(); return }
+                pending.waiters.append(continuation); self.pendingSaves[admission.id] = pending
+            }
+        }
+    }
+
+    /// Legacy callers still finish metadata attachment by the reserved concrete filename.
     func completePendingSave(fileName: String) {
         self.pendingSaveLock.withLock {
-            self.pendingSaveFileNames.remove(fileName)
+            let saves = self.pendingSaves.values.filter { $0.admission.fileName == fileName }.map(\.admission)
+            for save in saves {
+                guard var pending = self.pendingSaves[save.id] else { continue }
+                if pending.isWriting { pending.completionRequested = true; self.pendingSaves[save.id] = pending }
+                else { self.removePending(save) }
+            }
         }
     }
 
@@ -289,12 +461,9 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
     }
 
     private func audioDirectory(createIfNeeded: Bool = true) throws -> URL {
-        guard let base = self.fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            throw DictationAudioHistoryError.applicationSupportUnavailable
-        }
-        let directory = base
-            .appendingPathComponent(self.appSupportFolder, isDirectory: true)
-            .appendingPathComponent(self.audioFolder, isDirectory: true)
+        guard self.pendingSaveLock.withLock({ !self.retired }),
+              self.profile.map(PrivateProfileStorage.isReadable) != false else { throw CancellationError() }
+        let directory = self.rootDirectory.appendingPathComponent(self.audioFolder, isDirectory: true)
         if createIfNeeded {
             try self.fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
@@ -403,14 +572,14 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
         return formatter
     }()
 
-    private static let isoFormatter: ISO8601DateFormatter = {
+    private static var isoFormatter: ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
-    }()
+    }
 }
 
-private struct AudioManifestRow: Encodable {
+private nonisolated struct AudioManifestRow: Encodable {
     let audio: String
     let text: String
     let rawTranscript: String

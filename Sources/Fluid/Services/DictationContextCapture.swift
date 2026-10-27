@@ -375,11 +375,13 @@ nonisolated enum DictationContextReader {
         }
     }
 
-    private static let fetchedAttributes = [
-        kAXRoleAttribute, kAXSubroleAttribute, kAXValueAttribute, kAXTitleAttribute,
-        kAXDescriptionAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute,
-        kAXVisibleCharacterRangeAttribute,
-    ] as CFArray
+    private static var fetchedAttributes: CFArray {
+        [
+            kAXRoleAttribute, kAXSubroleAttribute, kAXValueAttribute, kAXTitleAttribute,
+            kAXDescriptionAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute,
+            kAXVisibleCharacterRangeAttribute,
+        ] as CFArray
+    }
 
     /// The same bounded walk reports whether whole-window OCR is safe. A secure
     /// descendant or incomplete walk cannot establish that the screenshot is public.

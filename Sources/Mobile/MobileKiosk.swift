@@ -6,11 +6,16 @@ enum MobileMeetingRecordingActions {
     @MainActor static func start(coordinator: MeetingSessionCoordinator,
                                  required: MobileRequiredResources,
                                  privacyActivation: MobilePrivacyActivation,
-                                 settings: SettingsStore = .shared) async throws {
+                                 settings: SettingsStore = .shared,
+                                 canStart: @MainActor () -> Bool = { true }) async throws {
+        guard !Task.isCancelled && canStart() else { throw CancellationError() }
         try await required.prepare(modelID: settings.selectedSpeechModel.rawValue)
+        guard !Task.isCancelled && canStart() else { throw CancellationError() }
         try await privacyActivation.waitUntilReadyIfRequested()
+        guard !Task.isCancelled && canStart() else { throw CancellationError() }
         let configuration = try await coordinator.defaultConfiguration(mode: .inRoom,
             title: PichiLocalization.text("In-room meeting"))
+        guard !Task.isCancelled && canStart() else { throw CancellationError() }
         _ = try await coordinator.startRecording(configuration: configuration)
     }
 }
@@ -232,10 +237,20 @@ struct MobileKioskRoot: View {
 
     private func start() {
         guard !voice.isBusy else { return }
+        let profiles = PrivateProfileService.shared
+        let profile = PrivateProfileStorage.current
+        let revision = profiles.projectionRevision
+        let canStart: @MainActor () -> Bool = {
+            !Task.isCancelled && access.isEnabled && profiles.isPrivateDataVisible
+                && !profiles.isTransitioning && profiles.projectionRevision == revision
+                && PrivateProfileStorage.acceptsNewWork
+                && PrivateProfileStorage.current == profile && PrivateProfileStorage.isReadable(profile)
+        }
         run {
+            guard canStart() else { throw CancellationError() }
             if case .completed = coordinator.state { try coordinator.resetForNewMeeting() }
             try await MobileMeetingRecordingActions.start(coordinator: coordinator,
-                required: required, privacyActivation: privacyActivation)
+                required: required, privacyActivation: privacyActivation, canStart: canStart)
         }
     }
 

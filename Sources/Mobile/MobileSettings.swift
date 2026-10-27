@@ -3,11 +3,15 @@ import UniformTypeIdentifiers
 
 /// Settings routes belong to the Settings stack, rather than to the selected app section.
 enum MobileSettingsDestination: Hashable {
-    case general, recording, models, privacy, kiosk
+    case general, recording, models, privacy, account, kiosk
 }
 
 /// The mobile subset keeps the desktop destinations and their existing preference owner.
 struct MobileSettingsRoot: View {
+    @ObservedObject var accountSession: AccountSessionService = AppServices.shared.accountSession
+    var accountInteraction: MobileAccountInteraction? = nil
+    var cloudPublication: PichiCloudPublicationService? = nil
+    var cloudInteraction: MobileCloudInteraction? = nil
     @ObservedObject var asr: ASRService
     let privacy: PichiTranscriptPrivacyService
     let microphones: [MeetingMicrophoneIdentity]
@@ -18,56 +22,87 @@ struct MobileSettingsRoot: View {
     let canReplaySetup: Bool
     let reportError: (Error) -> Void
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var privateProfile = PrivateProfileService.shared
     @Environment(\.theme) private var theme
 
     var body: some View {
         List {
-            Section {
-                NavigationLink(value: MobileSettingsDestination.general) { Label(PichiLocalization.text("General"), systemImage: "gearshape") }
-                    .accessibilityIdentifier("settings.general")
-                NavigationLink(value: MobileSettingsDestination.recording) {
-                    Label(PichiLocalization.text("Recording"), systemImage: "waveform")
-                }.accessibilityIdentifier("settings.recording")
-                NavigationLink(value: MobileSettingsDestination.models) {
-                    Label(PichiLocalization.text("Voice Engine"), systemImage: "waveform")
-                }.accessibilityIdentifier("settings.models")
-                NavigationLink(value: MobileSettingsDestination.privacy) {
-                    Label(PichiLocalization.text("Data cleanup"), systemImage: "lock.shield")
-                }.accessibilityIdentifier("settings.privacy")
-                NavigationLink(value: MobileSettingsDestination.kiosk) {
-                    Label(PichiLocalization.text("Restricted mode"), systemImage: "lock.shield")
-                }.accessibilityIdentifier("settings.kiosk")
-            } footer: {
-                Text(PichiLocalization.text("Audio recordings and transcripts are stored on this device."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-            }
-            Section {
-                Button {
-                    guard canReplaySetup else { return }
-                    settings.resetMobileSetupProgress()
-                } label: {
-                    Label(PichiLocalization.text("Replay onboarding"), systemImage: "arrow.counterclockwise")
-                        .foregroundStyle(theme.palette.primaryText)
+            if accountSession.isConfigured {
+                Section {
+                    NavigationLink(value: MobileSettingsDestination.account) {
+                        Label(PichiLocalization.text("account.title", defaultValue: "Account"), systemImage: "person.crop.circle")
+                    }.accessibilityIdentifier("settings.account")
                 }
-                // A native row like the ones above: full-row touch and highlight, no box inside it.
-                .buttonStyle(.automatic)
-                .disabled(!canReplaySetup)
-                .accessibilityIdentifier("settings.replaySetup")
-            } footer: {
-                Text(PichiLocalization.text("Your meetings, models and voice profile are kept."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            }
+            if privateProfile.isPrivateDataVisible {
+                Section {
+                    NavigationLink(value: MobileSettingsDestination.general) { Label(PichiLocalization.text("General"), systemImage: "gearshape") }
+                        .accessibilityIdentifier("settings.general")
+                    NavigationLink(value: MobileSettingsDestination.recording) {
+                        Label(PichiLocalization.text("Recording"), systemImage: "waveform")
+                    }.accessibilityIdentifier("settings.recording")
+                    NavigationLink(value: MobileSettingsDestination.models) {
+                        LabeledContent { Text(settings.selectedSpeechModel.displayName) } label: {
+                            Label(PichiLocalization.text("Voice Engine"), systemImage: "waveform")
+                        }
+                    }.accessibilityIdentifier("settings.models")
+                    NavigationLink(value: MobileSettingsDestination.privacy) {
+                        LabeledContent {
+                            switch privacyActivation.state {
+                            case .active: Text(PichiLocalization.text("On"))
+                            case .enabling: ProgressView().controlSize(.small)
+                            case .off: Text(PichiLocalization.text("Off"))
+                            case .failed: Text(PichiLocalization.text("Unavailable"))
+                            }
+                        } label: {
+                            Label(PichiLocalization.text("Data cleanup"), systemImage: "lock.shield")
+                        }
+                    }.accessibilityIdentifier("settings.privacy")
+                    NavigationLink(value: MobileSettingsDestination.kiosk) {
+                        Label(PichiLocalization.text("Restricted mode"), systemImage: "lock.shield")
+                    }.accessibilityIdentifier("settings.kiosk")
+                } footer: {
+                    Text(PichiLocalization.text("Audio recordings and transcripts are stored on this device."))
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                }
+                Section {
+                    Button {
+                        guard canReplaySetup, privateProfile.isPrivateDataVisible,
+                              !privateProfile.isTransitioning else { return }
+                        settings.resetMobileSetupProgress()
+                    } label: {
+                        Label(PichiLocalization.text("Replay onboarding"), systemImage: "arrow.counterclockwise")
+                            .foregroundStyle(theme.palette.primaryText)
+                    }
+                    // A native row like the ones above: full-row touch and highlight, no box inside it.
+                    .buttonStyle(.automatic)
+                    .disabled(!canReplaySetup || privateProfile.isTransitioning)
+                    .accessibilityIdentifier("settings.replaySetup")
+                } footer: {
+                    Text(PichiLocalization.text("Your meetings, models and voice profile are kept."))
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                }
             }
         }.listStyle(.insetGrouped).accessibilityIdentifier("settings.root")
             .navigationDestination(for: MobileSettingsDestination.self) { destination in
-                switch destination {
-                case .general: MobileGeneralSettings()
-                case .recording: MobileRecordingSettings(microphones: microphones, required: required)
-                case .models: MobileVoiceEngineSettings(asr: asr, reportError: reportError)
-                case .privacy:
-                    MobilePrivacySettings(activation: privacyActivation)
-                case .kiosk:
-                    MobileKioskSettings(access: .shared,
-                        canEnable: canReplaySetup && !required.isPreparing && !privacyActivation.isPreparing)
+                if destination == .account {
+                    MobileAccountSettings(session: accountSession, interaction: accountInteraction,
+                        cloudPublication: cloudPublication, cloudInteraction: cloudInteraction)
+                } else if !privateProfile.isPrivateDataVisible {
+                    Text(PichiLocalization.text("account.profile.unavailable"))
+                } else {
+                    switch destination {
+                    case .account: EmptyView()
+                    case .general: MobileGeneralSettings()
+                    case .recording: MobileRecordingSettings(microphones: microphones, required: required)
+                    case .models: MobileVoiceEngineSettings(asr: asr, reportError: reportError)
+                    case .privacy:
+                        MobilePrivacySettings(activation: privacyActivation)
+                    case .kiosk:
+                        MobileKioskSettings(access: .shared,
+                            canEnable: canReplaySetup && !privateProfile.isTransitioning
+                                && !required.isPreparing && !privacyActivation.isPreparing)
+                    }
                 }
             }
     }

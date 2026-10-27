@@ -662,6 +662,51 @@ final class MobileNavigationUITests: XCTestCase {
         #endif
     }
 
+    func testLegacyAccountLoginInBothLanguagesAndThemes() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Legacy login presentation review uses an owned simulator and no account credentials")
+        #else
+        for (language, appearance) in [("en", "light"), ("en", "dark"), ("ru", "light"), ("ru", "dark")] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
+            app.launch()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 20))
+            openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
+            let account = app.buttons["settings.account"]
+            XCTAssertTrue(account.waitForExistence(timeout: 5) && account.isHittable)
+            account.tap()
+            let email = app.textFields["account.legacy.email"]
+            let password = app.secureTextFields["account.legacy.password"]
+            XCTAssertTrue(email.waitForExistence(timeout: 5) && email.isHittable)
+            XCTAssertTrue(password.exists && password.isHittable)
+            XCTAssertTrue(app.staticTexts["account.legacy.destination"].exists)
+            XCTAssertFalse(app.buttons["account.signIn"].isEnabled)
+            capture("legacy-\(language)-\(appearance)-empty")
+            email.tap(); email.typeText("synthetic@example.invalid")
+            capture("legacy-\(language)-\(appearance)-email")
+            if ProcessInfo.processInfo.environment["PICHI_LEGACY_PROMPT_REVIEW_ONLY"] == "1" {
+                app.terminate()
+                continue
+            }
+            password.tap(); password.typeText("synthetic-only\n")
+            XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["account.signIn"].isEnabled)
+            capture("legacy-\(language)-\(appearance)-secure-password")
+            // Do not submit credentials or create any remote session.
+            openNavigation("meetings", title: language == "ru" ? "Встречи" : "Meetings")
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5), "The visible Meetings control must actually leave the Account screen")
+            XCTAssertEqual(app.keyboards.count, 0, "Leaving Account must dismiss its secure input keyboard")
+            openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
+            if app.buttons["settings.account"].exists { app.buttons["settings.account"].tap() }
+            XCTAssertTrue(app.secureTextFields["account.legacy.password"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.buttons["account.signIn"].isEnabled, "Leaving the account screen clears the transient password")
+            capture("legacy-\(language)-\(appearance)-reopened")
+        }
+        app.terminate()
+        #endif
+    }
+
     func testMVPSettingsAndOrientation() throws {
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
         XCTAssertGreaterThanOrEqual(app.buttons["meeting.start"].frame.height, 44)
@@ -2041,7 +2086,13 @@ final class MobileNavigationUITests: XCTestCase {
 
     private func openNavigation(_ identifier: String, title: String) {
         let sidebar = app.buttons["navigation.\(identifier)"]
-        if sidebar.exists { sidebar.tap() } else { app.tabBars.buttons[title].tap() }
+        if sidebar.exists && sidebar.isHittable { sidebar.tap() }
+        else {
+            let tab = app.tabBars.buttons[title]
+            XCTAssertTrue(tab.waitForExistence(timeout: 5) && tab.isHittable,
+                          "Navigation must target a visible sidebar or tab control")
+            tab.tap()
+        }
         capture("navigation-\(identifier)")
     }
 

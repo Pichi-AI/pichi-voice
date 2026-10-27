@@ -19,6 +19,7 @@ os.environ["DEVELOPER_DIR"] = developer_dir
 
 source = (repo / 'Sources/Fluid/UI/CustomDictionaryView.swift').read_text()
 method = source[source.index('    private func addTrainedReplacement() async {'):source.index('    private func removeTrainingVariant(')].replace('private func addTrainedReplacement', 'func addTrainedReplacement')
+prefix_save = source[source.index('    private func savePunctuationDictionaryPrefix() {'):source.index('    private func savePunctuationRules() {')].replace('private func savePunctuationDictionaryPrefix', 'func savePunctuationDictionaryPrefix')
 progress = source[source.index('struct DictionaryTrainingProgress {'):source.index('enum CustomDictionaryTrainingMerge {')]
 readiness = source[source.index('    private var trainingProgress:'):source.index('    private var trainingAlreadyCorrectWithoutReplacement:')]
 already_correct = source[source.index('    private var trainingAlreadyCorrectWithoutReplacement:'):source.index('    private var trainingReadinessProgress:')]
@@ -45,12 +46,19 @@ nonisolated final class UserDefaults: @unchecked Sendable {
 final class SettingsStore: @unchecked Sendable {
     static let shared = SettingsStore()
     var customDictionaryEntries: [CustomDictionaryEntry] = []
+    var punctuationDictionaryPrefix = "original"
     ENTRY
+}
+struct PrivateProfileSnapshot: Equatable, Sendable { let id = UUID() }
+enum PrivateProfileStorage {
+    static var current = PrivateProfileSnapshot()
+    static var acceptsNewWork = true
+    static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool { profile == current }
 }
 struct PronunciationEnrollmentCapture: Equatable, Sendable { var modelKey = "test" }
 enum DictionaryMatcherExperiment {
     static var sharedFeaturesEnabled = true
-    static var generation = UUID()
+    static var generation = UUID().uuidString
 }
 struct VoiceTrainingAliasFilter {
     struct Result {
@@ -95,6 +103,8 @@ actor PronunciationDictionaryStore {
 PROGRESS
 MERGE
 @MainActor final class SaveHarness {
+    let profile = PrivateProfileStorage.current
+    var isProfileVisible: Bool { PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork }
     READINESS
     ALREADY_CORRECT
     CAN_SAVE
@@ -118,6 +128,8 @@ MERGE
     var writes = 0
     func saveEntries() { writes += 1; SettingsStore.shared.customDictionaryEntries = entries }
     func resetTraining() { trainingSaveID = nil; isTrainingProcessing = false; trainingPronunciationEnrollments = []; trainingVariants = [] }
+    var punctuationPrefix = "old-owner-prefix"
+    PREFIX_SAVE
     METHOD
 }
 func check(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -131,9 +143,11 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             [Entry(triggers: ["fluid voice"], replacement: "FluidVoice"), Entry(triggers: ["other"], replacement: "Other")]
         }
         func reset(_ entries: [Entry]) -> SaveHarness {
+            PrivateProfileStorage.current = PrivateProfileSnapshot()
+            PrivateProfileStorage.acceptsNewWork = true
             SettingsStore.shared.customDictionaryEntries = entries
             DictionaryMatcherExperiment.sharedFeaturesEnabled = true
-            DictionaryMatcherExperiment.generation = UUID()
+            DictionaryMatcherExperiment.generation = UUID().uuidString
             VoiceTrainingAliasFilter.response = nil
             return SaveHarness()
         }
@@ -143,6 +157,22 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
                 check(ContinuousClock.now < deadline, "Save did not reach its expected persistence boundary within 3 seconds")
                 try await Task.sleep(for: .milliseconds(1))
             }
+        }
+        // A delayed popover dismissal must never write its original owner's prefix into another profile.
+        do {
+            let view = reset(baseline())
+            SettingsStore.shared.punctuationDictionaryPrefix = "current-owner"
+            PrivateProfileStorage.acceptsNewWork = false
+            view.savePunctuationDictionaryPrefix()
+            check(SettingsStore.shared.punctuationDictionaryPrefix == "current-owner", "Concealed dismissal cannot save punctuation")
+            PrivateProfileStorage.current = PrivateProfileSnapshot()
+            PrivateProfileStorage.acceptsNewWork = true
+            view.savePunctuationDictionaryPrefix()
+            check(SettingsStore.shared.punctuationDictionaryPrefix == "current-owner", "Old dismissal cannot overwrite the next profile")
+            let fresh = reset(baseline())
+            fresh.savePunctuationDictionaryPrefix()
+            check(SettingsStore.shared.punctuationDictionaryPrefix == fresh.punctuationPrefix, "Visible owner retains normal punctuation save")
+            passes += 1
         }
         // Production save and merge retain existing profile UUID and save new entries under the written UUID.
         for existing in [true, false] {
@@ -184,6 +214,24 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             check(!view.trainingPronunciationEnrollments.isEmpty && !view.trainingVariants.isEmpty, "Conflict must retain captures")
             let writes = await PronunciationDictionaryStore.shared.writes
             check(writes.isEmpty, "Persistence guard must reject changed dictionary")
+            passes += 1
+        }
+        // Conceal and another account cannot complete the original wizard into the new source.
+        for replaceProfile in [false, true] {
+            let original = baseline()
+            let view = reset(original)
+            let gate = Gate()
+            await PronunciationDictionaryStore.shared.configure(gate: gate)
+            let save = Task { await view.addTrainedReplacement() }
+            try await waitForGate(gate)
+            if replaceProfile { PrivateProfileStorage.current = PrivateProfileSnapshot() }
+            else { PrivateProfileStorage.acceptsNewWork = false }
+            await gate.release(); await save.value
+            let profiles = await PronunciationDictionaryStore.shared.writes
+            check(profiles.isEmpty && view.writes == 0, "Stale profile cannot persist a voice or text rule")
+            check(SettingsStore.shared.customDictionaryEntries == original, "Profile change preserves the destination dictionary")
+            check(view.wizardStep == .recording && !view.trainingHasError, "Conceal suppresses old success and error UI")
+            check(!view.trainingPronunciationEnrollments.isEmpty, "Original unsaved samples remain in their original owner")
             passes += 1
         }
         // An edit after the profile write but before the MainActor resumes must still preserve the dictionary.
@@ -361,7 +409,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             await PronunciationDictionaryStore.shared.configure(gate: gate)
             let save = Task { await view.addTrainedReplacement() }
             try await waitForGate(gate)
-            DictionaryMatcherExperiment.generation = UUID()
+            DictionaryMatcherExperiment.generation = UUID().uuidString
             await gate.release(); await save.value
             let profiles = await PronunciationDictionaryStore.shared.writes
             check(profiles.isEmpty && view.writes == 0 && SettingsStore.shared.customDictionaryEntries == original, "Stale pronunciation generation must not persist")
@@ -405,7 +453,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
         print("PASS \(passes) dictionary save scenarios using the production save method, readiness and merge code")
     }
 }
-'''.replace('ENTRY', entry).replace('PROGRESS', progress).replace('MERGE', merge).replace('READINESS', readiness).replace('ALREADY_CORRECT', already_correct).replace('CAN_SAVE', can_save).replace('METHOD', method)
+'''.replace('ENTRY', entry).replace('PROGRESS', progress).replace('MERGE', merge).replace('READINESS', readiness).replace('ALREADY_CORRECT', already_correct).replace('CAN_SAVE', can_save).replace('METHOD', method).replace('PREFIX_SAVE', prefix_save)
 swift = swift.replace('check(await PronunciationDictionaryStore.shared.writes.isEmpty,', 'let textOnlyWrites = await PronunciationDictionaryStore.shared.writes\n            check(textOnlyWrites.isEmpty,')
 isolation_swift = r'''
 import Foundation

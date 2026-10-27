@@ -4,14 +4,18 @@
 <key>CFBundleDevelopmentRegion</key><string>en</string>
 <key>CFBundleDisplayName</key><string>$(PICHI_PRODUCT_NAME)</string>
 <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+<key>CFBundleURLTypes</key>
+<array><dict><key>CFBundleURLName</key><string>$(PRODUCT_BUNDLE_IDENTIFIER).account</string><key>CFBundleURLSchemes</key><array><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string></array></dict></array>
 <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>5</string>
+<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>AppSourceRevision</key><string>$(PICHI_SOURCE_REVISION)</string>
 <key>LSRequiresIPhoneOS</key><true/>
+<key>NSLocalNetworkUsageDescription</key><string>Connect to the server configured for this installation on the local network.</string>
 <key>NSMicrophoneUsageDescription</key><string>Record in-room meetings and transcribe speech on this device.</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>Use speech recognition to transcribe recorded meetings.</string>
 <key>NSLocationWhenInUseUsageDescription</key><string>Use your location once when an in-room meeting starts to save its address. Apple resolves the address from the location.</string>
 <key>UIBackgroundModes</key><array><string>audio</string></array>
 <key>UILaunchScreen</key><dict/>
@@ -19,4 +23,5 @@
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 <key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 <key>ITSAppUsesNonExemptEncryption</key><false/>
+<key>NSSupportsLiveActivities</key><true/>
 </dict></plist>

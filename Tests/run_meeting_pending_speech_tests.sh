@@ -20,10 +20,12 @@ formatter = source[source.index('    static func timestampText('):source.index('
 Path(sys.argv[1]).write_text('import Foundation\nnonisolated enum MeetingTranscriptExporter {\n' + formatter + '\n}\n')
 PYEND
 # Production scalar PCM tee and projection; no app host, models or microphone.
+python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift" --synthetic-brand
 xcrun swiftc -swift-version 6 -default-isolation MainActor -parse-as-library \
     -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/ActivityDetector.swift" \
     "$task_test_dir/ElapsedFormatter.swift" \
+    "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \

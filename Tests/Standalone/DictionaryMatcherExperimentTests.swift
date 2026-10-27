@@ -1,18 +1,6 @@
 #if DICTIONARY_EXPERIMENT_STANDALONE
 import Foundation
 
-// Keep experiment toggles and brand lookups inside this process, away from app preferences.
-final class UserDefaults {
-    static let standard = UserDefaults()
-    private var values: [String: Any] = [:]
-    func object(forKey key: String) -> Any? { self.values[key] }
-    func data(forKey key: String) -> Data? { self.values[key] as? Data }
-    func string(forKey key: String) -> String? { self.values[key] as? String }
-    func bool(forKey key: String) -> Bool { self.values[key] as? Bool ?? false }
-    func set(_ value: Any?, forKey key: String) { self.values[key] = value }
-    func removeObject(forKey key: String) { self.values.removeValue(forKey: key) }
-}
-
 // The real catalog is compiled for checkpoint keys; artifact IO is outside this matcher probe.
 nonisolated enum HuggingFaceModelDownloader {
     static func artifactIsComplete(at url: URL, isDirectory: Bool) -> Bool {
@@ -34,6 +22,24 @@ enum PronunciationDictionaryStoreError: Error { case inconsistentEnrollment, sta
     }
 
     static func main() async throws {
+        let original = PrivateProfileStorage.current
+        let generation = UUID()
+        let profile = try PrivateProfileStorage.proposed(context: .init(identity: .init(issuer: "https://synthetic.invalid",
+            subject: UUID().uuidString, internalUserID: "matcher-test"), organizationID: nil, workspaceID: nil, generation: generation),
+            generation: generation, legacyRootDirectory: FileManager.default.temporaryDirectory)
+        PrivateProfileStorage.select(profile)
+        if let path = ProcessInfo.processInfo.environment["PICHI_DICTIONARY_TEST_PROFILE_MANIFEST"] {
+            try JSONEncoder().encode([AppBrand.storageNamespace + ".private-profile." + profile.id])
+                .write(to: URL(fileURLWithPath: path), options: .atomic)
+        }
+        defer {
+            let name = AppBrand.storageNamespace + ".private-profile." + profile.id
+            let suite = UserDefaults(suiteName: name)!
+            suite.removePersistentDomain(forName: name)
+            precondition(suite.synchronize(), "Synthetic domain cleanup must persist")
+
+            PrivateProfileStorage.select(original)
+        }
         let keys = [
             "DictionarySharedFeatureMatcherEnabled",
             "DictionaryTemporalMatcherEnabled",
@@ -41,18 +47,18 @@ enum PronunciationDictionaryStoreError: Error { case inconsistentEnrollment, sta
             "DictionaryNegativeComparisonEnabled",
             "DictionaryPronunciationGeneration",
         ]
-        let savedPreferences = keys.map { UserDefaults.standard.object(forKey: $0) }
+        let savedPreferences = keys.map { PrivateProfileDefaults.shared.object(forKey: $0) }
         defer { for (key, value) in zip(keys, savedPreferences) {
-            UserDefaults.standard.set(value, forKey: key)
+            PrivateProfileDefaults.shared.set(value, forKey: key)
         } }
         for key in keys {
-            UserDefaults.standard.set(true, forKey: key)
+            PrivateProfileDefaults.shared.set(true, forKey: key)
         }
-        UserDefaults.standard.set(false, forKey: keys[0])
+        PrivateProfileDefaults.shared.set(false, forKey: keys[0])
         self.expect(!DictionaryMatcherExperiment.positiveEnabled && !DictionaryMatcherExperiment.needsFrames, "Off overrides legacy matching preferences")
         self.expect(!DictionaryMatcherExperiment.collectNegatives && !DictionaryMatcherExperiment.compareNegatives, "Off disables negative audio learning and comparisons")
-        UserDefaults.standard.set(true, forKey: keys[0])
-        UserDefaults.standard.set(false, forKey: keys[1])
+        PrivateProfileDefaults.shared.set(true, forKey: keys[0])
+        PrivateProfileDefaults.shared.set(false, forKey: keys[1])
         self.expect(DictionaryMatcherExperiment.positiveEnabled && DictionaryMatcherExperiment.needsFrames, "On selects fast matching independently of legacy preference")
         let beforeToggle = DictionaryMatcherExperiment.generation
         DictionaryMatcherExperiment.setEnabled(false)

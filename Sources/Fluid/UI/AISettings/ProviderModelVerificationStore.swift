@@ -12,9 +12,16 @@ final class ProviderModelVerificationStore {
     static let maximumEntries = 256
     private let defaults: UserDefaults
     private var successes: [String: Double]
+    private let profile: PrivateProfileSnapshot?
+    private var profileIsCurrent: Bool {
+        guard let profile else { return true }
+        let current = PrivateProfileStorage.current
+        return current.isReadable && current.id == profile.id && current.generation == profile.generation
+    }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = PrivateProfileDefaults.shared) {
         self.defaults = defaults
+        self.profile = (defaults as? PrivateProfileDefaults)?.selectedProfile
         let stored = defaults.dictionary(forKey: Self.defaultsKey) as? [String: Double] ?? [:]
         self.successes = Dictionary(uniqueKeysWithValues: stored
             .filter { $0.key.count == 64 && $0.value.isFinite }
@@ -30,9 +37,12 @@ final class ProviderModelVerificationStore {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    func contains(_ identity: String) -> Bool { self.successes[identity] != nil }
+    func clearInMemory() { self.successes.removeAll() }
+
+    func contains(_ identity: String) -> Bool { self.profileIsCurrent && self.successes[identity] != nil }
 
     func recordSuccess(_ identity: String, now: Date = Date()) {
+        guard self.profileIsCurrent else { return }
         self.successes[identity] = now.timeIntervalSince1970
         while self.successes.count > Self.maximumEntries,
               let oldest = self.successes.min(by: { $0.value < $1.value })?.key
@@ -43,6 +53,7 @@ final class ProviderModelVerificationStore {
     }
 
     func remove(_ identity: String) {
+        guard self.profileIsCurrent else { return }
         guard self.successes.removeValue(forKey: identity) != nil else { return }
         self.defaults.set(self.successes, forKey: Self.defaultsKey)
     }

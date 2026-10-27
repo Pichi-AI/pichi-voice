@@ -321,6 +321,8 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     /// Optional so existing capture snapshots retain after-recording behavior.
     var speakerProcessingMode: MeetingSpeakerProcessingMode? = nil
     var piiRedactionEnabled: Bool? = nil
+    /// A frozen local data-handling requirement, independent of the inference backend.
+    var requiresEncryptedPersistence: Bool? = nil
     /// An explicit request override, separate from ambient saved-backend preferences.
     /// Nil keeps the selected speech model's registered route.
     var transcriptionBackendID: String? = nil
@@ -339,7 +341,8 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         speakerLabelsEnabled: Bool = true,
         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording,
         piiRedactionEnabled: Bool = false,
-        transcriptionBackendID: String? = nil
+        transcriptionBackendID: String? = nil,
+        requiresEncryptedPersistence: Bool = false
     ) {
         self.mode = mode
         self.title = title
@@ -355,6 +358,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         self.speakerProcessingMode = speakerLabelsEnabled && speakerProcessingMode == .streaming ? .streaming : nil
         self.piiRedactionEnabled = piiRedactionEnabled
         self.transcriptionBackendID = transcriptionBackendID
+        self.requiresEncryptedPersistence = requiresEncryptedPersistence ? true : nil
     }
 
     var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
@@ -1108,11 +1112,25 @@ nonisolated struct MeetingSpeakerEdits: Equatable, Sendable {
     }
 }
 
+/// Durable local ownership schema. This is persisted source metadata, not an account manager.
+/// Optional identity fields distinguish legacy guest data from a verified account admission.
+nonisolated struct MeetingProfileOwnership: Codable, Equatable, Sendable {
+    let profileID: String
+    var legacyOrigin: String? = nil
+    let issuer: String?
+    let subject: String?
+    let internalUserID: String?
+    let organizationID: String?
+    let workspaceID: String?
+}
+
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int
     var id: MeetingSessionID
+    /// Nil only for legacy unowned guest history. Cloud consent is a separate N5 policy.
+    var profileOwnership: MeetingProfileOwnership? = nil
     var title: String
     /// Present only for automatically named recordings; cleared when the user renames one.
     var defaultTitleBase: String? = nil
@@ -1153,6 +1171,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var speakerLabelsEnabled: Bool? = nil
     var speakerProcessingMode: MeetingSpeakerProcessingMode? = nil
     var piiRedactionEnabled: Bool? = nil
+    /// New protected-delivery captures persist local transcript data as ciphertext.
+    var requiresEncryptedPersistence: Bool? = nil
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil
@@ -1178,6 +1198,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.languageCode = configuration.languageCode
         self.mode = configuration.mode
         self.audioStorageMode = configuration.audioStorageMode
+        self.requiresEncryptedPersistence = configuration.requiresEncryptedPersistence
         self.speakerLabelsEnabled = configuration.speakerLabelsEnabled
         self.speakerProcessingMode = configuration.speakerProcessingMode
         self.piiRedactionEnabled = configuration.piiRedactionEnabled

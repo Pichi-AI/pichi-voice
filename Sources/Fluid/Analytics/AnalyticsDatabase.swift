@@ -13,7 +13,7 @@ enum AnalyticsDatabaseError: Error {
 }
 
 /// SQLite aggregates and crash-safe upload outbox.
-final class AnalyticsDatabase {
+nonisolated final class AnalyticsDatabase {
     private static let performanceBucketUpperBounds = [
         25, 50, 75, 100, 150, 200, 300, 500, 750, 1000,
         1500, 2000, 3000, 5000, 7500, 10_000, 20_000, 60_000,

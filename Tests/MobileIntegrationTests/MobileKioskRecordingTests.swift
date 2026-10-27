@@ -100,6 +100,40 @@ final class MobileKioskRecordingTests: XCTestCase {
         }
     }
 
+    func testUnavailableAdmissionDoesNotPrepareOrAcquireCapture() async throws {
+        // If preparation is entered this fixture throws a different error.
+        let fixture = try Fixture(failPreparation: true)
+        addTeardownBlock { await fixture.cleanup() }
+        do {
+            try await MobileMeetingRecordingActions.start(coordinator: fixture.coordinator,
+                required: fixture.required, privacyActivation: fixture.privacy,
+                settings: fixture.settings, canStart: { false })
+            XCTFail("A concealed or retired profile must not start a recording")
+        } catch is CancellationError {
+            XCTAssertEqual(fixture.arbiter.acquireCount, 0)
+            XCTAssertTrue(fixture.coordinator.isQuiescent)
+        }
+    }
+
+    func testProfileRetirementDuringPreparationDoesNotOpenMicrophone() async throws {
+        var admitted = true
+        let fixture = try Fixture(afterSpeechPreparation: { admitted = false })
+        addTeardownBlock { await fixture.cleanup() }
+        do {
+            try await MobileMeetingRecordingActions.start(coordinator: fixture.coordinator,
+                required: fixture.required, privacyActivation: fixture.privacy,
+                settings: fixture.settings, canStart: { admitted })
+            XCTFail("Preparation cannot transfer an old action into a new profile")
+        } catch is CancellationError {
+            XCTAssertEqual(fixture.arbiter.acquireCount, 0)
+            XCTAssertFalse(fixture.coordinator.hasPendingStart)
+            XCTAssertTrue(fixture.coordinator.isQuiescent)
+            let sessions = try await fixture.store.loadAll()
+            XCTAssertTrue(sessions.isEmpty)
+            XCTAssertTrue(fixture.settings.meetingSaveAudio)
+        }
+    }
+
     private func waitForProcessing(_ processing: SyntheticProcessing) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while !processing.isWaiting, ContinuousClock.now < deadline {
@@ -159,7 +193,8 @@ final class MobileKioskRecordingTests: XCTestCase {
         let privacy: MobilePrivacyActivation
         let access = MobileKioskAccess(storage: MemoryCredentialStore())
 
-        init(failPreparation: Bool = false) throws {
+        init(failPreparation: Bool = false,
+             afterSpeechPreparation: @escaping @MainActor () -> Void = {}) throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
             defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
             settings = SettingsStore(defaults: defaults)
@@ -184,6 +219,7 @@ final class MobileKioskRecordingTests: XCTestCase {
                 validate: { artifact }, install: { _ in throw SyntheticFailure.preparation })
             required = MobileRequiredResources(prepareSpeech: {
                 if failPreparation { throw SyntheticFailure.preparation }
+                afterSpeechPreparation()
             }, speakerStore: { _ in speakerStore })
             privacy = MobilePrivacyActivation(settings: settings, prepare: { _ in
                 XCTFail("Privacy was disabled by the administrator")

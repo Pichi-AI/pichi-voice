@@ -32,15 +32,31 @@ guard let bundleIdentifier = enclosingAppBundleIdentifier() else {
     FileHandle.standardError.write(Data("This meeting command must run from its enclosing application bundle.\n".utf8))
     exit(2)
 }
+let meetingRoot = FluidServeMeetings.defaultRoot(storageNamespace: bundleIdentifier)
+let arguments = Array(CommandLine.arguments.dropFirst())
+let requiresPrivateAccess = arguments.first == "meet" || arguments.first == "status"
+let admittedToken = requiresPrivateAccess ? try? FluidServeMeetings.guestAccessToken(root: meetingRoot) : Data()
+guard let profileToken = admittedToken else {
+    FileHandle.standardError.write(Data("Meeting access is unavailable for the active private profile.\n".utf8))
+    exit(2)
+}
 let result = FluidServeCommand.run(
-    arguments: Array(CommandLine.arguments.dropFirst()),
-    root: FluidServeMeetings.defaultRoot(storageNamespace: bundleIdentifier),
-    accessEnabled: FluidServeMeetings.isAccessEnabled(bundleIdentifier: bundleIdentifier),
+    arguments: arguments,
+    root: meetingRoot,
+    accessEnabled: requiresPrivateAccess && FluidServeMeetings.isAccessEnabled(bundleIdentifier: bundleIdentifier),
     toolPath: executable.path,
     ownerBundleIdentifier: bundleIdentifier,
     appName: (NSDictionary(contentsOf: executable.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Info.plist"))?["CFBundleDisplayName"] as? String) ?? "Voice app",
-    customPrompt: FluidServeMeetings.customSummaryPrompt(bundleIdentifier: bundleIdentifier)
+    customPrompt: requiresPrivateAccess ? FluidServeMeetings.customSummaryPrompt(bundleIdentifier: bundleIdentifier) : ""
 )
+// A transition may start while the helper reads. Never publish an answer admitted under
+// an earlier generation, including a legacy missing marker replaced during the read.
+if requiresPrivateAccess {
+    guard let finalToken = try? FluidServeMeetings.guestAccessToken(root: meetingRoot), finalToken == profileToken else {
+        FileHandle.standardError.write(Data("The private profile changed while reading meetings. Retry after switching profiles.\n".utf8))
+        exit(2)
+    }
+}
 let stream = result.exitCode == 0 ? FileHandle.standardOutput : FileHandle.standardError
 stream.write(Data((result.output + "\n").utf8))
 exit(result.exitCode)

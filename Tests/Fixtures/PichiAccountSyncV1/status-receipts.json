@@ -1,0 +1,67 @@
+{
+  "contractCommit": "f3ea4b15160b92c095d9d83036e6a66e3be81c34",
+  "runtimeImplemented": false,
+  "scope": "Synthetic status snapshots; accepted upload does not imply successful analysis.",
+  "receipts": [
+    {
+      "body": {
+        "schemaVersion": 1,
+        "importID": "synthetic-import-201",
+        "recordingID": "synthetic-recording-201",
+        "uploadState": "accepted",
+        "analysisState": "queued"
+      },
+      "nativeAction": "pollExistingReceipt"
+    },
+    {
+      "body": {
+        "schemaVersion": 1,
+        "importID": "synthetic-import-201",
+        "recordingID": "synthetic-recording-201",
+        "uploadState": "accepted",
+        "analysisState": "running"
+      },
+      "nativeAction": "pollExistingReceipt"
+    },
+    {
+      "body": {
+        "schemaVersion": 1,
+        "importID": "synthetic-import-201",
+        "recordingID": "synthetic-recording-201",
+        "uploadState": "accepted",
+        "analysisState": "succeeded"
+      },
+      "nativeAction": "analysisCompleted"
+    },
+    {
+      "body": {
+        "schemaVersion": 1,
+        "importID": "synthetic-import-201",
+        "recordingID": "synthetic-recording-201",
+        "uploadState": "accepted",
+        "analysisState": "failed"
+      },
+      "nativeAction": "showAnalysisFailure"
+    },
+    {
+      "body": {
+        "schemaVersion": 1,
+        "importID": "synthetic-import-201",
+        "recordingID": "synthetic-recording-201",
+        "uploadState": "accepted",
+        "analysisState": "needsParticipant"
+      },
+      "nativeAction": "showPendingParticipantAction"
+    },
+    {
+      "body": {
+        "schemaVersion": 1,
+        "importID": "synthetic-import-201",
+        "recordingID": "synthetic-recording-201",
+        "uploadState": "accepted",
+        "analysisState": "needsCriteria"
+      },
+      "nativeAction": "showPendingCriteriaAction"
+    }
+  ]
+}

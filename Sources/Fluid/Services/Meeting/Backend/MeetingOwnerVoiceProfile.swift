@@ -205,16 +205,21 @@ nonisolated struct MeetingOwnerVoiceProfileStore: Sendable {
     let fileURL: URL
     static let maximumBytes = 16_384
     static var defaultURL: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent("Library/Application Support", isDirectory: true)
-        return support.appendingPathComponent(AppBrand.storageNamespace, isDirectory: true)
-            .appendingPathComponent("OwnerVoice", isDirectory: true).appendingPathComponent("profile.json")
+        PrivateProfileStorage.current.directory("OwnerVoice").appendingPathComponent("profile.json")
     }
     static var encoderFingerprint: String {
         "\(MeetingSpeakerVoiceModelArtifacts.revision):\(MeetingSpeakerVoiceModelArtifacts.packageName):mono16000:two-disjoint-3to10s:v1:"
             + MeetingSpeakerVoiceModelArtifacts.files.map(\.digest).joined(separator: ":")
     }
-    init(fileURL: URL = Self.defaultURL) { self.fileURL = fileURL }
+    private let profile: PrivateProfileSnapshot?
+    init(fileURL: URL? = nil, profile: PrivateProfileSnapshot? = nil) {
+        let selected = profile ?? (fileURL == nil ? PrivateProfileStorage.current : nil)
+        self.profile = selected
+        self.fileURL = fileURL ?? selected!.directory("OwnerVoice").appendingPathComponent("profile.json")
+    }
+    fileprivate func requireAccess() throws {
+        guard self.profile.map(PrivateProfileStorage.isReadable) != false else { throw MeetingOwnerVoiceProfileError.staleDraft }
+    }
 
     private struct Record: Codable {
         let schema: Int
@@ -233,6 +238,7 @@ nonisolated struct MeetingOwnerVoiceProfileStore: Sendable {
         return MeetingSpeakerVoiceMatcher.distance(profile, profile).map { $0 <= MeetingSpeakerVoiceMatcher.maximumDistance } ?? false
     }
     func load() throws -> MeetingOwnerVoiceProfileSnapshot? {
+        try self.requireAccess()
         guard self.fileURL.isFileURL else { throw MeetingOwnerVoiceProfileError.invalidProfile }
         let properties: [FileAttributeKey: Any]
         do { properties = try FileManager.default.attributesOfItem(atPath: self.fileURL.path) }
@@ -251,6 +257,7 @@ nonisolated struct MeetingOwnerVoiceProfileStore: Sendable {
         return snapshot
     }
     func save(_ snapshot: MeetingOwnerVoiceProfileSnapshot) throws {
+        try self.requireAccess()
         guard self.fileURL.isFileURL, Self.isValid(snapshot) else { throw MeetingOwnerVoiceProfileError.invalidProfile }
         let directory = self.fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -275,6 +282,7 @@ nonisolated struct MeetingOwnerVoiceProfileStore: Sendable {
         try resource.setResourceValues(values)
     }
     func delete() throws {
+        try self.requireAccess()
         if FileManager.default.fileExists(atPath: self.fileURL.path) { try FileManager.default.removeItem(at: self.fileURL) }
     }
 }
@@ -283,7 +291,11 @@ nonisolated struct MeetingOwnerVoiceProfileStore: Sendable {
 /// operation. Resource preparation uses the existing store, inference the existing voice encoder.
 /// Cancellation waits for the actual native inference to drain before the lease can be released.
 actor MeetingOwnerVoiceProfileService {
-    static let shared = MeetingOwnerVoiceProfileService()
+    private static let cache = PrivateProfileStoreCache<MeetingOwnerVoiceProfileService>()
+    static var shared: MeetingOwnerVoiceProfileService {
+        cache.value { profile in MeetingOwnerVoiceProfileService(store: .init(
+            fileURL: profile.directory("OwnerVoice").appendingPathComponent("profile.json"), profile: profile)) }
+    }
     typealias PrepareResources = @Sendable () async throws -> Void
     typealias Encode = @Sendable ([MeetingSpeakerVoiceSamples]) throws -> [MeetingSpeakerVoiceProfile]
     private let store: MeetingOwnerVoiceProfileStore
@@ -292,17 +304,47 @@ actor MeetingOwnerVoiceProfileService {
     private let executor = TranscriptionExecutor()
     private var revision = UUID()
     private var busy = false
+    private var retired = false
+    private var transitionWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Invalidates drafts immediately and joins native preparation before cache retirement.
+    /// The UI owner cancels its preparation task before invoking this hook.
+    func prepareForProfileTransition() async {
+        self.retired = true
+        self.revision = UUID()
+        if self.busy {
+            await withCheckedContinuation { self.transitionWaiters.append($0) }
+        }
+    }
+
+    private func requireAccess() throws {
+        guard !self.retired else { throw MeetingOwnerVoiceProfileError.staleDraft }
+        try self.store.requireAccess()
+    }
 
     init(store: MeetingOwnerVoiceProfileStore = .init(),
          prepareResources: @escaping PrepareResources = { try await MeetingDiarizationModelStore.shared.prepare(dependencies: [.voiceMatching]) },
          encode: @escaping Encode = { try MeetingSpeakerVoiceEncoder.encode(samples: $0) }) {
         self.store = store; self.prepareResources = prepareResources; self.encode = encode
     }
-    func metadata() throws -> MeetingOwnerVoiceProfileMetadata? { try self.store.load()?.metadata }
-    func snapshot() throws -> MeetingOwnerVoiceProfileSnapshot? { try self.store.load() }
+    func metadata() throws -> MeetingOwnerVoiceProfileMetadata? {
+        try self.requireAccess()
+        return try self.store.load()?.metadata
+    }
+    func snapshot() throws -> MeetingOwnerVoiceProfileSnapshot? {
+        try self.requireAccess()
+        return try self.store.load()
+    }
     func prepare(samples: [Float], sampleRate: Double = 16_000) async throws -> MeetingOwnerVoiceProfileDraft {
+        try self.requireAccess()
         guard !self.busy else { throw MeetingOwnerVoiceProfileError.busy }
-        self.busy = true; defer { self.busy = false }
+        self.busy = true
+        defer {
+            self.busy = false
+            let waiters = self.transitionWaiters
+            self.transitionWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
         let initialRevision = self.revision
         try Task.checkCancellation()
         guard sampleRate == 16_000, (96_000...320_000).contains(samples.count), samples.allSatisfy(\.isFinite) else {
@@ -321,7 +363,7 @@ actor MeetingOwnerVoiceProfileService {
         let encode = self.encode
         let profiles = try await self.executor.runBlocking { try encode(excerpts) }
         try Task.checkCancellation()
-        guard initialRevision == self.revision else { throw MeetingOwnerVoiceProfileError.staleDraft }
+        guard !self.retired, initialRevision == self.revision else { throw MeetingOwnerVoiceProfileError.staleDraft }
         guard profiles.count == 1 else { throw MeetingOwnerVoiceProfileError.insufficientSpeech }
         let snapshot = MeetingOwnerVoiceProfileSnapshot(metadata: .init(generation: UUID(), enrolledAt: Date()),
             encoderFingerprint: MeetingOwnerVoiceProfileStore.encoderFingerprint, embeddings: profiles[0].embeddings)
@@ -329,6 +371,7 @@ actor MeetingOwnerVoiceProfileService {
         return MeetingOwnerVoiceProfileDraft(snapshot: snapshot, serviceRevision: initialRevision)
     }
     @discardableResult func save(_ draft: MeetingOwnerVoiceProfileDraft) throws -> MeetingOwnerVoiceProfileMetadata {
+        try self.requireAccess()
         guard draft.serviceRevision == self.revision else { throw MeetingOwnerVoiceProfileError.staleDraft }
         try Task.checkCancellation()
         try self.store.save(draft.snapshot)
@@ -336,6 +379,7 @@ actor MeetingOwnerVoiceProfileService {
         return draft.snapshot.metadata
     }
     func delete() throws {
+        try self.requireAccess()
         try self.store.delete()
         self.revision = UUID()
     }

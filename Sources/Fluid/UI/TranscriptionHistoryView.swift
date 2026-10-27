@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -32,17 +33,8 @@ struct TranscriptionHistoryView: View {
     @Environment(\.theme) private var theme
     @Environment(\.locale) private var interfaceLocale
 
-    @State private var searchQuery: String = ""
-    @State private var pinnedOnly = false
-    @State private var pinRevealRequest: HistoryPinRevealRequest?
-    @State private var showClearConfirmation: Bool = false
-    @State private var showReportConfirmation: Bool = false
-    @State private var selectedReportEntry: TranscriptionHistoryEntry?
-    @State private var audioEntryID: UUID?
-    @State private var copiedEntryID: UUID?
-    @State private var copyFeedbackTask: Task<Void, Never>?
-    @State private var availableAudioFiles: Set<String> = []
-    @State private var audioAvailabilityRevision = UUID()
+    @ObservedObject private var profiles = PrivateProfileService.shared
+    @StateObject private var projection = HistoryPrivateProjection()
     @FocusState private var listFocused: Bool
 
     private struct AudioAvailabilityRequest: Equatable {
@@ -52,20 +44,21 @@ struct TranscriptionHistoryView: View {
 
     private var audioAvailabilityRequest: AudioAvailabilityRequest {
         AudioAvailabilityRequest(
-            fileNames: self.historyStore.entries.compactMap { $0.audio?.fileName },
-            revision: self.audioAvailabilityRevision
+            fileNames: self.filteredEntries.compactMap { $0.audio?.fileName },
+            revision: self.projection.audioAvailabilityRevision
         )
     }
 
     /// Lives in the store so the sidebar search can select a row before this view
     /// exists, and the store's delete and clear paths keep it valid.
     private var selectedEntryID: UUID? {
-        get { self.historyStore.selectedEntryID }
-        nonmutating set { self.historyStore.selectedEntryID = newValue }
+        get { self.projection.isVisible ? self.historyStore.selectedEntryID : nil }
+        nonmutating set { if newValue == nil || self.projection.isVisible { self.historyStore.selectedEntryID = newValue } }
     }
 
     private var filteredEntries: [TranscriptionHistoryEntry] {
-        self.historyStore.search(query: self.searchQuery, starredOnly: self.pinnedOnly, pinnedFirst: true)
+        guard self.projection.isVisible else { return [] }
+        return self.historyStore.search(query: self.projection.searchQuery, starredOnly: self.projection.pinnedOnly, pinnedFirst: true)
     }
 
     private var selectedEntry: TranscriptionHistoryEntry? {
@@ -74,6 +67,23 @@ struct TranscriptionHistoryView: View {
     }
 
     var body: some View {
+        Group {
+            if self.projection.isVisible {
+                self.historyContent
+            } else {
+                self.noSelectionView
+            }
+        }
+        .onChange(of: self.profiles.projectionRevision) { _, _ in
+            self.projection.clearForProjectionChange()
+        }
+        .onChange(of: self.profiles.isPrivateDataVisible) { _, visible in
+            if !visible { self.projection.clearTransientState() }
+        }
+        .onDisappear { self.projection.clearTransientState() }
+    }
+
+    private var historyContent: some View {
         HSplitView {
             // MARK: - Left Panel: Entry List
 
@@ -82,8 +92,8 @@ struct TranscriptionHistoryView: View {
                     self.searchBar
                     FluidDropdownPicker(
                         PichiLocalization.text("History filter"),
-                        selectedTitle: PichiLocalization.text(self.pinnedOnly ? "Pinned" : "All"),
-                        selection: self.$pinnedOnly
+                        selectedTitle: PichiLocalization.text(self.projection.pinnedOnly ? "Pinned" : "All"),
+                        selection: self.$projection.pinnedOnly
                     ) {
                         Text("All").tag(false)
                         Text("Pinned").tag(true)
@@ -101,6 +111,7 @@ struct TranscriptionHistoryView: View {
                         Text(error)
                             .font(.fluidSystem(.caption))
                         Button("Retry saving history") {
+                            guard self.projection.isVisible else { return }
                             self.historyStore.retryPersistence()
                         }
                     }
@@ -142,39 +153,25 @@ struct TranscriptionHistoryView: View {
             self.selectedEntryID = visibleIDs.first
         }
         .onChange(of: self.selectedEntry?.id) { _, _ in
-            self.audioEntryID = nil
-        }
-        .onDisappear {
-            self.pinRevealRequest = nil
-            self.availableAudioFiles = []
-            self.audioEntryID = nil
-            self.copyFeedbackTask?.cancel()
-            self.copiedEntryID = nil
+            self.projection.audioEntryID = nil
         }
         .onAppear {
-            self.audioAvailabilityRevision = UUID()
+            self.projection.audioAvailabilityRevision = UUID()
             self.revealExternalSelection()
             if self.selectedEntryID == nil {
                 self.selectedEntryID = self.filteredEntries.first?.id
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            self.audioAvailabilityRevision = UUID()
+            self.projection.audioAvailabilityRevision = UUID()
         }
-        .task(id: self.audioAvailabilityRequest) {
-            let request = self.audioAvailabilityRequest
-            let available = await HistoryAudioAvailability.scan(fileNames: request.fileNames) {
-                DictationAudioHistoryStore.shared.audioFileExists(fileName: $0)
-            }
-            guard !Task.isCancelled, request == self.audioAvailabilityRequest else { return }
-            self.availableAudioFiles = available
-            if let entry = self.selectedEntry, !self.hasAudio(entry) {
-                self.audioEntryID = nil
-            }
+        .onChange(of: self.audioAvailabilityRequest, initial: true) { _, request in
+            self.projection.scanAudio(fileNames: request.fileNames)
         }
-        .alert("Clear All History", isPresented: self.$showClearConfirmation) {
+        .alert("Clear All History", isPresented: self.$projection.showClearConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Clear All", role: .destructive) {
+                guard self.projection.isVisible else { return }
                 withAnimation(.easeInOut(duration: 0.2)) {
                     self.historyStore.clearAllHistory()
                     self.selectedEntryID = nil
@@ -183,17 +180,22 @@ struct TranscriptionHistoryView: View {
         } message: {
             Text("This will permanently delete all \(self.historyStore.entries.count) transcription entries, including pinned entries. This action cannot be undone.")
         }
-        .alert("Report Sent", isPresented: self.$showReportConfirmation) {
+        .alert("Report Sent", isPresented: self.$projection.showReportConfirmation) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(AppBrand.text("Thank you for helping improve FluidVoice dictation."))
         }
-        .sheet(item: self.$selectedReportEntry) { entry in
-            TranscriptionFeedbackReportSheet(entry: entry) {
-                self.selectedReportEntry = nil
-                self.showReportConfirmation = true
-            }
-            .environment(\.theme, self.theme)
+        .alert("Pair Export Failed", isPresented: Binding(
+            get: { self.projection.exportError != nil },
+            set: { if !$0 { self.projection.exportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { self.projection.exportError = nil }
+        } message: {
+            Text(self.projection.exportError ?? "")
+        }
+        .sheet(item: self.$projection.selectedReportEntry) { _ in
+            TranscriptionFeedbackReportSheet(projection: self.projection)
+                .environment(\.theme, self.theme)
         }
     }
 
@@ -205,12 +207,12 @@ struct TranscriptionHistoryView: View {
                 .font(.fluidSystem(size: 13, weight: .medium))
                 .foregroundStyle(self.theme.palette.secondaryText)
 
-            FluidSearchField(title: "Search transcriptions...", text: self.$searchQuery)
+            FluidSearchField(title: "Search transcriptions...", text: self.$projection.searchQuery)
                 .font(.fluidSystem(size: 13))
 
-            if !self.searchQuery.isEmpty {
+            if !self.projection.searchQuery.isEmpty {
                 Button {
-                    self.searchQuery = ""
+                    self.projection.searchQuery = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.fluidSystem(size: 12))
@@ -252,22 +254,24 @@ struct TranscriptionHistoryView: View {
             }
             .onAppear { self.reveal(self.selectedEntryID, with: proxy) }
             .onChange(of: self.historyStore.selectedEntryID) { _, id in self.reveal(id, with: proxy) }
-            .task(id: self.pinRevealRequest) {
-                guard let request = self.pinRevealRequest else { return }
-                // Let the reordered rows reach the list before following the selected one.
-                await Task.yield()
-                guard !Task.isCancelled, self.pinRevealRequest == request else { return }
-                if let id = request.target(selectedID: self.selectedEntryID, visibleIDs: self.filteredEntries.map(\.id)) {
-                    proxy.scrollTo(id)
+            .onChange(of: self.projection.pinRevealRequest) { _, request in
+                guard let request else { return }
+                self.projection.start { ticket in
+                    // Let reordered rows reach the list before following the selection.
+                    await Task.yield()
+                    guard self.projection.isCurrent(ticket), self.projection.pinRevealRequest == request else { return }
+                    if let id = request.target(selectedID: self.selectedEntryID, visibleIDs: self.filteredEntries.map(\.id)) {
+                        proxy.scrollTo(id)
+                    }
+                    self.projection.pinRevealRequest = nil
                 }
-                if self.pinRevealRequest == request { self.pinRevealRequest = nil }
             }
         }
     }
 
     /// Parent-level handling also runs when no list exists to observe the selection.
     private func revealExternalSelection() {
-        guard let request = self.historyStore.searchSelectionRequest else { return }
+        guard self.projection.isVisible, let request = self.historyStore.searchSelectionRequest else { return }
         defer { self.historyStore.consumeSearchSelectionRequest(request) }
         guard HistorySelectionRevealPolicy.needsFilterReset(
             requestedID: request.entryID,
@@ -275,16 +279,16 @@ struct TranscriptionHistoryView: View {
             allEntries: self.historyStore.entries,
             visibleEntries: self.filteredEntries
         ) else { return }
-        self.searchQuery = ""
-        self.pinnedOnly = false
+        self.projection.searchQuery = ""
+        self.projection.pinnedOnly = false
     }
 
     /// The parent clears a hidden selection's filters; scroll after that view update.
     private func reveal(_ id: UUID?, with proxy: ScrollViewProxy) {
-        guard let id else { return }
-        if !self.filteredEntries.contains(where: { $0.id == id }) {
-            DispatchQueue.main.async { proxy.scrollTo(id) }
-        } else {
+        guard self.projection.isVisible, let id else { return }
+        self.projection.start { ticket in
+            await Task.yield()
+            guard self.projection.isCurrent(ticket), self.filteredEntries.contains(where: { $0.id == id }) else { return }
             proxy.scrollTo(id)
         }
     }
@@ -358,13 +362,13 @@ struct TranscriptionHistoryView: View {
                     Button {
                         self.copyFinalText(entry)
                     } label: {
-                        Image(systemName: self.copiedEntryID == entry.id ? "checkmark" : "doc.on.doc")
+                        Image(systemName: self.projection.copiedEntryID == entry.id ? "checkmark" : "doc.on.doc")
                             .frame(width: 28, height: 28)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help(PichiLocalization.text("Copy final text"))
-                    .accessibilityLabel(PichiLocalization.text(self.copiedEntryID == entry.id ? "Copied" : "Copy final text"))
+                    .accessibilityLabel(PichiLocalization.text(self.projection.copiedEntryID == entry.id ? "Copied" : "Copy final text"))
                     Button {
                         self.openFeedbackReport(for: entry)
                     } label: {
@@ -464,7 +468,8 @@ struct TranscriptionHistoryView: View {
         Divider()
 
         Button(role: .destructive) {
-            if self.audioEntryID == entry.id { self.audioEntryID = nil }
+            guard self.projection.isVisible else { return }
+            if self.projection.audioEntryID == entry.id { self.projection.audioEntryID = nil }
             self.historyStore.deleteEntry(id: entry.id)
             if self.selectedEntryID == entry.id {
                 self.selectedEntryID = self.filteredEntries.first(where: { $0.id != entry.id })?.id
@@ -475,27 +480,28 @@ struct TranscriptionHistoryView: View {
     }
 
     private func togglePin(_ entry: TranscriptionHistoryEntry) {
-        self.pinRevealRequest = nil
+        guard self.projection.isVisible else { return }
+        self.projection.pinRevealRequest = nil
         self.historyStore.toggleStar(id: entry.id)
         guard self.selectedEntryID == entry.id, self.filteredEntries.contains(where: { $0.id == entry.id }) else { return }
-        self.pinRevealRequest = HistoryPinRevealRequest(entryID: entry.id)
+        self.projection.pinRevealRequest = HistoryPinRevealRequest(entryID: entry.id)
     }
 
     // MARK: - Empty State
 
     private var emptyStateIcon: String {
-        if !self.searchQuery.isEmpty { return "magnifyingglass" }
-        return self.pinnedOnly ? "pin" : "clock.arrow.circlepath"
+        if !self.projection.searchQuery.isEmpty { return "magnifyingglass" }
+        return self.projection.pinnedOnly ? "pin" : "clock.arrow.circlepath"
     }
 
     private var emptyStateTitle: String {
-        if !self.searchQuery.isEmpty { return "No Results" }
-        return self.pinnedOnly ? "No Pinned Transcriptions" : "No History Yet"
+        if !self.projection.searchQuery.isEmpty { return "No Results" }
+        return self.projection.pinnedOnly ? "No Pinned Transcriptions" : "No History Yet"
     }
 
     private var emptyStateMessage: String {
-        if !self.searchQuery.isEmpty { return "Try a different search term" }
-        return self.pinnedOnly
+        if !self.projection.searchQuery.isEmpty { return "Try a different search term" }
+        return self.projection.pinnedOnly
             ? "Pin a transcription to keep it at the top of History"
             : "Your transcriptions will appear here"
     }
@@ -543,7 +549,8 @@ struct TranscriptionHistoryView: View {
                 // Clear All Button
                 if !self.historyStore.entries.isEmpty {
                     Button {
-                        self.showClearConfirmation = true
+                        guard self.projection.isVisible else { return }
+                        self.projection.showClearConfirmation = true
                     } label: {
                         Text("Clear All")
                             .font(.fluidSystem(size: 11, weight: .medium))
@@ -575,7 +582,7 @@ struct TranscriptionHistoryView: View {
                         self.detailActions(entry)
                     }
                 }
-                if self.audioEntryID == entry.id {
+                if self.projection.audioEntryID == entry.id {
                     HistoryInlineAudioView(entry: entry)
                         .id(entry.id)
                 }
@@ -681,8 +688,8 @@ struct TranscriptionHistoryView: View {
         .fluidGlassAction()
         Button { self.copyFinalText(entry) } label: {
             Label(
-                PichiLocalization.text(self.copiedEntryID == entry.id ? "Copied" : "Copy text"),
-                systemImage: self.copiedEntryID == entry.id ? "checkmark" : "doc.on.doc"
+                PichiLocalization.text(self.projection.copiedEntryID == entry.id ? "Copied" : "Copy text"),
+                systemImage: self.projection.copiedEntryID == entry.id ? "checkmark" : "doc.on.doc"
             )
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -690,9 +697,10 @@ struct TranscriptionHistoryView: View {
         .disabled(entry.clipboardText == nil)
         if self.hasAudio(entry) {
             Button {
-                self.audioEntryID = self.audioEntryID == entry.id ? nil : entry.id
+                guard self.projection.isVisible else { return }
+                self.projection.audioEntryID = self.projection.audioEntryID == entry.id ? nil : entry.id
             } label: {
-                Label(PichiLocalization.text(self.audioEntryID == entry.id ? "Close audio" : "Audio"), systemImage: "waveform")
+                Label(PichiLocalization.text(self.projection.audioEntryID == entry.id ? "Close audio" : "Audio"), systemImage: "waveform")
             }
             .fluidGlassAction()
         }
@@ -724,18 +732,9 @@ struct TranscriptionHistoryView: View {
     }
 
     private func copyFinalText(_ entry: TranscriptionHistoryEntry) {
-        guard let text = entry.clipboardText else { return }
+        guard self.projection.isVisible, let text = entry.clipboardText else { return }
         self.copyToClipboard(text)
-        self.showCopiedFeedback(for: entry)
-    }
-
-    private func showCopiedFeedback(for entry: TranscriptionHistoryEntry) {
-        self.copyFeedbackTask?.cancel()
-        self.copiedEntryID = entry.id
-        self.copyFeedbackTask = Task { @MainActor in
-            do { try await Task.sleep(for: .seconds(1.5)) } catch { return }
-            self.copiedEntryID = nil
-        }
+        self.projection.showCopyFeedback(entryID: entry.id)
     }
 
     private func moveSelection(_ direction: MoveCommandDirection, proxy: ScrollViewProxy) {
@@ -754,13 +753,15 @@ struct TranscriptionHistoryView: View {
     }
 
     private func copyCommandProviders() -> [NSItemProvider] {
-        guard let entry = self.selectedEntry, let text = entry.clipboardText else { return [] }
+        guard self.projection.isVisible,
+              let entry = self.selectedEntry, let text = entry.clipboardText else { return [] }
         ClipboardAudit.record("ui_copy_command")
-        self.showCopiedFeedback(for: entry)
+        self.projection.showCopyFeedback(entryID: entry.id)
         return [NSItemProvider(object: text as NSString)]
     }
 
     private func copyToClipboard(_ text: String) {
+        guard self.projection.isVisible else { return }
         ClipboardAudit.record("ui_copy_begin")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -768,7 +769,7 @@ struct TranscriptionHistoryView: View {
     }
 
     private func openFeedbackReport(for entry: TranscriptionHistoryEntry) {
-        self.selectedReportEntry = entry
+        self.projection.openReport(entry)
     }
 
     private func combinedText(for entry: TranscriptionHistoryEntry) -> String {
@@ -777,7 +778,7 @@ struct TranscriptionHistoryView: View {
 
     private func hasAudio(_ entry: TranscriptionHistoryEntry) -> Bool {
         guard let audio = entry.audio else { return false }
-        return self.availableAudioFiles.contains(audio.fileName)
+        return self.projection.availableAudioFiles.contains(audio.fileName)
     }
 
     private func recordingDurationText(for entry: TranscriptionHistoryEntry) -> String {
@@ -792,7 +793,8 @@ struct TranscriptionHistoryView: View {
     }
 
     private func revealAudio(_ entry: TranscriptionHistoryEntry) {
-        guard let url = DictationAudioHistoryStore.shared.audioFileURL(for: entry),
+        guard self.projection.isVisible,
+              let url = self.projection.audioStore.audioFileURL(for: entry),
               FileManager.default.fileExists(atPath: url.path)
         else {
             return
@@ -801,22 +803,26 @@ struct TranscriptionHistoryView: View {
     }
 
     private func exportPair(_ entry: TranscriptionHistoryEntry) {
-        do {
-            guard self.hasAudio(entry) else { throw DictationAudioHistoryError.audioMissing }
-            let panel = NSSavePanel()
-            panel.canCreateDirectories = true
-            panel.allowedContentTypes = [.zip]
-            panel.nameFieldStringValue = DictationAudioHistoryStore.shared.suggestedPairExportFilename(for: entry)
-
-            guard panel.runModal() == .OK, let url = panel.url else { return }
-            try DictationAudioHistoryStore.shared.exportPair(entry: entry, to: url)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = PichiLocalization.text("Pair Export Failed")
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .critical
-            alert.addButton(withTitle: PichiLocalization.text("OK"))
-            alert.runModal()
+        self.projection.start { ticket in
+            guard self.projection.exportPanel == nil else { return }
+            do {
+                guard self.hasAudio(entry) else { throw DictationAudioHistoryError.audioMissing }
+                let panel = NSSavePanel()
+                panel.canCreateDirectories = true
+                panel.allowedContentTypes = [.zip]
+                panel.nameFieldStringValue = self.projection.audioStore.suggestedPairExportFilename(for: entry)
+                self.projection.exportPanel = panel
+                defer { if self.projection.exportPanel === panel { self.projection.exportPanel = nil } }
+                // The retained task joins the panel's completion after conceal cancels it.
+                let response: NSApplication.ModalResponse = await withCheckedContinuation { continuation in
+                    panel.begin { continuation.resume(returning: $0) }
+                }
+                guard self.projection.isCurrent(ticket), response == .OK, let url = panel.url else { return }
+                try self.projection.audioStore.exportPair(entry: entry, to: url)
+            } catch {
+                guard self.projection.isCurrent(ticket) else { return }
+                self.projection.exportError = error.localizedDescription
+            }
         }
     }
 
@@ -837,27 +843,199 @@ struct TranscriptionHistoryView: View {
     }
 }
 
+// MARK: - Joined history projection lifetime
+
+/// One history view owns its transient payloads and readers. Source replacement is
+/// composition-owned; this owner never rebinds an old view to a newly selected profile.
+@MainActor
+final class HistoryPrivateProjection: ObservableObject, PrivateProfileTransitionParticipant {
+    struct Ticket {
+        let profile: PrivateProfileSnapshot
+        let revision: UUID
+    }
+
+    @Published var searchQuery = ""
+    @Published var pinnedOnly = false
+    @Published var pinRevealRequest: HistoryPinRevealRequest?
+    @Published var showClearConfirmation = false
+    @Published var showReportConfirmation = false
+    @Published var selectedReportEntry: TranscriptionHistoryEntry?
+    @Published var audioEntryID: UUID?
+    @Published var copiedEntryID: UUID?
+    @Published var availableAudioFiles: Set<String> = []
+    @Published var audioAvailabilityRevision = UUID()
+    @Published var exportError: String?
+    @Published var inputText = ""
+    @Published var outputText = ""
+    @Published var processingModel = ""
+    @Published var comment = ""
+    @Published var isSending = false
+    @Published var errorMessage: String?
+
+    let audioStore: DictationAudioHistoryStore
+    var exportPanel: NSSavePanel?
+    private let profile: PrivateProfileSnapshot
+    private let historyStore: TranscriptionHistoryStore
+    private let profiles: PrivateProfileService
+    private var retired = false
+    private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var audioScanID: UUID?
+    private var copyFeedbackID: UUID?
+    private var reportTaskID: UUID?
+    private var reportRevision = UUID()
+    private var concealObserver: AnyCancellable?
+
+    init() {
+        self.profile = PrivateProfileStorage.current
+        self.audioStore = DictationAudioHistoryStore.scoped(to: self.profile)
+        self.historyStore = TranscriptionHistoryStore.shared
+        self.profiles = PrivateProfileService.shared
+        self.profiles.register(self)
+        // Concealment is synchronous, including a later marker-persistence failure.
+        // The registered participant separately joins all retained asynchronous work.
+        self.concealObserver = NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.retired = true
+                    self?.clearTransientState(clearSelection: true)
+                }
+            }
+    }
+
+    var isVisible: Bool {
+        !self.retired && self.profiles.isPrivateDataVisible && !self.profiles.isTransitioning &&
+            PrivateProfileStorage.acceptsNewWork && PrivateProfileStorage.isReadable(self.profile)
+    }
+
+    func capture() -> Ticket? {
+        guard self.isVisible else { return nil }
+        return Ticket(profile: self.profile, revision: self.profiles.projectionRevision)
+    }
+
+    func isCurrent(_ ticket: Ticket) -> Bool {
+        self.isVisible && ticket.profile == self.profile &&
+            ticket.revision == self.profiles.projectionRevision &&
+            PrivateProfileStorage.isReadable(ticket.profile) && !Task.isCancelled
+    }
+
+    /// Every view-owned task remains retained until completion, including replaced
+    /// scans and cancelled feedback sleeps, so transition cleanup can join all of them.
+    @discardableResult
+    func start(_ work: @escaping @MainActor (Ticket) async -> Void) -> UUID? {
+        guard let ticket = self.capture() else { return nil }
+        let id = UUID()
+        self.tasks[id] = Task { @MainActor in
+            if self.isCurrent(ticket) { await work(ticket) }
+            self.tasks.removeValue(forKey: id)
+        }
+        return id
+    }
+
+    func scanAudio(fileNames: [String]) {
+        if let id = self.audioScanID { self.tasks[id]?.cancel() }
+        let audioStore = self.audioStore
+        self.audioScanID = self.start { ticket in
+            let available = await HistoryAudioAvailability.scan(fileNames: fileNames) {
+                audioStore.audioFileExists(fileName: $0)
+            }
+            guard self.isCurrent(ticket) else { return }
+            self.availableAudioFiles = available
+            if let selected = self.historyStore.entries.first(where: { $0.id == self.audioEntryID }),
+               let audio = selected.audio, !available.contains(audio.fileName) {
+                self.audioEntryID = nil
+            }
+        }
+    }
+
+    func showCopyFeedback(entryID: UUID) {
+        guard self.isVisible else { return }
+        if let id = self.copyFeedbackID { self.tasks[id]?.cancel() }
+        self.copiedEntryID = entryID
+        self.copyFeedbackID = self.start { ticket in
+            do { try await Task.sleep(for: .seconds(1.5)) } catch { return }
+            guard self.isCurrent(ticket) else { return }
+            self.copiedEntryID = nil
+        }
+    }
+
+    func openReport(_ entry: TranscriptionHistoryEntry) {
+        guard self.isVisible else { return }
+        self.closeReport()
+        self.inputText = entry.rawText
+        self.outputText = entry.processedText
+        let model = entry.processingModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.processingModel = model.isEmpty ? "unknown" : model
+        self.selectedReportEntry = entry
+    }
+
+    func closeReport() {
+        if let id = self.reportTaskID { self.tasks[id]?.cancel() }
+        self.reportTaskID = nil
+        self.reportRevision = UUID()
+        self.selectedReportEntry = nil
+        self.inputText = ""; self.outputText = ""; self.processingModel = ""; self.comment = ""
+        self.isSending = false; self.errorMessage = nil
+    }
+
+    func sendReport() {
+        guard self.isVisible, !self.isSending, self.selectedReportEntry != nil else { return }
+        let payload = TranscriptionFeedbackReporter.Payload(
+            rawText: self.inputText.trimmingCharacters(in: .whitespacesAndNewlines),
+            processedText: self.outputText.trimmingCharacters(in: .whitespacesAndNewlines),
+            processingModel: self.processingModel.trimmingCharacters(in: .whitespacesAndNewlines),
+            comments: self.comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        let reportRevision = self.reportRevision
+        self.isSending = true; self.errorMessage = nil
+        self.reportTaskID = self.start { ticket in
+            do {
+                try await TranscriptionFeedbackReporter.submit(payload)
+                guard self.isCurrent(ticket), self.reportRevision == reportRevision else { return }
+                self.closeReport()
+                self.showReportConfirmation = true
+            } catch {
+                guard self.isCurrent(ticket), self.reportRevision == reportRevision else { return }
+                self.errorMessage = error.localizedDescription
+                self.isSending = false
+            }
+        }
+    }
+
+    func clearForProjectionChange() {
+        self.clearTransientState(clearSelection: true)
+    }
+
+    func clearTransientState(clearSelection: Bool = false) {
+        for task in self.tasks.values { task.cancel() }
+        self.exportPanel?.cancel(nil)
+        self.exportPanel = nil
+        self.closeReport()
+        self.searchQuery = ""; self.pinnedOnly = false; self.pinRevealRequest = nil
+        self.showClearConfirmation = false; self.showReportConfirmation = false
+        self.availableAudioFiles = []; self.audioEntryID = nil; self.copiedEntryID = nil
+        self.exportError = nil
+        self.audioAvailabilityRevision = UUID()
+        if clearSelection { self.historyStore.selectedEntryID = nil }
+    }
+
+    func prepareForPrivateProfileTransition() async throws {
+        self.retired = true
+        self.clearTransientState(clearSelection: true)
+        let pending = Array(self.tasks.values)
+        for task in pending { await task.value }
+        self.tasks.removeAll()
+        self.audioScanID = nil; self.copyFeedbackID = nil; self.reportTaskID = nil
+    }
+}
+
+// MARK: - History feedback sheet
+
 private struct TranscriptionFeedbackReportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.theme) private var theme
     @Environment(\.locale) private var interfaceLocale
 
-    @State private var inputText: String
-    @State private var outputText: String
-    @State private var processingModel: String
-    @State private var comment: String
-    @State private var isSending: Bool = false
-    @State private var errorMessage: String?
-
-    let onSent: () -> Void
-
-    init(entry: TranscriptionHistoryEntry, onSent: @escaping () -> Void) {
-        _inputText = State(initialValue: entry.rawText)
-        _outputText = State(initialValue: entry.processedText)
-        _processingModel = State(initialValue: Self.reportModel(for: entry))
-        _comment = State(initialValue: "")
-        self.onSent = onSent
-    }
+    @ObservedObject var projection: HistoryPrivateProjection
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -869,12 +1047,12 @@ private struct TranscriptionFeedbackReportSheet: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
 
-            self.feedbackField(title: "Raw Text", text: self.$inputText, height: 88)
-            self.feedbackField(title: "Processed Text", text: self.$outputText, height: 88)
-            self.feedbackField(title: "Processing Model", text: self.$processingModel, height: 40)
-            self.feedbackField(title: "Comment optional", text: self.$comment, height: 72)
+            self.feedbackField(title: "Raw Text", text: self.$projection.inputText, height: 88)
+            self.feedbackField(title: "Processed Text", text: self.$projection.outputText, height: 88)
+            self.feedbackField(title: "Processing Model", text: self.$projection.processingModel, height: 40)
+            self.feedbackField(title: "Comment optional", text: self.$projection.comment, height: 72)
 
-            if let errorMessage {
+            if let errorMessage = self.projection.errorMessage {
                 Text(errorMessage)
                     .font(.fluidSystem(size: 12, weight: .medium))
                     .foregroundStyle(self.theme.palette.readableText(.red))
@@ -884,23 +1062,22 @@ private struct TranscriptionFeedbackReportSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") {
+                    self.projection.closeReport()
                     self.dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
-                .disabled(self.isSending)
+                .disabled(self.projection.isSending)
 
                 Button {
-                    Task {
-                        await self.sendReport()
-                    }
+                    self.projection.sendReport()
                 } label: {
                     HStack(spacing: 8) {
-                        if self.isSending {
+                        if self.projection.isSending {
                             ProgressView()
                                 .controlSize(.small)
                                 .fixedSize()
                         }
-                        Text(PichiLocalization.text(self.isSending ? "Sending..." : "Send Example"))
+                        Text(PichiLocalization.text(self.projection.isSending ? "Sending..." : "Send Example"))
                     }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -911,33 +1088,14 @@ private struct TranscriptionFeedbackReportSheet: View {
         .padding(20)
         .frame(width: 520)
         .background(self.theme.palette.contentBackground)
+        .onDisappear { self.projection.closeReport() }
     }
 
     private var isSendDisabled: Bool {
-        self.isSending ||
-            (self.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                self.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) ||
-            self.processingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func sendReport() async {
-        let payload = TranscriptionFeedbackReporter.Payload(
-            rawText: self.inputText.trimmingCharacters(in: .whitespacesAndNewlines),
-            processedText: self.outputText.trimmingCharacters(in: .whitespacesAndNewlines),
-            processingModel: self.processingModel.trimmingCharacters(in: .whitespacesAndNewlines),
-            comments: self.comment.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-
-        self.isSending = true
-        self.errorMessage = nil
-        do {
-            try await TranscriptionFeedbackReporter.submit(payload)
-            self.isSending = false
-            self.onSent()
-        } catch {
-            self.errorMessage = error.localizedDescription
-            self.isSending = false
-        }
+        self.projection.isSending ||
+            (self.projection.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                self.projection.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) ||
+            self.projection.processingModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func feedbackField(title: String, text: Binding<String>, height: CGFloat) -> some View {
@@ -963,10 +1121,6 @@ private struct TranscriptionFeedbackReportSheet: View {
         }
     }
 
-    private static func reportModel(for entry: TranscriptionHistoryEntry) -> String {
-        let model = entry.processingModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return model.isEmpty ? "unknown" : model
-    }
 }
 
 private struct HistoryHoverRow<Content: View>: View {

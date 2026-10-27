@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-struct AnalyticsSystemConfiguration: Equatable {
+nonisolated struct AnalyticsSystemConfiguration: Equatable, Sendable {
     let ramGB: Int
     let chip: String
     let osVersion: String

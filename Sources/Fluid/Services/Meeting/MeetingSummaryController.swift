@@ -100,7 +100,11 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
 }
 
 @MainActor
-final class MeetingSummaryController: ObservableObject {
+final class MeetingSummaryController: ObservableObject, PrivateProfileTransitionParticipant {
+    private let privateProfile = PrivateProfileStorage.current
+    private var profileRefreshOperation: Task<Void, Never>?
+    private var profileRefreshID: UUID?
+
     @Published private(set) var installed = false
     @Published private(set) var checking = true
     @Published private(set) var downloading = false
@@ -117,6 +121,7 @@ final class MeetingSummaryController: ObservableObject {
 
     init(store: any MeetingSessionStoring = MeetingSessionStore.shared) {
         self.store = store
+        PrivateProfileService.shared.register(self)
     }
 
     var busy: Bool {
@@ -130,6 +135,19 @@ final class MeetingSummaryController: ObservableObject {
     typealias SavedSummary = MeetingSavedSummary
 
     func refresh(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String = "") async {
+        guard PrivateProfileStorage.isReadable(privateProfile) else { return }
+        let prior = profileRefreshOperation
+        prior?.cancel(); await prior?.value
+        let id = UUID()
+        let task = Task { await self.refreshBound(session: session, kind: kind, customPrompt: customPrompt) }
+        profileRefreshOperation = task
+        profileRefreshID = id
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        if profileRefreshID == id { profileRefreshOperation = nil; profileRefreshID = nil }
+    }
+
+    private func refreshBound(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String) async {
+        guard PrivateProfileStorage.isReadable(privateProfile), !Task.isCancelled else { return }
         guard !self.busy else { return }
         let generation = UUID()
         self.generation = generation
@@ -143,7 +161,7 @@ final class MeetingSummaryController: ObservableObject {
         let promptHash = kind == .custom ? MeetingSummaryInput.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)) : nil
         let snapshot = await Task.detached(priority: .utility) { () -> (Bool, SavedSummary?) in
             let installed = model.map { PrivateAIIntegrationService.isModelInstalled($0) } ?? false
-            guard let session,
+            guard let session, session.requiresEncryptedPersistence != true,
                   let directory = try? await store.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
@@ -163,6 +181,7 @@ final class MeetingSummaryController: ObservableObject {
     }
 
     func download() {
+        guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
         guard !self.busy, let model else { return }
         self.downloading = true
         self.error = nil
@@ -185,6 +204,7 @@ final class MeetingSummaryController: ObservableObject {
     }
 
     func deleteModel(asr: ASRService) {
+        guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
         guard !self.busy, !self.checking, self.installed, let model else { return }
         self.generation = UUID()
         self.deleting = true
@@ -212,6 +232,7 @@ final class MeetingSummaryController: ObservableObject {
     }
 
     func summarize(session: MeetingSession, kind: MeetingSummaryKind, route: MeetingSummaryRoute, customPrompt: String = "") {
+        guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
         guard !self.busy, !self.checking,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
@@ -240,9 +261,6 @@ final class MeetingSummaryController: ObservableObject {
                         languageCode: session.languageCode
                     )
                     try Task.checkCancellation()
-                    guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
-                        throw MeetingPostProcessingError.checkpointFailed
-                    }
                     let saved = SavedSummary(
                         transcriptHash: contentHash,
                         modelID: route.modelID,
@@ -255,9 +273,14 @@ final class MeetingSummaryController: ObservableObject {
                         promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil,
                         transcriptHashVersion: SavedSummary.currentTranscriptHashVersion
                     )
-                    try await Task.detached(priority: .utility) {
-                        try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
-                    }.value
+                    if session.requiresEncryptedPersistence != true {
+                        guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
+                            throw MeetingPostProcessingError.checkpointFailed
+                        }
+                        try await Task.detached(priority: .utility) {
+                            try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
+                        }.value
+                    }
                     self.output = text
                     self.outputProvenance = saved.provenance
                     self.outputNotice = saved.notice
@@ -279,6 +302,7 @@ final class MeetingSummaryController: ObservableObject {
         thinking: Bool,
         asr: ASRService
     ) {
+        guard PrivateProfileStorage.isReadable(privateProfile), PrivateProfileStorage.acceptsNewWork else { return }
         guard !self.busy, !self.checking, self.installed, let model,
               let selectionLock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
@@ -316,9 +340,6 @@ final class MeetingSummaryController: ObservableObject {
                     }
                     try Task.checkCancellation()
                     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MeetingPostProcessingError.invalidOutput }
-                    guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
-                        throw MeetingPostProcessingError.checkpointFailed
-                    }
                     let saved = SavedSummary(
                         transcriptHash: contentHash,
                         modelID: model.id,
@@ -332,9 +353,14 @@ final class MeetingSummaryController: ObservableObject {
                         modelName: model.displayName,
                         transcriptHashVersion: SavedSummary.currentTranscriptHashVersion
                     )
-                    try await Task.detached(priority: .utility) {
-                        try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
-                    }.value
+                    if session.requiresEncryptedPersistence != true {
+                        guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
+                            throw MeetingPostProcessingError.checkpointFailed
+                        }
+                        try await Task.detached(priority: .utility) {
+                            try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
+                        }.value
+                    }
                     self.output = text
                     self.outputProvenance = saved.provenance
                     self.outputNotice = saved.notice
@@ -353,6 +379,17 @@ final class MeetingSummaryController: ObservableObject {
 
     func cancel() {
         self.operation?.cancel()
+    }
+
+    func prepareForPrivateProfileTransition() async throws {
+        generation = UUID()
+        profileRefreshID = nil
+        let refresh = profileRefreshOperation; refresh?.cancel()
+        let task = operation; task?.cancel()
+        await refresh?.value
+        await task?.value
+        profileRefreshOperation = nil
+        operation = nil; output = ""; outputProvenance = ""; error = nil; checking = false
     }
 }
 

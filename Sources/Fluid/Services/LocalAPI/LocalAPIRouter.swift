@@ -35,6 +35,8 @@ final class LocalAPIRouter {
     }
 
     func route(_ request: LocalAPI.Request) async -> LocalAPI.Response {
+        let profile = PrivateProfileStorage.current
+        guard profile.isReadable, PrivateProfileStorage.acceptsNewWork else { return LocalAPI.error("Meetings are unavailable.", status: 503) }
         let key = RouteKey(method: request.method.uppercased(), path: request.path)
         guard let handler = self.routes[key] else {
             if self.routes.keys.contains(where: { $0.path == request.path }) {
@@ -42,7 +44,11 @@ final class LocalAPIRouter {
             }
             return LocalAPI.error("Route not found.", status: 404)
         }
-        return await handler.handle(request)
+        let response = await handler.handle(request)
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else {
+            return LocalAPI.error("Meetings are unavailable.", status: 503)
+        }
+        return response
     }
 }
 
