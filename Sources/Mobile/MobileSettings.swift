@@ -35,7 +35,7 @@ struct MobileSettingsRoot: View {
                     Label(PichiLocalization.text("Data cleanup"), systemImage: "lock.shield")
                 }.accessibilityIdentifier("settings.privacy")
                 NavigationLink(value: MobileSettingsDestination.kiosk) {
-                    Label(PichiLocalization.text("Kiosk mode"), systemImage: "lock.shield")
+                    Label(PichiLocalization.text("Restricted mode"), systemImage: "lock.shield")
                 }.accessibilityIdentifier("settings.kiosk")
             } footer: {
                 Text(PichiLocalization.text("Audio recordings and transcripts are stored on this device."))

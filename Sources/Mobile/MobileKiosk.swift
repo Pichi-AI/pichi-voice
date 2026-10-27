@@ -304,8 +304,8 @@ struct MobileKioskSettings: View {
     var body: some View {
         Form {
             Section {
-                Text(PichiLocalization.text("Configure recording, transcription and storage first. Kiosk mode keeps these settings and shows only recording controls."))
-                Text(PichiLocalization.text("To keep audio on this device, enable Save Audio and choose the recording retention period before entering kiosk mode."))
+                Text(PichiLocalization.text("Configure recording, transcription and storage first. Restricted access keeps these settings and allows only recording and your voice setup."))
+                Text(PichiLocalization.text("To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access."))
             }
             Section(PichiLocalization.text("Administrator password")) {
                 SecureField(PichiLocalization.text(access.hasPassword ? "Current password" : "Password"), text: $password)
@@ -326,7 +326,7 @@ struct MobileKioskSettings: View {
                     Text(error).foregroundStyle(theme.palette.primaryText)
                         .accessibilityIdentifier("kiosk.passwordError")
                 }
-                Button(PichiLocalization.text("Enable kiosk mode")) {
+                Button(PichiLocalization.text("Enable restricted mode")) {
                     guard canEnable else { return }
                     Task { @MainActor in
                         do {
@@ -338,11 +338,11 @@ struct MobileKioskSettings: View {
                 }.disabled(!canEnable || access.isBusy).accessibilityIdentifier("kiosk.enable")
             }.disabled(access.isBusy)
             Section {
-                Text(PichiLocalization.text("The password is required to leave kiosk mode. Kiosk mode stays enabled after restarting the app."))
+                Text(PichiLocalization.text("The password is required to restore full access. Restricted access stays enabled after restarting the app."))
                 Text(PichiLocalization.text("To keep the device in this app, also enable Guided Access in iPad or iPhone settings."))
             }
         }
-        .navigationTitle(PichiLocalization.text("Kiosk mode"))
+        .navigationTitle(PichiLocalization.text("Restricted mode"))
         .accessibilityIdentifier("kiosk.settings")
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {

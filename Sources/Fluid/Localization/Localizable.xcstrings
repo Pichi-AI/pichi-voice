@@ -56455,6 +56455,86 @@
           }
         }
       }
+    },
+    "Restricted mode": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restricted mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ограниченный режим"
+          }
+        }
+      }
+    },
+    "Enable restricted mode": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable restricted mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить ограниченный режим"
+          }
+        }
+      }
+    },
+    "Configure recording, transcription and storage first. Restricted access keeps these settings and allows only recording and your voice setup.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configure recording, transcription and storage first. Restricted access keeps these settings and allows only recording and your voice setup."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала настройте запись, расшифровку и хранение. При ограниченном доступе эти настройки сохраняются, а доступны только запись и настройка своего голоса."
+          }
+        }
+      }
+    },
+    "To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы хранить аудио на устройстве, включите сохранение аудио и выберите срок хранения перед ограничением доступа."
+          }
+        }
+      }
+    },
+    "The password is required to restore full access. Restricted access stays enabled after restarting the app.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The password is required to restore full access. Restricted access stays enabled after restarting the app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для восстановления полного доступа нужен пароль. Ограниченный доступ сохраняется после перезапуска приложения."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
