@@ -17,6 +17,7 @@ nonisolated struct PichiPublicationReceipt: Codable, Equatable, Sendable {
     let recordingID: String
     let uploadState: UploadState
     let analysisState: PichiPublicationAnalysisState
+    var billingState: PichiPublicationBillingState? = nil
 
     fileprivate func validate() throws {
         guard self.schemaVersion == 1, PichiPublicationRequest.validID(self.importID),
@@ -451,5 +452,168 @@ nonisolated struct PichiPublicationRequest: Sendable {
         do { return try PichiProtectedPublicationPayload.validate(data) }
         catch is CancellationError { throw CancellationError() }
         catch { throw PichiPublicationWireFailure.invalidRequest }
+    }
+}
+
+/// Legacy imports select an employee and assessment before the first POST. These IDs
+/// are server data, never inferred from a display name or a local speaker flag.
+nonisolated struct LegacyPublicationSelection: Codable, Equatable, Sendable {
+    let userID: String
+    let participantID: UUID
+    let criteriaIDs: [String]
+
+    func validate(represented: Set<UUID>) throws {
+        guard PichiLegacyPublicationRequest.databaseID(userID) != nil,
+              represented.contains(participantID), !criteriaIDs.isEmpty, criteriaIDs.count <= 100,
+              Set(criteriaIDs).count == criteriaIDs.count,
+              criteriaIDs.allSatisfy({ PichiLegacyPublicationRequest.databaseID($0) != nil }) else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+    }
+}
+
+nonisolated struct LegacyPublicationOptions: Equatable, Sendable {
+    struct Employee: Equatable, Sendable { let id: String; let name: String }
+    struct Criterion: Equatable, Sendable { let id: String; let name: String }
+    struct Participant: Equatable, Sendable { let id: UUID; let displayName: String }
+    let employees: [Employee]
+    let criteria: [Criterion]
+    let participants: [Participant]
+    let title: String
+}
+
+nonisolated enum PichiPublicationBillingState: String, Codable, Sendable {
+    case pending, charged, notRequired = "not_required", uncertain
+    var needsReview: Bool { self == .pending || self == .uncertain }
+}
+
+/// Pure codec for the existing cookie-authenticated route. The account service owns
+/// its isolated cookie session. Protected source bytes are embedded verbatim and the
+/// full body is frozen by the existing outbox before any HTTP attempt can start.
+nonisolated enum PichiLegacyPublicationRequest {
+    static let maximumResponseBytes = 2_097_152
+
+    static func databaseID(_ value: String) -> Int? {
+        guard !value.isEmpty, value.utf8.allSatisfy({ (48...57).contains($0) }),
+              let id = Int(value), id > 0, id <= 2_147_483_647, String(id) == value else { return nil }
+        return id
+    }
+
+    static func endpoint(origin: URL, path: String) throws -> URLRequest {
+        guard let parts = URLComponents(url: origin, resolvingAgainstBaseURL: false),
+              parts.scheme == "https", parts.host != nil, parts.user == nil, parts.password == nil,
+              parts.query == nil, parts.fragment == nil, parts.path.isEmpty || parts.path == "/",
+              path.hasPrefix("/api/"), !path.contains("?"), !path.contains("#"),
+              let url = URL(string: path, relativeTo: origin)?.absoluteURL else {
+            throw PichiPublicationWireFailure.invalidConfiguration
+        }
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+    }
+
+    static func importBody(context: AccountContext, transcriptBytes: Data,
+                           selection: LegacyPublicationSelection) throws -> Data {
+        let represented = try PichiProtectedPublicationPayload.validate(transcriptBytes)
+        try selection.validate(represented: represented)
+        guard let workspace = context.workspaceID.flatMap(databaseID),
+              let object = try JSONSerialization.jsonObject(with: transcriptBytes) as? [String: Any],
+              let title = object["title"] as? String, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+        struct Binding: Encodable { let title: String; let workspaceId: Int; let userId: Int; let managerSpeakerId: String; let criteriaIds: [Int] }
+        let binding = Binding(title: title, workspaceId: workspace, userId: databaseID(selection.userID)!,
+            managerSpeakerId: selection.participantID.uuidString,
+            criteriaIds: selection.criteriaIDs.map { databaseID($0)! })
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var body = try encoder.encode(binding)
+        guard body.last == 125 else { throw PichiPublicationWireFailure.invalidRequest }
+        body.removeLast(); body.append(Data(",\"transcriptImport\":".utf8))
+        body.append(transcriptBytes); body.append(125)
+        guard body.count <= PichiPublicationRequest.maximumMultipartBytes else { throw PichiPublicationWireFailure.invalidRequest }
+        return body
+    }
+
+    static func importSource(origin: URL, frozenBody: Data) throws -> URLRequest {
+        guard !frozenBody.isEmpty, frozenBody.count <= PichiPublicationRequest.maximumMultipartBytes else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+        var request = try endpoint(origin: origin, path: "/api/recordings/transcript")
+        request.httpMethod = "POST"; request.httpBody = frozenBody
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return request
+    }
+
+    static func status(origin: URL, receipt: PichiPublicationReceipt) throws -> URLRequest {
+        guard databaseID(receipt.recordingID) != nil else { throw PichiPublicationWireFailure.invalidRequest }
+        return try endpoint(origin: origin, path: "/api/recordings/" + receipt.recordingID)
+    }
+
+    static func checkedJSON(_ response: PichiPublicationHTTPResponse) throws -> Any {
+        guard response.body.count <= maximumResponseBytes else { throw PichiPublicationWireFailure.responseTooLarge }
+        guard response.status == 200 || response.status == 202 else { throw remoteFailure(response) }
+        guard let object = try? JSONSerialization.jsonObject(with: response.body) else { throw PichiPublicationWireFailure.invalidResponse }
+        return object
+    }
+
+    static func receipt(from response: PichiPublicationHTTPResponse, context: AccountContext,
+                        transcriptBytes: Data, selection: LegacyPublicationSelection,
+                        expected: PichiPublicationReceipt? = nil) throws -> PichiPublicationReceipt {
+        guard let object = try checkedJSON(response) as? [String: Any],
+              let id = jsonID(object["id"]), let workspace = jsonID(object["workspaceId"]), workspace == context.workspaceID,
+              jsonID(object["uploadedById"]) == context.identity.internalUserID,
+              jsonID(object["userId"]) == selection.userID,
+              let manager = object["managerSpeakerId"] as? String, UUID(uuidString: manager) == selection.participantID,
+              let criteria = object["criteriaIds"] as? [Any], criteria.compactMap(jsonID).count == criteria.count,
+              Set(criteria.compactMap(jsonID)) == Set(selection.criteriaIDs),
+              let source = try JSONSerialization.jsonObject(with: transcriptBytes) as? NSDictionary,
+              let acceptedSource = object["transcriptImport"] as? NSDictionary, acceptedSource == source,
+              object["title"] as? String == source["title"] as? String,
+              object["deletedAt"] == nil || object["deletedAt"] is NSNull,
+              let sessionID = source["sessionID"] as? String,
+              object["importSourceId"] as? String == sessionID.lowercased(),
+              expected.map({ $0.importID == sessionID.lowercased() && $0.recordingID == id }) != false else {
+            throw PichiPublicationWireFailure.invalidResponse
+        }
+        let billing = (object["importBillingStatus"] as? String).flatMap(PichiPublicationBillingState.init(rawValue:))
+        // A missing billing status means the deployed route predates safe reconciliation.
+        // Acceptance is retained, but analysis is never reported successful from that reply.
+        let safeBilling = billing ?? .uncertain
+        let state: PichiPublicationAnalysisState
+        if object["transcriptionStatus"] as? String == "failed" { state = .failed }
+        else if safeBilling.needsReview { state = .queued }
+        else if object["processingStage"] as? String == "analyzing" { state = .running }
+        else if object["transcriptionStatus"] as? String == "completed",
+                let results = object["evaluationResults"] as? [String: Any],
+                let evaluations = results["evaluations"] as? [[String: Any]],
+                Set(selection.criteriaIDs).isSubset(of: Set(evaluations.compactMap { jsonID($0["criterion_id"]) })) {
+            state = .succeeded
+        } else { state = .queued }
+        var receipt = PichiPublicationReceipt(schemaVersion: 1, importID: sessionID.lowercased(), recordingID: id,
+            uploadState: .accepted, analysisState: state)
+        receipt.billingState = safeBilling
+        return receipt
+    }
+
+    static func remoteFailure(_ response: PichiPublicationHTTPResponse) -> PichiPublicationRemoteFailure {
+        let action: PichiPublicationRemoteAction
+        switch response.status {
+        case 400, 413: action = .stopAndShowValidation
+        case 401: action = .pauseForReauthentication
+        case 402: action = .pauseForAccountReview
+        case 403: action = .pauseForPermissionReview
+        case 409: action = .pauseForConflictReview
+        case 429, 500, 502, 503, 504: action = .boundedRetry
+        default: action = .pauseForReceiptReview
+        }
+        return .init(action: action, httpStatus: response.status, code: nil,
+            retryAfter: action == .boundedRetry ? PichiPublicationRetryPolicy.parseRetryAfter(response.retryAfter, now: Date()) : nil)
+    }
+
+    static func jsonID(_ value: Any?) -> String? {
+        guard let value = value as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(),
+              value.doubleValue.isFinite, value.doubleValue.rounded() == value.doubleValue,
+              value.doubleValue > 0, value.doubleValue <= 2_147_483_647 else { return nil }
+        return String(value.intValue)
     }
 }

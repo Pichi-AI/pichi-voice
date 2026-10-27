@@ -23,7 +23,7 @@ nonisolated struct PichiPublicationOutboxRecord: Codable, Equatable, Sendable {
     let schemaVersion: Int
     let sessionID: MeetingSessionID
     let owner: MeetingProfileOwnership
-    let configuration: AccountConfiguration
+    let configuration: AccountPublicationConfiguration
     let operationID: UUID
     let sourceRevision: Int
     let automaticConsent: Bool
@@ -38,6 +38,8 @@ nonisolated struct PichiPublicationOutboxRecord: Codable, Equatable, Sendable {
     var retryAfterRequiresReview: Bool?
     var receipt: PichiPublicationReceipt?
     var receiptPauseReason: PichiPublicationPauseReason?
+    var legacySelection: LegacyPublicationSelection?
+    var legacyBodySHA256: String?
 
     var originalAssessment: PichiPublicationAssessment { .init(participantID: nil, criteriaIDs: []) }
     var multipartBoundary: String { "pichi-import-" + operationID.uuidString }
@@ -52,12 +54,16 @@ actor PichiPublicationOutboxStore {
     private static let maximumRecordBytes = 1_048_576
     private static let maximumAttemptCount = 10_000
     private let profile: PrivateProfileSnapshot
-    private let configuration: AccountConfiguration
+    private let configuration: AccountPublicationConfiguration
     private var recovered = false
 
-    init(profile: PrivateProfileSnapshot, configuration: AccountConfiguration) {
+    init(profile: PrivateProfileSnapshot, destination: AccountPublicationConfiguration) {
         self.profile = profile
-        self.configuration = configuration
+        self.configuration = destination
+    }
+
+    init(profile: PrivateProfileSnapshot, configuration: AccountConfiguration) {
+        self.init(profile: profile, destination: .oidc(configuration))
     }
 
     /// A durable false-consent marker prevents a repeated callback or later opt-in from
@@ -137,11 +143,33 @@ actor PichiPublicationOutboxStore {
     func beginAttempt(id: MeetingSessionID, now: Date = Date()) throws -> PichiPublicationOutboxRecord {
         try self.withDirectories { directories in
             var record = try self.required(id, directories)
+            if case .legacy = record.configuration, record.legacySelection == nil { throw PichiPublicationOutboxFailure.invalidTransition }
             guard now.timeIntervalSince1970.isFinite, record.transcriptBytes != nil,
                   record.state == .queued || (record.state == .retryScheduled && (record.nextAttemptAt ?? .distantFuture) <= now),
                   record.retryAfterRequiresReview != true, (record.retryNotBefore ?? .distantPast) <= now,
                   record.attemptCount < Self.maximumAttemptCount else { throw PichiPublicationOutboxFailure.invalidTransition }
             record.attemptCount += 1; record.state = .sending; record.nextAttemptAt = nil; record.retryNotBefore = nil; record.pauseReason = nil
+            try self.commit(record, directories)
+            return record
+        }
+    }
+
+    /// The first explicit legacy choice wins. The exact body is deterministic from the
+    /// already-frozen source and this binding, and its durable digest proves every replay.
+    func freezeLegacySelection(id: MeetingSessionID, selection: LegacyPublicationSelection) throws -> PichiPublicationOutboxRecord {
+        try self.withDirectories { directories in
+            var record = try self.required(id, directories)
+            guard case .legacy = record.configuration, let bytes = record.transcriptBytes else {
+                throw PichiPublicationOutboxFailure.invalidSource
+            }
+            if let existing = record.legacySelection {
+                guard existing == selection else { throw PichiPublicationOutboxFailure.receiptConflict }
+                return record
+            }
+            guard record.attemptCount == 0, record.receipt == nil else { throw PichiPublicationOutboxFailure.invalidTransition }
+            let body = try PichiLegacyPublicationRequest.importBody(context: self.context(), transcriptBytes: bytes, selection: selection)
+            record.legacySelection = selection
+            record.legacyBodySHA256 = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
             try self.commit(record, directories)
             return record
         }
@@ -290,12 +318,11 @@ actor PichiPublicationOutboxStore {
     private func owner() throws -> MeetingProfileOwnership {
         do { try configuration.validate() } catch { throw PichiPublicationOutboxFailure.invalidScope }
         guard !profile.isGuest, let context = profile.context,
-              context.identity.issuer == configuration.issuer.absoluteString,
+              configuration.matches(context.identity),
               let organization = context.organizationID, let workspace = context.workspaceID,
-              [profile.id, context.identity.subject, context.identity.internalUserID, organization, workspace].allSatisfy(Self.validID)
+              ([profile.id, organization, workspace] + context.identity.storageComponents).allSatisfy(Self.validID)
         else { throw PichiPublicationOutboxFailure.invalidScope }
-        return .init(profileID: profile.id, issuer: context.identity.issuer, subject: context.identity.subject,
-            internalUserID: context.identity.internalUserID, organizationID: organization, workspaceID: workspace)
+        return .init(profile: profile)
     }
 
     private static func validID(_ value: String) -> Bool {
@@ -319,9 +346,24 @@ actor PichiPublicationOutboxStore {
         }
         if let bytes = record.transcriptBytes, let digest = record.sourceSHA256 {
             do {
-                _ = try PichiPublicationRequest.importSource(configuration: configuration, context: self.context(),
-                    operationID: record.operationID, transcriptBytes: bytes, sourceSHA256: digest,
-                    assessment: record.originalAssessment, boundary: record.multipartBoundary)
+                guard SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == digest else {
+                    throw PichiPublicationOutboxFailure.corruptRecord
+                }
+                switch configuration {
+                case .oidc(let oidc):
+                    guard record.legacySelection == nil, record.legacyBodySHA256 == nil else { throw PichiPublicationOutboxFailure.corruptRecord }
+                    _ = try PichiPublicationRequest.importSource(configuration: oidc, context: self.context(),
+                        operationID: record.operationID, transcriptBytes: bytes, sourceSHA256: digest,
+                        assessment: record.originalAssessment, boundary: record.multipartBoundary)
+                case .legacy:
+                    _ = try PichiProtectedPublicationPayload.validate(bytes)
+                    if let selection = record.legacySelection {
+                        let body = try PichiLegacyPublicationRequest.importBody(context: self.context(), transcriptBytes: bytes, selection: selection)
+                        guard record.legacyBodySHA256 == SHA256.hash(data: body).map({ String(format: "%02x", $0) }).joined() else {
+                            throw PichiPublicationOutboxFailure.corruptRecord
+                        }
+                    } else if record.legacyBodySHA256 != nil || record.attemptCount > 0 { throw PichiPublicationOutboxFailure.corruptRecord }
+                }
                 guard let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
                       let sourceID = object["sessionID"] as? String, UUID(uuidString: sourceID) == id else {
                     throw PichiPublicationOutboxFailure.corruptRecord
@@ -448,6 +490,7 @@ actor PichiPublicationOutboxStore {
         lhs.sessionID == rhs.sessionID && lhs.operationID == rhs.operationID && lhs.owner == rhs.owner
             && lhs.configuration == rhs.configuration && lhs.automaticConsent == rhs.automaticConsent
             && lhs.transcriptBytes == rhs.transcriptBytes && lhs.sourceSHA256 == rhs.sourceSHA256
+            && lhs.legacySelection == rhs.legacySelection && lhs.legacyBodySHA256 == rhs.legacyBodySHA256
     }
 
     private func readPending(_ directories: Directories) throws -> [PichiPublicationOutboxRecord] {

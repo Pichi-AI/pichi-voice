@@ -319,6 +319,66 @@ extension PichiPublicationConsentTests {
         do { _ = try await http.perform(authorized); check(false, "Closed executor cannot reopen") }
         catch let error as PichiPublicationNetworkFailure { check(error == .shutdown, "Joined shutdown closes executor admission") }
         checks += try await checkAssessmentOptions(fixtures: fixtures.deletingLastPathComponent().appendingPathComponent("PichiAssessmentOptionsV1"))
+        // The separate legacy codec shares protected source validation while retaining
+        // its actual cookie-session JSON protocol and pre-upload employee selection.
+        let legacyOrigin = URL(string: "https://legacy.example")!
+        let legacySelection = LegacyPublicationSelection(userID: "123", participantID: participantID, criteriaIDs: ["31"])
+        let legacyBody = try PichiLegacyPublicationRequest.importBody(context: context, transcriptBytes: source, selection: legacySelection)
+        let legacyPost = try PichiLegacyPublicationRequest.importSource(origin: legacyOrigin, frozenBody: legacyBody)
+        check(legacyPost.httpMethod == "POST" && legacyPost.url?.absoluteString == "https://legacy.example/api/recordings/transcript"
+              && legacyPost.value(forHTTPHeaderField: "Authorization") == nil && legacyPost.value(forHTTPHeaderField: "Cookie") == nil,
+              "Legacy wire uses the existing JSON route without serializing session credentials")
+        let legacyReplayBody = try PichiLegacyPublicationRequest.importBody(context: context, transcriptBytes: source, selection: legacySelection)
+        check(legacyBody.range(of: source) != nil && legacyBody == legacyReplayBody,
+              "Every legacy replay retains exact protected bytes and deterministic binding")
+        let sourceID = (sourceObject["sessionID"] as! String).lowercased()
+        var legacyRow: [String: Any] = ["id": 101, "title": sourceObject["title"]!, "workspaceId": 9, "userId": 123, "uploadedById": 123,
+            "criteriaIds": [31], "managerSpeakerId": participantID.uuidString, "transcriptImport": sourceObject,
+            "importSourceId": sourceID, "transcriptionStatus": "completed", "processingStage": NSNull(),
+            "evaluationResults": NSNull(), "importBillingStatus": "charged"]
+        func legacyReceipt(_ row: [String: Any], status: Int = 202) throws -> PichiPublicationReceipt {
+            try PichiLegacyPublicationRequest.receipt(from: .init(status: status, body: json(row), retryAfter: nil),
+                context: context, transcriptBytes: source, selection: legacySelection)
+        }
+        let legacyAccepted = try legacyReceipt(legacyRow)
+        check(legacyAccepted.recordingID == "101" && legacyAccepted.importID == sourceID && legacyAccepted.analysisState == .queued,
+              "A completed source with no assessment result is accepted, not successful analysis")
+        check(try legacyReceipt(legacyRow, status: 200) == legacyAccepted, "An idempotent legacy replay retains the same receipt")
+        legacyRow["evaluationResults"] = ["evaluations": [["criterion_id": 31, "score": 5, "reasoning": "Synthetic"]]]
+        check(try legacyReceipt(legacyRow).analysisState == .succeeded, "Legacy success requires a result for every selected criterion")
+        legacyRow["evaluationResults"] = ["evaluations": [["criterion_id": 32, "score": 5]]]
+        check(try legacyReceipt(legacyRow).analysisState == .queued, "Unrelated assessment cannot satisfy the selected criteria")
+        legacyRow["importBillingStatus"] = "pending"
+        let pendingBilling = try legacyReceipt(legacyRow)
+        check(pendingBilling.billingState?.needsReview == true && pendingBilling.analysisState != .succeeded,
+              "Accepted pending billing requires review without another debit")
+        legacyRow.removeValue(forKey: "importBillingStatus")
+        check(try legacyReceipt(legacyRow).billingState == .uncertain, "Old deployed routes cannot imply safe billing reconciliation")
+        legacyRow["transcriptionStatus"] = "failed"
+        check(try legacyReceipt(legacyRow).analysisState == .failed, "Explicit server failure is a separate terminal analysis outcome")
+        legacyRow["uploadedById"] = 124
+        try rejects(.invalidResponse, "Another account's row cannot become this source's receipt") { _ = try legacyReceipt(legacyRow) }
+        legacyRow["uploadedById"] = 123; legacyRow["workspaceId"] = 10
+        try rejects(.invalidResponse, "A different destination workspace is rejected") { _ = try legacyReceipt(legacyRow) }
+        legacyRow["workspaceId"] = 9; legacyRow["managerSpeakerId"] = UUID().uuidString
+        try rejects(.invalidResponse, "The selected source speaker is immutable") { _ = try legacyReceipt(legacyRow) }
+        try rejects(.invalidRequest, "Legacy cannot upload with empty criteria") {
+            _ = try PichiLegacyPublicationRequest.importBody(context: context, transcriptBytes: source,
+                selection: .init(userID: "123", participantID: participantID, criteriaIDs: []))
+        }
+        try rejects(.invalidRequest, "An unrepresented source speaker cannot be selected") {
+            _ = try PichiLegacyPublicationRequest.importBody(context: context, transcriptBytes: source,
+                selection: .init(userID: "123", participantID: UUID(), criteriaIDs: ["31"]))
+        }
+        for (status, action) in [(401, PichiPublicationRemoteAction.pauseForReauthentication), (403, .pauseForPermissionReview),
+            (409, .pauseForConflictReview), (402, .pauseForAccountReview), (429, .boundedRetry), (503, .boundedRetry)] {
+            let failure = PichiLegacyPublicationRequest.remoteFailure(.init(status: status,
+                body: Data("PRIVATE SERVER PROSE".utf8), retryAfter: "30"))
+            check(failure.action == action && !String(describing: failure).contains("PRIVATE"),
+                  "Legacy errors retain bounded action/status while discarding server prose")
+        }
+        check(PichiLegacyPublicationRequest.databaseID("01") == nil && PichiLegacyPublicationRequest.databaseID("2147483648") == nil,
+              "Legacy database IDs cannot smuggle path syntax or exceed server bounds")
         return checks
     }
 }

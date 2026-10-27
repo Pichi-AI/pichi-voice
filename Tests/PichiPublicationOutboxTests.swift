@@ -30,7 +30,7 @@ struct PichiPublicationOutboxTests {
         let identityA = identity
         let a = try profile("A")
         let store = PichiPublicationOutboxStore(profile: a, configuration: configuration)
-        func source(id: UUID = UUID(), text: String = "Synthetic protected contact [PERSON].") throws -> PichiProtectedPublicationSource {
+        func source(id: UUID = UUID(), text: String = "Synthetic protected contact [PERSON].", participantID: UUID? = nil) throws -> PichiProtectedPublicationSource {
             let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
                 machTimebaseDenominator: 1, firstPresentationTime: nil)
             var session = MeetingSession(id: id, configuration: .init(mode: .inRoom, title: "Synthetic outbox Ёё",
@@ -38,9 +38,13 @@ struct PichiPublicationOutboxTests {
                 startedAt: Date(timeIntervalSince1970: 1_700_000_000), timebase: timebase)
             session.state = .completed; session.endedAt = session.startedAt.addingTimeInterval(5)
             session.piiRedactionEnabled = true; session.transcriptIsComplete = true
+            if let participantID {
+                session.speakers = [.init(id: participantID, displayName: "Synthetic Ёё", diarizationClusterID: nil,
+                    trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
+            }
             session.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 1),
-                end: .init(value: 5, timescale: 1), sourceTrackID: UUID(), speakerID: nil, text: text,
-                revision: 0, status: .final, overlap: .none, completeness: .complete, attributionState: .unassigned)]
+                end: .init(value: 5, timescale: 1), sourceTrackID: UUID(), speakerID: participantID, text: text,
+                revision: 0, status: .final, overlap: .none, completeness: .complete, attributionState: participantID == nil ? .unassigned : .assigned)]
             return try .prepare(for: session)
         }
         func receipt(_ state: PichiPublicationAnalysisState = .needsParticipant, importID: String = "import-A") -> PichiPublicationReceipt {
@@ -313,6 +317,47 @@ struct PichiPublicationOutboxTests {
         let unrepresentable = PichiPublicationOutboxStore(profile: retryProfile, configuration: configuration)
         try await rejects(.invalidTransition, "An unrepresentable server deadline remains a review pause after restart") {
             _ = try await unrepresentable.explicitRetry(id: retrySource.sessionID, now: .distantFuture)
+        }
+        let legacyOrigin = URL(string: "https://legacy.example")!
+        let legacyConfiguration = LegacyAccountConfiguration(apiBaseURL: legacyOrigin, bundleIdentifier: "ai.synthetic.voice")
+        let legacyDirectory = root.appendingPathComponent("legacy", isDirectory: true)
+        try manager.createDirectory(at: legacyDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let legacyContext = AccountContext(identity: .legacy(origin: legacyOrigin, internalUserID: "123"),
+            organizationID: "17", workspaceID: "9", generation: UUID())
+        let legacyProfile = PrivateProfileSnapshot(id: "synthetic-legacy", context: legacyContext, generation: UUID(),
+            rootDirectory: legacyDirectory, legacyRootDirectory: root, isReadable: true)
+        let legacyStore = PichiPublicationOutboxStore(profile: legacyProfile, destination: .legacy(legacyConfiguration))
+        let representedID = UUID(), legacySource = try source(participantID: representedID)
+        let legacySelection = LegacyPublicationSelection(userID: "123", participantID: representedID, criteriaIDs: ["31"])
+        _ = try await legacyStore.capture(id: legacySource.sessionID, automaticConsent: true)
+        _ = try await legacyStore.installSource(id: legacySource.sessionID, source: legacySource)
+        let frozen = try await legacyStore.freezeLegacySelection(id: legacySource.sessionID, selection: legacySelection)
+        check(frozen.legacySelection == legacySelection && frozen.legacyBodySHA256?.count == 64,
+              "Explicit legacy selection and deterministic request digest are durable before an attempt")
+        check(try await legacyStore.freezeLegacySelection(id: legacySource.sessionID, selection: legacySelection) == frozen,
+              "The same legacy choice reuses its immutable request")
+        try await rejects(.receiptConflict, "A changed employee cannot overwrite the original request") {
+            _ = try await legacyStore.freezeLegacySelection(id: legacySource.sessionID,
+                selection: .init(userID: "124", participantID: representedID, criteriaIDs: ["31"]))
+        }
+        _ = try await legacyStore.beginAttempt(id: legacySource.sessionID)
+        let legacyReopened = PichiPublicationOutboxStore(profile: legacyProfile, destination: .legacy(legacyConfiguration))
+        let legacyUncertain = try await legacyReopened.record(id: legacySource.sessionID)!
+        check(legacyUncertain.pauseReason == .uncertainDelivery && legacyUncertain.legacySelection == legacySelection
+            && legacyUncertain.legacyBodySHA256 == frozen.legacyBodySHA256 && legacyUncertain.transcriptBytes == frozen.transcriptBytes,
+              "Lost-response recovery retains the exact source and selected assessment")
+        let legacyConsentDirectory = legacyDirectory.appendingPathComponent("Consent", isDirectory: true)
+        try manager.createDirectory(at: legacyConsentDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let legacyConsent = PichiPublicationConsentStore(directory: legacyConsentDirectory, destination: .legacy(legacyConfiguration))
+        check(try await !legacyConsent.automaticPublicationEnabled(for: legacyContext), "Legacy consent defaults off")
+        try await legacyConsent.setCloudSyncEnabled(true, for: legacyContext)
+        check(try await legacyConsent.automaticPublicationEnabled(for: legacyContext), "Explicit legacy consent uses the same private setting store")
+        let otherLegacyContext = AccountContext(identity: .legacy(origin: legacyOrigin, internalUserID: "124"),
+            organizationID: "17", workspaceID: "9", generation: UUID())
+        check(try await !legacyConsent.automaticPublicationEnabled(for: otherLegacyContext), "Another legacy account cannot inherit consent")
+        try mutate(location(legacyProfile, legacySource.sessionID)) { $0["legacyBodySHA256"] = String(repeating: "0", count: 64) }
+        try await rejects(.corruptRecord, "A changed frozen request digest fails closed") {
+            _ = try await legacyReopened.record(id: legacySource.sessionID)
         }
         print("Pichi publication outbox: \(checks) synthetic checks passed")
         let facadeChecks = try await Self.checkCloudPublicationService(root: root.appendingPathComponent("facade", isDirectory: true))

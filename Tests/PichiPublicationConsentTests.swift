@@ -174,6 +174,6 @@ struct PichiPublicationConsentTests {
         check(try await store.automaticPublicationEnabled(for: a), "An interrupted temporary file cannot replace the last complete setting")
         print("Publication consent tests passed: \(checks) checks; synthetic account/configuration/filesystem inputs only")
         let wireChecks = try await Self.checkPublicationWire(fixtures: URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true))
-        print("Publication wire tests passed: \(wireChecks) checks; frozen W2 fixtures only, no network or server acceptance")
+        print("Publication wire tests passed: \(wireChecks) checks; frozen W2 fixtures and synthetic legacy replies, no network or server acceptance")
     }
 }

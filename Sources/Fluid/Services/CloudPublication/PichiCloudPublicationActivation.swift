@@ -56,7 +56,7 @@ import Foundation
             // @Published notifies from willSet. Capture committed values on the next turn.
             await Task.yield()
             guard !Task.isCancelled, !self.closed, self.revision == expectedRevision else { return }
-            guard self.account.configuration != nil, let context = self.account.context else {
+            guard self.account.isConfigured, let context = self.account.context else {
                 try? await self.service.refresh() // Clears any previous owner's presentation.
                 return
             }

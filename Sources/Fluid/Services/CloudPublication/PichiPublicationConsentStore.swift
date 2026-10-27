@@ -11,7 +11,7 @@ nonisolated enum PichiPublicationConsentFailure: String, Error, Sendable {
 /// before reading or changing consent. This store has no account selection or capture hook.
 actor PichiPublicationConsentStore {
     private nonisolated struct Scope: Codable, Equatable {
-        let configuration: AccountConfiguration
+        let configuration: AccountPublicationConfiguration
         let identity: AccountIdentity
         let organizationID: String
         let workspaceID: String
@@ -25,12 +25,16 @@ actor PichiPublicationConsentStore {
     }
 
     private let directory: URL
-    private let configuration: AccountConfiguration?
+    private let configuration: AccountPublicationConfiguration?
     private static let maximumRecordBytes = 16_384
 
-    init(directory: URL, configuration: AccountConfiguration?) {
+    init(directory: URL, destination: AccountPublicationConfiguration?) {
         self.directory = directory
-        self.configuration = configuration
+        self.configuration = destination
+    }
+
+    init(directory: URL, configuration: AccountConfiguration?) {
+        self.init(directory: directory, destination: configuration.map(AccountPublicationConfiguration.oidc))
     }
 
     /// Missing trusted configuration, an unselected workspace or an absent record means off.
@@ -108,8 +112,8 @@ actor PichiPublicationConsentStore {
         guard let organizationID = context.organizationID, let workspaceID = context.workspaceID else {
             throw PichiPublicationConsentFailure.workspaceUnavailable
         }
-        let identifiers = [context.identity.subject, context.identity.internalUserID, organizationID, workspaceID]
-        guard context.identity.issuer == configuration.issuer.absoluteString,
+        let identifiers = context.identity.storageComponents + [organizationID, workspaceID]
+        guard configuration.matches(context.identity),
               identifiers.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                   && $0.utf8.count <= 512 && $0.rangeOfCharacter(from: .controlCharacters) == nil }) else {
             throw PichiPublicationConsentFailure.invalidScope
