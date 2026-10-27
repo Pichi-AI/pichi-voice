@@ -226,7 +226,8 @@ final class MobileCloudInteraction: ObservableObject {
         guard self.action == nil else { return nil }
         self.action = action; self.failed = false
         let task = publications.start(affectsBusy: false, report: { [weak self] error in
-            if error as? AccountError != .staleOperation, error as? AccountError != .cancelled {
+            if error as? AccountError != .staleOperation, error as? AccountError != .cancelled,
+               !(error is ProtectedDataAccessError) {
                 self?.failed = true
             }
         }, finished: { self.action = nil }) { admission in

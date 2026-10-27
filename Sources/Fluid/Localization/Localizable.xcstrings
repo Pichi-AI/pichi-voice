@@ -58663,13 +58663,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The local recording is deleted only after the server confirms receipt. While the server is unavailable, an encrypted local copy is kept and delivery is retried."
+            "value": "Applies to new recordings. The local recording is deleted only after the server confirms receipt. While the server is unavailable, an encrypted local copy is kept and delivery is retried."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Локальная запись удаляется только после подтверждения приёма сервером. Пока сервер недоступен, зашифрованная копия остаётся на устройстве, а отправка повторяется."
+            "value": "Применяется к новым записям. Локальная запись удаляется только после подтверждения приёма сервером. Пока сервер недоступен, зашифрованная копия остаётся на устройстве, а отправка повторяется."
           }
         }
       }
