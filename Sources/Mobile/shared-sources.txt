@@ -2,6 +2,7 @@
 Sources/Fluid/Account/AccountComposition.swift
 Sources/Fluid/Account/AccountDomain.swift
 Sources/Fluid/Account/AccountLegacyTransport.swift
+Sources/Fluid/Account/AccountPublicationConfiguration.swift
 Sources/Fluid/Account/AccountHTTPTransport.swift
 Sources/Fluid/Account/AccountJWTValidator.swift
 Sources/Fluid/Account/AccountKeychainStore.swift

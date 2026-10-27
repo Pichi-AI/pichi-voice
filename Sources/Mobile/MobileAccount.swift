@@ -103,7 +103,8 @@ final class MobileAccountInteraction: ObservableObject {
         begin(.guest) {
             // Restoration retains signedOut while doing work. Explicit guest choice
             // must join all shared account work, rather than infer it from view state.
-            await self.session.logout()
+            if self.session.isLegacySession { await self.session.retireLegacySession() }
+            else { await self.session.logout() }
             await previous?.value
             guard self.session.context == nil,
                   self.session.presentationError == nil || self.session.presentationError == .revocationUnavailable,
