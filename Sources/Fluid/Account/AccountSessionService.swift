@@ -12,6 +12,7 @@ import Foundation
     let legacyConfiguration: LegacyAccountConfiguration?
     private let legacyTransport: (any LegacyAccountTransporting)?
     private var legacySessionActive = false
+    private var legacyRemoteRevocationRequested = false
     var isConfigured: Bool { configuration != nil || legacyConfiguration != nil }
     var isLegacySession: Bool { legacyConfiguration != nil }
     var legacyLogoutRevokesAllSessions: Bool { isLegacySession }
@@ -81,7 +82,7 @@ import Foundation
     /// Explicit person switch requests a fresh browser interaction and rejects the prior
     /// verified identity if a federated provider nevertheless returns it without a choice.
     func switchPerson() async {
-        if isLegacySession { await logout(); return }
+        if isLegacySession { await retireLegacySession(); return }
         let previousIdentity = context?.identity ?? grant?.identity
         await runAuthenticationCommand(logoutFirst: true,
             requiresExplicitIdentity: true, excluding: previousIdentity)
@@ -218,7 +219,7 @@ import Foundation
 
     func cancelSignIn() async {
         guard authenticationCommand != nil || state == .signingIn else { return }
-        await logout()
+        if isLegacySession { await retireLegacySession() } else { await logout() }
         if !cleanupRequired { presentationError = nil }
     }
 
@@ -314,17 +315,27 @@ import Foundation
 
     /// Device logout only. Concurrent callers join the same cleanup. A durable nonsecret marker
     /// prevents a failed Keychain deletion from restoring a deliberately logged-out grant on restart.
-    func logout() async {
+    func logout() async { await retireSession(revokeLegacyRemote: true) }
+
+    /// Disconnect this device without invoking the server endpoint that revokes all
+    /// devices. Used by reconnect, cancellation and the explicit guest continuation.
+    func retireLegacySession() async {
+        guard isLegacySession else { return }
+        await retireSession(revokeLegacyRemote: false)
+    }
+
+    private func retireSession(revokeLegacyRemote: Bool) async {
         let command = authenticationCommand
         command?.task.cancel()
-        await logoutSession()
+        await logoutSession(revokeLegacyRemote: revokeLegacyRemote)
         await command?.task.value
         if let command, authenticationCommand?.id == command.id { authenticationCommand = nil }
     }
 
     /// Joined profile/credential cleanup only. This must never await authenticationCommand:
     /// that command may itself be suspended on this logout task during its preflight.
-    private func logoutSession() async {
+    private func logoutSession(revokeLegacyRemote: Bool = true) async {
+        if revokeLegacyRemote { legacyRemoteRevocationRequested = true }
         if let logoutTask { await logoutTask.value; return }
         boundaryInProgress = true; generation = UUID()
         let task = Task { @MainActor in await self.performLogout() }
@@ -357,12 +368,13 @@ import Foundation
         }
         latestDeviceRefreshToken = nil
         if let legacyTransport {
-            if legacySessionActive {
+            if legacySessionActive && legacyRemoteRevocationRequested {
                 do { try await legacyTransport.logout() }
                 catch { if presentationError == nil { presentationError = .revocationUnavailable } }
             }
             await legacyTransport.clearSession()
             legacySessionActive = false
+            legacyRemoteRevocationRequested = false
         }
     }
 
@@ -431,7 +443,7 @@ extension AccountSessionService {
         guard authenticationCommand == nil, !isShuttingDown else { presentationError = .busy; return }
         let commandID = UUID()
         let task = Task { @MainActor in
-            if self.state == .reauthenticationRequired { await self.logoutSession() }
+            if self.state == .reauthenticationRequired { await self.logoutSession(revokeLegacyRemote: false) }
             guard !Task.isCancelled, self.authenticationCommand?.id == commandID else { return }
             guard self.canAdmitSignIn, self.ownedOperation == nil, self.context == nil else {
                 self.presentationError = self.cleanupRequired ? .credentialsUnavailable : .isolationRequired; return
@@ -458,7 +470,7 @@ extension AccountSessionService {
             self.ownedOperation = OwnedOperation(id: operationID, kind: .admission, task: operation)
             await withTaskCancellationHandler { _ = try? await operation.value } onCancel: { operation.cancel() }
             if self.ownedOperation?.id == operationID { self.ownedOperation = nil }
-            if Task.isCancelled { await self.logoutSession() }
+            if Task.isCancelled { await self.logoutSession(revokeLegacyRemote: false) }
         }
         authenticationCommand = AuthenticationCommand(id: commandID, task: task)
         await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }

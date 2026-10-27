@@ -33,6 +33,8 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
     private var cookie: HTTPCookie?
     private var active: [UUID: Task<LegacyAccountHTTPResponse, Error>] = [:]
     private var closed = false
+    private var sessionGeneration = UUID()
+    private var clearing: Task<Void, Never>?
 
     init(configuration: LegacyAccountConfiguration, sessionConfiguration: URLSessionConfiguration? = nil) throws {
         try configuration.validate()
@@ -108,10 +110,14 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
         if cookie != nil { _ = try await checked(path: "/api/auth/logout", method: "POST") }
     }
     func clearSession() async {
+        if let clearing { await clearing.value; return }
+        sessionGeneration = UUID(); cookie = nil
         let tasks = Array(active.values)
         tasks.forEach { $0.cancel() }
-        for task in tasks { _ = try? await task.value }
-        cookie = nil
+        let task = Task { for request in tasks { _ = try? await request.value } }
+        clearing = task
+        await task.value
+        clearing = nil
     }
     func shutdown() async { closed = true; await clearSession(); session.invalidateAndCancel() }
 
@@ -141,7 +147,7 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
 
     func perform(_ original: URLRequest) async throws -> LegacyAccountHTTPResponse {
         try Task.checkCancellation()
-        guard !closed, active.count < 4 else { throw AccountError.busy }
+        guard !closed, clearing == nil, active.count < 4 else { throw AccountError.busy }
         try validate(original)
         var request = original
         if let cookie {
@@ -150,7 +156,7 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
             }
             request.setValue("auth_token=" + cookie.value, forHTTPHeaderField: "Cookie")
         }
-        let id = UUID(), session = self.session
+        let id = UUID(), session = self.session, captured = sessionGeneration
         let task = Task<LegacyAccountHTTPResponse, Error> {
             do {
                 let (stream, response) = try await session.bytes(for: request)
@@ -163,7 +169,7 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
                     result.append(byte)
                 }
                 try Task.checkCancellation()
-                try await self.receiveCookie(response, requestedURL: request.url!)
+                try self.receiveCookie(response, requestedURL: request.url!, generation: captured)
                 return .init(status: response.statusCode, body: result, retryAfter: response.value(forHTTPHeaderField: "Retry-After"))
             } catch let error as AccountError { throw error }
             catch is CancellationError { throw CancellationError() }
@@ -174,8 +180,9 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
         return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
     }
 
-    private func receiveCookie(_ response: HTTPURLResponse, requestedURL: URL) throws {
+    private func receiveCookie(_ response: HTTPURLResponse, requestedURL: URL, generation: UUID) throws {
         try Task.checkCancellation()
+        guard sessionGeneration == generation else { throw AccountError.staleOperation }
         guard let raw = response.value(forHTTPHeaderField: "Set-Cookie") else { return }
         guard ["/api/auth/login", "/api/auth/refresh", "/api/auth/switch-organization", "/api/auth/logout"].contains(requestedURL.path) else {
             throw AccountError.invalidResponse

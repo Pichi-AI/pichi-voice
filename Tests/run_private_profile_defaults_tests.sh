@@ -12,7 +12,7 @@ nonisolated enum AppBrand {
     static let keychainAccount = "synthetic-unused-account"
     static let applicationSupportDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(storageNamespace)
 }
-nonisolated struct AccountIdentity: Equatable, Sendable { let issuer: String; let subject: String; let internalUserID: String }
+nonisolated struct AccountIdentity: Equatable, Sendable { let issuer: String; let subject: String; let internalUserID: String; var storageComponents: [String] { [issuer, subject, internalUserID] } }
 nonisolated struct AccountContext: Equatable, Sendable { let identity: AccountIdentity; let organizationID: String?; let workspaceID: String?; let generation: UUID }
 nonisolated enum AccountError: Error { case invalidAccount, isolationRequired }
 SWIFT

@@ -145,6 +145,7 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         reject("insecure issuer") { try JSONDecoder().decode(AccountConfiguration.self, from: JSONSerialization.data(withJSONObject: object)).validate() }
         try jwtTests()
         try await transportTests(configuration)
+        count += try await AccountLegacySessionChecks.run()
         await commandPreflightCancellationTests(configuration)
         await callerCancellationDuringAdmissionTests(configuration)
         let browser = FakeBrowser(), transport = FakeTransport(), credentials = MemoryCredentials(), lifecycle = Lifecycle()
