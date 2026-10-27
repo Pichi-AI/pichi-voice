@@ -4,7 +4,7 @@ import XCTest
 /// preference store and Keychain without starting a microphone or model operation.
 final class MobileKioskUITests: XCTestCase {
     private var app: XCUIApplication!
-    private let password = "KioskTest42"
+    private let password = "482915"
     private var language = "en"
 
     override func setUpWithError() throws {
@@ -52,19 +52,23 @@ final class MobileKioskUITests: XCTestCase {
         XCTAssertTrue(app.secureTextFields["kiosk.confirmation"].exists,
                       "A fresh simulator must have no previous administrator credential")
 
-        enter("short", into: "kiosk.password", step: "07-short-password")
-        enter("short", into: "kiosk.confirmation", step: "08-short-confirmation")
+        enter("123", into: "kiosk.password", step: "07-short-password")
+        enter("123", into: "kiosk.confirmation", step: "08-short-confirmation")
         tap(app.buttons["kiosk.enable"], step: "09-short-password-rejected")
         XCTAssertTrue(element("kiosk.passwordError").waitForExistence(timeout: 5))
+        XCTAssertEqual(element("kiosk.passwordError").label,
+                       language == "ru" ? "Используйте пароль длиной от 6 до 128 символов." : "Use a password with 6 to 128 characters.")
         XCTAssertFalse(element("kiosk.voiceWelcome").exists)
 
-        replace("short", with: password, in: "kiosk.password", step: "10-valid-password")
-        replace("short", with: "Different42", in: "kiosk.confirmation", step: "11-mismatched-confirmation")
+        replace("123", with: password, in: "kiosk.password", step: "10-valid-password")
+        replace("123", with: "759421", in: "kiosk.confirmation", step: "11-mismatched-confirmation")
         tap(app.buttons["kiosk.enable"], step: "12-mismatch-rejected")
         XCTAssertTrue(element("kiosk.passwordError").waitForExistence(timeout: 5))
+        XCTAssertEqual(element("kiosk.passwordError").label,
+                       language == "ru" ? "Пароли не совпадают." : "The passwords do not match.")
         XCTAssertFalse(element("kiosk.voiceWelcome").exists)
 
-        replace("Different42", with: password, in: "kiosk.confirmation", step: "13-matching-confirmation")
+        replace("759421", with: password, in: "kiosk.confirmation", step: "13-matching-confirmation")
         tap(app.buttons["kiosk.enable"], step: "14-first-entry-voice-question", waitFor: "kiosk.voiceWelcome")
         assertVoiceWelcome()
 
@@ -82,7 +86,7 @@ final class MobileKioskUITests: XCTestCase {
         assertRecordingIsolated()
 
         openAdministrator(stepPrefix: "20")
-        enter("WrongTest42", into: "kiosk.unlockPassword", step: "21-wrong-admin-password")
+        enter("759421", into: "kiosk.unlockPassword", step: "21-wrong-admin-password")
         tap(app.buttons["kiosk.unlockConfirm"], step: "22-wrong-password-rejected")
         XCTAssertTrue(element("kiosk.passwordError").waitForExistence(timeout: 5))
         XCTAssertTrue(element("kiosk.unlock").exists)
@@ -309,8 +313,7 @@ final class MobileKioskUITests: XCTestCase {
                       "The native keyboard must be ready before secure input")
         // A field entry is one interaction. Type immediately after focus rather than
         // suspending a transient secure-keyboard state for the visual review pause.
-        field.typeText(value)
-        waitForSecureEntry(field, count: value.count)
+        typeNativeDigits(value)
         capture(step)
     }
 
@@ -319,18 +322,26 @@ final class MobileKioskUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count) + value)
-        waitForSecureEntry(field, count: value.count)
+        for _ in previous { app.keyboards.keys["delete"].tap() }
+        typeNativeDigits(value)
         capture(step)
     }
 
-    private func waitForSecureEntry(_ field: XCUIElement, count: Int) {
-        let entered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            guard let maskedValue = field.value as? String else { return false }
-            return maskedValue.count == count && !maskedValue.isEmpty
-        }, object: field)
-        XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 5), .completed,
-                       "Secure input must reach the field before taking the review frame")
+    /// Real native keys avoid ASCII typeText injection into a Russian keyboard.
+    /// Submission and password-gate assertions verify the bindings, without
+    /// assuming that a secure field exposes its value or length to accessibility.
+    private func typeNativeDigits(_ value: String) {
+        XCTAssertFalse(value.isEmpty)
+        XCTAssertTrue(value.allSatisfy { $0.isASCII && $0.isNumber })
+        guard let first = value.first else { return }
+        if !app.keyboards.keys[String(first)].exists {
+            app.keyboards.keys["more"].tap()
+        }
+        for digit in value {
+            let key = app.keyboards.keys[String(digit)]
+            XCTAssertTrue(key.waitForExistence(timeout: 3))
+            key.tap()
+        }
     }
 
     private func tap(_ target: XCUIElement, step: String, waitFor identifier: String? = nil) {
