@@ -1171,7 +1171,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         return try await self.process(session, generation: generation)
     }
 
-    func deleteSession(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership? = nil) async throws {
+    func deleteSession(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership? = nil,
+                       validating: (@Sendable (MeetingSession) throws -> Void)? = nil) async throws {
         await self.ensureRestored()
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.maintenanceInProgress }
         guard self.isQuiescent else { throw MeetingCoordinatorError.activityInProgress }
@@ -1181,7 +1182,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Re-check: the flush await gives a racing operation a window to start.
         guard !self.hasBlockingActivityTask else { throw MeetingCoordinatorError.activityInProgress }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.maintenanceInProgress }
-        if let expectedOwnership { try await self.store.delete(id: id, expectedOwnership: expectedOwnership) }
+        if let validating {
+            guard let expectedOwnership else { throw CocoaError(.featureUnsupported) }
+            try await self.store.delete(id: id, expectedOwnership: expectedOwnership, validating: validating)
+        } else if let expectedOwnership { try await self.store.delete(id: id, expectedOwnership: expectedOwnership) }
         else { try await self.store.delete(id: id) }
         self.correctionUndoStacks[id] = nil
         if self.activeSession?.id == id {

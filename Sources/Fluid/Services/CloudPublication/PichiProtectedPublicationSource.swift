@@ -21,12 +21,25 @@ nonisolated struct PichiProtectedPublicationSource: Equatable, Sendable {
     let sessionID: MeetingSessionID
     let transcriptBytes: Data
     let sourceSHA256: String
+    let localSourceSHA256: String
 
-    private init(sessionID: MeetingSessionID, transcriptBytes: Data) {
-        self.sessionID = sessionID
+    private init(session: MeetingSession, transcriptBytes: Data) throws {
+        self.sessionID = session.id
+        self.localSourceSHA256 = try Self.localFingerprint(for: session)
         self.transcriptBytes = transcriptBytes
         self.sourceSHA256 = SHA256.hash(data: transcriptBytes)
             .map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A local revision fingerprint uses stored domain values, not localized display
+    /// titles. Changing interface language or time zone cannot strand accepted cleanup.
+    static func localFingerprint(for session: MeetingSession) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let bytes = try encoder.encode(session)
+        guard bytes.count <= 64 * 1_024 * 1_024 else { throw PichiPublicationWithholdingReason.exportLimitExceeded }
+        return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
 
     /// The caller supplies the snapshot reloaded after terminal persistence through N2's
@@ -77,7 +90,7 @@ nonisolated struct PichiProtectedPublicationSource: Equatable, Sendable {
         catch PichiProtectedPublicationPayload.Failure.emptyTranscript { throw PichiPublicationWithholdingReason.emptyTranscript }
         catch PichiProtectedPublicationPayload.Failure.limitExceeded { throw PichiPublicationWithholdingReason.exportLimitExceeded }
         catch PichiProtectedPublicationPayload.Failure.invalidTranscript { throw PichiPublicationWithholdingReason.invalidTranscript }
-        let source = Self(sessionID: session.id, transcriptBytes: bytes)
+        let source = try Self(session: session, transcriptBytes: bytes)
         try Task.checkCancellation()
         return source
     }

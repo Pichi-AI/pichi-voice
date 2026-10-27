@@ -29,6 +29,7 @@ nonisolated struct PichiPublicationOutboxRecord: Codable, Equatable, Sendable {
     let automaticConsent: Bool
     var transcriptBytes: Data?
     var sourceSHA256: String?
+    var localSourceSHA256: String?
     var attemptCount: Int
     var state: PichiPublicationDeliveryState
     var pauseReason: PichiPublicationPauseReason?
@@ -225,6 +226,7 @@ actor PichiPublicationOutboxStore {
             }
             record.transcriptBytes = source.transcriptBytes
             record.sourceSHA256 = source.sourceSHA256
+            record.localSourceSHA256 = source.localSourceSHA256
             record.canonicalSourceSHA256 = try PichiLegacyPublicationRequest.canonicalSourceSHA256(source.transcriptBytes)
             if record.automaticAccountContext == true {
                 record.managerSpeakerHint = try PichiLegacyPublicationRequest.confirmedLocalUserHint(in: source.transcriptBytes)

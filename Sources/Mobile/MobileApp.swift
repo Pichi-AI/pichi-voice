@@ -238,12 +238,16 @@ final class AppServices: ObservableObject {
                 recordingCipher: { profile in
                     guard let cipher = try await resolveRecordingCipher(profile, true) else { throw MeetingRecordingCipher.Failure.unavailableKey }
                     return cipher
-                }, deleteAcceptedRecording: { [weak self] id, owner in
+                }, deleteAcceptedRecording: { [weak self] id, owner, expectedSourceSHA256 in
                     guard let self else { throw AccountError.staleOperation }
                     let profile = PrivateProfileStorage.current
                     guard owner.matches(profile), PrivateProfileStorage.isReadable(profile),
                           self.privateProfiles.isPrivateDataVisible, !self.privateProfiles.isTransitioning else { throw AccountError.staleOperation }
-                    try await self.meetingSessionCoordinator.deleteSession(id: id, expectedOwnership: owner)
+                    try await self.meetingSessionCoordinator.deleteSession(id: id, expectedOwnership: owner, validating: { source in
+                        guard try PichiProtectedPublicationSource.localFingerprint(for: source) == expectedSourceSHA256 else {
+                            throw PichiPublicationOutboxFailure.receiptConflict
+                        }
+                    })
                 })
             self.cloudPublicationActivation = PichiCloudPublicationActivation(service: service,
                 account: self.accountSession, profiles: self.privateProfiles)
@@ -307,12 +311,10 @@ final class AppServices: ObservableObject {
     func setSceneActive(_ active: Bool) async {
         isSceneActive = active
         cloudPublication?.notifySceneActive(active)
-        if active { await accountSession.restoreAfterConnectivity() }
         await updateIdlePreparation()
     }
 
     func protectedDataDidBecomeAvailable() async {
-        await accountSession.restoreAfterConnectivity()
         cloudPublication?.notifyServerAvailabilityChanged()
     }
 

@@ -19,6 +19,7 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL?
     func delete(id: MeetingSessionID) async throws
     func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership, validating: @Sendable (MeetingSession) throws -> Void) async throws
     /// Removes the `tracks/` directory and any processing checkpoint, leaving the manifest and
     /// transcript untouched. Idempotent — missing paths are not an error.
     func deleteAudioFiles(for id: MeetingSessionID) async throws
@@ -40,6 +41,11 @@ nonisolated extension MeetingSessionStoring {
         guard session.profileOwnership == expectedOwnership else { throw CocoaError(.fileWriteNoPermission) }
         try await self.delete(id: id)
     }
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership, validating: @Sendable (MeetingSession) throws -> Void) async throws {
+        // A custom store must provide an atomic implementation, not a load/await/delete approximation.
+        throw CocoaError(.featureUnsupported)
+    }
+
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
@@ -338,6 +344,18 @@ actor MeetingSessionStore: MeetingSessionStoring {
             try self.fileSystem.manager.removeItem(at: directory)
         }
         try self.removeFromIndex(id)
+    }
+
+    /// Validation and removal execute in one actor turn with no suspension, so an
+    /// admitted save cannot overwrite the source between comparison and deletion.
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership,
+                validating: @Sendable (MeetingSession) throws -> Void) throws {
+        try Task.checkCancellation()
+        if let session = try self.load(id: id) {
+            guard session.profileOwnership == expectedOwnership else { throw CocoaError(.fileWriteNoPermission) }
+            try validating(session)
+        }
+        try self.delete(id: id)
     }
 
     func deleteAudioFiles(for id: MeetingSessionID) throws {

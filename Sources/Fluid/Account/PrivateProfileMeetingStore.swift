@@ -241,6 +241,16 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
         admissions.removeValue(forKey: id)
     }
 
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership,
+                validating: @Sendable (MeetingSession) throws -> Void) async throws {
+        let profile = try readableProfile()
+        guard expectedOwnership.matches(profile) else { throw AccountError.staleOperation }
+        try checkReadable(profile)
+        try await store(for: profile).delete(id: id, expectedOwnership: expectedOwnership, validating: validating)
+        try checkReadable(profile)
+        admissions.removeValue(forKey: id)
+    }
+
     func deleteAudioFiles(for id: MeetingSessionID) async throws {
         let profile = try readableProfile()
         guard let session = try await store(for: profile).load(id: id), permits(session, in: profile) else { return }

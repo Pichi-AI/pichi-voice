@@ -626,7 +626,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                                  context: AccountContext, store: PichiPublicationOutboxStore) async {
         guard record.state == .acceptedCleanupPending, record.receipt != nil,
               record.receiptPauseReason != .sourceConflict,
-              let expectedDigest = record.sourceSHA256,
+              let expectedDigest = record.localSourceSHA256,
               let deleteAcceptedRecording, cleaning.insert(record.sessionID).inserted else { return }
         defer { cleaning.remove(record.sessionID) }
         do {
@@ -636,10 +636,10 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             if let current = try await meetings.loadTranscript(id: record.sessionID) {
                 try check(profile, context: context)
                 guard current.profileOwnership == record.owner else { throw AccountError.staleOperation }
-                let export = Task.detached { try PichiProtectedPublicationSource.prepare(for: current) }
+                let export = Task.detached { try PichiProtectedPublicationSource.localFingerprint(for: current) }
                 let source = try await withTaskCancellationHandler { try await export.value } onCancel: { export.cancel() }
                 try check(profile, context: context)
-                guard source.sourceSHA256 == record.sourceSHA256 else {
+                guard source == expectedDigest else {
                     let reviewed = try await store.pauseReceipt(id: record.sessionID, reason: .sourceConflict)
                     project(record.sessionID, Self.status(reviewed), profile: profile, automatic: reviewed.automaticAccountContext == true)
                     return
