@@ -58442,13 +58442,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Only the completed protected text, participant names and timing are sent. Check the destination, employee, source participant and criteria before sending."
+            "value": "Only the completed protected text and metadata, including participant names and timing, are sent. Check the destination, employee, source participant and criteria before sending."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Отправляются только завершённый защищённый текст, имена участников и время. Проверьте адрес, сотрудника, участника записи и критерии перед отправкой."
+            "value": "Отправляются только завершённый защищённый текст и метаданные, включая имена участников и время. Проверьте адрес, сотрудника, участника записи и критерии перед отправкой."
           }
         }
       }

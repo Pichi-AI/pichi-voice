@@ -38,4 +38,3 @@ nonisolated enum AccountPublicationConfiguration: Codable, Equatable, Sendable {
         }
     }
 }
-
