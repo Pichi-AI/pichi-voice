@@ -31,7 +31,8 @@ final class MobileKioskUITests: XCTestCase {
     }
 
     func testVoiceWelcomeAndRestrictedSettingsRespectPasswordGateAcrossEntriesAndRelaunch() throws {
-        guard ProcessInfo.processInfo.environment["PICHI_KIOSK_UI_EXISTING_VOICE"] != "1" else {
+        guard ProcessInfo.processInfo.environment["PICHI_KIOSK_UI_EXISTING_VOICE"] != "1",
+              ProcessInfo.processInfo.environment["PICHI_KIOSK_UI_WARM_REOPEN"] != "1" else {
             throw XCTSkip("The missing-voice flow requires a task-owned container without a profile")
         }
         openSettings()
@@ -215,7 +216,10 @@ final class MobileKioskUITests: XCTestCase {
         let expectedStatus: String
         if expectsProfile { expectedStatus = language == "ru" ? "Ваш голос сохранён" : "Your voice is saved" }
         else { expectedStatus = language == "ru" ? "Ваш голос ещё не настроен" : "Your voice is not set up" }
-        XCTAssertTrue(element("ownerVoice.status").label.contains(expectedStatus), file: file, line: line)
+        // Label propagates its identifier to both the SF Symbol and its text.
+        let statusText = app.staticTexts["ownerVoice.status"].firstMatch
+        XCTAssertTrue(statusText.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(statusText.label.contains(expectedStatus), file: file, line: line)
         XCTAssertTrue(app.buttons["kiosk.admin"].exists, file: file, line: line)
         assertAdministrativeDestinationsAbsent(file: file, line: line)
         assertNoModeTitle(file: file, line: line)
@@ -301,7 +305,8 @@ final class MobileKioskUITests: XCTestCase {
         let field = app.secureTextFields[identifier]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
-        capture("\(step)-focused")
+        // A field entry is one interaction. Type immediately after focus rather than
+        // suspending a transient secure-keyboard state for the visual review pause.
         field.typeText(value)
         capture(step)
     }
@@ -310,7 +315,6 @@ final class MobileKioskUITests: XCTestCase {
         let field = app.secureTextFields[identifier]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
-        capture("\(step)-focused")
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count) + value)
         capture(step)
     }
