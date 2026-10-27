@@ -821,13 +821,8 @@ struct MobileMeetingRoot: View {
 
     private func beginMeeting() {
         run {
-            // Finish preparation before the capture lease can open the microphone.
-            try await required.prepare(modelID: settings.selectedSpeechModel.rawValue)
-            try await privacyActivation.waitUntilReadyIfRequested()
-            await refreshMicrophones()
-            let configuration = try await coordinator.defaultConfiguration(mode: .inRoom,
-                title: PichiLocalization.text("In-room meeting"))
-            _ = try await coordinator.startRecording(configuration: configuration)
+            try await MobileMeetingRecordingActions.start(coordinator: coordinator,
+                required: required, privacyActivation: privacyActivation)
         }
     }
 

@@ -56055,6 +56055,342 @@
           }
         }
       }
+    },
+    "Kiosk mode": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kiosk mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Режим киоска"
+          }
+        }
+      }
+    },
+    "Administrator": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Administrator"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Администратор"
+          }
+        }
+      }
+    },
+    "Administrator password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Administrator password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пароль администратора"
+          }
+        }
+      }
+    },
+    "Current password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текущий пароль"
+          }
+        }
+      }
+    },
+    "Confirm password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторите пароль"
+          }
+        }
+      }
+    },
+    "Enable kiosk mode": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable kiosk mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить режим киоска"
+          }
+        }
+      }
+    },
+    "Exit kiosk mode": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exit kiosk mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выйти из режима киоска"
+          }
+        }
+      }
+    },
+    "Finishing recording…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finishing recording…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершение записи…"
+          }
+        }
+      }
+    },
+    "Recording saved": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording saved"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись сохранена"
+          }
+        }
+      }
+    },
+    "Recording could not be completed. Contact your administrator.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording could not be completed. Contact your administrator."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось завершить запись. Обратитесь к администратору."
+          }
+        }
+      }
+    },
+    "Recording was interrupted. Contact your administrator.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording was interrupted. Contact your administrator."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись прервана. Обратитесь к администратору."
+          }
+        }
+      }
+    },
+    "Configure recording, transcription and storage first. Kiosk mode keeps these settings and shows only recording controls.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configure recording, transcription and storage first. Kiosk mode keeps these settings and shows only recording controls."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала настройте запись, расшифровку и хранение. Режим киоска использует эти настройки и показывает только управление записью."
+          }
+        }
+      }
+    },
+    "To keep audio on this device, enable Save Audio and choose the recording retention period before entering kiosk mode.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To keep audio on this device, enable Save Audio and choose the recording retention period before entering kiosk mode."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы хранить аудио на этом устройстве, включите сохранение аудио и выберите срок хранения перед включением киоска."
+          }
+        }
+      }
+    },
+    "The password is required to leave kiosk mode. Kiosk mode stays enabled after restarting the app.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The password is required to leave kiosk mode. Kiosk mode stays enabled after restarting the app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для выхода из режима киоска нужен пароль. После перезапуска приложения режим киоска остаётся включённым."
+          }
+        }
+      }
+    },
+    "To keep the device in this app, also enable Guided Access in iPad or iPhone settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To keep the device in this app, also enable Guided Access in iPad or iPhone settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы устройство оставалось в этом приложении, также включите «Гид-доступ» в настройках iPad или iPhone."
+          }
+        }
+      }
+    },
+    "Use a password with 6 to 128 characters.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use a password with 6 to 128 characters."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Используйте пароль длиной от 6 до 128 символов."
+          }
+        }
+      }
+    },
+    "The passwords do not match.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The passwords do not match."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пароли не совпадают."
+          }
+        }
+      }
+    },
+    "The administrator password is incorrect.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The administrator password is incorrect."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неверный пароль администратора."
+          }
+        }
+      }
+    },
+    "Too many attempts. Wait one minute before trying again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many attempts. Wait one minute before trying again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много попыток. Подождите одну минуту и попробуйте снова."
+          }
+        }
+      }
+    },
+    "Kiosk security is unavailable. Access remains locked. Try again after unlocking the device.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kiosk security is unavailable. Access remains locked. Try again after unlocking the device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Защита киоска недоступна. Доступ остаётся заблокированным. Разблокируйте устройство и попробуйте снова."
+          }
+        }
+      }
+    },
+    "A password check is already in progress.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A password check is already in progress."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка пароля уже выполняется."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

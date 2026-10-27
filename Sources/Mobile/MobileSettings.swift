@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 /// Settings routes belong to the Settings stack, rather than to the selected app section.
 enum MobileSettingsDestination: Hashable {
-    case general, recording, models, privacy
+    case general, recording, models, privacy, kiosk
 }
 
 /// The mobile subset keeps the desktop destinations and their existing preference owner.
@@ -34,6 +34,9 @@ struct MobileSettingsRoot: View {
                 NavigationLink(value: MobileSettingsDestination.privacy) {
                     Label(PichiLocalization.text("Data cleanup"), systemImage: "lock.shield")
                 }.accessibilityIdentifier("settings.privacy")
+                NavigationLink(value: MobileSettingsDestination.kiosk) {
+                    Label(PichiLocalization.text("Kiosk mode"), systemImage: "lock.shield")
+                }.accessibilityIdentifier("settings.kiosk")
             } footer: {
                 Text(PichiLocalization.text("Audio recordings and transcripts are stored on this device."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
@@ -62,6 +65,9 @@ struct MobileSettingsRoot: View {
                 case .models: MobileVoiceEngineSettings(asr: asr, reportError: reportError)
                 case .privacy:
                     MobilePrivacySettings(activation: privacyActivation)
+                case .kiosk:
+                    MobileKioskSettings(access: .shared,
+                        canEnable: canReplaySetup && !required.isPreparing && !privacyActivation.isPreparing)
                 }
             }
     }

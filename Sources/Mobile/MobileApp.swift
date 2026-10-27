@@ -271,6 +271,7 @@ final class AppServices: ObservableObject {
 struct PichiVoiceMobileApp: App {
     @StateObject private var services = AppServices.shared
     @ObservedObject private var settings = SettingsStore.shared
+    @ObservedObject private var kiosk = MobileKioskAccess.shared
     @Environment(\.scenePhase) private var scenePhase
     var body: some Scene {
         WindowGroup {
@@ -311,7 +312,10 @@ struct PichiVoiceMobileApp: App {
     }
 
     @ViewBuilder private var meetingRoot: some View {
-        if !settings.mobileSetupCompleted {
+        if kiosk.isEnabled {
+            MobileKioskRoot(coordinator: services.meetingSessionCoordinator, required: services.requiredResources,
+                privacyActivation: services.privacyActivation, access: kiosk)
+        } else if !settings.mobileSetupCompleted {
             MobileOnboarding(asr: services.asr, required: services.requiredResources, privacy: services.privacyActivation,
                 audioArbiter: services.meetingAudioActivityArbiter)
         } else {
