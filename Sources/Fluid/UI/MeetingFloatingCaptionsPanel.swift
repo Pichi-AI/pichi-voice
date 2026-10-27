@@ -148,6 +148,9 @@ final class MeetingFloatingCaptionsController: ObservableObject {
             }
         )
         let panel = MeetingFloatingPanelFactory.make(size: Self.panelSize, resizable: true, content: content)
+        // Draw the shadow outside the window in the compositor. A SwiftUI shadow inside
+        // this exact-sized canvas paints its rounded corners and clips at rectangular edges.
+        panel.hasShadow = true
         panel.minSize = Self.minimumSize
 
         panel.setFrameAutosaveName(Self.autosaveName)
@@ -256,7 +259,6 @@ struct MeetingFloatingCaptionsContent: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(self.theme.palette.separator.opacity(0.55), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.35), radius: 16, x: 0, y: 6)
         .onChange(of: self.isRecordingActive) { _, active in
             if active { self.isStopping = false }
         }

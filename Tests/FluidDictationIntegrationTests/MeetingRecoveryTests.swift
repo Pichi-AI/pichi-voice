@@ -12,6 +12,52 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    func testFloatingCaptionCornersStayTransparentAcrossAppearanceAndNativeResizing() throws {
+        let directory = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let coordinator = MeetingSessionCoordinator(
+            store: MeetingSessionStore(rootDirectory: directory), capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+        for scheme in [ColorScheme.light, .dark] {
+            let content = AnyView(MeetingFloatingCaptionsContent(coordinator: coordinator)
+                .appTheme(.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme)))
+            let panel = MeetingFloatingPanelFactory.make(
+                size: NSSize(width: 400, height: 480), resizable: true, content: content
+            )
+            panel.isReleasedWhenClosed = false
+            defer { panel.contentView = nil; panel.close() }
+            XCTAssertTrue(panel.styleMask.contains(.resizable), "Keep the existing native resize boundary")
+            XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+            XCTAssertFalse(panel.canBecomeKey)
+            XCTAssertEqual(panel.sharingType, .none, "Caption privacy is unchanged")
+            let host = try XCTUnwrap(panel.contentView as? MeetingFloatingHostingView)
+            for size in [NSSize(width: 400, height: 480), NSSize(width: 560, height: 340), NSSize(width: 320, height: 240)] {
+                panel.setContentSize(size)
+                host.layoutSubtreeIfNeeded()
+                host.displayIfNeeded()
+                XCTAssertEqual(host.bounds.size, size, "The actual caption surface follows the resized window")
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                for (x, y) in [(0, 0), (bitmap.pixelsWide - 1, 0), (0, bitmap.pixelsHigh - 1),
+                               (bitmap.pixelsWide - 1, bitmap.pixelsHigh - 1)] {
+                    XCTAssertLessThan(try XCTUnwrap(bitmap.colorAt(x: x, y: y)).alphaComponent, 0.01,
+                                      "Rounded outer corners must contain neither a backing fill nor a clipped shadow")
+                }
+                XCTAssertGreaterThan(try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2,
+                    y: bitmap.pixelsHigh / 2)).alphaComponent, 0.8, "A blank capture cannot satisfy transparency")
+                XCTAssertFalse(panel.isVisible)
+                XCTAssertFalse(panel.isKeyWindow)
+            }
+            // Prove that the same native raster path detects an opaque rectangular backing.
+            host.rootView = AnyView(content.background(Color.red))
+            host.layoutSubtreeIfNeeded()
+            let opaque = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: opaque)
+            XCTAssertGreaterThan(try XCTUnwrap(opaque.colorAt(x: 0, y: 0)).alphaComponent, 0.95)
+        }
+    }
+
     func testComparisonProbeRefusesFrozenPrivatePoliciesBeforeCreatingFiles() throws {
         for (storage, redact) in [(MeetingAudioStorageMode.memoryOnly, false), (.retainedFiles, true)] {
             let root = self.makeTempDirectory().appendingPathComponent("never-created")
