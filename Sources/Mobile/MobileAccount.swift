@@ -744,6 +744,7 @@ struct MobileCloudSyncSettings: View {
 
     private var isBusy: Bool { interaction.action != nil || service.snapshot.availability == .pausing }
     private var unavailable: Bool {
+        guard let context = session.context, context.organizationID != nil, context.workspaceID != nil else { return true }
         switch service.snapshot.availability {
         case .unconfigured, .signedOut, .profileUnavailable, .protectedDataUnavailable: return true
         default: return false
