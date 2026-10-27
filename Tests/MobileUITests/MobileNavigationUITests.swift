@@ -685,6 +685,10 @@ final class MobileNavigationUITests: XCTestCase {
             capture("legacy-\(language)-\(appearance)-empty")
             email.tap(); email.typeText("synthetic@example.invalid")
             capture("legacy-\(language)-\(appearance)-email")
+            if ProcessInfo.processInfo.environment["PICHI_LEGACY_PROMPT_REVIEW_ONLY"] == "1" {
+                app.terminate()
+                continue
+            }
             password.tap(); password.typeText("synthetic-only\n")
             XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
             XCTAssertTrue(app.buttons["account.signIn"].isEnabled)
