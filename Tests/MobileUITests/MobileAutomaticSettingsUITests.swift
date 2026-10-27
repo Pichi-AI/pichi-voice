@@ -33,15 +33,15 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
             XCTAssertEqual(deletion.value as? String, "0")
             XCTAssertFalse(deletion.isEnabled)
             capture(prefix + "-off")
-            tap(automatic)
+            tap(automatic, app: app, step: prefix + "-automatic-visible")
             waitForValue(automatic, "1")
             XCTAssertTrue(deletion.isEnabled)
             capture(prefix + "-automatic-on")
-            tap(deletion)
+            tap(deletion, app: app, step: prefix + "-retention-visible")
             waitForValue(deletion, "1")
             XCTAssertFalse(app.descendants(matching: .any)["cloud.sync.error"].firstMatch.exists)
             capture(prefix + "-retention-on")
-            tap(automatic)
+            tap(automatic, app: app, step: prefix + "-automatic-visible")
             waitForValue(automatic, "0")
             XCTAssertEqual(deletion.value as? String, "1", "OFF pauses delivery without silently changing the future retention preference")
             XCTAssertFalse(deletion.isEnabled)
@@ -60,12 +60,14 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
         let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.scrollViews.firstMatch
         for index in 0..<7 where !element.isHittable {
             XCTAssertTrue(scroll.exists && scroll.isHittable)
-            scroll.swipeUp()
+            if element.exists && element.frame.midY < app.windows.firstMatch.frame.midY { scroll.swipeDown() }
+            else { scroll.swipeUp() }
             capture(step + "-scroll-\(index)")
         }
         XCTAssertTrue(element.exists && element.isHittable)
     }
-    private func tap(_ row: XCUIElement) {
+    private func tap(_ row: XCUIElement, app: XCUIApplication, step: String) {
+        expose(row, in: app, step: step)
         XCTAssertTrue(row.isHittable && row.isEnabled)
         // An identified SwiftUI Toggle exposes a full-width native row. The switch
         // occupies its trailing control, while a center tap can land on the caption.

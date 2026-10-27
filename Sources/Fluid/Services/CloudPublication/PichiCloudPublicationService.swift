@@ -777,7 +777,6 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         -> (PrivateProfileSnapshot, AccountContext, PichiPublicationOutboxStore, PichiPublicationConsentStore) {
         guard !self.shutDown, let configuration = self.account.publicationConfiguration else { throw AccountError.unconfigured }
         guard let context = self.account.context, self.account.isCurrent(context) else { throw AccountError.staleOperation }
-        guard context.organizationID != nil, context.workspaceID != nil else { throw AccountError.workspaceUnavailable }
         let profile = PrivateProfileStorage.current
         guard !profile.isGuest, profile.context == context, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
               expected.map({ $0 == profile }) != false else { throw AccountError.staleOperation }
@@ -785,6 +784,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             guard profile.generation != self.closedGeneration else { throw AccountError.staleOperation }
             self.closing = false
         }
+        guard context.organizationID != nil, context.workspaceID != nil else { throw AccountError.workspaceUnavailable }
         if self.scope != profile || self.outbox == nil {
             self.snapshot = .init(availability: .paused, cloudSyncEnabled: false, items: [:]); self.itemOrder.removeAll(); self.analysisPolls.removeAll()
             let rootAttributes = try FileManager.default.attributesOfItem(atPath: profile.rootDirectory.path)
