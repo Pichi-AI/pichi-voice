@@ -31,6 +31,13 @@ nonisolated struct PichiProtectedPublicationSource: Equatable, Sendable {
             .map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Publication equality remains the exact text-only wire source. Local revision
+    /// metadata is a separate deletion guard and cannot widen the portable payload.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.sessionID == rhs.sessionID && lhs.transcriptBytes == rhs.transcriptBytes
+            && lhs.sourceSHA256 == rhs.sourceSHA256
+    }
+
     /// A local revision fingerprint uses stored domain values, not localized display
     /// titles. Changing interface language or time zone cannot strand accepted cleanup.
     static func localFingerprint(for session: MeetingSession) throws -> String {
@@ -127,7 +134,8 @@ nonisolated struct PichiProtectedPublicationSource: Equatable, Sendable {
             languageCode = session.languageCode; mode = session.mode
             startedAt = session.startedAt; endedAt = session.endedAt; state = session.state
             speakers = session.speakers; segments = session.transcriptSegments
-            coverage = session.transcriptCoverageGaps; sidecar = session.resultSidecarReference
+            coverage = session.transcriptCoverageGaps?.isEmpty == false ? session.transcriptCoverageGaps : nil
+            sidecar = session.resultSidecarReference
             complete = session.transcriptIsComplete; postProcessing = session.postProcessing
             backendID = session.recordingBackendID; artifactFingerprint = session.recordingASRArtifactFingerprint
             audioStorageMode = session.audioStorageMode; speakerLabelsEnabled = session.speakerLabelsEnabled
