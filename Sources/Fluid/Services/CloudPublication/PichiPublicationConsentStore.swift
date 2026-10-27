@@ -22,6 +22,7 @@ actor PichiPublicationConsentStore {
         let scope: Scope
         let automaticPublicationEnabled: Bool
         let deliveryPaused: Bool?
+        var deleteLocalAfterAcceptance: Bool? = nil
     }
 
     private let directory: URL
@@ -59,7 +60,8 @@ actor PichiPublicationConsentStore {
         // Preserve evidence of corruption or a foreign copied record instead of overwriting it.
         let previous = try self.read(scope: scope, directoryFD: directoryFD)
         let record = Record(schemaVersion: 1, scope: scope, automaticPublicationEnabled: enabled,
-            deliveryPaused: previous?.deliveryPaused ?? false)
+            deliveryPaused: previous?.deliveryPaused ?? false,
+            deleteLocalAfterAcceptance: previous?.deleteLocalAfterAcceptance)
         let bytes = try self.encode(record)
         guard bytes.count <= Self.maximumRecordBytes else { throw PichiPublicationConsentFailure.invalidScope }
         try self.write(bytes, name: self.name(for: scope), directoryFD: directoryFD)
@@ -84,7 +86,8 @@ actor PichiPublicationConsentStore {
         defer { Darwin.close(directoryFD) }
         let previous = try self.read(scope: scope, directoryFD: directoryFD)
         let record = Record(schemaVersion: 1, scope: scope,
-            automaticPublicationEnabled: previous?.automaticPublicationEnabled ?? false, deliveryPaused: paused)
+            automaticPublicationEnabled: previous?.automaticPublicationEnabled ?? false, deliveryPaused: paused,
+            deleteLocalAfterAcceptance: previous?.deleteLocalAfterAcceptance)
         let bytes = try self.encode(record)
         guard bytes.count <= Self.maximumRecordBytes else { throw PichiPublicationConsentFailure.invalidScope }
         try self.write(bytes, name: self.name(for: scope), directoryFD: directoryFD)
@@ -98,12 +101,34 @@ actor PichiPublicationConsentStore {
         let scope = try self.scope(for: context)
         guard let directoryFD = try self.openDirectory() else { throw PichiPublicationConsentFailure.unavailable }
         defer { Darwin.close(directoryFD) }
-        _ = try self.read(scope: scope, directoryFD: directoryFD)
-        let record = Record(schemaVersion: 1, scope: scope, automaticPublicationEnabled: enabled, deliveryPaused: !enabled)
+        let previous = try self.read(scope: scope, directoryFD: directoryFD)
+        let record = Record(schemaVersion: 1, scope: scope, automaticPublicationEnabled: enabled, deliveryPaused: !enabled,
+            deleteLocalAfterAcceptance: previous?.deleteLocalAfterAcceptance)
         let bytes = try self.encode(record)
         guard bytes.count <= Self.maximumRecordBytes else { throw PichiPublicationConsentFailure.invalidScope }
         try self.write(bytes, name: self.name(for: scope), directoryFD: directoryFD)
         guard try self.read(scope: scope, directoryFD: directoryFD) == record else { throw PichiPublicationConsentFailure.unavailable }
+    }
+
+    func deleteLocalAfterAcceptance(for context: AccountContext) throws -> Bool {
+        let scope = try self.scope(for: context)
+        guard let fd = try openDirectory() else { return false }
+        defer { Darwin.close(fd) }
+        return try read(scope: scope, directoryFD: fd)?.deleteLocalAfterAcceptance ?? false
+    }
+
+    /// Future captures only. The outbox freezes this choice before a source exists.
+    func setDeleteLocalAfterAcceptance(_ enabled: Bool, for context: AccountContext) throws {
+        let scope = try self.scope(for: context)
+        guard let fd = try openDirectory() else { throw PichiPublicationConsentFailure.unavailable }
+        defer { Darwin.close(fd) }
+        let previous = try read(scope: scope, directoryFD: fd)
+        let record = Record(schemaVersion: 1, scope: scope,
+            automaticPublicationEnabled: previous?.automaticPublicationEnabled ?? false,
+            deliveryPaused: previous?.deliveryPaused ?? false,
+            deleteLocalAfterAcceptance: enabled)
+        try write(encode(record), name: name(for: scope), directoryFD: fd)
+        guard try read(scope: scope, directoryFD: fd) == record else { throw PichiPublicationConsentFailure.unavailable }
     }
 
     private func scope(for context: AccountContext) throws -> Scope {

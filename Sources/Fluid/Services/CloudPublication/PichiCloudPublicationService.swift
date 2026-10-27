@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 nonisolated enum PichiCloudPublicationAvailability: String, Sendable {
-    case unconfigured, signedOut, profileUnavailable, ready, pausing, paused, transportUnavailable, storageUnavailable
+    case unconfigured, signedOut, profileUnavailable, ready, pausing, paused, protectedDataUnavailable, transportUnavailable, storageUnavailable
 }
 
 nonisolated enum PichiCloudPublicationControlFailure: String, Error, Sendable { case cloudSyncDisabled }
@@ -24,6 +24,8 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     let cloudSyncEnabled: Bool
     /// A bounded current-profile projection. status(for:) loads any known history ID.
     let items: [MeetingSessionID: PichiCloudPublicationStatus]
+    var deleteLocalAfterAcceptance: Bool = false
+    var automaticRecordingIDs: Set<MeetingSessionID> = []
 }
 
 /// The single platform-shared facade. N2 composition retains this observer/participant;
@@ -39,6 +41,10 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private let meetings: PrivateProfileMeetingStore
     private let profiles: PrivateProfileService
     private let http: (any PichiPublicationHTTPPerforming)?
+    private let recordingCipherProvider: (@MainActor @Sendable (PrivateProfileSnapshot) async throws -> MeetingRecordingCipher)?
+    private let deleteAcceptedRecording: (@MainActor @Sendable (MeetingSessionID, MeetingProfileOwnership) async throws -> Void)?
+    private var recordingCipher: MeetingRecordingCipher?
+    private var workerDelay: Task<Void, Never>?
     private var scope: PrivateProfileSnapshot?
     private var outbox: PichiPublicationOutboxStore?
     private var consent: PichiPublicationConsentStore?
@@ -53,6 +59,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private var commands: [UUID: OwnedCommand] = [:]
     private var requests: [UUID: Task<PichiPublicationHTTPResponse, Error>] = [:]
     private var delivering = Set<MeetingSessionID>()
+    private var cleaning = Set<MeetingSessionID>()
     private var worker: (id: UUID, task: Task<Void, Never>)?
     private var shutdownTask: Task<Void, Never>?
     private var cloudToggle: (id: UUID, task: Task<Void, Error>)?
@@ -63,8 +70,11 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private var storageDrain: (id: UUID, task: Task<Void, Never>)?
 
     init(account: AccountSessionService, meetings: PrivateProfileMeetingStore = .shared,
-         profiles: PrivateProfileService? = nil, http: (any PichiPublicationHTTPPerforming)? = nil) {
+         profiles: PrivateProfileService? = nil, http: (any PichiPublicationHTTPPerforming)? = nil,
+         recordingCipher: (@MainActor @Sendable (PrivateProfileSnapshot) async throws -> MeetingRecordingCipher)? = nil,
+         deleteAcceptedRecording: (@MainActor @Sendable (MeetingSessionID, MeetingProfileOwnership) async throws -> Void)? = nil) {
         self.account = account; self.meetings = meetings; self.profiles = profiles ?? .shared; self.http = http
+        self.recordingCipherProvider = recordingCipher; self.deleteAcceptedRecording = deleteAcceptedRecording
     }
 
     /// Composition calls once and retains this service. No restore/login/readiness or
@@ -74,6 +84,82 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         try await self.meetings.installRecordingObserver(self)
         self.profiles.register(self)
         self.installed = true
+    }
+
+    /// Parent capture composition freezes memory-only audio and the existing Privacy
+    /// operation only after this encrypted future-capture queue has passed preflight.
+    func prepareAutomaticCapture() async throws -> Bool {
+        guard account.isLegacySession, account.context != nil else { return false }
+        return try await command {
+            let (profile, context, store, consent) = try self.currentScope()
+            guard try await consent.automaticPublicationEnabled(for: context) else { return false }
+            try await self.ensureRecordingCipher(profile: profile, context: context, store: store)
+            try await store.preflightAutomaticCapture()
+            try self.check(profile, context: context)
+            return true
+        }
+    }
+
+    func setDeleteLocalAfterAcceptance(_ enabled: Bool) async throws {
+        try await command {
+            let (profile, context, _, consent) = try self.currentScope()
+            try await consent.setDeleteLocalAfterAcceptance(enabled, for: context)
+            try self.check(profile, context: context)
+            try await self.refreshBody()
+        }
+    }
+
+    /// Availability wakes the same bounded worker. Only real authenticated HTTP and
+    /// a checked receipt establish server acceptance or authorize local cleanup.
+    func notifyServerAvailabilityChanged() async {
+        // Restoration may invoke the existing profile lifecycle. It must never be
+        // enclosed by a publication task that the lifecycle would then try to join.
+        if account.isAwaitingLegacyServerValidation {
+            await joinOwnedWork()
+            await account.restoreAfterConnectivity()
+        }
+        await localOperation {
+            guard !self.closing, !self.shutDown else { return }
+            self.workerDelay?.cancel()
+            do {
+                try await self.activateBody(resumeUserPauses: false)
+                if let (_, _, store, _) = try? self.currentScope() { try await store.expediteAutomaticNetworkRetries() }
+                self.workerDelay?.cancel()
+            } catch is ProtectedDataAccessError { self.waitForProtectedData() }
+            catch { /* Durable queue state is retained for the next scoped wake. */ }
+        }
+    }
+
+    func notifySceneActive(_ active: Bool) async {
+        if active { await notifyServerAvailabilityChanged() }
+    }
+
+    private func ensureRecordingCipher(profile: PrivateProfileSnapshot, context: AccountContext,
+                                       store: PichiPublicationOutboxStore) async throws {
+        guard account.isLegacySession else { return }
+        if let cipher = recordingCipher, cipher.profileID == profile.id {
+            try await store.installCipher(cipher)
+            try await meetings.installEncryptionCipher(cipher, for: profile)
+            try check(profile, context: context)
+            return
+        }
+        guard let recordingCipherProvider else { throw PichiPublicationOutboxFailure.unavailable }
+        let cipher = try await recordingCipherProvider(profile)
+        try check(profile, context: context)
+        guard cipher.profileID == profile.id else { throw PichiPublicationOutboxFailure.invalidScope }
+        try await store.installCipher(cipher)
+        try await meetings.installEncryptionCipher(cipher, for: profile)
+        try check(profile, context: context)
+        recordingCipher = cipher
+    }
+
+    private func waitForProtectedData() {
+        userPaused = true
+        workerDelay?.cancel()
+        snapshot = .init(availability: .protectedDataUnavailable,
+            cloudSyncEnabled: snapshot.cloudSyncEnabled, items: snapshot.items,
+            deleteLocalAfterAcceptance: snapshot.deleteLocalAfterAcceptance,
+            automaticRecordingIDs: snapshot.automaticRecordingIDs)
     }
 
     func refresh() async throws { try await self.command { try await self.refreshBody() } }
@@ -118,7 +204,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         let recoveringStorage = self.offLatch?.profileID == profile.id && self.offLatch?.failed == true
         if !enabled {
             self.offLatch = (profile.id, false); self.userPaused = true
-            self.snapshot = .init(availability: .pausing, cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items)
+            self.snapshot = .init(availability: .pausing, cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items,
+                deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
+                automaticRecordingIDs: self.snapshot.automaticRecordingIDs)
         }
         let task = Task { @MainActor in
             do {
@@ -135,12 +223,23 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     try self.check(profile, context: context)
                     try await self.refreshBody()
                 }
+            } catch is ProtectedDataAccessError {
+                if self.scope == profile, PrivateProfileStorage.isReadable(profile) {
+                    self.snapshot = .init(availability: .protectedDataUnavailable,
+                        cloudSyncEnabled: enabled, items: self.snapshot.items,
+                        deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
+                        automaticRecordingIDs: self.snapshot.automaticRecordingIDs)
+                }
+                self.userPaused = true
+                throw ProtectedDataAccessError.temporarilyUnavailable
             } catch {
                 self.userPaused = true; self.offLatch = (profile.id, true)
                 await self.joinOwnedWork(excludingToggle: id)
                 if self.scope == profile, PrivateProfileStorage.isReadable(profile) {
                     self.snapshot = .init(availability: .storageUnavailable,
-                        cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items)
+                        cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items,
+                deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
+                automaticRecordingIDs: self.snapshot.automaticRecordingIDs)
                 }
                 throw error
             }
@@ -152,7 +251,10 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
 
     private func refreshBody() async throws {
         do { try await self.refreshCurrentScope() }
-        catch {
+        catch is ProtectedDataAccessError {
+            waitForProtectedData()
+            throw ProtectedDataAccessError.temporarilyUnavailable
+        } catch {
             if error is PichiPublicationOutboxFailure || error is PichiPublicationConsentFailure,
                let profile = self.scope { self.storageFailed(profile: profile, because: error) }
             let visible = PrivateProfileStorage.current
@@ -163,7 +265,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             let sameOwner = visible.isReadable && self.scope?.id == visible.id
             self.snapshot = .init(availability: availability,
                 cloudSyncEnabled: sameOwner && self.snapshot.cloudSyncEnabled,
-                items: sameOwner ? self.snapshot.items : [:])
+                items: sameOwner ? self.snapshot.items : [:],
+                deleteLocalAfterAcceptance: sameOwner && self.snapshot.deleteLocalAfterAcceptance,
+                automaticRecordingIDs: sameOwner ? self.snapshot.automaticRecordingIDs : [])
             throw error
         }
     }
@@ -171,6 +275,11 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private func refreshCurrentScope() async throws {
         let (profile, context, store, consent) = try self.currentScope()
         let enabled = try await consent.automaticPublicationEnabled(for: context)
+        if account.isLegacySession, recordingCipherProvider != nil {
+            let hasExisting = recordingCipher != nil ? true : try PichiPublicationOutboxStore.hasEncryptedPersistenceData(in: profile)
+            if enabled || hasExisting { try await ensureRecordingCipher(profile: profile, context: context, store: store) }
+        }
+        let deleteLocal = try await consent.deleteLocalAfterAcceptance(for: context)
         let records = try await store.pendingRecords()
         try self.check(profile, context: context)
         var items = self.snapshot.items
@@ -178,15 +287,20 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         let availability: PichiCloudPublicationAvailability = self.offLatch?.profileID == profile.id && self.offLatch?.failed == true
             ? .storageUnavailable : self.userPaused ? .paused : (self.http == nil && !self.account.isLegacySession) ? .transportUnavailable : .ready
         self.snapshot = .init(availability: availability,
-            cloudSyncEnabled: enabled, items: self.bounded(items))
+            cloudSyncEnabled: enabled, items: self.bounded(items), deleteLocalAfterAcceptance: deleteLocal,
+            automaticRecordingIDs: self.snapshot.automaticRecordingIDs.union(records.filter { $0.automaticAccountContext == true }.map(\.sessionID)).intersection(Set(items.keys)))
     }
 
     private func statusBody(_ id: MeetingSessionID) async throws -> PichiCloudPublicationStatus {
         let (profile, context, store, _) = try self.currentScope()
+        if account.isLegacySession, recordingCipherProvider != nil {
+            let hasExisting = recordingCipher != nil ? true : try PichiPublicationOutboxStore.hasEncryptedPersistenceData(in: profile)
+            if hasExisting { try await ensureRecordingCipher(profile: profile, context: context, store: store) }
+        }
         let record = try await store.record(id: id)
         try self.check(profile, context: context)
         let value = record.map(Self.status) ?? (self.snapshot.items[id] == .paused(.storageUnavailable) ? .paused(.storageUnavailable) : .localOnly)
-        self.project(id, value, profile: profile)
+        self.project(id, value, profile: profile, automatic: record?.automaticAccountContext == true)
         return value
     }
 
@@ -198,7 +312,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         try self.check(profile, context: context)
         try await self.requireNetworkAdmission(profile: profile, context: context)
         if record.receipt != nil { try await self.reconcile(id); return }
-        if self.account.isLegacySession, record.legacySelection == nil { throw PichiPublicationOutboxFailure.notAdmitted }
+        if self.account.isLegacySession, record.legacySelection == nil, record.automaticAccountContext != true { throw PichiPublicationOutboxFailure.notAdmitted }
         if record.transcriptBytes == nil { await self.prepareSource(id: id, admission: .init(profile: profile), store: store) }
         try self.check(profile, context: context)
         guard let prepared = try await store.record(id: id), prepared.transcriptBytes != nil else { throw PichiPublicationOutboxFailure.invalidSource }
@@ -215,7 +329,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         try self.check(profile, context: context)
         try await self.requireNetworkAdmission(profile: profile, context: context)
         if record.receipt != nil { try await self.reconcile(id); return }
-        if self.account.isLegacySession, record.legacySelection == nil { throw PichiPublicationOutboxFailure.notAdmitted }
+        if self.account.isLegacySession, record.legacySelection == nil, record.automaticAccountContext != true { throw PichiPublicationOutboxFailure.notAdmitted }
         if record.transcriptBytes == nil { await self.prepareSource(id: id, admission: .init(profile: profile), store: store) }
         else { _ = try await store.explicitRetry(id: id) }
         try self.check(profile, context: context)
@@ -234,7 +348,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 try await consent.setDeliveryPaused(true, for: context)
                 try await store.pauseAll(reason: .userRequested)
                 if self.scope == profile, PrivateProfileStorage.isReadable(profile) {
-                    self.snapshot = .init(availability: .paused, cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items)
+                    self.snapshot = .init(availability: .paused, cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items,
+                deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
+                automaticRecordingIDs: self.snapshot.automaticRecordingIDs)
                 }
             } catch {
                 self.storageFailed(profile: profile, because: error)
@@ -259,11 +375,12 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         try self.check(profile, context: context)
         if paused || !enabled || self.offLatch?.profileID == profile.id { self.userPaused = true; try await self.refreshBody(); return }
         guard self.http != nil || self.account.isLegacySession else { throw PichiPublicationNetworkFailure.unavailable }
+        if account.isLegacySession { try await ensureRecordingCipher(profile: profile, context: context, store: store) }
         let records = try await store.pendingRecords()
         try self.check(profile, context: context)
         for record in records where record.state == .paused {
             if record.pauseReason == .profileTransition || record.pauseReason == .uncertainDelivery || (resumeUserPauses && record.pauseReason == .userRequested) {
-                if record.attemptCount >= PichiPublicationRetryPolicy.maximumAutomaticAttempts {
+                if record.automaticAccountContext != true && record.attemptCount >= PichiPublicationRetryPolicy.maximumAutomaticAttempts {
                     _ = try await store.pause(id: record.sessionID, reason: .retryBudgetExhausted)
                     continue
                 }
@@ -346,7 +463,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             try self.check(profile, context: request.context)
             let updated = try await store.updateReceipt(id: record.sessionID, receipt: receipt)
             try self.check(profile, context: request.context)
-            self.project(record.sessionID, Self.status(updated), profile: profile)
+            self.project(record.sessionID, Self.status(updated), profile: profile, automatic: updated.automaticAccountContext == true)
             return value
         } catch {
             // Cancellation/concealment leaves the accepted receipt intact. A current
@@ -364,7 +481,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             do { updated = try await store.pauseReceipt(id: record.sessionID, reason: reason, retryAfter: remote?.retryAfter) }
             catch { self.storageFailed(profile: profile, because: error); throw error }
             try self.check(profile, context: request.context)
-            self.project(record.sessionID, Self.status(updated), profile: profile)
+            self.project(record.sessionID, Self.status(updated), profile: profile, automatic: updated.automaticAccountContext == true)
             throw error
         }
     }
@@ -436,6 +553,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 try self.check(profile, context: context)
                 return PichiPublicationHTTPResponse(status: response.status, body: response.body, retryAfter: response.retryAfter)
             } catch AccountError.networkUnavailable { throw PichiPublicationNetworkFailure.unavailable }
+            catch is LegacyAccountConnectivityFailure { throw PichiPublicationNetworkFailure.unavailable }
         }
         self.requests[id] = task
         defer { self.requests.removeValue(forKey: id) }
@@ -447,20 +565,35 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         guard self.delivering.insert(record.sessionID).inserted else { throw AccountError.busy }
         defer { self.delivering.remove(record.sessionID) }
         guard case .legacy(let configuration) = record.configuration, let receipt = record.receipt,
-              let bytes = record.transcriptBytes, let selection = record.legacySelection,
               record.retryAfterRequiresReview != true, (record.retryNotBefore ?? .distantPast) <= Date() else {
             throw PichiPublicationOutboxFailure.invalidTransition
         }
         do {
             let request = try PichiLegacyPublicationRequest.status(origin: configuration.apiBaseURL, receipt: receipt)
             let response = try await self.performLegacyResponse(request, context: context, profile: profile)
-            let current = try PichiLegacyPublicationRequest.receipt(from: response, context: context,
-                transcriptBytes: bytes, selection: selection, expected: receipt)
+            let current: PichiPublicationReceipt
+            if record.automaticAccountContext == true, let digest = record.canonicalSourceSHA256 {
+                current = try PichiLegacyPublicationRequest.accountContextReceipt(from: response, context: context,
+                    sessionID: record.sessionID, canonicalSourceSHA256: digest,
+                    managerSpeakerID: record.managerSpeakerHint, expected: receipt)
+            } else {
+                guard let bytes = record.transcriptBytes, let selection = record.legacySelection else {
+                    throw PichiPublicationOutboxFailure.invalidTransition
+                }
+                current = try PichiLegacyPublicationRequest.receipt(from: response, context: context,
+                    transcriptBytes: bytes, selection: selection, expected: receipt)
+            }
             try self.check(profile, context: context)
             var updated = try await store.updateReceipt(id: record.sessionID, receipt: current)
             if current.billingState?.needsReview == true { updated = try await store.pauseReceipt(id: record.sessionID, reason: .accountReview) }
             try self.check(profile, context: context)
-            self.project(record.sessionID, Self.status(updated), profile: profile)
+            self.project(record.sessionID, Self.status(updated), profile: profile, automatic: updated.automaticAccountContext == true)
+            if updated.state == .acceptedCleanupPending {
+                await self.cleanupAccepted(updated, profile: profile, context: context, store: store)
+            }
+        } catch is ProtectedDataAccessError {
+            waitForProtectedData()
+            throw ProtectedDataAccessError.temporarilyUnavailable
         } catch {
             guard (try? self.check(profile, context: context)) != nil, !(error is PichiCloudPublicationControlFailure) else { throw error }
             let remote = error as? PichiPublicationRemoteFailure
@@ -468,8 +601,49 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 ?? (error is AccountError ? .authenticationRequired : .receiptReview)
             let updated = try await store.pauseReceipt(id: record.sessionID, reason: reason, retryAfter: remote?.retryAfter)
             try self.check(profile, context: context)
-            self.project(record.sessionID, Self.status(updated), profile: profile)
+            self.project(record.sessionID, Self.status(updated), profile: profile, automatic: updated.automaticAccountContext == true)
             throw error
+        }
+    }
+
+    private func cleanupAccepted(_ record: PichiPublicationOutboxRecord, profile: PrivateProfileSnapshot,
+                                 context: AccountContext, store: PichiPublicationOutboxStore) async {
+        guard record.state == .acceptedCleanupPending, record.receipt != nil,
+              record.receiptPauseReason != .sourceConflict,
+              let deleteAcceptedRecording, cleaning.insert(record.sessionID).inserted else { return }
+        defer { cleaning.remove(record.sessionID) }
+        do {
+            try check(profile, context: context)
+            // A user can edit the local source while HTTP is in flight. Never erase
+            // that newer work because an older frozen snapshot was accepted.
+            if let current = try await meetings.loadTranscript(id: record.sessionID) {
+                try check(profile, context: context)
+                guard current.profileOwnership == record.owner else { throw AccountError.staleOperation }
+                let export = Task.detached { try PichiProtectedPublicationSource.prepare(for: current) }
+                let source = try await withTaskCancellationHandler { try await export.value } onCancel: { export.cancel() }
+                try check(profile, context: context)
+                guard source.sourceSHA256 == record.sourceSHA256 else {
+                    let reviewed = try await store.pauseReceipt(id: record.sessionID, reason: .sourceConflict)
+                    project(record.sessionID, Self.status(reviewed), profile: profile, automatic: reviewed.automaticAccountContext == true)
+                    return
+                }
+            }
+            try check(profile, context: context)
+            try await deleteAcceptedRecording(record.sessionID, record.owner)
+            try check(profile, context: context)
+            let compacted = try await store.completeLocalRemoval(id: record.sessionID)
+            try check(profile, context: context)
+            project(record.sessionID, Self.status(compacted), profile: profile, automatic: compacted.automaticAccountContext == true)
+        } catch is CancellationError { return }
+        catch is PichiPublicationWithholdingReason {
+            guard (try? check(profile, context: context)) != nil else { return }
+            if let reviewed = try? await store.pauseReceipt(id: record.sessionID, reason: .sourceConflict) {
+                project(record.sessionID, Self.status(reviewed), profile: profile, automatic: reviewed.automaticAccountContext == true)
+            }
+        } catch {
+            // Busy/finalizing coordinator guards stay intact. Only cleanup is retried;
+            // the durable accepted receipt can never re-enter upload or billing.
+            if error is PichiPublicationOutboxFailure { storageFailed(profile: profile, because: error) }
         }
     }
 
@@ -481,10 +655,10 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 let (profile, context, store, consent) = try self.currentScope(expected: admission.profile)
                 let stored = try await consent.automaticPublicationEnabled(for: context)
                 try self.check(profile, context: context)
-                let enabled = stored && self.offLatch?.profileID != profile.id
+                let enabled = stored && self.offLatch?.profileID != profile.id && !self.account.isLegacySession
                 let record = try await store.capture(id: id, automaticConsent: enabled)
                 try self.check(profile, context: context)
-                self.project(id, Self.status(record), profile: profile)
+                self.project(id, Self.status(record), profile: profile, automatic: record.automaticAccountContext == true)
             } catch {
                 // Missing durable admission always means local-only on later callbacks.
                 // Recording remains authorized and no exception escapes to N2 persistence.
@@ -496,13 +670,38 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         }
     }
 
+    /// A required encrypted capture must fail before recording if reservation or key
+    /// validation fails. Unlike the ordinary observer callback this error is not swallowed.
+    func prepareRequiredCapture(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async throws {
+        try await command {
+            let (profile, context, store, consent) = try self.currentScope(expected: admission.profile)
+            guard self.account.isLegacySession, admission.requiresEncryptedPersistence else {
+                throw PichiPublicationOutboxFailure.invalidScope
+            }
+            try await self.ensureRecordingCipher(profile: profile, context: context, store: store)
+            let enabled = try await consent.automaticPublicationEnabled(for: context)
+                && self.offLatch?.profileID != profile.id
+            let deleteLocal = try await consent.deleteLocalAfterAcceptance(for: context)
+            try self.check(profile, context: context)
+            let record = try await store.capture(id: id, automaticConsent: enabled,
+                automaticAccountContext: enabled, requiresEncryptedPersistence: true,
+                deleteLocalAfterAcceptance: enabled && deleteLocal)
+            try self.check(profile, context: context)
+            self.project(id, Self.status(record), profile: profile, automatic: record.automaticAccountContext == true)
+        }
+    }
+
     func sourceDidPersist(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async {
         await self.localOperation {
             guard let (_, _, store, _) = try? self.currentScope(expected: admission.profile) else { return }
             await self.prepareSource(id: id, admission: admission, store: store)
         }
-        // No worker/network starts from this callback. An explicitly resumed worker
-        // independently observes durable known pending IDs on its bounded schedule.
+        // Wake only the existing task after this bounded local operation. No HTTP or
+        // coordinator deletion is awaited from the persistence callback itself.
+        self.workerDelay?.cancel()
+        if let (profile, context, store, _) = try? currentScope(expected: admission.profile), !userPaused {
+            startWorker(profile: profile, context: context, store: store)
+        }
     }
 
     func captureAdmissionCancelled(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async {
@@ -525,7 +724,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         self.analysisPolls.removeAll()
         await self.joinOwnedWork()
         if let outbox { try await outbox.pauseAll(reason: .profileTransition) }
-        self.outbox = nil; self.consent = nil; self.scope = nil
+        self.outbox = nil; self.consent = nil; self.scope = nil; self.recordingCipher = nil
     }
 
     func shutdown() async {
@@ -535,7 +734,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             await self.joinOwnedWork()
             if let outbox = self.outbox { try? await outbox.pauseAll(reason: .profileTransition) }
             await self.http?.shutdown()
-            self.outbox = nil; self.consent = nil; self.scope = nil
+            self.outbox = nil; self.consent = nil; self.scope = nil; self.recordingCipher = nil
             self.analysisPolls.removeAll()
             self.snapshot = .init(availability: .profileUnavailable, cloudSyncEnabled: false, items: [:])
         }
@@ -562,7 +761,8 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                   rootPermissions & 0o077 == 0 else {
                 throw PichiPublicationOutboxFailure.invalidStorage
             }
-            let store = PichiPublicationOutboxStore(profile: profile, destination: configuration)
+            let store = PichiPublicationOutboxStore(profile: profile, destination: configuration,
+                cipher: recordingCipher?.profileID == profile.id ? recordingCipher : nil)
             let consentDirectory = profile.directory("CloudPublication").appendingPathComponent("Consent", isDirectory: true)
             try Self.privateDirectory(consentDirectory)
             self.scope = profile; self.outbox = store
@@ -591,15 +791,17 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             try self.check(admission.profile, context: context)
             let updated = try await store.installSource(id: id, source: source)
             try self.check(admission.profile, context: context)
-            self.project(id, Self.status(updated), profile: admission.profile)
+            self.project(id, Self.status(updated), profile: admission.profile, automatic: updated.automaticAccountContext == true)
         } catch let reason as PichiPublicationWithholdingReason {
             guard (try? self.check(admission.profile, context: context)) != nil else { return }
             do {
                 let record = try await store.withhold(id: id, reason: reason)
-                self.project(id, Self.status(record), profile: admission.profile)
+                self.project(id, Self.status(record), profile: admission.profile, automatic: record.automaticAccountContext == true)
             } catch { self.storageFailed(profile: admission.profile, because: error) }
         } catch {
-            if error is PichiPublicationOutboxFailure { self.storageFailed(profile: admission.profile, because: error) }
+            if let failure = error as? PichiPublicationOutboxFailure, failure != .capacityExceeded {
+                self.storageFailed(profile: admission.profile, because: error)
+            }
         }
     }
 
@@ -665,16 +867,24 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     try self.check(profile, context: context)
                     for record in records {
                         try self.check(profile, context: context)
-                        if record.state == .waitingForSource {
+                        guard !self.userPaused else { break }
+                        if record.state == .acceptedCleanupPending {
+                            await self.cleanupAccepted(record, profile: profile, context: context, store: store)
+                        } else if record.state == .waitingForSource {
                             await self.prepareSource(id: record.sessionID, admission: .init(profile: profile), store: store)
+                            if let ready = try await store.record(id: record.sessionID), ready.state == .queued,
+                               (!self.account.isLegacySession || ready.legacySelection != nil || ready.automaticAccountContext == true) {
+                                await self.deliver(id: ready.sessionID, profile: profile, context: context, store: store)
+                            }
                         } else if (record.state == .queued || (record.state == .retryScheduled && (record.nextAttemptAt ?? .distantFuture) <= Date()))
-                            && (!self.account.isLegacySession || record.legacySelection != nil) {
+                            && (!self.account.isLegacySession || record.legacySelection != nil || record.automaticAccountContext == true) {
                             await self.deliver(id: record.sessionID, profile: profile, context: context, store: store)
                         }
                     }
                     var polls = 0
                     for (id, plan) in self.analysisPolls.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
                         try self.check(profile, context: context)
+                        guard !self.userPaused else { break }
                         guard polls < 4 else { break }
                         guard plan.attempts < 12, plan.notBefore <= Date() else { continue }
                         self.analysisPolls[id] = (plan.attempts + 1, Date().addingTimeInterval(10))
@@ -684,7 +894,11 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     }
                     // Local notifications never start HTTP. This single resumed worker
                     // checks only its bounded pending IDs; there is no history scan.
-                    try await Task.sleep(for: .seconds(5))
+                    let delay = Task<Void, Never> { try? await Task.sleep(for: .seconds(5)) }
+                    self.workerDelay = delay
+                    await withTaskCancellationHandler { await delay.value } onCancel: { delay.cancel() }
+                    self.workerDelay = nil
+                    try Task.checkCancellation()
                 } catch {
                     if error is PichiPublicationOutboxFailure || error is PichiPublicationConsentFailure { self.storageFailed(profile: profile, because: error) }
                     return
@@ -710,17 +924,30 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     assessment: record.originalAssessment, boundary: record.multipartBoundary)
                 receipt = try await self.perform(request, profile: profile)
             case .legacy(let configuration):
-                guard let selection = record.legacySelection else { throw PichiPublicationOutboxFailure.notAdmitted }
-                let body = try PichiLegacyPublicationRequest.importBody(context: context, transcriptBytes: bytes, selection: selection)
-                let request = try PichiLegacyPublicationRequest.importSource(origin: configuration.apiBaseURL, frozenBody: body)
-                let response = try await self.performLegacyResponse(request, context: context, profile: profile)
-                receipt = try PichiLegacyPublicationRequest.receipt(from: response, context: context, transcriptBytes: bytes, selection: selection)
+                if record.automaticAccountContext == true {
+                    guard let canonical = record.canonicalSourceSHA256 else { throw PichiPublicationOutboxFailure.invalidSource }
+                    let body = try PichiLegacyPublicationRequest.accountContextBody(context: context,
+                        transcriptBytes: bytes, managerSpeakerID: record.managerSpeakerHint)
+                    let request = try PichiLegacyPublicationRequest.importSource(origin: configuration.apiBaseURL, frozenBody: body)
+                    let response = try await self.performLegacyResponse(request, context: context, profile: profile)
+                    receipt = try PichiLegacyPublicationRequest.accountContextReceipt(from: response, context: context,
+                        sessionID: record.sessionID, canonicalSourceSHA256: canonical, managerSpeakerID: record.managerSpeakerHint)
+                } else {
+                    guard let selection = record.legacySelection else { throw PichiPublicationOutboxFailure.notAdmitted }
+                    let body = try PichiLegacyPublicationRequest.importBody(context: context, transcriptBytes: bytes, selection: selection)
+                    let request = try PichiLegacyPublicationRequest.importSource(origin: configuration.apiBaseURL, frozenBody: body)
+                    let response = try await self.performLegacyResponse(request, context: context, profile: profile)
+                    receipt = try PichiLegacyPublicationRequest.receipt(from: response, context: context, transcriptBytes: bytes, selection: selection)
+                }
             }
             try self.check(profile, context: context)
             var accepted = try await store.accept(id: id, receipt: receipt)
             if receipt.billingState?.needsReview == true { accepted = try await store.pauseReceipt(id: id, reason: .accountReview) }
             try self.check(profile, context: context)
-            self.project(id, Self.status(accepted), profile: profile)
+            self.project(id, Self.status(accepted), profile: profile, automatic: accepted.automaticAccountContext == true)
+            if accepted.state == .acceptedCleanupPending {
+                await self.cleanupAccepted(accepted, profile: profile, context: context, store: store)
+            }
         } catch {
             if Task.isCancelled || error is CancellationError {
                 // The HTTP task has joined. This task is owned and joined by its
@@ -731,11 +958,13 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     do {
                         guard try await store.record(id: id)?.state == .sending else { return }
                         let paused = try await store.pause(id: id, reason: .uncertainDelivery)
-                        self.project(id, Self.status(paused), profile: profile)
+                        self.project(id, Self.status(paused), profile: profile, automatic: paused.automaticAccountContext == true)
                     } catch {
                         if self.scope == profile, !self.closing, PrivateProfileStorage.isReadable(profile) {
                             self.snapshot = .init(availability: .storageUnavailable,
-                                cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items)
+                                cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items,
+                deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
+                automaticRecordingIDs: self.snapshot.automaticRecordingIDs)
                         }
                     }
                 }
@@ -745,7 +974,12 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             guard (try? self.check(profile, context: context)) != nil else { return }
             do {
                 let updated: PichiPublicationOutboxRecord
-                if let remote = error as? PichiPublicationRemoteFailure {
+                if error is ProtectedDataAccessError {
+                    let count = try await store.record(id: id)?.attemptCount ?? 1
+                    updated = try await store.scheduleRetry(id: id,
+                        decision: PichiPublicationRetryPolicy.automaticContextDecision(afterAttempt: count, retryAfter: nil), now: Date())
+                    self.waitForProtectedData()
+                } else if let remote = error as? PichiPublicationRemoteFailure {
                     if remote.action == .boundedRetry {
                         let count = try await store.record(id: id)?.attemptCount ?? PichiPublicationRetryPolicy.maximumAutomaticAttempts
                         updated = try await store.scheduleRetry(id: id, decision: PichiPublicationRetryPolicy.decision(afterAttempt: count, retryAfter: remote.retryAfter), retryAfter: remote.retryAfter, now: Date())
@@ -759,7 +993,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     updated = try await store.scheduleRetry(id: id, decision: PichiPublicationRetryPolicy.decision(afterAttempt: count, retryAfter: nil), now: Date())
                 } else { updated = try await store.pause(id: id, reason: .receiptReview) }
                 try self.check(profile, context: context)
-                self.project(id, Self.status(updated), profile: profile)
+                self.project(id, Self.status(updated), profile: profile, automatic: updated.automaticAccountContext == true)
             } catch { self.storageFailed(profile: profile, because: error) }
         }
     }
@@ -770,7 +1004,10 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
               self.account.isCurrent(context) else { return }
         self.offLatch = (profile.id, true); self.userPaused = true
         self.snapshot = .init(availability: .storageUnavailable,
-            cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items)
+            cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items,
+                deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
+                automaticRecordingIDs: self.snapshot.automaticRecordingIDs)
+        self.workerDelay?.cancel()
         self.worker?.task.cancel()
         let requests = Array(self.requests.values)
         for request in requests { request.cancel() }
@@ -786,6 +1023,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private func joinOwnedWork(excludingToggle: UUID? = nil) async {
         let toggle = self.cloudToggle?.id == excludingToggle ? nil : self.cloudToggle
         toggle?.task.cancel()
+        self.workerDelay?.cancel()
         self.worker?.task.cancel()
         for (id, task) in self.locals where !self.cleanupLocals.contains(id) { task.cancel() }
         for task in self.requests.values { task.cancel() }
@@ -803,15 +1041,19 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         }
     }
 
-    private func project(_ id: MeetingSessionID, _ status: PichiCloudPublicationStatus, profile: PrivateProfileSnapshot) {
+    private func project(_ id: MeetingSessionID, _ status: PichiCloudPublicationStatus, profile: PrivateProfileSnapshot, automatic: Bool? = nil) {
         guard !self.closing, !self.shutDown, self.scope == profile, PrivateProfileStorage.isReadable(profile) else { return }
         var items = self.snapshot.items; items[id] = status
+        var automaticIDs = self.snapshot.automaticRecordingIDs
+        if let automatic { if automatic { automaticIDs.insert(id) } else { automaticIDs.remove(id) } }
         if case let .accepted(receipt) = status, [.queued, .running].contains(receipt.analysisState) {
             if self.analysisPolls[id] == nil { self.analysisPolls[id] = (0, Date().addingTimeInterval(1)) }
         } else { self.analysisPolls.removeValue(forKey: id) }
         self.itemOrder.removeAll { $0 == id }; self.itemOrder.append(id)
         self.snapshot = .init(availability: self.snapshot.availability,
-            cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.bounded(items))
+            cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.bounded(items),
+            deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
+            automaticRecordingIDs: automaticIDs.intersection(Set(self.bounded(items).keys)))
     }
 
     private func bounded(_ items: [MeetingSessionID: PichiCloudPublicationStatus]) -> [MeetingSessionID: PichiCloudPublicationStatus] {
@@ -829,7 +1071,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         case .sending: return .sending
         case .retryScheduled: return .retryScheduled(record.nextAttemptAt ?? .distantFuture)
         case .paused: return .paused(record.pauseReason ?? .receiptReview)
-        case .accepted:
+        case .accepted, .acceptedCleanupPending:
             guard let receipt = record.receipt else { return .paused(.receiptReview) }
             return record.receiptPauseReason.map { .acceptedNeedsReview(receipt, $0) } ?? .accepted(receipt)
         case .withheld: return record.withholdingReason.map(PichiCloudPublicationStatus.withheld) ?? .localOnly

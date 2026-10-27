@@ -379,6 +379,50 @@ extension PichiPublicationConsentTests {
         }
         check(PichiLegacyPublicationRequest.databaseID("01") == nil && PichiLegacyPublicationRequest.databaseID("2147483648") == nil,
               "Legacy database IDs cannot smuggle path syntax or exceed server bounds")
+        let autoBody = try PichiLegacyPublicationRequest.accountContextBody(context: context, transcriptBytes: source, managerSpeakerID: nil)
+        let autoObject = try JSONSerialization.jsonObject(with: autoBody) as! [String: Any]
+        check(autoBody.range(of: source) != nil && autoObject["userId"] == nil && autoObject["criteriaIds"] == nil
+            && autoObject["analysisId"] == nil && autoObject["managerSpeakerId"] == nil,
+              "Account-context import keeps original bytes and never requires a manager or inferred employee")
+        check(autoObject["assessmentMode"] as? String == "account_context" && autoObject["assessmentPolicyVersion"] as? Int == 1,
+              "Account-context mode has an explicit immutable server policy version")
+        let canonical = try PichiLegacyPublicationRequest.canonicalSourceSHA256(source)
+        check(try PichiLegacyPublicationRequest.canonicalSourceSHA256(json(sourceObject)) == canonical,
+              "Semantic source fingerprint tolerates JSONB object-key ordering without changing content")
+        var autoRow: [String: Any] = ["id": 201, "title": sourceObject["title"]!, "workspaceId": 9,
+            "userId": 123, "uploadedById": 123, "assessmentMode": "account_context", "assessmentPolicyVersion": 1,
+            "managerSpeakerId": NSNull(), "analysisId": NSNull(), "criteriaIds": [], "assessmentPolicyCriteriaIds": [],
+            "transcriptImport": sourceObject, "importSourceId": sourceID, "transcriptionStatus": "completed",
+            "evaluationResults": NSNull(), "importBillingStatus": "not_required"]
+        func automaticReceipt(_ row: [String: Any], expected: PichiPublicationReceipt? = nil) throws -> PichiPublicationReceipt {
+            try PichiLegacyPublicationRequest.accountContextReceipt(from: .init(status: 202, body: json(row), retryAfter: nil),
+                context: context, sessionID: UUID(uuidString: sourceID)!, canonicalSourceSHA256: canonical,
+                managerSpeakerID: nil, expected: expected)
+        }
+        let autoAccepted = try automaticReceipt(autoRow)
+        check(autoAccepted.analysisState == .queued && autoAccepted.accountContextPolicyCriteriaIDs == [],
+              "Accepted unknown-speaker source freezes server policy without claiming analysis success")
+        autoRow["evaluationResults"] = ["noCriteria": true, "evaluations": []]
+        check(try automaticReceipt(autoRow).analysisState == .queued, "No-criteria boolean alone cannot fabricate a summary outcome")
+        autoRow["summary"] = "Existing synthetic contextual summary"
+        check(try automaticReceipt(autoRow).analysisState == .succeeded, "Completed actual summary is a terminal no-criteria outcome")
+        autoRow["criteriaIds"] = [31]
+        autoRow["evaluationResults"] = ["evaluations": [["criterion_id": 31, "score": 5]]]
+        autoRow["title"] = "Authorized display rename"
+        check(try automaticReceipt(autoRow, expected: autoAccepted).analysisState == .succeeded,
+              "Authorized current criteria/display edits preserve original policy/source binding")
+        autoRow["assessmentPolicyCriteriaIds"] = [99]
+        try rejects(.invalidResponse, "Original server policy criterion snapshot cannot change during later status reads") {
+            _ = try automaticReceipt(autoRow, expected: autoAccepted)
+        }
+        autoRow["assessmentPolicyCriteriaIds"] = []; autoRow["assessmentPolicyVersion"] = true
+        try rejects(.invalidResponse, "A boolean cannot masquerade as policy version one") { _ = try automaticReceipt(autoRow, expected: autoAccepted) }
+        autoRow["assessmentPolicyVersion"] = 1.5
+        try rejects(.invalidResponse, "Fractional policy versions are invalid") { _ = try automaticReceipt(autoRow, expected: autoAccepted) }
+        autoRow["assessmentPolicyVersion"] = 1; autoRow["uploadedById"] = 124
+        try rejects(.invalidResponse, "Another uploader cannot become the account's accepted receipt") { _ = try automaticReceipt(autoRow, expected: autoAccepted) }
+        check(PichiPublicationRetryPolicy.automaticContextDecision(afterAttempt: 100, retryAfter: nil) == .retry(afterSeconds: 60),
+              "Long offline account-context delivery remains queued with a bounded backoff")
         return checks
     }
 }

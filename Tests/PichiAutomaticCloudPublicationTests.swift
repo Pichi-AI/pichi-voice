@@ -1,0 +1,288 @@
+import Foundation
+
+extension PichiPublicationOutboxTests {
+    /// Real facade, admissions, encrypted stores and retry/cleanup state. The server,
+    /// deletion owner and account are synthetic; no model, Keychain, socket or UI runs.
+    static func checkAutomaticCloudPublication(root: URL) async throws -> Int {
+        let manager = FileManager.default
+        try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let previous = PrivateProfileStorage.current
+        defer { PrivateProfileStorage.select(previous) }
+        PrivateProfileStorage.select(try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root))
+        var checks = 0
+        func check(_ condition: Bool, _ message: String) { precondition(condition, message); checks += 1 }
+        func wait(_ condition: @MainActor () async throws -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+            while !(try await condition()) {
+                guard ContinuousClock.now < deadline else { throw AutomaticFixtureFailure.timeout }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        let configuration = LegacyAccountConfiguration(apiBaseURL: URL(string: "https://automatic.example")!, bundleIdentifier: "ai.synthetic.voice")
+        let transport = AutomaticFixtureTransport(configuration: configuration)
+        let profiles = PrivateProfileService()
+        try profiles.configure(isBusy: { false }, prepare: {}, activate: { _ in })
+        let account = AccountSessionService(configuration: nil, browser: AutomaticFixtureBrowser(),
+            transport: AutomaticFixtureOIDC(), credentials: AutomaticFixtureCredentials(),
+            lifecycle: profiles, legacyConfiguration: configuration, legacyTransport: transport)
+        var meetings = PrivateProfileMeetingStore()
+        let cleanup = AutomaticCleanupOwner(store: meetings)
+        let keyOwner = AutomaticCipherOwner()
+        func makeService(_ store: PrivateProfileMeetingStore) -> PichiCloudPublicationService {
+            .init(account: account, meetings: store, profiles: profiles,
+                recordingCipher: { try keyOwner.load($0) },
+                deleteAcceptedRecording: { try await cleanup.delete($0, owner: $1) })
+        }
+        var service = makeService(meetings)
+        try await service.install()
+        await account.signIn(email: "a@synthetic.example", password: "synthetic-only")
+        try await account.selectWorkspace(organizationID: "17", workspaceID: "9")
+        check(try await service.prepareAutomaticCapture() == false, "Automatic capture is off before explicit future consent")
+        try await service.setDeleteLocalAfterAcceptance(true)
+        check(keyOwner.loads == 0, "Reading disabled policy or changing retention does not create an encryption key")
+        keyOwner.locked = true
+        do { try await service.setCloudSyncEnabled(true); check(false, "A locked keystore cannot admit automatic capture") }
+        catch is ProtectedDataAccessError {
+            check(service.snapshot.availability == .protectedDataUnavailable && keyOwner.loads == 0,
+                  "Device lock preserves explicit consent as an automatic unlock wait, without a replacement key")
+        }
+        keyOwner.locked = false
+        await service.notifyServerAvailabilityChanged()
+        check(try await service.prepareAutomaticCapture(), "Automatic admission resumes after unlock and preflights its cipher and queue")
+        let profile = PrivateProfileStorage.current
+        let cipher = try MeetingRecordingCipher(profileID: profile.id, key: Data(repeating: 0xA7, count: 32))
+        func box() -> PichiPublicationOutboxStore { .init(profile: profile, destination: .legacy(configuration), cipher: cipher) }
+        // Inspect atomic snapshots without opening a second live outbox actor: a new
+        // actor intentionally performs crash recovery and must not race the active owner.
+        func record(_ id: UUID) throws -> PichiPublicationOutboxRecord? {
+            for leaf in ["settled", "pending"] {
+                let file = profile.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1/" + leaf + "/" + id.uuidString.lowercased() + ".json")
+                guard manager.fileExists(atPath: file.path) else { continue }
+                let bytes: Data
+                do { bytes = try Data(contentsOf: file) }
+                catch CocoaError.fileReadNoSuchFile { continue }
+                let json = MeetingRecordingCipher.isEncryptedEnvelope(bytes)
+                    ? try cipher.open(bytes, sessionID: id, artifactKind: .publicationOutbox, maximumPlaintextBytes: 1_048_576) : bytes
+                return try JSONDecoder().decode(PichiPublicationOutboxRecord.self, from: json)
+            }
+            return nil
+        }
+
+        func createSource() async throws -> MeetingSession {
+            var configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic automatic Ёё", languageCode: "ru",
+                microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"))
+            configuration.audioStorageMode = .memoryOnly; configuration.piiRedactionEnabled = true
+            configuration.requiresEncryptedPersistence = true
+            let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+                machTimebaseDenominator: 1, firstPresentationTime: nil)
+            var session = MeetingSession(configuration: configuration,
+                startedAt: Date(timeIntervalSince1970: 1_700_000_000), timebase: timebase)
+            session.state = .recording; session.audioStorageMode = .memoryOnly; session.piiRedactionEnabled = true
+            session.profileOwnership = try await meetings.captureOwnership(for: session.id, configuration: configuration)
+            let track = UUID(), speaker = UUID()
+            session.audioTracks = [.init(id: track, kind: .microphone, sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic",
+                format: nil, timebase: timebase, health: .waiting, chunks: [])]
+            try await meetings.create(session)
+            session.state = .completed; session.endedAt = session.startedAt.addingTimeInterval(5); session.transcriptIsComplete = true
+            session.speakers = [.init(id: speaker, displayName: "Unidentified participant", diarizationClusterID: nil,
+                trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
+            session.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 1), end: .init(value: 5, timescale: 1),
+                sourceTrackID: track, speakerID: speaker, text: "Synthetic protected [PERSON].", revision: 0,
+                status: .final, overlap: .none, completeness: .complete, attributionState: .assigned)]
+            try await meetings.save(session)
+            return session
+        }
+        await transport.setOffline(true)
+        let source = try await createSource()
+        try await wait { try record(source.id)?.state == .retryScheduled }
+        let manifest = profile.directory("Meetings").appendingPathComponent(source.id.uuidString + "/session.json")
+        let queueFile = profile.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1/pending/" + source.id.uuidString.lowercased() + ".json")
+        check(MeetingRecordingCipher.isEncryptedEnvelope(try Data(contentsOf: manifest)), "Offline recording manifest is authenticated ciphertext")
+        check(MeetingRecordingCipher.isEncryptedEnvelope(try Data(contentsOf: queueFile)), "Offline outbox is ciphertext from its first admission")
+        check(await transport.postCount() == 0 && cleanup.calls == 0, "Offline server validation sends no source and deletes nothing")
+        check(service.snapshot.automaticRecordingIDs.contains(source.id) && service.snapshot.deleteLocalAfterAcceptance,
+              "Current account projection identifies automatic records and its future retention setting")
+        await transport.setOffline(false); await transport.loseNextResponse()
+        await service.notifyServerAvailabilityChanged()
+        try await wait {
+            let count = await transport.postCount(), record = try record(source.id)
+            return count == 1 && record?.state == .retryScheduled
+        }
+        await service.notifySceneActive(true)
+        try await wait { try record(source.id)?.state == .acceptedCleanupPending }
+        let replay = await transport.replaySummary(for: source.id)
+        check(replay.posts == 2 && replay.rows == 1 && replay.identical, "Lost response repeats immutable bytes into one accepted source")
+        let posted = try JSONSerialization.jsonObject(with: replay.body) as! [String: Any]
+        check(posted["assessmentMode"] as? String == "account_context" && posted["userId"] == nil
+            && posted["criteriaIds"] == nil && posted["analysisId"] == nil && posted["managerSpeakerId"] == nil,
+              "Unknown speaker still uploads under server-owned context without inferred employee or forced criteria")
+        check(try await meetings.loadTranscript(id: source.id) != nil, "A busy deletion owner retains the encrypted accepted source")
+        let acceptedPendingBytes = try Data(contentsOf: queueFile)
+        let postsBeforeRestart = await transport.postCount()
+        await service.shutdown()
+        meetings = PrivateProfileMeetingStore(); cleanup.store = meetings
+        service = makeService(meetings); try await service.install(); try await service.activateCurrentProfile()
+        check(await transport.postCount() == postsBeforeRestart, "Restarting delivery with a durable receipt never re-enters POST")
+        cleanup.busy = false; cleanup.failAfterDeleteOnce = true
+        await service.notifySceneActive(true)
+        try await wait {
+            let local = try await meetings.loadTranscript(id: source.id), record = try record(source.id)
+            return local == nil && record?.state == .acceptedCleanupPending
+        }
+        check(try record(source.id)?.receipt != nil, "Failure after source deletion retains the durable accepted cleanup intent")
+        await service.notifySceneActive(true)
+        try await wait { try record(source.id)?.sourcePurged == true }
+        check(try await meetings.loadTranscript(id: source.id) == nil, "Existing owner deletion removes the local recording after accepted receipt")
+        let compact = try record(source.id)!
+        let compactFile = profile.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1/settled/" + source.id.uuidString.lowercased() + ".json")
+        let compactJSON = try cipher.open(Data(contentsOf: compactFile), sessionID: source.id,
+            artifactKind: .publicationOutbox, maximumPlaintextBytes: 1_048_576)
+        let compactObject = try JSONSerialization.jsonObject(with: compactJSON) as! [String: Any]
+        check(compact.transcriptBytes == nil && compactObject["transcriptBytes"] == nil
+            && !String(decoding: compactJSON, as: UTF8.self).contains("Synthetic protected"),
+              "Settled receipt retains no transcript, title or participant names")
+        await transport.finishAnalysis(for: source.id)
+        try await service.reconcile(source.id)
+        if case .accepted(let receipt) = try await service.status(for: source.id) {
+            check(receipt.analysisState == .succeeded && receipt.accountContextPolicyCriteriaIDs == [],
+                  "Purged source reconciles genuine no-criteria summary through its semantic fingerprint")
+        } else { check(false, "Purged accepted source remains visible as receipt only") }
+        check(await transport.postCount() == postsBeforeRestart, "Cleanup and later analysis status never repeat upload or billing")
+        await service.pause()
+        try acceptedPendingBytes.write(to: queueFile)
+        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: queueFile.path)
+        let cold = box()
+        check(try await cold.pendingRecords().allSatisfy { $0.sessionID != source.id }
+            && !manager.fileExists(atPath: queueFile.path), "Compacted settled receipt wins over an interrupted encrypted full pending copy")
+        check(try PichiPublicationOutboxStore.hasEncryptedPersistenceData(in: profile), "Header-only preflight detects retained ciphertext before key loading")
+        let withoutKey = PichiPublicationOutboxStore(profile: profile, destination: .legacy(configuration))
+        do { _ = try await withoutKey.record(id: source.id); check(false, "Missing key must fail closed") }
+        catch let failure as PichiPublicationOutboxFailure { check(failure == .unavailable, "Missing key cannot decode or silently replace queued data") }
+        let ciphertext = try Data(contentsOf: compactFile)
+        let wrong = try MeetingRecordingCipher(profileID: profile.id, key: Data(repeating: 0xA8, count: 32))
+        do {
+            _ = try await PichiPublicationOutboxStore(profile: profile, destination: .legacy(configuration), cipher: wrong).record(id: source.id)
+            check(false, "Wrong key cannot decode a receipt")
+        } catch let failure as PichiPublicationOutboxFailure { check(failure == .corruptRecord, "Authenticated envelope rejects a wrong key") }
+        check(try Data(contentsOf: compactFile) == ciphertext, "Failed authentication preserves original ciphertext")
+        try compactJSON.write(to: compactFile)
+        do { _ = try await box().record(id: source.id); check(false, "Encrypted record cannot downgrade to plaintext") }
+        catch let failure as PichiPublicationOutboxFailure { check(failure == .invalidStorage, "A known encrypted-mode record rejects plaintext fallback") }
+        try ciphertext.write(to: compactFile)
+        try await service.resume()
+
+        await transport.holdNextResponse()
+        let editedSource = try await createSource()
+        try await wait { await transport.isHolding() }
+        var edit = editedSource; edit.transcriptSegments[0].text = "New protected manual edit [PERSON]."
+        try await meetings.save(edit)
+        await transport.releaseResponse()
+        try await wait { try record(editedSource.id)?.receiptPauseReason == .sourceConflict }
+        check(try await meetings.loadTranscript(id: editedSource.id)?.transcriptSegments[0].text == edit.transcriptSegments[0].text,
+              "Editing during upload preserves newer encrypted local work instead of deleting it")
+        await account.logout(); await account.signIn(email: "b@synthetic.example", password: "synthetic-only")
+        try await account.selectWorkspace(organizationID: "17", workspaceID: "9"); try await service.refresh()
+        check(!service.snapshot.cloudSyncEnabled && !service.snapshot.deleteLocalAfterAcceptance
+            && service.snapshot.automaticRecordingIDs.isEmpty, "Account B inherits no A delivery/retention policy or receipt projection")
+        await service.shutdown(); await account.shutdown()
+        return checks
+    }
+}
+
+private enum AutomaticFixtureFailure: Error { case timeout, busy }
+@MainActor private final class AutomaticCipherOwner {
+    var locked = false; var loads = 0
+    func load(_ profile: PrivateProfileSnapshot) throws -> MeetingRecordingCipher {
+        if locked { throw ProtectedDataAccessError.temporarilyUnavailable }
+        loads += 1
+        return try MeetingRecordingCipher(profileID: profile.id, key: Data(repeating: 0xA7, count: 32))
+    }
+}
+@MainActor private final class AutomaticCleanupOwner {
+    var store: PrivateProfileMeetingStore; var busy = true; var calls = 0; var failAfterDeleteOnce = false
+    init(store: PrivateProfileMeetingStore) { self.store = store }
+    func delete(_ id: UUID, owner: MeetingProfileOwnership) async throws {
+        calls += 1
+        if busy { throw AutomaticFixtureFailure.busy }
+        try await store.delete(id: id, expectedOwnership: owner)
+        if failAfterDeleteOnce { failAfterDeleteOnce = false; throw AutomaticFixtureFailure.busy }
+    }
+}
+@MainActor private final class AutomaticFixtureBrowser: AccountBrowserAuthenticating {
+    func authenticate(url: URL, callbackScheme: String) async throws -> URL { throw AccountError.unconfigured }
+    func cancel() {}
+}
+private actor AutomaticFixtureCredentials: AccountCredentialStoring {
+    func load() async throws -> AccountGrant? { nil }
+    func save(_ grant: AccountGrant) async throws { preconditionFailure("Legacy does not use OIDC grants") }
+    func clear() async throws {}
+}
+private actor AutomaticFixtureOIDC: AccountTransporting {
+    func authorizationURL(state: String, nonce: String, challenge: String) async throws -> URL { throw AccountError.unconfigured }
+    func exchange(code: String, verifier: String, nonce: String) async throws -> AccountTokenResponse { throw AccountError.unconfigured }
+    func refresh(_ grant: AccountGrant) async throws -> AccountTokenResponse { throw AccountError.unconfigured }
+    func account(accessToken: String) async throws -> AccountSnapshot { throw AccountError.unconfigured }
+    func revoke(refreshToken: String) async throws {}
+}
+private actor AutomaticFixtureTransport: LegacyAccountTransporting {
+    let configuration: LegacyAccountConfiguration
+    private var userID = "123", offline = false, loseNext = false, holdNext = false, holding = false
+    private var gate: CheckedContinuation<Void, Never>?
+    private var rows: [String: [String: Any]] = [:]
+    private var bodies: [String: [Data]] = [:]
+    init(configuration: LegacyAccountConfiguration) { self.configuration = configuration }
+    func login(email: String, password: String, captchaToken: String?) async throws -> AccountSnapshot {
+        userID = email.hasPrefix("b@") ? "124" : "123"; return try await account()
+    }
+    func account() async throws -> AccountSnapshot {
+        if offline { throw LegacyAccountConnectivityFailure.unavailable }
+        return .init(schemaVersion: 1, account: .init(id: userID, displayName: "Synthetic", email: nil),
+            identity: .init(issuer: "", subject: "", legacyOrigin: configuration.apiBaseURL.absoluteString),
+            organizations: [.init(id: "17", name: "Synthetic", workspaces: [.init(id: "9", name: "Synthetic", capabilities: ["recordings:import"])])],
+            activeOrganizationID: "17")
+    }
+    func switchOrganization(_ organizationID: String) async throws -> AccountSnapshot { try await account() }
+    func logout() async throws {}
+    func clearSession() async {}
+    func shutdown() async {}
+    func setOffline(_ value: Bool) { offline = value }
+    func loseNextResponse() { loseNext = true }
+    func holdNextResponse() { holdNext = true }
+    func isHolding() -> Bool { holding }
+    func releaseResponse() { holding = false; gate?.resume(); gate = nil }
+    func postCount() -> Int { bodies.values.reduce(0) { $0 + $1.count } }
+    func replaySummary(for id: UUID) -> (posts: Int, rows: Int, identical: Bool, body: Data) {
+        let key = id.uuidString.lowercased(), list = bodies[id.uuidString.lowercased()] ?? []
+        return (list.count, rows[key] == nil ? 0 : 1, Set(list).count == 1, list.first ?? Data())
+    }
+    func finishAnalysis(for id: UUID) {
+        let key = id.uuidString.lowercased()
+        rows[key]?["importBillingStatus"] = "not_required"; rows[key]?["summary"] = "Synthetic account-context summary"
+        rows[key]?["evaluationResults"] = ["noCriteria": true, "evaluations": []]
+    }
+    func perform(_ request: URLRequest) async throws -> LegacyAccountHTTPResponse {
+        if offline { throw LegacyAccountConnectivityFailure.unavailable }
+        let row: [String: Any]
+        if request.url!.path == "/api/recordings/transcript" {
+            let body = request.httpBody!, posted = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+            let source = posted["transcriptImport"] as! [String: Any], key = (source["sessionID"] as! String).lowercased()
+            bodies[key, default: []].append(body)
+            if rows[key] == nil {
+                var accepted = posted
+                accepted["id"] = 100 + rows.count; accepted["uploadedById"] = Int(userID)!; accepted["userId"] = Int(userID)!
+                accepted["managerSpeakerId"] = posted["managerSpeakerId"] ?? NSNull(); accepted["analysisId"] = NSNull()
+                accepted["criteriaIds"] = []; accepted["assessmentPolicyCriteriaIds"] = []
+                accepted["importSourceId"] = key; accepted["transcriptionStatus"] = "completed"
+                accepted["evaluationResults"] = NSNull(); accepted["importBillingStatus"] = "uncertain"
+                rows[key] = accepted
+            }
+            if holdNext { holdNext = false; holding = true; await withCheckedContinuation { gate = $0 } }
+            if loseNext { loseNext = false; throw LegacyAccountConnectivityFailure.unavailable }
+            row = rows[key]!
+        } else if request.url!.path.hasPrefix("/api/recordings/"),
+                  let id = Int(request.url!.lastPathComponent), let existing = rows.values.first(where: { $0["id"] as? Int == id }) {
+            row = existing
+        } else { throw AccountError.invalidConfiguration }
+        return .init(status: 200, body: try JSONSerialization.data(withJSONObject: row), retryAfter: nil)
+    }
+}

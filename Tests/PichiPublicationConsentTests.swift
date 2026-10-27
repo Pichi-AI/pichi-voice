@@ -73,6 +73,14 @@ struct PichiPublicationConsentTests {
         let coherentOn = try await store.automaticPublicationEnabled(for: a)
         let pausedOn = try await store.deliveryPaused(for: a)
         check(coherentOn && !pausedOn, "Cloud sync ON atomically opts in future captures and clears scoped pause")
+        check(try await !store.deleteLocalAfterAcceptance(for: a), "Future local removal defaults off")
+        try await store.setDeleteLocalAfterAcceptance(true, for: a)
+        check(try await restarted.deleteLocalAfterAcceptance(for: a), "Future local removal survives a fresh scoped store")
+        try await store.setDeliveryPaused(true, for: a)
+        try await store.setCloudSyncEnabled(true, for: a)
+        check(try await store.deleteLocalAfterAcceptance(for: a), "Pause and sync changes preserve the separate retention choice")
+        check(try await !store.deleteLocalAfterAcceptance(for: context("subject")), "Retention never crosses account ownership")
+
         try await store.setAutomaticPublicationEnabled(true, for: a)
         check(try manager.contentsOfDirectory(atPath: root.path).count == 1, "Atomic replacement leaves no task-owned temporary files")
 

@@ -20,6 +20,22 @@ nonisolated enum PichiPublicationRetryPolicy {
     static let maximumAutomaticAttempts = 5
     static let maximumAutomaticDelay: TimeInterval = 3_600
 
+    /// Account-context delivery remains queued across a long offline interval. Each
+    /// request and delay is bounded; lack of connectivity cannot spend a finite burst
+    /// budget and strand a protected source permanently after a few minutes.
+    static func automaticContextDecision(afterAttempt attempt: Int,
+        retryAfter: PichiPublicationRetryAfter?) -> PichiPublicationRetryDecision {
+        guard attempt > 0 else { return .pause(.retryBudgetExhausted) }
+        let backoff = min(60, 5 * pow(2, Double(min(10, attempt - 1))))
+        switch retryAfter {
+        case .beyondAutomaticWindow: return .pause(.retryAfterBeyondBudget)
+        case .seconds(let delay):
+            guard delay.isFinite, delay >= 0, delay <= maximumAutomaticDelay else { return .pause(.retryAfterBeyondBudget) }
+            return .retry(afterSeconds: max(backoff, delay))
+        case nil: return .retry(afterSeconds: backoff)
+        }
+    }
+
     static func decision(afterAttempt attempt: Int, retryAfter: PichiPublicationRetryAfter?) -> PichiPublicationRetryDecision {
         guard (1..<self.maximumAutomaticAttempts).contains(attempt) else { return .pause(.retryBudgetExhausted) }
         let backoff = 5 * pow(2, Double(attempt - 1))

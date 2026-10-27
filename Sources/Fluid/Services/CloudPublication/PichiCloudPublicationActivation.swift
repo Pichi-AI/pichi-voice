@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Network
 
 /// Composition owns the gap between N1's published context and its joined command.
 /// This is an activation task owner, not a second account or profile lifecycle.
@@ -12,6 +13,9 @@ import Foundation
     private var activation: Task<Void, Never>?
     private var revision = UUID()
     private var closed = false
+    private var networkMonitor: NWPathMonitor?
+    private var networkEvents: AsyncStream<Void>.Continuation?
+    private var networkWake: Task<Void, Never>?
     private(set) var isInstalled = false
 
     init(service: PichiCloudPublicationService, account: AccountSessionService, profiles: PrivateProfileService) {
@@ -30,6 +34,24 @@ import Foundation
         guard !closed else { throw AccountError.staleOperation }
         guard !isInstalled else { return }
         isInstalled = true
+        if account.isLegacySession {
+            // One coalesced event consumer belongs to this composition. A path is a
+            // wake hint; the shared account service still validates server identity/ACL.
+            let events = AsyncStream<Void>(bufferingPolicy: .bufferingNewest(1)) { self.networkEvents = $0 }
+            let continuation = self.networkEvents
+            let monitor = NWPathMonitor()
+            monitor.pathUpdateHandler = { path in
+                if path.status == .satisfied { continuation?.yield(()) }
+            }
+            monitor.start(queue: DispatchQueue(label: "publication-network-availability"))
+            networkMonitor = monitor
+            networkWake = Task { @MainActor [weak self] in
+                for await _ in events {
+                    guard let self, !self.closed, !Task.isCancelled else { return }
+                    await self.service.notifyServerAvailabilityChanged()
+                }
+            }
+        }
         account.$context.sink { [weak self] _ in self?.scheduleActivation() }.store(in: &observers)
         account.$state.sink { [weak self] _ in self?.scheduleActivation() }.store(in: &observers)
         account.$generation.sink { [weak self] _ in self?.scheduleActivation() }.store(in: &observers)
@@ -92,6 +114,9 @@ import Foundation
 
     func shutdown() async {
         closed = true; revision = UUID(); observers.removeAll()
+        networkMonitor?.cancel(); networkMonitor = nil
+        networkEvents?.finish(); networkEvents = nil
+        networkWake?.cancel(); await networkWake?.value; networkWake = nil
         activation?.cancel(); await activation?.value; activation = nil
         // Installation is local-only. Join it before shutting down the installed observer.
         _ = await installation?.result; installation = nil

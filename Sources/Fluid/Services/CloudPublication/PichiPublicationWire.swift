@@ -18,6 +18,8 @@ nonisolated struct PichiPublicationReceipt: Codable, Equatable, Sendable {
     let uploadState: UploadState
     let analysisState: PichiPublicationAnalysisState
     var billingState: PichiPublicationBillingState? = nil
+    /// Frozen server policy outcome for account-context imports, never a client default.
+    var accountContextPolicyCriteriaIDs: [String]? = nil
 
     fileprivate func validate() throws {
         guard self.schemaVersion == 1, PichiPublicationRequest.validID(self.importID),
@@ -532,6 +534,114 @@ nonisolated enum PichiLegacyPublicationRequest {
         body.append(transcriptBytes); body.append(125)
         guard body.count <= PichiPublicationRequest.maximumMultipartBytes else { throw PichiPublicationWireFailure.invalidRequest }
         return body
+    }
+
+    /// Account ownership comes from the authenticated session. The source is embedded
+    /// verbatim; an optional represented voice hint never becomes an employee identity.
+    static func accountContextBody(context: AccountContext, transcriptBytes: Data,
+                                   managerSpeakerID: UUID?) throws -> Data {
+        let represented = try PichiProtectedPublicationPayload.validate(transcriptBytes)
+        guard managerSpeakerID.map({ represented.contains($0) }) != false,
+              let workspace = context.workspaceID.flatMap(databaseID),
+              let object = try JSONSerialization.jsonObject(with: transcriptBytes) as? [String: Any],
+              let title = object["title"] as? String, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw PichiPublicationWireFailure.invalidRequest
+        }
+        struct Binding: Encodable {
+            let title: String; let workspaceId: Int
+            let assessmentMode = "account_context"; let assessmentPolicyVersion = 1
+            let managerSpeakerId: String?
+        }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var body = try encoder.encode(Binding(title: title, workspaceId: workspace,
+            managerSpeakerId: managerSpeakerID?.uuidString))
+        guard body.last == 125 else { throw PichiPublicationWireFailure.invalidRequest }
+        body.removeLast(); body.append(Data(",\"transcriptImport\":".utf8))
+        body.append(transcriptBytes); body.append(125)
+        guard body.count <= PichiPublicationRequest.maximumMultipartBytes else { throw PichiPublicationWireFailure.invalidRequest }
+        return body
+    }
+
+    /// JSONB can reorder object keys. A validated semantic fingerprint lets a minimal
+    /// accepted receipt verify later GETs after all local transcript content is removed.
+    static func canonicalSourceSHA256(_ bytes: Data) throws -> String {
+        _ = try PichiProtectedPublicationPayload.validate(bytes)
+        let object = try JSONSerialization.jsonObject(with: bytes)
+        let canonical = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
+        return SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func confirmedLocalUserHint(in bytes: Data) throws -> UUID? {
+        let represented = try PichiProtectedPublicationPayload.validate(bytes)
+        guard let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let speakers = object["speakers"] as? [[String: Any]] else { throw PichiPublicationWireFailure.invalidRequest }
+        let candidates = speakers.compactMap { speaker -> UUID? in
+            guard let local = speaker["isLocalUser"] as? NSNumber, CFGetTypeID(local) == CFBooleanGetTypeID(), local.boolValue,
+                  let provisional = speaker["identityIsProvisional"] as? NSNumber,
+                  CFGetTypeID(provisional) == CFBooleanGetTypeID(), !provisional.boolValue,
+                  let raw = speaker["id"] as? String, let id = UUID(uuidString: raw), represented.contains(id) else { return nil }
+            return id
+        }
+        return candidates.count == 1 ? candidates[0] : nil
+    }
+
+    static func accountContextReceipt(from response: PichiPublicationHTTPResponse, context: AccountContext,
+        sessionID: UUID, canonicalSourceSHA256: String, managerSpeakerID: UUID?,
+        expected: PichiPublicationReceipt? = nil) throws -> PichiPublicationReceipt {
+        guard let object = try checkedJSON(response) as? [String: Any],
+              let id = jsonID(object["id"]), jsonID(object["workspaceId"]) == context.workspaceID,
+              jsonID(object["uploadedById"]) == context.identity.internalUserID,
+              jsonID(object["userId"]) == context.identity.internalUserID,
+              object["assessmentMode"] as? String == "account_context",
+              let version = object["assessmentPolicyVersion"] as? NSNumber,
+              CFGetTypeID(version) != CFBooleanGetTypeID(), version.doubleValue == 1,
+              object["analysisId"] == nil || object["analysisId"] is NSNull,
+              object["deletedAt"] == nil || object["deletedAt"] is NSNull,
+              object["importSourceId"] as? String == sessionID.uuidString.lowercased(),
+              let source = object["transcriptImport"] as? [String: Any],
+              let rawSourceID = source["sessionID"] as? String, UUID(uuidString: rawSourceID) == sessionID,
+              expected != nil || object["title"] as? String == source["title"] as? String,
+              try Self.canonicalSourceSHA256(JSONSerialization.data(withJSONObject: source, options: [.sortedKeys, .withoutEscapingSlashes])) == canonicalSourceSHA256,
+              expected.map({ $0.importID == sessionID.uuidString.lowercased() && $0.recordingID == id }) != false else {
+            throw PichiPublicationWireFailure.invalidResponse
+        }
+        let acceptedHint: UUID?
+        if let raw = object["managerSpeakerId"] as? String, let hint = UUID(uuidString: raw) { acceptedHint = hint }
+        else if object["managerSpeakerId"] == nil || object["managerSpeakerId"] is NSNull { acceptedHint = nil }
+        else { throw PichiPublicationWireFailure.invalidResponse }
+        guard acceptedHint == managerSpeakerID else { throw PichiPublicationWireFailure.invalidResponse }
+        let criteria: [String]
+        if object["criteriaIds"] == nil || object["criteriaIds"] is NSNull { criteria = [] }
+        else if let values = object["criteriaIds"] as? [Any], values.count <= 10_000,
+                values.compactMap(jsonID).count == values.count {
+            criteria = values.compactMap(jsonID).sorted()
+        } else { throw PichiPublicationWireFailure.invalidResponse }
+        guard let policyValues = object["assessmentPolicyCriteriaIds"] as? [Any], policyValues.count <= 10_000,
+              policyValues.compactMap(jsonID).count == policyValues.count else {
+            throw PichiPublicationWireFailure.invalidResponse
+        }
+        let policyCriteria = policyValues.compactMap(jsonID).sorted()
+        guard Set(criteria).count == criteria.count, Set(policyCriteria).count == policyCriteria.count,
+              expected?.accountContextPolicyCriteriaIDs.map({ $0.sorted() == policyCriteria }) != false else {
+            throw PichiPublicationWireFailure.invalidResponse
+        }
+        let billing = (object["importBillingStatus"] as? String).flatMap(PichiPublicationBillingState.init(rawValue:)) ?? .uncertain
+        let state: PichiPublicationAnalysisState
+        if object["transcriptionStatus"] as? String == "failed" { state = .failed }
+        else if billing.needsReview { state = .queued }
+        else if object["processingStage"] as? String == "analyzing" { state = .running }
+        else if object["transcriptionStatus"] as? String == "completed",
+                let result = object["evaluationResults"] as? [String: Any] {
+            let evaluated = Set((result["evaluations"] as? [[String: Any]] ?? []).compactMap { jsonID($0["criterion_id"]) })
+            let noCriteria = (result["noCriteria"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } == true
+            let hasSummary = (object["summary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            state = criteria.isEmpty ? (noCriteria && hasSummary ? .succeeded : .queued)
+                : (Set(criteria).isSubset(of: evaluated) ? .succeeded : .queued)
+        } else { state = .queued }
+        var receipt = PichiPublicationReceipt(schemaVersion: 1, importID: sessionID.uuidString.lowercased(), recordingID: id,
+            uploadState: .accepted, analysisState: state)
+        receipt.billingState = billing; receipt.accountContextPolicyCriteriaIDs = policyCriteria
+        return receipt
     }
 
     static func importSource(origin: URL, frozenBody: Data) throws -> URLRequest {

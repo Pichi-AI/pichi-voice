@@ -26,7 +26,8 @@ extension PichiPublicationOutboxTests {
         let account = AccountSessionService(configuration: nil, browser: LegacyFacadeBrowser(), transport: LegacyFacadeUnusedOIDC(),
             credentials: LegacyFacadeCredentials(), lifecycle: profiles, legacyConfiguration: configuration, legacyTransport: transport)
         let meetings = PrivateProfileMeetingStore()
-        let service = PichiCloudPublicationService(account: account, meetings: meetings, profiles: profiles)
+        let service = PichiCloudPublicationService(account: account, meetings: meetings, profiles: profiles,
+            recordingCipher: { try MeetingRecordingCipher(profileID: $0.id, key: Data(repeating: 0x73, count: 32)) })
         try await service.install()
         await account.signIn(email: "a@synthetic.example", password: "synthetic-password")
         try await account.selectWorkspace(organizationID: "17", workspaceID: "9")
@@ -34,12 +35,18 @@ extension PichiPublicationOutboxTests {
         check(service.isLegacySession && service.legacyDestinationURL == configuration.apiBaseURL && !service.snapshot.cloudSyncEnabled,
               "Legacy composition uses the trusted destination and defaults consent off without an OIDC HTTP client")
         let participantID = UUID()
-        func capture() async throws -> MeetingSession {
+        func capture(priorLegacyAdmission: Bool = false) async throws -> MeetingSession {
             let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
             var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic legacy Ёё", languageCode: "ru",
                 microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic")),
                 startedAt: Date(timeIntervalSince1970: 1_700_000_000), timebase: timebase)
             session.state = .recording; session.audioStorageMode = .memoryOnly; session.piiRedactionEnabled = true
+            if priorLegacyAdmission {
+                // Explicitly restore an already admitted pre-automatic source. The ordinary
+                // capture callback cannot grant new historical/automatic consent.
+                let prior = PichiPublicationOutboxStore(profile: PrivateProfileStorage.current, destination: .legacy(configuration))
+                _ = try await prior.capture(id: session.id, automaticConsent: true)
+            }
             session.profileOwnership = try await meetings.captureOwnership(for: session.id)
             let track = UUID()
             session.audioTracks = [.init(id: track, kind: .microphone, sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic",
@@ -57,7 +64,7 @@ extension PichiPublicationOutboxTests {
         let oldLocal = try await capture()
         try await service.setCloudSyncEnabled(true)
         check(try await service.status(for: oldLocal.id) == .localOnly, "Later consent cannot grant historical send admission")
-        let source = try await capture()
+        let source = try await capture(priorLegacyAdmission: true)
         try await Task.sleep(for: .seconds(5.2))
         let unsentPosts = await transport.postCount(), unsentStatus = try await service.status(for: source.id)
         check(unsentPosts == 0 && unsentStatus == .queued,
