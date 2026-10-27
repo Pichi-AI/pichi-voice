@@ -373,7 +373,22 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         let paused = try await consent.deliveryPaused(for: context)
         let enabled = try await consent.automaticPublicationEnabled(for: context)
         try self.check(profile, context: context)
-        if paused || !enabled || self.offLatch?.profileID == profile.id { self.userPaused = true; try await self.refreshBody(); return }
+        if paused || !enabled || self.offLatch?.profileID == profile.id {
+            self.userPaused = true
+            // Pausing new network delivery does not revoke an already accepted
+            // capture's frozen local-retention policy. This branch performs no HTTP.
+            if account.isLegacySession, recordingCipherProvider != nil {
+                let hasExisting = recordingCipher != nil ? true : try PichiPublicationOutboxStore.hasEncryptedPersistenceData(in: profile)
+                if hasExisting {
+                    try await ensureRecordingCipher(profile: profile, context: context, store: store)
+                    for record in try await store.pendingRecords() where record.state == .acceptedCleanupPending {
+                        await cleanupAccepted(record, profile: profile, context: context, store: store)
+                    }
+                }
+            }
+            try await self.refreshBody()
+            return
+        }
         guard self.http != nil || self.account.isLegacySession else { throw PichiPublicationNetworkFailure.unavailable }
         if account.isLegacySession { try await ensureRecordingCipher(profile: profile, context: context, store: store) }
         let records = try await store.pendingRecords()

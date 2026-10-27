@@ -194,6 +194,17 @@ extension PichiPublicationOutboxTests {
         try await wait { try record(lateEdited.id)?.receiptPauseReason == .sourceConflict }
         check(try await meetings.loadTranscript(id: lateEdited.id)?.transcriptSegments[0].text == "Late protected edit at deletion boundary [PERSON].",
               "The deletion owner receives the frozen digest and rejects work changed after publication preflight")
+        cleanup.busy = true
+        let acceptedBeforeOff = try await createSource()
+        try await wait { try record(acceptedBeforeOff.id)?.state == .acceptedCleanupPending }
+        let postedBeforeOff = await transport.postCount()
+        try await service.setCloudSyncEnabled(false)
+        cleanup.busy = false
+        await service.notifySceneActive(true)
+        try await wait { try record(acceptedBeforeOff.id)?.sourcePurged == true }
+        let postedAfterOff = await transport.postCount()
+        check(!service.snapshot.cloudSyncEnabled && postedAfterOff == postedBeforeOff,
+              "Disabled publication still completes previously authorized local cleanup without another network upload")
         await account.logout(); await account.signIn(email: "b@synthetic.example", password: "synthetic-only")
         try await account.selectWorkspace(organizationID: "17", workspaceID: "9"); try await service.refresh()
         check(!service.snapshot.cloudSyncEnabled && !service.snapshot.deleteLocalAfterAcceptance
