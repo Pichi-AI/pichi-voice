@@ -483,13 +483,17 @@ private struct MobileAccountPanel: View {
                     Text(verbatim: destination).font(theme.typography.captionStrong)
                         .accessibilityIdentifier("account.legacy.destination")
                 }
-                TextField(PichiLocalization.text("account.legacy.email", defaultValue: "Email"), text: $legacyEmail)
+                TextField(PichiLocalization.text("account.legacy.email", defaultValue: "Email"), text: $legacyEmail,
+                          prompt: Text(PichiLocalization.text("account.legacy.email", defaultValue: "Email"))
+                            .foregroundStyle(theme.palette.secondaryText))
                     .textContentType(.username).keyboardType(.emailAddress)
                     .focused($legacyFocus, equals: .email)
                     .submitLabel(.next).onSubmit { legacyFocus = .password }
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .disabled(!interaction.canSignIn).accessibilityIdentifier("account.legacy.email")
-                SecureField(PichiLocalization.text("account.legacy.password", defaultValue: "Password"), text: $legacyPassword)
+                SecureField(PichiLocalization.text("account.legacy.password", defaultValue: "Password"), text: $legacyPassword,
+                            prompt: Text(PichiLocalization.text("account.legacy.password", defaultValue: "Password"))
+                                .foregroundStyle(theme.palette.secondaryText))
                     .textContentType(.password).focused($legacyFocus, equals: .password)
                     .submitLabel(.done).onSubmit { legacyFocus = nil }
                     .disabled(!interaction.canSignIn)
