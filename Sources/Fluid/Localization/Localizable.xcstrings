@@ -58323,13 +58323,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Your password is used only to sign in. Sign in again after restarting the app."
+            "value": "Your password is used only to sign in. This device stores your session securely."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Пароль используется только для входа. После перезапуска приложения войдите снова."
+            "value": "Пароль используется только для входа. Сеанс безопасно хранится на этом устройстве."
           }
         }
       }
@@ -58585,6 +58585,125 @@
           "stringUnit": {
             "state": "translated",
             "value": "На этом устройстве выполнен выход. Сервер не подтвердил завершение сеансов на всех устройствах."
+          }
+        }
+      }
+    },
+    "account.legacy.offline": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Offline. Your account will be checked again before anything is sent."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет связи. Перед отправкой учётная запись будет проверена снова."
+          }
+        }
+      }
+    },
+    "cloud.automatic.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send protected transcripts automatically"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправлять защищённые расшифровки автоматически"
+          }
+        }
+      }
+    },
+    "cloud.automatic.consent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New completed protected transcripts are sent to your selected account and workspace automatically. Audio is not retained in this mode. Turn on Data cleanup before recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новые завершённые защищённые расшифровки автоматически отправляются в выбранную учётную запись и рабочее пространство. В этом режиме аудио не сохраняется. Перед записью включите обезличивание данных."
+          }
+        }
+      }
+    },
+    "cloud.automatic.deleteLocal": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Do not keep recordings on this device"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не хранить записи на этом устройстве"
+          }
+        }
+      }
+    },
+    "cloud.automatic.retention": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The local recording is deleted only after the server confirms receipt. While the server is unavailable, an encrypted local copy is kept and delivery is retried."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная запись удаляется только после подтверждения приёма сервером. Пока сервер недоступен, зашифрованная копия остаётся на устройстве, а отправка повторяется."
+          }
+        }
+      }
+    },
+    "cloud.automatic.runtime": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delivery resumes automatically while the app is running and the server is reachable."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправка возобновляется автоматически, когда приложение работает и сервер доступен."
+          }
+        }
+      }
+    },
+    "cloud.automatic.requiresPrivacy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on Data cleanup before recording with automatic protected delivery."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перед записью с автоматической отправкой включите обезличивание данных."
           }
         }
       }

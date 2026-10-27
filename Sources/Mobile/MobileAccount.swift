@@ -146,7 +146,7 @@ final class MobileAccountInteraction: ObservableObject {
 @MainActor
 final class MobileCloudInteraction: ObservableObject {
     enum Action: Equatable {
-        case toggle(Bool), pause, resume, send(UUID), retry(UUID), reconcile(UUID), options(UUID), assessment(UUID)
+        case toggle(Bool), retention(Bool), pause, resume, send(UUID), retry(UUID), reconcile(UUID), options(UUID), assessment(UUID)
     }
     @Published private(set) var action: Action?
     @Published private(set) var failed = false
@@ -498,7 +498,7 @@ private struct MobileAccountPanel: View {
                     .submitLabel(.done).onSubmit { legacyFocus = nil }
                     .disabled(!interaction.canSignIn)
                     .accessibilityIdentifier("account.legacy.password")
-                Text(PichiLocalization.text("account.legacy.sessionOnly", defaultValue: "Your password is used only to sign in. Sign in again after restarting the app."))
+                Text(PichiLocalization.text("account.legacy.sessionOnly", defaultValue: "Your password is used only to sign in. This device stores your session securely."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -538,6 +538,11 @@ private struct MobileAccountPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }.accessibilityElement(children: .combine)
+        if session.isAwaitingLegacyServerValidation {
+            Text(PichiLocalization.text("account.legacy.offline", defaultValue: "Offline. Your account will be checked again before anything is sent."))
+                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("account.legacy.offline")
+        }
         Text(PichiLocalization.text("account.workspace.choose", defaultValue: "Choose a workspace"))
             .font(theme.typography.bodyStrong)
         if account.organizations.allSatisfy({ $0.workspaces.isEmpty }) {
@@ -677,13 +682,26 @@ struct MobileCloudSyncSettings: View {
     var body: some View {
         if interaction.publications.admit() != nil {
             VStack(alignment: .leading, spacing: theme.metrics.spacing.md) {
-                Toggle(MobileCloudCopy.text("title"), isOn: Binding(
+                Toggle(MobileCloudCopy.text(service.isLegacySession ? "automatic.title" : "title"), isOn: Binding(
                     get: { service.snapshot.cloudSyncEnabled },
                     set: { enabled in command(.toggle(enabled)) { try await service.setCloudSyncEnabled(enabled) } }))
                     .disabled(isBusy || unavailable)
                     .accessibilityIdentifier("cloud.sync.toggle")
-                Text(MobileCloudCopy.text(service.isLegacySession ? "legacy.consent" : "consent"))
+                Text(MobileCloudCopy.text(service.isLegacySession ? "automatic.consent" : "consent"))
                     .font(theme.typography.bodySmall).fixedSize(horizontal: false, vertical: true)
+                if service.isLegacySession {
+                    Toggle(MobileCloudCopy.text("automatic.deleteLocal"), isOn: Binding(
+                        get: { service.snapshot.deleteLocalAfterAcceptance },
+                        set: { enabled in command(.retention(enabled)) { try await service.setDeleteLocalAfterAcceptance(enabled) } }))
+                        .disabled(isBusy || unavailable || !service.snapshot.cloudSyncEnabled)
+                        .accessibilityIdentifier("cloud.automatic.deleteLocal")
+                    Text(MobileCloudCopy.text("automatic.retention"))
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(MobileCloudCopy.text("automatic.runtime"))
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text(MobileCloudCopy.text("history"))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -834,7 +852,7 @@ struct MobileCloudRecordingStatus: View {
         if MobileCloudCopy.canUseNetwork(service.snapshot) {
             switch status {
             case .queued:
-                if service.isLegacySession {
+                if service.isLegacySession && !service.snapshot.automaticRecordingIDs.contains(recordingID) {
                     Button(MobileCloudCopy.text("action.send")) {
                         guard interaction.publications.admit() != nil else { return }
                         projection.legacyTarget = .init(recordingID: recordingID)
