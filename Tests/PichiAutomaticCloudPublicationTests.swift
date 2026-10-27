@@ -38,6 +38,15 @@ extension PichiPublicationOutboxTests {
         await account.signIn(email: "a@synthetic.example", password: "synthetic-only")
         check(try await service.prepareAutomaticCapture() == false && keyOwner.loads == 0,
               "Signed-in accounts without a selected workspace keep ordinary local recording available")
+        try await service.refresh()
+        let unselectedRoot = PrivateProfileStorage.current.rootDirectory
+        check(service.snapshot.availability == .unconfigured
+            && !manager.fileExists(atPath: unselectedRoot.appendingPathComponent("CloudPublication").path),
+              "An unselected workspace cannot construct an invalid outbox or consent directory")
+        await account.retireLegacySession()
+        check(profiles.isPrivateDataVisible && PrivateProfileStorage.current.isGuest && account.presentationError == nil,
+              "A no-workspace account retires through the existing profile lifecycle without a hidden cleanup failure")
+        await account.signIn(email: "a@synthetic.example", password: "synthetic-only")
         try await account.selectWorkspace(organizationID: "17", workspaceID: "9")
         check(try await service.prepareAutomaticCapture() == false, "Automatic capture is off before explicit future consent")
         try await service.setDeleteLocalAfterAcceptance(true)

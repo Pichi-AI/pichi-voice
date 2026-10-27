@@ -262,6 +262,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             let availability: PichiCloudPublicationAvailability = !self.account.isConfigured ? .unconfigured
                 : !visible.isReadable || self.closing ? .profileUnavailable
                 : self.account.context == nil ? .signedOut
+                : self.account.context?.organizationID == nil || self.account.context?.workspaceID == nil ? .unconfigured
                 : self.account.state == .reauthenticationRequired ? .paused : .storageUnavailable
             let sameOwner = visible.isReadable && self.scope?.id == visible.id
             self.snapshot = .init(availability: availability,
@@ -776,6 +777,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         -> (PrivateProfileSnapshot, AccountContext, PichiPublicationOutboxStore, PichiPublicationConsentStore) {
         guard !self.shutDown, let configuration = self.account.publicationConfiguration else { throw AccountError.unconfigured }
         guard let context = self.account.context, self.account.isCurrent(context) else { throw AccountError.staleOperation }
+        guard context.organizationID != nil, context.workspaceID != nil else { throw AccountError.workspaceUnavailable }
         let profile = PrivateProfileStorage.current
         guard !profile.isGuest, profile.context == context, PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
               expected.map({ $0 == profile }) != false else { throw AccountError.staleOperation }
