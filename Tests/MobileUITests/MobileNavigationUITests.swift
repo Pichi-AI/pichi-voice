@@ -690,6 +690,7 @@ final class MobileNavigationUITests: XCTestCase {
             capture("legacy-\(language)-\(appearance)-secure-password")
             // Do not submit credentials or create any remote session.
             openNavigation("meetings", title: language == "ru" ? "Встречи" : "Meetings")
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5), "The visible Meetings control must actually leave the Account screen")
             openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
             if app.buttons["settings.account"].exists { app.buttons["settings.account"].tap() }
             XCTAssertTrue(app.secureTextFields["account.legacy.password"].waitForExistence(timeout: 5))
@@ -2079,7 +2080,13 @@ final class MobileNavigationUITests: XCTestCase {
 
     private func openNavigation(_ identifier: String, title: String) {
         let sidebar = app.buttons["navigation.\(identifier)"]
-        if sidebar.exists { sidebar.tap() } else { app.tabBars.buttons[title].tap() }
+        if sidebar.exists && sidebar.isHittable { sidebar.tap() }
+        else {
+            let tab = app.tabBars.buttons[title]
+            XCTAssertTrue(tab.waitForExistence(timeout: 5) && tab.isHittable,
+                          "Navigation must target a visible sidebar or tab control")
+            tab.tap()
+        }
         capture("navigation-\(identifier)")
     }
 
