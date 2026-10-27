@@ -426,13 +426,6 @@ private struct MobileAccountPanel: View {
                     .accessibilityIdentifier("account.error")
             }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button(PichiLocalization.text("Done")) { legacyFocus = nil }
-                    .accessibilityIdentifier("account.legacy.dismissKeyboard")
-            }
-        }
         .onChange(of: interaction.action != nil) { _, active in actionChanged(active) }
         .onChange(of: interaction.presentationRevision) { _, _ in
             legacyFocus = nil; legacyEmail = ""; legacyPassword = ""
