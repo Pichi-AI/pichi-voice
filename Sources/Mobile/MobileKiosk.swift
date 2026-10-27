@@ -30,6 +30,9 @@ struct MobileKioskRoot: View {
     @State private var awakeToken: UUID?
 
     private var status: String {
+        if !access.isAvailable {
+            return "Kiosk security is unavailable. Access remains locked. Try again after unlocking the device."
+        }
         if recordingError { return "Recording could not be completed. Contact your administrator." }
         switch coordinator.state {
         case .recording, .recordingDegraded: return "Recording"
