@@ -310,12 +310,12 @@ final class AppServices: ObservableObject {
 
     func setSceneActive(_ active: Bool) async {
         isSceneActive = active
-        cloudPublication?.notifySceneActive(active)
+        await cloudPublication?.notifySceneActive(active)
         await updateIdlePreparation()
     }
 
     func protectedDataDidBecomeAvailable() async {
-        cloudPublication?.notifyServerAvailabilityChanged()
+        await cloudPublication?.notifyServerAvailabilityChanged()
     }
 
     func didReceiveMemoryWarning() async {
