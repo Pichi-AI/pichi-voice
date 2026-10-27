@@ -21,7 +21,7 @@ xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
     -module-cache-path "$task_test_dir/AccountModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
-    Sources/Fluid/Account/Account*.swift Sources/Fluid/UI/DesktopAccountGuestContinuation.swift \
+    Sources/Fluid/Persistence/ProtectedDataAccessError.swift Sources/Fluid/Account/Account*.swift Sources/Fluid/UI/DesktopAccountGuestContinuation.swift \
     Sources/Fluid/UI/DesktopAccountProjection.swift \
     Tests/DesktopAccountGuestContinuationTests.swift -o "$task_test_dir/DesktopAccountGuestContinuationTests"
 "$task_test_dir/DesktopAccountGuestContinuationTests"

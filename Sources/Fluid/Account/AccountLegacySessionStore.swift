@@ -88,6 +88,7 @@ actor LegacyAccountKeychainStore: LegacyAccountSessionStoring {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(request as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
+        if let unavailable = ProtectedDataAccessError.keychainFailure(status) { throw unavailable }
         guard status == errSecSuccess, let data = result as? Data, data.count <= LegacyAccountStoredSession.maximumBytes else {
             throw AccountError.credentialsUnavailable
         }
@@ -104,14 +105,18 @@ actor LegacyAccountKeychainStore: LegacyAccountSessionStoring {
         let attributes: [String: Any] = [kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
         let status = SecItemUpdate(query() as CFDictionary, attributes as CFDictionary)
+        if let unavailable = ProtectedDataAccessError.keychainFailure(status) { throw unavailable }
         if status == errSecItemNotFound {
             var insert = query(); attributes.forEach { insert[$0.key] = $0.value }
-            guard SecItemAdd(insert as CFDictionary, nil) == errSecSuccess else { throw AccountError.credentialsUnavailable }
+            let inserted = SecItemAdd(insert as CFDictionary, nil)
+            if let unavailable = ProtectedDataAccessError.keychainFailure(inserted) { throw unavailable }
+            guard inserted == errSecSuccess else { throw AccountError.credentialsUnavailable }
         } else if status != errSecSuccess { throw AccountError.credentialsUnavailable }
         guard try storedBytes() == data else { throw AccountError.credentialsUnavailable }
     }
     func clear() throws {
         let status = SecItemDelete(query() as CFDictionary)
+        if let unavailable = ProtectedDataAccessError.keychainFailure(status) { throw unavailable }
         guard status == errSecSuccess || status == errSecItemNotFound else { throw AccountError.credentialsUnavailable }
         guard try storedBytes() == nil else { throw AccountError.credentialsUnavailable }
     }

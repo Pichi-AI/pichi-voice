@@ -13,6 +13,9 @@ import Foundation
     private let legacyTransport: (any LegacyAccountTransporting)?
     private let legacyCredentials: (any LegacyAccountSessionStoring)?
     private var legacyStoredSession: LegacyAccountStoredSession?
+    private var pendingLegacySession: LegacyAccountStoredSession?
+    private var legacyProtectedRollbackRequired = false
+    @Published private(set) var isAwaitingProtectedData = false
     @Published private(set) var isAwaitingLegacyServerValidation = false
     private var legacySessionActive = false
     private var legacyRemoteRevocationRequested = false
@@ -363,7 +366,8 @@ import Foundation
         let persisted = try? await credentials.load()
         let revokeToken = latestDeviceRefreshToken ?? (persisted ?? previousGrant)?.refreshToken
         grant = nil; context = nil; account = nil; requiresAccountValidation = false
-        legacyStoredSession = nil; isAwaitingLegacyServerValidation = false
+        legacyStoredSession = nil; pendingLegacySession = nil; isAwaitingLegacyServerValidation = false
+        isAwaitingProtectedData = false; legacyProtectedRollbackRequired = false
         state = isConfigured ? .signedOut : .unconfigured
         do { try await lifecycle?.transition(from: previousContext, to: nil, generation: captured) }
         catch { cleanupRequired = true; presentationError = sanitized(error) }
@@ -428,7 +432,8 @@ import Foundation
     private func failedAdmission(_ error: Error, generation captured: UUID) async {
         let failure = sanitized(error)
         await legacyTransport?.clearSession()
-        legacySessionActive = false; legacyStoredSession = nil; isAwaitingLegacyServerValidation = false
+        legacySessionActive = false; legacyStoredSession = nil; pendingLegacySession = nil; isAwaitingLegacyServerValidation = false
+        isAwaitingProtectedData = false; legacyProtectedRollbackRequired = false
         do { try await legacyCredentials?.clear() } catch { cleanupRequired = true }
         do { try restoration.inhibit() } catch { cleanupRequired = true }
         do { try await lifecycle?.transition(from: context, to: nil, generation: captured) }
@@ -474,18 +479,24 @@ extension AccountSessionService {
                 do {
                     try legacyConfiguration.validate()
                     guard self.configuration == nil else { throw AccountError.invalidConfiguration }
+                    try self.restoration.inhibit()
+                    self.pendingLegacySession = nil
                     let snapshot = try await legacyTransport.login(email: email, password: password, captchaToken: captchaToken)
                     try snapshot.validateLegacy(origin: legacyConfiguration.apiBaseURL)
                     try self.check(captured)
                     let next = AccountContext(identity: snapshot.stableIdentity, organizationID: nil, workspaceID: nil, generation: captured)
-                    try await self.lifecycle?.transition(from: nil, to: next, generation: captured)
+                    self.pendingLegacySession = try await self.legacySessionEnvelope(snapshot: snapshot, context: next)
+                    try await self.transitionLegacyProfile(from: nil, to: next, generation: captured)
                     try self.check(captured)
                     self.legacySessionActive = true
                     self.account = snapshot; self.context = next; self.state = .signedIn
                     self.isAwaitingLegacyServerValidation = false
                     try await self.persistLegacySession(snapshot: snapshot, context: next)
                 } catch {
-                    if self.generation == captured { await self.failedAdmission(error, generation: captured) }
+                    if self.generation == captured {
+                        if error is ProtectedDataAccessError { await self.handleTemporaryLegacyFailure(generation: captured) }
+                        else { await self.failedAdmission(error, generation: captured) }
+                    }
                     throw error
                 }
             }
@@ -529,20 +540,33 @@ extension AccountSessionService {
     }
 
     private func persistLegacySession(snapshot: AccountSnapshot, context expected: AccountContext) async throws {
-        guard let legacyCredentials, let legacyConfiguration, let legacyTransport else { return }
+        guard let legacyCredentials else { return }
         try check(expected.generation)
         guard context == expected, state == .signedIn else { throw AccountError.staleOperation }
+        guard let saved = try await legacySessionEnvelope(snapshot: snapshot, context: expected) else { throw AccountError.credentialsUnavailable }
+        pendingLegacySession = saved
+        try await legacyCredentials.save(saved)
+        try check(expected.generation)
+        guard context == expected else { throw AccountError.staleOperation }
+        try restoration.permit()
+        legacyStoredSession = saved; pendingLegacySession = nil; isAwaitingProtectedData = false
+    }
+
+    private func legacySessionEnvelope(snapshot: AccountSnapshot, context expected: AccountContext) async throws -> LegacyAccountStoredSession? {
+        guard legacyCredentials != nil, let legacyConfiguration, let legacyTransport else { return nil }
         guard let cookie = try await legacyTransport.sessionCookie() else { throw AccountError.credentialsUnavailable }
         try check(expected.generation)
         let saved = LegacyAccountStoredSession(schemaVersion: 1, configuration: legacyConfiguration,
             cookie: cookie, snapshot: snapshot, verifiedAt: Date(),
             organizationID: expected.organizationID, workspaceID: expected.workspaceID)
         try saved.validate(configuration: legacyConfiguration)
-        try await legacyCredentials.save(saved)
-        try check(expected.generation)
-        guard context == expected else { throw AccountError.staleOperation }
-        try restoration.permit()
-        legacyStoredSession = saved
+        return saved
+    }
+
+    private func transitionLegacyProfile(from: AccountContext?, to: AccountContext?, generation: UUID) async throws {
+        legacyProtectedRollbackRequired = true
+        try await lifecycle?.transition(from: from, to: to, generation: generation)
+        legacyProtectedRollbackRequired = false
     }
 
     private func validateLegacySelection(_ snapshot: AccountSnapshot, saved: LegacyAccountStoredSession) throws {
@@ -557,12 +581,16 @@ extension AccountSessionService {
 
     private func restoreLegacySession() async {
         guard let configuration = legacyConfiguration, let legacyTransport, let legacyCredentials,
-              isSignInAvailable, restoration.isAllowed, ownedOperation == nil, context == nil else { return }
+              isSignInAvailable, (restoration.isAllowed || pendingLegacySession != nil), ownedOperation == nil, context == nil else { return }
         generation = UUID()
         let captured = generation, id = UUID()
         let task = Task { @MainActor in
             do {
-                guard let saved = try await legacyCredentials.load() else { return }
+                let wasPending = self.pendingLegacySession != nil
+                let candidate: LegacyAccountStoredSession?
+                if let pending = self.pendingLegacySession { candidate = pending }
+                else { candidate = try await legacyCredentials.load() }
+                guard let saved = candidate else { return }
                 try saved.validate(configuration: configuration)
                 try self.check(captured)
                 try await legacyTransport.restoreSession(saved.cookie)
@@ -580,12 +608,21 @@ extension AccountSessionService {
                 try self.check(captured)
                 let next = AccountContext(identity: saved.snapshot.stableIdentity,
                     organizationID: saved.organizationID, workspaceID: saved.workspaceID, generation: captured)
-                try await self.lifecycle?.transition(from: nil, to: next, generation: captured)
+                self.pendingLegacySession = saved
+                try await self.transitionLegacyProfile(from: nil, to: next, generation: captured)
                 try self.check(captured)
                 self.legacySessionActive = true; self.legacyStoredSession = saved
                 self.account = snapshot; self.context = next; self.state = .signedIn
                 self.isAwaitingLegacyServerValidation = awaitingServer; self.presentationError = nil
                 if !awaitingServer { try await self.persistLegacySession(snapshot: snapshot, context: next) }
+                else if wasPending {
+                    // Preserve the original verification time when a fresh pre-lock
+                    // envelope is saved after unlock while connectivity is still absent.
+                    try await legacyCredentials.save(saved)
+                    try self.check(captured)
+                    try self.restoration.permit()
+                    self.pendingLegacySession = nil; self.isAwaitingProtectedData = false
+                } else { self.pendingLegacySession = nil; self.isAwaitingProtectedData = false }
             } catch {
                 if self.generation == captured {
                     if error is CancellationError {
@@ -596,6 +633,8 @@ extension AccountSessionService {
                             self.legacySessionActive = false; self.isAwaitingLegacyServerValidation = false
                             self.state = .signedOut; self.presentationError = .cancelled
                         }
+                    } else if error is ProtectedDataAccessError {
+                        await self.handleTemporaryLegacyFailure(generation: captured)
                     } else {
                         await self.failedAdmission(error, generation: captured)
                         if self.generation == captured { self.state = .reauthenticationRequired }
@@ -609,13 +648,80 @@ extension AccountSessionService {
         if ownedOperation?.id == id { ownedOperation = nil }
     }
 
+    /// A transient keystore lock never revokes a credential. Only a failed profile
+    /// activation needs joined guest rollback; an already committed safe owner stays.
+    private func handleTemporaryLegacyFailure(generation captured: UUID) async {
+        guard generation == captured else { return }
+        isAwaitingProtectedData = true; isAwaitingLegacyServerValidation = true
+        presentationError = nil
+        guard legacyProtectedRollbackRequired else { return }
+        let old = context
+        context = nil; account = nil; state = .signedOut
+        do {
+            try await lifecycle?.transition(from: old, to: nil, generation: captured)
+            if generation == captured { legacyProtectedRollbackRequired = false }
+        } catch is ProtectedDataAccessError {
+            // The guest's protected sources may also be locked. Keep the failed
+            // account concealed and retry this exact cleanup after unlock.
+        } catch {
+            if generation == captured { cleanupRequired = true; presentationError = sanitized(error) }
+        }
+    }
+
+    /// Bounded retry for the OS protected-data notification or foreground wake.
+    /// This joins the same operation slot and never changes logout/restoration intent.
+    func restoreAfterProtectedDataAvailable() async {
+        guard isLegacySession, isAwaitingProtectedData, !isShuttingDown, !boundaryInProgress,
+              !cleanupRequired, authenticationCommand == nil, ownedOperation == nil,
+              restoration.isAllowed || pendingLegacySession != nil else { return }
+        let captured = generation, id = UUID()
+        let task = Task<Void, Error> { @MainActor in
+            do {
+                if self.legacyProtectedRollbackRequired {
+                    try await self.lifecycle?.transition(from: self.context, to: nil, generation: captured)
+                    try self.check(captured)
+                    self.legacyProtectedRollbackRequired = false
+                }
+                // A pending envelope is previously server-verified. Saving its exact
+                // bytes after unlock does not assert another fresh server validation.
+                if let expected = self.context, let pending = self.pendingLegacySession,
+                   let credentials = self.legacyCredentials, let configuration = self.legacyConfiguration {
+                    try pending.validate(configuration: configuration)
+                    guard pending.snapshot.stableIdentity == expected.identity,
+                          pending.organizationID == expected.organizationID,
+                          pending.workspaceID == expected.workspaceID else { throw AccountError.invalidAccount }
+                    try await credentials.save(pending)
+                    try self.check(captured)
+                    guard self.context == expected else { throw AccountError.staleOperation }
+                    try self.restoration.permit()
+                    self.legacyStoredSession = pending; self.pendingLegacySession = nil
+                }
+                try self.check(captured)
+                self.isAwaitingProtectedData = false
+            } catch is ProtectedDataAccessError {
+                await self.handleTemporaryLegacyFailure(generation: captured)
+            } catch is CancellationError {
+                // The owner of logout/shutdown joins this attempt before clearing.
+            } catch {
+                if self.generation == captured { await self.failedAdmission(error, generation: captured) }
+            }
+        }
+        ownedOperation = OwnedOperation(id: id, kind: .restoration, task: task)
+        await withTaskCancellationHandler { _ = try? await task.value } onCancel: { task.cancel() }
+        if ownedOperation?.id == id { ownedOperation = nil }
+        guard !Task.isCancelled, !isShuttingDown, generation == captured, !isAwaitingProtectedData else { return }
+        if context == nil { await restoreLegacySession() }
+        else { await restoreAfterConnectivity() }
+    }
+
     /// One connectivity event, one bounded validation. It never switches an identity
     /// or retries a password, and it leaves the existing offline capture owner intact.
     func restoreAfterConnectivity() async {
         guard isLegacySession else { return }
+        if isAwaitingProtectedData { await restoreAfterProtectedDataAvailable(); return }
         if context == nil { await restoreLegacySession(); return }
         guard isAwaitingLegacyServerValidation, isSignInAvailable, ownedOperation == nil,
-              let expected = context, state == .signedIn, let saved = legacyStoredSession else { return }
+              let expected = context, state == .signedIn, let saved = pendingLegacySession ?? legacyStoredSession else { return }
         let id = UUID(), captured = expected.generation
         let task = Task<Void, Error> { @MainActor in
             do {
@@ -628,6 +734,8 @@ extension AccountSessionService {
                 try await self.persistLegacySession(snapshot: snapshot, context: expected)
                 try self.check(captured)
                 self.isAwaitingLegacyServerValidation = false; self.presentationError = nil
+            } catch is ProtectedDataAccessError {
+                await self.handleTemporaryLegacyFailure(generation: captured)
             } catch is LegacyAccountConnectivityFailure {
                 // Still offline. Keep only the already admitted local profile.
             } catch is CancellationError {
@@ -659,13 +767,17 @@ extension AccountSessionService {
             self.generation = UUID()
             let next = AccountContext(identity: old.identity, organizationID: organizationID, workspaceID: workspaceID, generation: self.generation)
             do {
-                try await self.lifecycle?.transition(from: old, to: next, generation: next.generation)
+                self.pendingLegacySession = try await self.legacySessionEnvelope(snapshot: snapshot, context: next)
+                try await self.transitionLegacyProfile(from: old, to: next, generation: next.generation)
                 try self.check(next.generation)
                 self.account = snapshot; self.context = next
                 self.isAwaitingLegacyServerValidation = false
                 try await self.persistLegacySession(snapshot: snapshot, context: next)
             } catch {
-                if self.generation == next.generation { await self.failedAdmission(error, generation: next.generation) }
+                if self.generation == next.generation {
+                    if error is ProtectedDataAccessError { await self.handleTemporaryLegacyFailure(generation: next.generation) }
+                    else { await self.failedAdmission(error, generation: next.generation) }
+                }
                 throw error
             }
         }
@@ -685,20 +797,24 @@ extension AccountSessionService {
         let captured = generation, id = UUID()
         let task = Task { @MainActor in
             do {
-                try await self.lifecycle?.transition(from: old, to: nil, generation: captured)
+                try await self.transitionLegacyProfile(from: old, to: nil, generation: captured)
                 try self.check(captured)
                 let snapshot = try await legacyTransport.switchOrganization(organizationID)
                 try snapshot.validateLegacy(origin: configuration.apiBaseURL)
                 try self.check(captured)
                 guard snapshot.stableIdentity == old.identity, snapshot.activeOrganizationID == organizationID else { throw AccountError.invalidAccount }
                 let next = AccountContext(identity: old.identity, organizationID: nil, workspaceID: nil, generation: captured)
-                try await self.lifecycle?.transition(from: nil, to: next, generation: captured)
+                self.pendingLegacySession = try await self.legacySessionEnvelope(snapshot: snapshot, context: next)
+                try await self.transitionLegacyProfile(from: nil, to: next, generation: captured)
                 try self.check(captured)
                 self.account = snapshot; self.context = next
                 self.isAwaitingLegacyServerValidation = false
                 try await self.persistLegacySession(snapshot: snapshot, context: next)
             } catch {
-                if self.generation == captured { await self.failedAdmission(error, generation: captured) }
+                if self.generation == captured {
+                    if error is ProtectedDataAccessError { await self.handleTemporaryLegacyFailure(generation: captured) }
+                    else { await self.failedAdmission(error, generation: captured) }
+                }
                 throw error
             }
         }
@@ -727,9 +843,16 @@ extension AccountSessionService {
             let response = try await legacyTransport.perform(request)
             try Task.checkCancellation()
             guard isCurrent(expected) else { throw AccountError.staleOperation }
-            if response.status == 401 { await invalidateLegacyRestoration(for: expected, failure: .reauthenticationRequired) }
+            if response.status == 401 || response.status == 403 {
+                await invalidateLegacyRestoration(for: expected,
+                    failure: response.status == 403 ? .permissionDenied : .reauthenticationRequired)
+            }
             return response
         } catch {
+            if error is ProtectedDataAccessError {
+                await handleTemporaryLegacyFailure(generation: expected.generation)
+                throw error
+            }
             let failure = sanitized(error)
             if error is LegacyAccountConnectivityFailure, isCurrent(expected) { isAwaitingLegacyServerValidation = true }
             if isCurrent(expected), [.reauthenticationRequired, .invalidAccount, .permissionDenied].contains(failure) {
@@ -745,7 +868,8 @@ extension AccountSessionService {
     private func invalidateLegacyRestoration(for expected: AccountContext, failure: AccountError) async {
         guard context == expected, generation == expected.generation else { return }
         state = .reauthenticationRequired; presentationError = failure
-        isAwaitingLegacyServerValidation = false; legacyStoredSession = nil
+        isAwaitingLegacyServerValidation = false; legacyStoredSession = nil; pendingLegacySession = nil
+        isAwaitingProtectedData = false; legacyProtectedRollbackRequired = false
         do { try restoration.inhibit() } catch { cleanupRequired = true; presentationError = .credentialsUnavailable }
         do { try await legacyCredentials?.clear() }
         catch { cleanupRequired = true; presentationError = .credentialsUnavailable }
