@@ -686,6 +686,11 @@ struct MobileCloudSyncSettings: View {
     var body: some View {
         if interaction.publications.admit() != nil {
             VStack(alignment: .leading, spacing: theme.metrics.spacing.md) {
+                if service.isLegacySession, let host = service.legacyDestinationURL?.host {
+                    LabeledContent(MobileCloudCopy.text("automatic.destination")) {
+                        Text(verbatim: host).font(theme.typography.captionStrong)
+                    }.accessibilityIdentifier("cloud.automatic.destination")
+                }
                 Toggle(MobileCloudCopy.text(service.isLegacySession ? "automatic.title" : "title"), isOn: Binding(
                     get: { service.snapshot.cloudSyncEnabled },
                     set: { enabled in command(.toggle(enabled)) { try await service.setCloudSyncEnabled(enabled) } }))

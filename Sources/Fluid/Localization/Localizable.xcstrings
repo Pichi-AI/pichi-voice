@@ -58629,13 +58629,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "New completed protected transcripts are sent to your selected account and workspace automatically. Audio is not retained in this mode. Turn on Data cleanup before recording."
+            "value": "New completed protected transcripts, participant names and timing are sent to your selected account and workspace automatically. Metadata may contain personal information. Audio is not retained in this mode. Turn on Data cleanup before recording."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Новые завершённые защищённые расшифровки автоматически отправляются в выбранную учётную запись и рабочее пространство. В этом режиме аудио не сохраняется. Перед записью включите обезличивание данных."
+            "value": "Новые завершённые защищённые расшифровки, имена участников и время автоматически отправляются в выбранную учётную запись и рабочее пространство. Метаданные могут содержать персональные сведения. В этом режиме аудио не сохраняется. Перед записью включите обезличивание данных."
           }
         }
       }
@@ -58738,6 +58738,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Разблокируйте устройство, чтобы восстановить учётную запись и защищённые записи."
+          }
+        }
+      }
+    },
+    "cloud.automatic.destination": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервер"
           }
         }
       }
