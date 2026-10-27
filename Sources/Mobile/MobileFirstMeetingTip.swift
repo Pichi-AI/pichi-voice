@@ -15,11 +15,19 @@ struct FirstMeetingTip: Tip {
     static func configure() {
         guard !isConfigured else { return }
         isConfigured = true
-        try? Tips.configure([.displayFrequency(.immediate)])
         #if DEBUG
-        // Native screenshot review only; a distributed Release app cannot select it.
-        if ProcessInfo.processInfo.arguments.contains("-PichiShowTipsForReview") { setupFinished = true }
+        // Native screenshot review only; a distributed Release app cannot select it. Each review starts
+        // a fresh store of its own, so the armed tip never reaches the app's data or later test runs.
+        if ProcessInfo.processInfo.arguments.contains("-PichiShowTipsForReview") {
+            let store = FileManager.default.temporaryDirectory.appending(path: "TipKitReview", directoryHint: .isDirectory)
+            try? FileManager.default.removeItem(at: store)
+            try? FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+            try? Tips.configure([.displayFrequency(.immediate), .datastoreLocation(.url(store))])
+            setupFinished = true
+            return
+        }
         #endif
+        try? Tips.configure([.displayFrequency(.immediate)])
     }
     private static var isConfigured = false
 }

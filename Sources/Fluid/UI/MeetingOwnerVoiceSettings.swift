@@ -84,12 +84,23 @@ struct MeetingOwnerVoiceSettingsContent: View {
         }
     }
 
+    /// iOS keeps the accent fill, so a prominent label takes the theme's ink for it, like Start Recording.
+    /// macOS greys prominent buttons in an inactive window and keeps choosing its own label color.
+    @ViewBuilder private func prominent(_ label: Text) -> some View {
+        #if os(iOS)
+        label.foregroundStyle(self.theme.palette.accentForeground)
+        #else
+        label
+        #endif
+    }
+
     @ViewBuilder private var actions: some View {
         if self.model.phase == .recording {
             // Once the sample is long enough, finishing becomes the clear next step.
             if self.model.seconds >= MeetingOwnerVoiceEnrollmentCapture.recommendedSeconds {
-                Button(PichiLocalization.text("Done")) { self.model.finishRecording() }
-                    .buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.stop")
+                Button { self.model.finishRecording() } label: {
+                    self.prominent(Text(PichiLocalization.text("Done")))
+                }.buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.stop")
             } else {
                 Button(PichiLocalization.text("Stop")) { self.model.finishRecording() }
                     .accessibilityIdentifier("ownerVoice.stop")
@@ -104,8 +115,9 @@ struct MeetingOwnerVoiceSettingsContent: View {
                 self.model.start(microphone: self.microphone)
             }.accessibilityIdentifier("ownerVoice.start")
             if self.model.phase == .ready {
-                Button(PichiLocalization.text("Save")) { self.model.save() }
-                    .buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.save")
+                Button { self.model.save() } label: {
+                    self.prominent(Text(PichiLocalization.text("Save")))
+                }.buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.save")
                 Button(PichiLocalization.text("Cancel")) { self.model.discardDraft() }
                     .accessibilityIdentifier("ownerVoice.cancel")
             }

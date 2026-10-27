@@ -52,7 +52,13 @@ struct MobileSettingsRoot: View {
                             case .active: Text(PichiLocalization.text("On"))
                             case .enabling: ProgressView().controlSize(.small)
                             case .off: Text(PichiLocalization.text("Off"))
-                            case .failed: Text(PichiLocalization.text("Unavailable"))
+                            case .failed:
+                                Label {
+                                    Text(PichiLocalization.text("Failed"))
+                                } icon: {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(theme.palette.warning)
+                                }.labelStyle(.titleAndIcon)
                             }
                         } label: {
                             Label(PichiLocalization.text("Data cleanup"), systemImage: "lock.shield")
