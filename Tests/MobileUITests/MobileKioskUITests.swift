@@ -224,6 +224,15 @@ final class MobileKioskUITests: XCTestCase {
         let statusText = app.staticTexts["ownerVoice.status"].firstMatch
         XCTAssertTrue(statusText.waitForExistence(timeout: 5), file: file, line: line)
         XCTAssertTrue(statusText.label.contains(expectedStatus), file: file, line: line)
+        // Compact sheets virtualize the row below voice setup. Reveal it through
+        // the real scroll view before asserting access to administrator recovery.
+        if !app.buttons["kiosk.admin"].exists {
+            for attempt in 1...3 {
+                element("kiosk.limitedSettings").swipeUp()
+                capture("limited-settings-admin-reveal-\(attempt)")
+                if app.buttons["kiosk.admin"].exists { break }
+            }
+        }
         XCTAssertTrue(app.buttons["kiosk.admin"].exists, file: file, line: line)
         assertAdministrativeDestinationsAbsent(file: file, line: line)
         assertNoModeTitle(file: file, line: line)
