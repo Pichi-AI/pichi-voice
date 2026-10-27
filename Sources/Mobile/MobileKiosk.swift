@@ -172,9 +172,11 @@ struct MobileKioskSettings: View {
                 Button(PichiLocalization.text("Enable kiosk mode")) {
                     guard canEnable else { return }
                     Task { @MainActor in
-                        do { try await access.enable(password: password, confirmation: confirmation) }
+                        do {
+                            try await access.enable(password: password, confirmation: confirmation)
+                            password = ""; confirmation = ""
+                        }
                         catch { self.error = error.localizedDescription }
-                        password = ""; confirmation = ""
                     }
                 }.disabled(!canEnable || access.isBusy).accessibilityIdentifier("kiosk.enable")
             }.disabled(access.isBusy)
