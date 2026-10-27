@@ -521,6 +521,18 @@ final class MeetingSessionCoordinator: ObservableObject {
     ) async throws -> MeetingSession {
         try Task.checkCancellation()
         guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
+        // The existing storage/admission owner resolves security policy for every
+        // recording entry point before backend checks or microphone permission work.
+        var configuration = configuration
+        if try await self.store.prepareAutomaticCapture() {
+            guard configuration.piiRedactionEnabled == true else {
+                throw NSError(domain: "ProtectedRecording", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                    PichiLocalization.text("cloud.automatic.requiresPrivacy", defaultValue: "Turn on Data cleanup before recording with automatic protected delivery.")])
+            }
+            configuration.audioStorageMode = .memoryOnly
+            configuration.requiresEncryptedPersistence = true
+        }
+        try Task.checkCancellation()
         try configuration.validate()
         let selectedModelID = self.settings.selectedSpeechModel.rawValue
         let savedBackendID = self.settings.meetingTranscriptionBackendID

@@ -128,19 +128,13 @@ final class AppServices: ObservableObject {
                 // Preferences are one immutable request snapshot. Async discovery/preparation
                 // cannot substitute later Settings values into a running meeting.
                 let profile = publicationStore.map { _ in PrivateProfileStorage.current }
-                let automaticDelivery = try await publicationStore?.prepareAutomaticCapture() ?? false
                 let preferences = settings.meetingRecordingDefaults
                 let modelID = settings.selectedSpeechModel.rawValue
                 let savedBackendID = settings.meetingTranscriptionBackendID
-                let storageMode: MeetingAudioStorageMode = automaticDelivery ? .memoryOnly
-                    : settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
+                let storageMode: MeetingAudioStorageMode = settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
                 let speakerLabelsEnabled = settings.meetingSpeakerLabelsEnabled
                 let speakerProcessingMode = settings.meetingSpeakerProcessingMode(for: mode)
                 let piiRedactionEnabled = settings.meetingPIIRedactionRequested
-                guard !automaticDelivery || piiRedactionEnabled else {
-                    throw NSError(domain: "ProtectedRecording", code: 1, userInfo: [NSLocalizedDescriptionKey:
-                        PichiLocalization.text("cloud.automatic.requiresPrivacy", defaultValue: "Turn on Data cleanup before recording with automatic protected delivery.")])
-                }
                 let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
                 let language = preferences.languageCode.flatMap { supported.contains($0) ? $0 : nil }
                     ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
@@ -153,7 +147,7 @@ final class AppServices: ObservableObject {
                 let configuration = MeetingCaptureConfiguration(mode: mode, title: title, languageCode: language,
                     microphone: microphone, timestampDefaultTitle: true, audioStorageMode: storageMode,
                     speakerLabelsEnabled: speakerLabelsEnabled, speakerProcessingMode: speakerProcessingMode,
-                    piiRedactionEnabled: piiRedactionEnabled, requiresEncryptedPersistence: automaticDelivery)
+                    piiRedactionEnabled: piiRedactionEnabled)
                 // Deployment admission uses the frozen privacy request. The processing owner
                 // prepares its pinned text redactor before recognizing or publishing speech.
                 if storageMode == .memoryOnly || configuration.effectiveSpeakerProcessingMode == .streaming {

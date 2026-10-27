@@ -4,6 +4,7 @@ import Foundation
 
 nonisolated protocol MeetingSessionStoring: Sendable {
     /// Freeze local ownership under the existing capture admission, before the first manifest.
+    func prepareAutomaticCapture() async throws -> Bool
     func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership?
     func captureOwnership(for id: MeetingSessionID, configuration: MeetingCaptureConfiguration) async throws -> MeetingProfileOwnership?
     func cancelCaptureAdmission(for id: MeetingSessionID) async
@@ -25,6 +26,7 @@ nonisolated protocol MeetingSessionStoring: Sendable {
 
 // Test/custom stores retain their existing behavior unless they provide the lighter reads.
 nonisolated extension MeetingSessionStoring {
+    func prepareAutomaticCapture() async throws -> Bool { false }
     func loadHistory() async throws -> [MeetingSession] { try await self.loadAll() }
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
     func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership? { nil }
