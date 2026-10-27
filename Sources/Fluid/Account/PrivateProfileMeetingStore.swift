@@ -27,11 +27,13 @@ nonisolated struct MeetingPrivateProfileAdmission: Sendable {
 nonisolated protocol PrivateProfileRecordingObserver: Sendable {
     func captureAdmitted(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
     func prepareRequiredCapture(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async throws
+    func prepareAutomaticCapture() async throws -> Bool
     func sourceDidPersist(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
     func captureAdmissionCancelled(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
 }
 
 extension PrivateProfileRecordingObserver {
+    nonisolated func prepareAutomaticCapture() async throws -> Bool { false }
     nonisolated func prepareRequiredCapture(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async throws {
         throw CocoaError(.featureUnsupported)
     }
@@ -50,6 +52,16 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     func installRecordingObserver(_ observer: any PrivateProfileRecordingObserver) throws {
         guard recordingObserver == nil else { throw AccountError.busy }
         recordingObserver = observer
+    }
+
+    /// Resolves the existing observer's secure-mode resource preflight before the
+    /// platform builds its immutable capture configuration. No second policy owner.
+    func prepareAutomaticCapture() async throws -> Bool {
+        let profile = try readableProfile()
+        let required = try await recordingObserver?.prepareAutomaticCapture() ?? false
+        try checkReadable(profile)
+        guard !required || encryptedProfiles.contains(profile.id) else { throw MeetingRecordingCipher.Failure.unavailableKey }
+        return required
     }
 
     func admission() throws -> MeetingPrivateProfileAdmission {
