@@ -58357,13 +58357,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Signing out ends your current Pichi sessions on every device, including the web app."
+            "value": "Signing out ends your account sessions on every device, including the web app."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Выход завершит текущие сеансы Pichi на всех устройствах, включая веб-приложение."
+            "value": "Выход завершит сеансы вашей учётной записи на всех устройствах, включая веб-приложение."
           }
         }
       }

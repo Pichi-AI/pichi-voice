@@ -355,6 +355,7 @@ private struct MobileAccountPanel: View {
     @State private var legacyEmail = ""
     @State private var legacyPassword = ""
     @State private var confirmingLegacyLogout = false
+    @State private var legacyLogoutContext: AccountContext?
     @Environment(\.theme) private var theme
 
     init(session: AccountSessionService, interaction suppliedInteraction: MobileAccountInteraction? = nil,
@@ -399,19 +400,25 @@ private struct MobileAccountPanel: View {
         }
         .onChange(of: interaction.action != nil) { _, active in actionChanged(active) }
         .onChange(of: privateProfile.projectionRevision) { _, _ in
-            legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false
+            legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false; legacyLogoutContext = nil
             interaction.privateProjectionDidChange()
         }
         .onChange(of: privateProfile.isPrivateDataVisible) { _, visible in
-            if !visible { legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false }
+            if !visible { legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false; legacyLogoutContext = nil }
             interaction.privateProjectionDidChange()
         }
         .onAppear { presentedProjectionRevision = privateProfile.projectionRevision }
+        .onChange(of: session.generation) { _, _ in
+            legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false; legacyLogoutContext = nil
+        }
         .confirmationDialog(PichiLocalization.text("account.legacy.logoutTitle", defaultValue: "Sign out on all devices?"),
                             isPresented: $confirmingLegacyLogout, titleVisibility: .visible) {
-            Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out"), role: .destructive) { interaction.logout() }
+            Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out"), role: .destructive) {
+                guard let expected = legacyLogoutContext, session.isCurrent(expected) else { return }
+                legacyLogoutContext = nil; interaction.logout()
+            }
         } message: {
-            Text(PichiLocalization.text("account.legacy.logoutWarning", defaultValue: "Signing out ends your current Pichi sessions on every device, including the web app."))
+            Text(PichiLocalization.text("account.legacy.logoutWarning", defaultValue: "Signing out ends your account sessions on every device, including the web app."))
         }
         .onDisappear {
             legacyEmail = ""; legacyPassword = ""
@@ -514,12 +521,12 @@ private struct MobileAccountPanel: View {
                 .accessibilityIdentifier("account.updating")
         }
         Button(PichiLocalization.text("account.action.switchPerson", defaultValue: "Switch account")) {
-            if session.isLegacySession { confirmingLegacyLogout = true } else { interaction.switchPerson() }
+            if session.isLegacySession { legacyLogoutContext = context; confirmingLegacyLogout = true } else { interaction.switchPerson() }
         }
             .disabled(interaction.action != nil || !session.isSignInAvailable)
             .accessibilityIdentifier("account.switchPerson")
         Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out"), role: .destructive) {
-            if session.isLegacySession { confirmingLegacyLogout = true } else { interaction.logout() }
+            if session.isLegacySession { legacyLogoutContext = context; confirmingLegacyLogout = true } else { interaction.logout() }
         }
             .disabled(interaction.action != nil).accessibilityIdentifier("account.signOut")
     }
