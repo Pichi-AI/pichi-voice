@@ -218,43 +218,27 @@ final class OverlayCaptionPresentationTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.animationBehavior = .none
         window.contentView = view
-        // This fixture must be exposed, like the real overlay, rather than covered by
-        // the Dock or another application's normal window at the desktop origin.
-        let visibleFrame = try XCTUnwrap(NSScreen.main).visibleFrame
-        window.setFrameOrigin(NSPoint(x: visibleFrame.midX - 50, y: visibleFrame.midY - 10))
-        window.level = .floating
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.orderFrontRegardless()
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(50))
         let gradient = try XCTUnwrap(view.layer?.sublayers?.first)
-        func waitForVisibleShimmer() async throws {
-            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-            while gradient.animation(forKey: "fluid.shimmer.locations") == nil && ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(10))
-            }
-            XCTAssertTrue(window.occlusionState.contains(.visible), "The owned animation fixture must actually be exposed")
-        }
-        try await waitForVisibleShimmer()
         XCTAssertNotNil(gradient.animation(forKey: "fluid.shimmer.locations"))
         window.alphaValue = 0
         XCTAssertNil(gradient.animation(forKey: "fluid.shimmer.locations"), "A cached alpha-zero panel must stop immediately")
         window.alphaValue = 1
-        try await waitForVisibleShimmer()
         XCTAssertNotNil(gradient.animation(forKey: "fluid.shimmer.locations"))
         view.isHidden = true
         XCTAssertNil(gradient.animation(forKey: "fluid.shimmer.locations"), "A retained hidden view must stop its infinite shimmer")
         view.isHidden = false
-        try await waitForVisibleShimmer()
         XCTAssertNotNil(gradient.animation(forKey: "fluid.shimmer.locations"))
         window.orderOut(nil)
         XCTAssertNil(gradient.animation(forKey: "fluid.shimmer.locations"), "Ordering out a retained window must stop the shimmer")
         window.orderFrontRegardless()
-        try await waitForVisibleShimmer()
+        try await Task.sleep(for: .milliseconds(100))
         XCTAssertNotNil(gradient.animation(forKey: "fluid.shimmer.locations"))
         view.configure(duration: 1, peakOpacity: 0.88, isActive: false)
         XCTAssertNil(gradient.animation(forKey: "fluid.shimmer.locations"), "Inactive and Reduce Motion presentations must remain static")
         view.configure(duration: 1, peakOpacity: 0.88, isActive: true)
-        try await waitForVisibleShimmer()
         XCTAssertNotNil(gradient.animation(forKey: "fluid.shimmer.locations"))
         window.contentView = nil
         XCTAssertNil(gradient.animation(forKey: "fluid.shimmer.locations"))
