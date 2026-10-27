@@ -150,6 +150,29 @@ final class MobileKioskUITests: XCTestCase {
         XCTAssertFalse(element("kiosk.root").exists)
     }
 
+    func testUnansweredVoiceWelcomeDoesNotReturnAfterWarmReopen() throws {
+        guard ProcessInfo.processInfo.environment["PICHI_KIOSK_UI_WARM_REOPEN"] == "1" else {
+            throw XCTSkip("Run on a task-owned container without an owner voice profile")
+        }
+        openSettings()
+        tap(app.buttons["settings.kiosk"], step: "warm-03-administrator-settings")
+        enter(password, into: "kiosk.password", step: "warm-04-password")
+        if app.secureTextFields["kiosk.confirmation"].exists {
+            enter(password, into: "kiosk.confirmation", step: "warm-05-confirmation")
+        }
+        tap(app.buttons["kiosk.enable"], step: "warm-06-first-entry-question", waitFor: "kiosk.voiceWelcome")
+        assertVoiceWelcome()
+        XCUIDevice.shared.press(.home)
+        capture("warm-07-home-with-question-unanswered")
+        app.activate()
+        XCTAssertTrue(app.buttons["kiosk.start"].waitForExistence(timeout: 10))
+        capture("warm-08-reopen-goes-to-recording")
+        assertRecordingIsolated()
+        openLimitedSettings(step: "warm-09-voice-only-in-settings")
+        assertLimitedSettings()
+        unlock(stepPrefix: "warm-10")
+    }
+
     private func assertRecordingIsolated(file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(element("kiosk.root").waitForExistence(timeout: 10), file: file, line: line)
         XCTAssertTrue(app.buttons["kiosk.start"].exists, file: file, line: line)
