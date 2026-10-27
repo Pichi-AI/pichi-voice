@@ -30,7 +30,10 @@ final class MobileKioskUITests: XCTestCase {
         #endif
     }
 
-    func testPasswordGatePersistsAcrossRelaunchAndPreservesAdministratorSettings() throws {
+    func testVoiceWelcomeAndRestrictedSettingsRespectPasswordGateAcrossEntriesAndRelaunch() throws {
+        guard ProcessInfo.processInfo.environment["PICHI_KIOSK_UI_EXISTING_VOICE"] != "1" else {
+            throw XCTSkip("The missing-voice flow requires a task-owned container without a profile")
+        }
         openSettings()
         tap(app.buttons["settings.privacy"], step: "03-open-privacy")
         let audio = app.switches["privacy.saveAudio"]
@@ -43,99 +46,211 @@ final class MobileKioskUITests: XCTestCase {
         capture("04-configured-audio-choice")
 
         returnToSettings()
-        tap(app.buttons["settings.kiosk"], step: "06-open-kiosk-settings")
+        tap(app.buttons["settings.kiosk"], step: "06-open-administrator-settings")
         XCTAssertTrue(element("kiosk.settings").waitForExistence(timeout: 5))
         XCTAssertTrue(app.secureTextFields["kiosk.confirmation"].exists,
-                      "A fresh simulator must have no previous kiosk credential")
+                      "A fresh simulator must have no previous administrator credential")
 
         enter("short", into: "kiosk.password", step: "07-short-password")
         enter("short", into: "kiosk.confirmation", step: "08-short-confirmation")
         tap(app.buttons["kiosk.enable"], step: "09-short-password-rejected")
         XCTAssertTrue(element("kiosk.passwordError").waitForExistence(timeout: 5))
-        XCTAssertFalse(element("kiosk.root").exists)
+        XCTAssertFalse(element("kiosk.voiceWelcome").exists)
 
         replace("short", with: password, in: "kiosk.password", step: "10-valid-password")
         replace("short", with: "Different42", in: "kiosk.confirmation", step: "11-mismatched-confirmation")
         tap(app.buttons["kiosk.enable"], step: "12-mismatch-rejected")
         XCTAssertTrue(element("kiosk.passwordError").waitForExistence(timeout: 5))
-        XCTAssertFalse(element("kiosk.root").exists)
+        XCTAssertFalse(element("kiosk.voiceWelcome").exists)
 
         replace("Different42", with: password, in: "kiosk.confirmation", step: "13-matching-confirmation")
-        tap(app.buttons["kiosk.enable"], step: "14-kiosk-enabled")
-        assertKioskIsolated(step: "14a-kiosk-confirmed")
+        tap(app.buttons["kiosk.enable"], step: "14-first-entry-voice-question", waitFor: "kiosk.voiceWelcome")
+        assertVoiceWelcome()
 
-        tap(app.buttons["kiosk.admin"], step: "15-admin-password-sheet")
-        XCTAssertTrue(element("kiosk.unlock").waitForExistence(timeout: 5))
-        tap(app.buttons["kiosk.unlockCancel"], step: "16-admin-cancelled")
-        assertKioskIsolated(step: "16a-kiosk-after-cancel")
+        // This never presses ownerVoice.start, grants microphone access or saves a profile.
+        tap(app.buttons["kiosk.voiceWelcome.setup"], step: "15-welcome-opens-own-voice",
+            waitFor: "kiosk.limitedSettings")
+        assertLimitedSettings()
+        closeLimitedSettings(step: "16-return-to-recording")
+        assertRecordingIsolated()
 
-        tap(app.buttons["kiosk.admin"], step: "17-admin-sheet-reopened")
-        enter("WrongTest42", into: "kiosk.unlockPassword", step: "18-wrong-admin-password")
-        tap(app.buttons["kiosk.unlockConfirm"], step: "19-wrong-password-rejected")
+        openAdministrator(stepPrefix: "17")
+        tap(app.buttons["kiosk.unlockCancel"], step: "18-admin-cancelled", waitFor: "kiosk.limitedSettings")
+        assertLimitedSettings()
+        closeLimitedSettings(step: "19-recording-after-admin-cancel")
+        assertRecordingIsolated()
+
+        openAdministrator(stepPrefix: "20")
+        enter("WrongTest42", into: "kiosk.unlockPassword", step: "21-wrong-admin-password")
+        tap(app.buttons["kiosk.unlockConfirm"], step: "22-wrong-password-rejected")
         XCTAssertTrue(element("kiosk.passwordError").waitForExistence(timeout: 5))
         XCTAssertTrue(element("kiosk.unlock").exists)
-        XCTAssertFalse(app.buttons["navigation.history"].exists)
-        tap(app.buttons["kiosk.unlockCancel"], step: "20-wrong-password-cancelled")
-        assertKioskIsolated(step: "20a-kiosk-after-wrong-password")
+        assertAdministrativeDestinationsAbsent()
+        tap(app.buttons["kiosk.unlockCancel"], step: "23-wrong-password-cancelled", waitFor: "kiosk.limitedSettings")
+        closeLimitedSettings(step: "24-recording-after-wrong-password")
+        assertRecordingIsolated()
 
-        app.terminate()
-        app.launch()
-        capture("21-relaunch-stays-locked")
-        assertKioskIsolated(step: "21a-relaunch-confirmed")
-        unlock(stepPrefix: "22")
+        relaunchIntoRecording(step: "25-relaunch-does-not-repeat-voice-question")
+        openLimitedSettings(step: "26-own-voice-remains-available-after-relaunch")
+        assertLimitedSettings()
+        unlock(stepPrefix: "27")
 
         openSettings()
-        tap(app.buttons["settings.privacy"], step: "24-privacy-after-unlock")
+        tap(app.buttons["settings.privacy"], step: "28-privacy-after-unlock")
         XCTAssertTrue(app.switches["privacy.saveAudio"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.switches["privacy.saveAudio"].value as? String, configuredAudio,
-                       "Kiosk entry, relaunch and exit must preserve the administrator's audio choice")
-        capture("25-audio-choice-preserved")
+                       "Voice invitation, restricted settings, relaunch and exit must preserve the administrator's audio choice")
+        capture("29-audio-choice-preserved")
 
         returnToSettings()
-        tap(app.buttons["settings.kiosk"], step: "27-existing-kiosk-password")
+        tap(app.buttons["settings.kiosk"], step: "30-existing-administrator-password")
         XCTAssertTrue(element("kiosk.settings").waitForExistence(timeout: 5))
         XCTAssertFalse(app.secureTextFields["kiosk.confirmation"].exists,
                        "Re-enabling must verify the existing administrator credential")
-        enter(password, into: "kiosk.password", step: "28-existing-password-entered")
-        tap(app.buttons["kiosk.enable"], step: "29-kiosk-reenabled")
-        assertKioskIsolated(step: "29a-kiosk-reenabled-confirmed")
-        unlock(stepPrefix: "30")
+        enter(password, into: "kiosk.password", step: "31-existing-password-entered")
+        tap(app.buttons["kiosk.enable"], step: "32-new-entry-asks-about-voice-again", waitFor: "kiosk.voiceWelcome")
+        assertVoiceWelcome()
+        tap(app.buttons["kiosk.voiceWelcome.skip"], step: "33-skip-voice-for-this-entry", waitFor: "kiosk.start")
+        assertRecordingIsolated()
+        relaunchIntoRecording(step: "34-relaunch-after-skip-does-not-repeat-question")
+        openLimitedSettings(step: "35-own-voice-can-still-be-set-in-settings")
+        assertLimitedSettings()
+        unlock(stepPrefix: "36")
 
         openSettings()
-        tap(app.buttons["settings.privacy"], step: "32-return-to-audio-settings")
+        tap(app.buttons["settings.privacy"], step: "37-return-to-audio-settings")
         XCTAssertEqual(app.switches["privacy.saveAudio"].value as? String, configuredAudio)
         try toggleAudio(app.switches["privacy.saveAudio"])
         XCTAssertEqual(app.switches["privacy.saveAudio"].value as? String, originalAudio)
-        capture("33-original-audio-choice-restored")
+        capture("38-original-audio-choice-restored")
         returnToSettings()
         XCTAssertFalse(element("kiosk.root").exists)
         XCTAssertTrue(app.buttons["settings.kiosk"].exists)
     }
 
-    private func assertKioskIsolated(step: String, file: StaticString = #filePath, line: UInt = #line) {
+    /// The parent stages a valid invented profile in this fresh simulator's ordinary
+    /// application container. Neither this test nor the app uses a testing injection.
+    func testExistingVoiceProfileSkipsAutomaticWelcome() throws {
+        guard ProcessInfo.processInfo.environment["PICHI_KIOSK_UI_EXISTING_VOICE"] == "1" else {
+            throw XCTSkip("Opt in only after staging a valid synthetic voice profile on a fresh task-owned simulator")
+        }
+        openSettings()
+        tap(app.buttons["settings.kiosk"], step: "existing-03-administrator-settings")
+        XCTAssertTrue(app.secureTextFields["kiosk.confirmation"].waitForExistence(timeout: 5),
+                      "Existing-profile acceptance still requires a fresh administrator credential")
+        enter(password, into: "kiosk.password", step: "existing-04-password")
+        enter(password, into: "kiosk.confirmation", step: "existing-05-confirmation")
+        tap(app.buttons["kiosk.enable"], step: "existing-06-recording-without-voice-question", waitFor: "kiosk.start")
+        assertRecordingIsolated()
+        openLimitedSettings(step: "existing-07-saved-voice-in-restricted-settings", expectsProfile: true)
+        closeLimitedSettings(step: "existing-08-return-to-recording")
+        relaunchIntoRecording(step: "existing-09-relaunch-with-existing-profile")
+        openLimitedSettings(step: "existing-10-voice-profile-remains-saved", expectsProfile: true)
+        unlock(stepPrefix: "existing-11")
+        XCTAssertFalse(element("kiosk.root").exists)
+    }
+
+    private func assertRecordingIsolated(file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(element("kiosk.root").waitForExistence(timeout: 10), file: file, line: line)
         XCTAssertTrue(app.buttons["kiosk.start"].exists, file: file, line: line)
+        XCTAssertTrue(app.buttons["kiosk.settings.open"].exists, file: file, line: line)
+        XCTAssertFalse(element("kiosk.voiceWelcome").exists, file: file, line: line)
+        XCTAssertFalse(element("kiosk.limitedSettings").exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["kiosk.admin"].exists, file: file, line: line)
+        assertAdministrativeDestinationsAbsent(file: file, line: line)
+        assertNoModeTitle(file: file, line: line)
+    }
+
+    private func assertVoiceWelcome(file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(element("kiosk.voiceWelcome").waitForExistence(timeout: 10), file: file, line: line)
+        XCTAssertTrue(app.buttons["kiosk.voiceWelcome.setup"].exists, file: file, line: line)
+        XCTAssertTrue(app.buttons["kiosk.voiceWelcome.skip"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["kiosk.start"].exists, file: file, line: line)
+        XCTAssertFalse(app.buttons["kiosk.settings.open"].exists, file: file, line: line)
+        for index in 0...6 {
+            XCTAssertFalse(element("onboarding.step.\(index)").exists,
+                           "The entry question must not expose the full setup flow", file: file, line: line)
+        }
+        assertAdministrativeDestinationsAbsent(file: file, line: line)
+        assertNoModeTitle(file: file, line: line)
+    }
+
+    private func assertLimitedSettings(expectsProfile: Bool = false,
+                                       file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(element("kiosk.limitedSettings").waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(element("settings.ownerVoice").exists, file: file, line: line)
+        XCTAssertTrue(element("ownerVoice.status").exists, file: file, line: line)
+        XCTAssertTrue(app.buttons["ownerVoice.start"].exists, file: file, line: line)
+        XCTAssertTrue(app.buttons["ownerVoice.start"].isEnabled, file: file, line: line)
+        if expectsProfile {
+            XCTAssertTrue(app.buttons["ownerVoice.delete"].waitForExistence(timeout: 5),
+                          "The staged profile must be read through the real voice service", file: file, line: line)
+        } else {
+            XCTAssertFalse(app.buttons["ownerVoice.delete"].exists,
+                           "This task-owned container must have no voice profile", file: file, line: line)
+        }
+        let expectedStatus: String
+        if expectsProfile { expectedStatus = language == "ru" ? "Ваш голос сохранён" : "Your voice is saved" }
+        else { expectedStatus = language == "ru" ? "Ваш голос ещё не настроен" : "Your voice is not set up" }
+        XCTAssertTrue(element("ownerVoice.status").label.contains(expectedStatus), file: file, line: line)
         XCTAssertTrue(app.buttons["kiosk.admin"].exists, file: file, line: line)
+        assertAdministrativeDestinationsAbsent(file: file, line: line)
+        assertNoModeTitle(file: file, line: line)
+    }
+
+    private func assertAdministrativeDestinationsAbsent(file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertEqual(app.tabBars.count, 0, file: file, line: line)
         for identifier in ["navigation.settings", "navigation.history", "navigation.meetings",
-                           "settings.root", "settings.kiosk", "meeting.start", "transcript.more",
-                           "meeting.presentation", "meeting.share"] {
-            XCTAssertFalse(element(identifier).exists, "Kiosk exposed \(identifier)", file: file, line: line)
+                           "settings.root", "settings.kiosk", "settings.general", "settings.recording",
+                           "settings.models", "settings.privacy", "settings.replaySetup", "privacy.saveAudio",
+                           "meeting.start", "transcript.more", "meeting.presentation", "meeting.share"] {
+            XCTAssertFalse(element(identifier).exists, "Restricted UI exposed \(identifier)", file: file, line: line)
         }
-        XCTAssertEqual(app.alerts.count, 0, file: file, line: line)
+        XCTAssertEqual(app.alerts.count, 0,
+                       "Viewing own-voice controls must not prompt for microphone access", file: file, line: line)
+    }
+
+    private func assertNoModeTitle(file: StaticString = #filePath, line: UInt = #line) {
+        for title in ["Kiosk mode", "Режим киоска"] {
+            XCTAssertFalse(app.navigationBars[title].exists, file: file, line: line)
+            XCTAssertFalse(app.staticTexts[title].exists, file: file, line: line)
+        }
+    }
+
+    private func openLimitedSettings(step: String, expectsProfile: Bool = false) {
+        tap(app.buttons["kiosk.settings.open"], step: step, waitFor: "kiosk.limitedSettings")
+        assertLimitedSettings(expectsProfile: expectsProfile)
+    }
+
+    private func closeLimitedSettings(step: String) {
+        tap(app.buttons["kiosk.settings.done"], step: step, waitFor: "kiosk.start")
+        assertRecordingIsolated()
+    }
+
+    private func openAdministrator(stepPrefix: String) {
+        if !element("kiosk.limitedSettings").exists {
+            openLimitedSettings(step: "\(stepPrefix)-a-open-restricted-settings")
+        }
+        tap(app.buttons["kiosk.admin"], step: "\(stepPrefix)-b-open-administrator", waitFor: "kiosk.unlock")
+    }
+
+    private func relaunchIntoRecording(step: String) {
+        app.terminate()
+        app.launch()
+        assertRecordingIsolated()
         capture(step)
     }
 
     private func unlock(stepPrefix: String) {
-        tap(app.buttons["kiosk.admin"], step: "\(stepPrefix)-a-open-unlock")
-        enter(password, into: "kiosk.unlockPassword", step: "\(stepPrefix)-b-correct-password")
-        tap(app.buttons["kiosk.unlockConfirm"], step: "\(stepPrefix)-c-admin-unlocked")
+        openAdministrator(stepPrefix: stepPrefix)
+        enter(password, into: "kiosk.unlockPassword", step: "\(stepPrefix)-c-correct-password")
+        tap(app.buttons["kiosk.unlockConfirm"], step: "\(stepPrefix)-d-admin-unlocked")
         let normal = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
             !element("kiosk.root").exists && !element("kiosk.unlock").exists
                 && (app.buttons["navigation.settings"].exists || app.tabBars.count > 0)
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [normal], timeout: 10), .completed)
-        capture("\(stepPrefix)-d-normal-interface-confirmed")
+        capture("\(stepPrefix)-e-normal-interface-confirmed")
     }
 
     private func openSettings() {
@@ -177,7 +292,7 @@ final class MobileKioskUITests: XCTestCase {
         capture(step)
     }
 
-    private func tap(_ target: XCUIElement, step: String) {
+    private func tap(_ target: XCUIElement, step: String, waitFor identifier: String? = nil) {
         XCTAssertTrue(target.waitForExistence(timeout: 5))
         if ["kiosk.enable", "kiosk.unlockConfirm"].contains(target.identifier), app.keyboards.count > 0 {
             let done = app.buttons["kiosk.keyboardDone"]
@@ -186,9 +301,17 @@ final class MobileKioskUITests: XCTestCase {
             done.tap()
             capture("\(step)-keyboard-dismissed")
         }
+        if target.identifier == "kiosk.admin", !target.isHittable {
+            for attempt in 1...3 {
+                element("kiosk.limitedSettings").swipeUp()
+                capture("\(step)-scroll-\(attempt)")
+                if target.isHittable { break }
+            }
+        }
         XCTAssertTrue(target.isEnabled)
         XCTAssertTrue(target.isHittable)
         target.tap()
+        if let identifier { XCTAssertTrue(element(identifier).waitForExistence(timeout: 10)) }
         capture(step)
     }
 
