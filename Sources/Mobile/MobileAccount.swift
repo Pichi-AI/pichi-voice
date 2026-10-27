@@ -583,7 +583,7 @@ private struct MobileAccountPanel: View {
                 .accessibilityIdentifier("account.updating")
         }
         Button(PichiLocalization.text("account.action.switchPerson", defaultValue: "Switch account")) {
-            if session.isLegacySession { legacyLogoutContext = context; confirmingLegacyLogout = true } else { interaction.switchPerson() }
+            interaction.switchPerson()
         }
             .disabled(interaction.action != nil || !session.isSignInAvailable)
             .accessibilityIdentifier("account.switchPerson")
