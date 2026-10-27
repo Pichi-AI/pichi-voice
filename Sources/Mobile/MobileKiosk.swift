@@ -387,6 +387,7 @@ struct MobileKioskSettings: View {
 private struct MobileKioskUnlock: View {
     @ObservedObject var access: MobileKioskAccess
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
     @Environment(\.scenePhase) private var scenePhase
     @State private var password = ""
     @State private var error: String?
