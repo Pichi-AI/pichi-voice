@@ -628,6 +628,7 @@ actor PichiPublicationOutboxStore {
               info.st_uid == geteuid(), info.st_mode & 0o077 == 0 else { throw PichiPublicationOutboxFailure.invalidStorage }
         guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { throw PichiPublicationOutboxFailure.unavailable }
         defer { flock(lock, LOCK_UN) }
+        try self.removeOrphanedWrites(root: root)
         let pending = try self.openSubdirectory("pending", parent: root)
         defer { Darwin.close(pending) }
         let settled = try self.openSubdirectory("settled", parent: root)
@@ -641,6 +642,57 @@ actor PichiPublicationOutboxStore {
             recovered = true
         }
         return try operation(directories)
+    }
+
+    /// A process crash can bypass commit's defer after writing a private transaction
+    /// copy. No admission or HTTP can depend on that copy until its rename commits.
+    /// Under this same exclusive lock it is safe to remove only validated store temps.
+    private func removeOrphanedWrites(root: Int32) throws {
+        let duplicate = dup(root)
+        guard duplicate >= 0, let stream = fdopendir(duplicate) else {
+            if duplicate >= 0 { Darwin.close(duplicate) }
+            throw PichiPublicationOutboxFailure.unavailable
+        }
+        defer { closedir(stream) }
+        rewinddir(stream)
+        var scanned = 0, removed = false, totalBytes: Int64 = 0
+        let legacyPrefix = Data("{\"attemp".utf8), cipherPrefix = Data("MRCE0001".utf8)
+        errno = 0
+        while let entry = readdir(stream) {
+            let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
+            }
+            scanned += 1
+            guard scanned <= 1_024 else { throw PichiPublicationOutboxFailure.invalidStorage }
+            guard name.hasPrefix(".write-") else { continue }
+            guard name.hasSuffix(".tmp"),
+                  UUID(uuidString: String(name.dropFirst(7).dropLast(4))) != nil else {
+                throw PichiPublicationOutboxFailure.invalidStorage
+            }
+            let file = openat(root, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            guard file >= 0 else { throw PichiPublicationOutboxFailure.invalidStorage }
+            defer { Darwin.close(file) }
+            var info = stat()
+            guard fstat(file, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1,
+                  info.st_uid == geteuid(), info.st_mode & 0o077 == 0, info.st_size >= 0,
+                  info.st_size <= Self.maximumRecordBytes + MeetingRecordingCipher.envelopeOverhead else {
+                throw PichiPublicationOutboxFailure.invalidStorage
+            }
+            totalBytes += info.st_size
+            guard totalBytes <= Int64(Self.maximumPendingBytes + Self.maximumRecordBytes) else {
+                throw PichiPublicationOutboxFailure.invalidStorage
+            }
+            var header = Data(count: min(MeetingRecordingCipher.envelopePrefixBytes, Int(info.st_size)))
+            let count = header.withUnsafeMutableBytes { Darwin.read(file, $0.baseAddress, $0.count) }
+            guard count == header.count,
+                  cipherPrefix.starts(with: header) || legacyPrefix.starts(with: header) else {
+                throw PichiPublicationOutboxFailure.invalidStorage
+            }
+            guard unlinkat(root, name, 0) == 0 else { throw PichiPublicationOutboxFailure.unavailable }
+            removed = true; errno = 0
+        }
+        guard errno == 0 else { throw PichiPublicationOutboxFailure.unavailable }
+        if removed, fsync(root) != 0 { throw PichiPublicationOutboxFailure.unavailable }
     }
 
     private func checkDirectory(_ fd: Int32) throws {

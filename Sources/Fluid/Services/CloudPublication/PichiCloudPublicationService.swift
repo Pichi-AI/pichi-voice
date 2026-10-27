@@ -42,7 +42,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private let profiles: PrivateProfileService
     private let http: (any PichiPublicationHTTPPerforming)?
     private let recordingCipherProvider: (@MainActor @Sendable (PrivateProfileSnapshot) async throws -> MeetingRecordingCipher)?
-    private let deleteAcceptedRecording: (@MainActor @Sendable (MeetingSessionID, MeetingProfileOwnership) async throws -> Void)?
+    private let deleteAcceptedRecording: (@MainActor @Sendable (MeetingSessionID, MeetingProfileOwnership, String) async throws -> Void)?
     private var recordingCipher: MeetingRecordingCipher?
     private var workerDelay: Task<Void, Never>?
     private var scope: PrivateProfileSnapshot?
@@ -72,7 +72,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     init(account: AccountSessionService, meetings: PrivateProfileMeetingStore = .shared,
          profiles: PrivateProfileService? = nil, http: (any PichiPublicationHTTPPerforming)? = nil,
          recordingCipher: (@MainActor @Sendable (PrivateProfileSnapshot) async throws -> MeetingRecordingCipher)? = nil,
-         deleteAcceptedRecording: (@MainActor @Sendable (MeetingSessionID, MeetingProfileOwnership) async throws -> Void)? = nil) {
+         deleteAcceptedRecording: (@MainActor @Sendable (MeetingSessionID, MeetingProfileOwnership, String) async throws -> Void)? = nil) {
         self.account = account; self.meetings = meetings; self.profiles = profiles ?? .shared; self.http = http
         self.recordingCipherProvider = recordingCipher; self.deleteAcceptedRecording = deleteAcceptedRecording
     }
@@ -610,6 +610,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                                  context: AccountContext, store: PichiPublicationOutboxStore) async {
         guard record.state == .acceptedCleanupPending, record.receipt != nil,
               record.receiptPauseReason != .sourceConflict,
+              let expectedDigest = record.sourceSHA256,
               let deleteAcceptedRecording, cleaning.insert(record.sessionID).inserted else { return }
         defer { cleaning.remove(record.sessionID) }
         do {
@@ -629,12 +630,22 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 }
             }
             try check(profile, context: context)
-            try await deleteAcceptedRecording(record.sessionID, record.owner)
+            // Composition must revalidate this digest under the coordinator/store's
+            // deletion ownership after flushing writers. The preflight check alone
+            // cannot prevent an edit completing between this await and acquisition.
+            try await deleteAcceptedRecording(record.sessionID, record.owner, expectedDigest)
             try check(profile, context: context)
             let compacted = try await store.completeLocalRemoval(id: record.sessionID)
             try check(profile, context: context)
             project(record.sessionID, Self.status(compacted), profile: profile, automatic: compacted.automaticAccountContext == true)
         } catch is CancellationError { return }
+        catch let failure as PichiPublicationOutboxFailure where failure == .receiptConflict {
+            guard (try? check(profile, context: context)) != nil else { return }
+            if let reviewed = try? await store.pauseReceipt(id: record.sessionID, reason: .sourceConflict) {
+                project(record.sessionID, Self.status(reviewed), profile: profile, automatic: reviewed.automaticAccountContext == true)
+            }
+        }
+        catch is ProtectedDataAccessError { waitForProtectedData() }
         catch is PichiPublicationWithholdingReason {
             guard (try? check(profile, context: context)) != nil else { return }
             if let reviewed = try? await store.pauseReceipt(id: record.sessionID, reason: .sourceConflict) {

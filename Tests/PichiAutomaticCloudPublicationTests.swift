@@ -31,7 +31,7 @@ extension PichiPublicationOutboxTests {
         func makeService(_ store: PrivateProfileMeetingStore) -> PichiCloudPublicationService {
             .init(account: account, meetings: store, profiles: profiles,
                 recordingCipher: { try keyOwner.load($0) },
-                deleteAcceptedRecording: { try await cleanup.delete($0, owner: $1) })
+                deleteAcceptedRecording: { try await cleanup.delete($0, owner: $1, expectedSourceSHA256: $2) })
         }
         var service = makeService(meetings)
         try await service.install()
@@ -123,7 +123,11 @@ extension PichiPublicationOutboxTests {
         meetings = PrivateProfileMeetingStore(); cleanup.store = meetings
         service = makeService(meetings); try await service.install(); try await service.activateCurrentProfile()
         check(await transport.postCount() == postsBeforeRestart, "Restarting delivery with a durable receipt never re-enters POST")
-        cleanup.busy = false; cleanup.failAfterDeleteOnce = true
+        cleanup.busy = false; cleanup.locked = true
+        await service.notifySceneActive(true)
+        try await wait { service.snapshot.availability == .protectedDataUnavailable }
+        check(try record(source.id)?.state == .acceptedCleanupPending, "Lock during local removal retains accepted cleanup state without another upload")
+        cleanup.locked = false; cleanup.failAfterDeleteOnce = true
         await service.notifySceneActive(true)
         try await wait {
             let local = try await meetings.loadTranscript(id: source.id), record = try record(source.id)
@@ -151,8 +155,13 @@ extension PichiPublicationOutboxTests {
         await service.pause()
         try acceptedPendingBytes.write(to: queueFile)
         try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: queueFile.path)
+        let orphan = profile.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1/.write-" + UUID().uuidString + ".tmp")
+        try acceptedPendingBytes.write(to: orphan)
+        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: orphan.path)
         let cold = box()
-        check(try await cold.pendingRecords().allSatisfy { $0.sessionID != source.id }
+        let recoveredPending = try await cold.pendingRecords()
+        check(!manager.fileExists(atPath: orphan.path), "Recovery removes a validated orphan transaction copy containing accepted source ciphertext")
+        check(recoveredPending.allSatisfy { $0.sessionID != source.id }
             && !manager.fileExists(atPath: queueFile.path), "Compacted settled receipt wins over an interrupted encrypted full pending copy")
         check(try PichiPublicationOutboxStore.hasEncryptedPersistenceData(in: profile), "Header-only preflight detects retained ciphertext before key loading")
         let withoutKey = PichiPublicationOutboxStore(profile: profile, destination: .legacy(configuration))
@@ -180,6 +189,11 @@ extension PichiPublicationOutboxTests {
         try await wait { try record(editedSource.id)?.receiptPauseReason == .sourceConflict }
         check(try await meetings.loadTranscript(id: editedSource.id)?.transcriptSegments[0].text == edit.transcriptSegments[0].text,
               "Editing during upload preserves newer encrypted local work instead of deleting it")
+        cleanup.editBeforeValidationOnce = true
+        let lateEdited = try await createSource()
+        try await wait { try record(lateEdited.id)?.receiptPauseReason == .sourceConflict }
+        check(try await meetings.loadTranscript(id: lateEdited.id)?.transcriptSegments[0].text == "Late protected edit at deletion boundary [PERSON].",
+              "The deletion owner receives the frozen digest and rejects work changed after publication preflight")
         await account.logout(); await account.signIn(email: "b@synthetic.example", password: "synthetic-only")
         try await account.selectWorkspace(organizationID: "17", workspaceID: "9"); try await service.refresh()
         check(!service.snapshot.cloudSyncEnabled && !service.snapshot.deleteLocalAfterAcceptance
@@ -199,11 +213,22 @@ private enum AutomaticFixtureFailure: Error { case timeout, busy }
     }
 }
 @MainActor private final class AutomaticCleanupOwner {
-    var store: PrivateProfileMeetingStore; var busy = true; var calls = 0; var failAfterDeleteOnce = false
+    var store: PrivateProfileMeetingStore; var busy = true; var calls = 0; var failAfterDeleteOnce = false; var locked = false; var editBeforeValidationOnce = false
     init(store: PrivateProfileMeetingStore) { self.store = store }
-    func delete(_ id: UUID, owner: MeetingProfileOwnership) async throws {
+    func delete(_ id: UUID, owner: MeetingProfileOwnership, expectedSourceSHA256: String) async throws {
         calls += 1
         if busy { throw AutomaticFixtureFailure.busy }
+        if locked { throw ProtectedDataAccessError.temporarilyUnavailable }
+        if editBeforeValidationOnce, var current = try await store.loadTranscript(id: id) {
+            editBeforeValidationOnce = false
+            current.transcriptSegments[0].text = "Late protected edit at deletion boundary [PERSON]."
+            try await store.save(current)
+        }
+        if let current = try await store.loadTranscript(id: id) {
+            guard try PichiProtectedPublicationSource.prepare(for: current).sourceSHA256 == expectedSourceSHA256 else {
+                throw PichiPublicationOutboxFailure.receiptConflict
+            }
+        }
         try await store.delete(id: id, expectedOwnership: owner)
         if failAfterDeleteOnce { failAfterDeleteOnce = false; throw AutomaticFixtureFailure.busy }
     }
