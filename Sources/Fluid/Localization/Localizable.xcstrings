@@ -58571,6 +58571,23 @@
           }
         }
       }
+    },
+    "account.legacy.revocationUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signed out on this device. The server could not confirm sign-out on all devices."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этом устройстве выполнен выход. Сервер не подтвердил завершение сеансов на всех устройствах."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

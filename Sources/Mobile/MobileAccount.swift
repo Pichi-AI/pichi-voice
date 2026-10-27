@@ -397,7 +397,7 @@ private struct MobileAccountPanel: View {
                         .font(theme.typography.bodySmall).fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("account.profile.hidden")
                 }
-                Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out")) { interaction.logout() }
+                Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out")) { requestLogout() }
                     .disabled(interaction.action != nil).accessibilityIdentifier("account.signOut")
             } else if session.state == .signedIn {
                 if let account = session.account, let context = session.context,
@@ -411,7 +411,9 @@ private struct MobileAccountPanel: View {
                 signedOut
             }
             if let error = session.presentationError ?? interaction.error {
-                Text(MobileAccountCopy.error(error)).font(theme.typography.bodySmall)
+                Text(session.isLegacySession && error == .revocationUnavailable
+                    ? PichiLocalization.text("account.legacy.revocationUnavailable", defaultValue: "Signed out on this device. The server could not confirm sign-out on all devices.")
+                    : MobileAccountCopy.error(error)).font(theme.typography.bodySmall)
                     .foregroundStyle(theme.palette.warning)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("account.error")
@@ -433,7 +435,8 @@ private struct MobileAccountPanel: View {
         .confirmationDialog(PichiLocalization.text("account.legacy.logoutTitle", defaultValue: "Sign out on all devices?"),
                             isPresented: $confirmingLegacyLogout, titleVisibility: .visible) {
             Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out"), role: .destructive) {
-                guard let expected = legacyLogoutContext, session.isCurrent(expected) else { return }
+                guard let expected = legacyLogoutContext, session.context == expected,
+                      session.generation == expected.generation else { return }
                 legacyLogoutContext = nil; interaction.logout()
             }
         } message: {
@@ -446,6 +449,12 @@ private struct MobileAccountPanel: View {
             interaction.cancelOwnedSignInOnDisappear(
                 profileBoundaryChanged: presentedProjectionRevision != privateProfile.projectionRevision)
         }
+    }
+
+    private func requestLogout() {
+        if session.isLegacySession, let context = session.context {
+            legacyLogoutContext = context; confirmingLegacyLogout = true
+        } else { interaction.logout() }
     }
 
     @ViewBuilder private var signedOut: some View {
@@ -490,7 +499,7 @@ private struct MobileAccountPanel: View {
                     .accessibilityIdentifier("account.unavailable")
             }
             if session.state == .reauthenticationRequired || (session.presentationError != nil && !session.isSignInAvailable) {
-                Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out")) { interaction.logout() }
+                Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out")) { requestLogout() }
                     .disabled(interaction.action != nil).accessibilityIdentifier("account.signOut")
             }
         }
@@ -551,7 +560,7 @@ private struct MobileAccountPanel: View {
             .disabled(interaction.action != nil || !session.isSignInAvailable)
             .accessibilityIdentifier("account.switchPerson")
         Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out"), role: .destructive) {
-            if session.isLegacySession { legacyLogoutContext = context; confirmingLegacyLogout = true } else { interaction.logout() }
+            requestLogout()
         }
             .disabled(interaction.action != nil).accessibilityIdentifier("account.signOut")
     }
