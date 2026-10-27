@@ -154,6 +154,8 @@ struct MobileKioskSettings: View {
     @State private var password = ""
     @State private var confirmation = ""
     @State private var error: String?
+    @FocusState private var focusedField: PasswordField?
+    private enum PasswordField: Hashable { case password, confirmation }
 
     var body: some View {
         Form {
@@ -164,10 +166,15 @@ struct MobileKioskSettings: View {
             Section(PichiLocalization.text("Administrator password")) {
                 SecureField(PichiLocalization.text(access.hasPassword ? "Current password" : "Password"), text: $password)
                     .textContentType(access.hasPassword ? .password : .newPassword)
+                    .focused($focusedField, equals: .password)
+                    .submitLabel(access.hasPassword ? .done : .next)
+                    .onSubmit { focusedField = access.hasPassword ? nil : .confirmation }
                     .accessibilityIdentifier("kiosk.password")
                 if !access.hasPassword {
                     SecureField(PichiLocalization.text("Confirm password"), text: $confirmation)
                         .textContentType(.newPassword).accessibilityIdentifier("kiosk.confirmation")
+                        .focused($focusedField, equals: .confirmation)
+                        .submitLabel(.done).onSubmit { focusedField = nil }
                 }
                 Text(PichiLocalization.text("Use a password with 6 to 128 characters."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
@@ -193,6 +200,13 @@ struct MobileKioskSettings: View {
         }
         .navigationTitle(PichiLocalization.text("Kiosk mode"))
         .accessibilityIdentifier("kiosk.settings")
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button(PichiLocalization.text("Done")) { focusedField = nil }
+                    .accessibilityIdentifier("kiosk.keyboardDone")
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { password = ""; confirmation = "" }
         }
@@ -205,12 +219,15 @@ private struct MobileKioskUnlock: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var password = ""
     @State private var error: String?
+    @FocusState private var passwordFocused: Bool
 
     var body: some View {
         NavigationStack {
             Form {
                 SecureField(PichiLocalization.text("Administrator password"), text: $password)
                     .textContentType(.password).accessibilityIdentifier("kiosk.unlockPassword")
+                    .focused($passwordFocused).submitLabel(.done)
+                    .onSubmit { passwordFocused = false }
                 if let error {
                     Text(error).accessibilityIdentifier("kiosk.passwordError")
                 }
@@ -225,6 +242,11 @@ private struct MobileKioskUnlock: View {
             .disabled(access.isBusy)
             .navigationTitle(PichiLocalization.text("Administrator"))
             .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button(PichiLocalization.text("Done")) { passwordFocused = false }
+                        .accessibilityIdentifier("kiosk.keyboardDone")
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button(PichiLocalization.text("Cancel")) { dismiss() }
                         .disabled(access.isBusy).accessibilityIdentifier("kiosk.unlockCancel")

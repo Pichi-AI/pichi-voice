@@ -179,6 +179,13 @@ final class MobileKioskUITests: XCTestCase {
 
     private func tap(_ target: XCUIElement, step: String) {
         XCTAssertTrue(target.waitForExistence(timeout: 5))
+        if ["kiosk.enable", "kiosk.unlockConfirm"].contains(target.identifier), app.keyboards.count > 0 {
+            let done = app.buttons["kiosk.keyboardDone"]
+            XCTAssertTrue(done.waitForExistence(timeout: 5))
+            XCTAssertTrue(done.isHittable)
+            done.tap()
+            capture("\(step)-keyboard-dismissed")
+        }
         XCTAssertTrue(target.isEnabled)
         XCTAssertTrue(target.isHittable)
         target.tap()
