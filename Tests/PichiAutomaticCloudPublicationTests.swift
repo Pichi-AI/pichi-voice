@@ -36,6 +36,8 @@ extension PichiPublicationOutboxTests {
         var service = makeService(meetings)
         try await service.install()
         await account.signIn(email: "a@synthetic.example", password: "synthetic-only")
+        check(try await service.prepareAutomaticCapture() == false && keyOwner.loads == 0,
+              "Signed-in accounts without a selected workspace keep ordinary local recording available")
         try await account.selectWorkspace(organizationID: "17", workspaceID: "9")
         check(try await service.prepareAutomaticCapture() == false, "Automatic capture is off before explicit future consent")
         try await service.setDeleteLocalAfterAcceptance(true)

@@ -36,7 +36,7 @@ final class MobileLegacyQALoginUITests: XCTestCase {
         capture("secure-entry")
         app.buttons["account.signIn"].tap()
         let transitioned = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            app.buttons["meeting.start"].exists || app.descendants(matching: .any)["account.displayName"].firstMatch.exists
+            app.buttons["meeting.start"].isHittable || app.descendants(matching: .any)["account.displayName"].firstMatch.exists
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [transitioned], timeout: 45), .completed)
         openAccount(app)
@@ -49,7 +49,7 @@ final class MobileLegacyQALoginUITests: XCTestCase {
         for _ in 0..<6 where !change.isHittable { app.collectionViews.firstMatch.swipeUp() }
         XCTAssertTrue(change.isHittable); change.tap()
         let retired = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            app.buttons["meeting.start"].exists || app.textFields["account.legacy.email"].exists
+            app.buttons["meeting.start"].isHittable || app.textFields["account.legacy.email"].exists
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [retired], timeout: 20), .completed)
         openAccount(app)
