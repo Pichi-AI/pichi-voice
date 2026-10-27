@@ -37,7 +37,7 @@ nonisolated struct PichiProtectedPublicationSource: Equatable, Sendable {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let bytes = try encoder.encode(session)
+        let bytes = try encoder.encode(LocalRevision(session: session))
         guard bytes.count <= 64 * 1_024 * 1_024 else { throw PichiPublicationWithholdingReason.exportLimitExceeded }
         return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
@@ -94,4 +94,46 @@ nonisolated struct PichiProtectedPublicationSource: Equatable, Sendable {
         try Task.checkCancellation()
         return source
     }
+    /// Only user content and canonical source bindings govern deletion. Retention,
+    /// update clocks, health and diagnostic events are automatic maintenance.
+    private nonisolated struct LocalRevision: Encodable {
+        let id: MeetingSessionID
+        let owner: MeetingProfileOwnership?
+        let title: String
+        let defaultTitleBase: String?
+        let location: MeetingLocation?
+        let languageCode: String
+        let mode: MeetingCaptureMode
+        let startedAt: Date
+        let endedAt: Date?
+        let state: MeetingSessionState
+        let speakers: [MeetingSessionSpeaker]
+        let segments: [MeetingTranscriptSegment]
+        let coverage: [MeetingTranscriptCoverageGap]?
+        let sidecar: MeetingResultSidecarReference?
+        let complete: Bool?
+        let postProcessing: MeetingPostProcessingArtifact?
+        let backendID: String?
+        let artifactFingerprint: String?
+        let audioStorageMode: MeetingAudioStorageMode?
+        let speakerLabelsEnabled: Bool?
+        let speakerProcessingMode: MeetingSpeakerProcessingMode?
+        let piiRedactionEnabled: Bool?
+        let encryptedPersistence: Bool?
+        let timeDomain: MeetingTranscriptTimeDomain?
+        init(session: MeetingSession) {
+            id = session.id; owner = session.profileOwnership
+            title = session.title; defaultTitleBase = session.defaultTitleBase; location = session.location
+            languageCode = session.languageCode; mode = session.mode
+            startedAt = session.startedAt; endedAt = session.endedAt; state = session.state
+            speakers = session.speakers; segments = session.transcriptSegments
+            coverage = session.transcriptCoverageGaps; sidecar = session.resultSidecarReference
+            complete = session.transcriptIsComplete; postProcessing = session.postProcessing
+            backendID = session.recordingBackendID; artifactFingerprint = session.recordingASRArtifactFingerprint
+            audioStorageMode = session.audioStorageMode; speakerLabelsEnabled = session.speakerLabelsEnabled
+            speakerProcessingMode = session.speakerProcessingMode; piiRedactionEnabled = session.piiRedactionEnabled
+            encryptedPersistence = session.requiresEncryptedPersistence; timeDomain = session.transcriptTimeDomain
+        }
+    }
+
 }

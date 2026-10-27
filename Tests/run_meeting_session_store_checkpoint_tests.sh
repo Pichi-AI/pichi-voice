@@ -83,7 +83,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift \
-    Sources/Fluid/Services/Meeting/MeetingRecordingKeychainStore.swift \
+    Sources/Fluid/Services/Meeting/MeetingRecordingKeychainStore.swift Sources/Fluid/Persistence/ProtectedDataAccessError.swift \
     "$task_test_dir/PipelineVersion.swift" \
     Sources/Fluid/Account/AccountDomain.swift \
     Sources/Fluid/Account/PrivateProfileStorage.swift \
