@@ -12,16 +12,27 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
-    func testFloatingCaptionCornersStayTransparentAcrossAppearanceAndNativeResizing() throws {
+    func testFloatingCaptionCornersStayTransparentAcrossAppearanceAndNativeResizing() async throws {
         let directory = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = SettingsStore.shared
+        let originalTheme = settings.themePreference
+        let originalThemeValue = settings.defaults.object(forKey: SettingsStore.Keys.themePreference)
+        let originalAppearance = NSApplication.shared.appearance
+        defer {
+            settings.themePreference = originalTheme
+            settings.defaults.set(originalThemeValue, forKey: SettingsStore.Keys.themePreference)
+            NSApplication.shared.appearance = originalAppearance
+        }
         let coordinator = MeetingSessionCoordinator(
             store: MeetingSessionStore(rootDirectory: directory), capture: StubCaptureController(),
             processing: StubProcessingController(), audioArbiter: StubArbiter()
         )
         for scheme in [ColorScheme.light, .dark] {
-            let content = AnyView(MeetingFloatingCaptionsContent(coordinator: coordinator)
-                .appTheme(.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme)))
+            settings.themePreference = scheme == .light ? .light : .dark
+            let content = AnyView(AdaptiveAppTheme(accent: settings.accentColor) {
+                MeetingFloatingCaptionsContent(coordinator: coordinator)
+            })
             let panel = MeetingFloatingPanelFactory.make(
                 size: NSSize(width: 400, height: 480), resizable: true, content: content
             )
@@ -34,6 +45,7 @@ final class MeetingRecoveryTests: XCTestCase {
             let host = try XCTUnwrap(panel.contentView as? MeetingFloatingHostingView)
             for size in [NSSize(width: 400, height: 480), NSSize(width: 560, height: 340), NSSize(width: 320, height: 240)] {
                 panel.setContentSize(size)
+                try await Task.sleep(for: .milliseconds(30))
                 host.layoutSubtreeIfNeeded()
                 host.displayIfNeeded()
                 XCTAssertEqual(host.bounds.size, size, "The actual caption surface follows the resized window")
@@ -51,6 +63,7 @@ final class MeetingRecoveryTests: XCTestCase {
             }
             // Prove that the same native raster path detects an opaque rectangular backing.
             host.rootView = AnyView(content.background(Color.red))
+            try await Task.sleep(for: .milliseconds(30))
             host.layoutSubtreeIfNeeded()
             let opaque = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: opaque)
