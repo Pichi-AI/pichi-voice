@@ -90,8 +90,8 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     /// operation only after this encrypted future-capture queue has passed preflight.
     func prepareAutomaticCapture() async throws -> Bool {
         return try await command {
-            guard self.account.isLegacySession, let context = self.account.context,
-                  context.organizationID != nil, context.workspaceID != nil else { return false }
+            guard self.account.isLegacySession, let selectedContext = self.account.context,
+                  selectedContext.organizationID != nil, selectedContext.workspaceID != nil else { return false }
             let (profile, context, store, consent) = try self.currentScope()
             guard try await consent.automaticPublicationEnabled(for: context) else { return false }
             try await self.ensureRecordingCipher(profile: profile, context: context, store: store)
