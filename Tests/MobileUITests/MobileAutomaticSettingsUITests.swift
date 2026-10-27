@@ -72,7 +72,7 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
         row.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
     }
     private func waitForValue(_ element: XCUIElement, _ value: String) {
-        let expected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
+        let expected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@ AND enabled == true", value), object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 5), .completed)
     }
     private func capture(_ step: String) {
