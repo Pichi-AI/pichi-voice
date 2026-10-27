@@ -119,6 +119,7 @@ final class MobileKioskRecordingTests: XCTestCase {
         XCTAssertEqual(health.status, .healthy)
         // Capture and the real retained-PCM writer both publish meter events. The
         // writer normalizes the peak asynchronously, so either healthy update is valid.
+        XCTAssertGreaterThan(expectedPeak, 0.02, "The invented input must excite the shared waveform")
         XCTAssertTrue(health.level.isFinite)
         XCTAssertGreaterThan(health.level, 0.02)
         XCTAssertLessThanOrEqual(health.level, 1)

@@ -25,6 +25,7 @@ struct MobileKioskRoot: View {
     @StateObject private var voice: MeetingOwnerVoiceEnrollmentModel
     @Environment(\.theme) private var theme
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var isBusy = false
     @State private var showSettings = false
@@ -183,13 +184,14 @@ struct MobileKioskRoot: View {
                     }
                     Spacer(minLength: compactHeight ? 0 : 24)
                     AudioWaveformBars(color: theme.palette.accent, barCount: 7,
-                        barWidth: 12, barSpacing: 10, minHeight: 8,
-                        maxHeight: compactHeight ? 64 : 144,
+                        barWidth: horizontalSizeClass == .regular ? 20 : 12,
+                        barSpacing: horizontalSizeClass == .regular ? 14 : 10, minHeight: 8,
+                        maxHeight: compactHeight ? 64 : horizontalSizeClass == .regular ? 216 : 144,
                         level: { CGFloat(coordinator.trackHealth[.microphone]?.level ?? 0) },
                         noiseThreshold: 0.02, isAnimating: coordinator.isRecording,
                         isIdleWaveEnabled: false)
                         .foregroundStyle(theme.palette.accent)
-                        .frame(maxWidth: .infinity, minHeight: compactHeight ? 80 : 176)
+                        .frame(maxWidth: .infinity, minHeight: compactHeight ? 80 : horizontalSizeClass == .regular ? 248 : 176)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(PichiLocalization.text("Microphone"))
                         .accessibilityIdentifier("kiosk.waveform")
