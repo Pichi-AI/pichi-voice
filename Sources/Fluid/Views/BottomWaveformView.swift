@@ -77,7 +77,7 @@ struct BottomWaveformView: View {
                     .foregroundStyle(self.barFillColor)
 
                 if self.isProcessingVisualActive {
-                    CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
+                    CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9, isActive: self.contentState.isBottomOverlayPresented)
                         .mask {
                             self.barsView
                         }
@@ -106,7 +106,7 @@ struct BottomWaveformView: View {
             maxHeight: self.maxHeight,
             level: { self.audioLevel.isLive ? OverlayAudioLevelState.shared.level : 0 },
             noiseThreshold: self.noiseThreshold,
-            isAnimating: self.contentState.isBottomOverlayPresented && !self.isProcessingVisualActive,
+            isAnimating: self.contentState.isBottomOverlayPresented && !self.isWaitingForMicrophone && !self.isProcessingVisualActive,
             isIdleWaveEnabled: self.audioLevel.isLive,
             glowIntensity: self.isReleaseAnimationActive ? 0 : self.currentGlowIntensity,
             glowRadius: self.isReleaseAnimationActive ? 0 : self.currentGlowRadius

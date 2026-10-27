@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Owned fixture control on private mock protocol files. Never launches an app."""
 import json
+import hashlib
+import os
 from pathlib import Path
 import signal
 import subprocess
@@ -9,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import uuid
+from types import SimpleNamespace
 
 from meeting_continuity_driver import Child, Driver, OwnedProcesses
 from meeting_continuity_fixture import ProtocolError, atomic_json, read_json
@@ -36,6 +39,8 @@ class MockProcesses(OwnedProcesses):
         self.profile = self.workspace / "profile"
         self.wave = Path("/synthetic/second.wav")
         self.children, self.statuses, self.metadata = {}, {}, {}
+        self.identity_receipt = None
+        self.relocated_bundles, self.executable_proofs, self.proven_candidate_pids = {}, {}, set()
         self.signals, self.launches = [], []
         self.after_resume = lambda: None
 
@@ -81,6 +86,11 @@ class MockProcesses(OwnedProcesses):
             self.clock.now += 1.0  # Deliberately short playback proves actual >=8s absence gate.
             self.statuses[pid] = 0
             self.after_resume()
+
+    def copied_bundle_processes(self, deadline):
+        return [dict(processID=pid, processGroup=value["group"], executablePath=value["executable"])
+                for pid, value in self.metadata.items() if self.statuses.get(pid) is None
+                and value["executable"].startswith(str(self.chrome_app) + "/")]
 
 
 class MockFixture:
@@ -204,6 +214,373 @@ class DriverTests(unittest.TestCase):
                 with self.assertRaises(ProtocolError):
                     processes.stop(child)
                 self.assertEqual(processes.signals, [])
+
+    def test_identity_receipt_records_each_predicate_and_redacts_fixture_query(self):
+        child = self.processes.child("chrome")
+        self.processes.metadata[child.pid]["arguments"] += " http://127.0.0.1:8888/meeting_browser_speech_stimulus.html?token=private-fixture-token"
+        self.processes.assert_owned(child)
+        value = read_json(self.driver.state_path)
+        self.assertEqual(value["step"], "ownership-identity")
+        self.assertEqual(value["observedExecutable"], str(self.processes.executable))
+        self.assertEqual(value["observedProcessGroup"], child.pid)
+        self.assertTrue(all(value["predicates"].values()))
+        self.assertIn(f"--user-data-dir={self.processes.profile}", value["observedArguments"])
+        self.assertNotIn("private-fixture-token", json.dumps(value))
+
+    def test_identity_failure_names_failed_predicates_and_records_observed_values(self):
+        child = self.processes.child("chrome")
+        self.processes.metadata[child.pid].update(executable="/unexpected/chrome", group=999,
+                                                arguments="chrome --user-data-dir=/unexpected/profile")
+        with self.assertRaisesRegex(ProtocolError, "executableMatches, processGroupMatches, observedProfileMatches"):
+            self.processes.assert_owned(child)
+        value = read_json(self.driver.state_path)
+        self.assertEqual(value["observedExecutable"], "/unexpected/chrome")
+        self.assertEqual(value["observedProcessGroup"], 999)
+        self.assertEqual(value["observedArguments"], ["chrome", "--user-data-dir=/unexpected/profile"])
+        self.assertEqual(self.processes.signals, [])
+
+    def test_identity_observation_timeout_is_recorded_and_never_signalled(self):
+        child = self.processes.child("chrome")
+        with patch.object(self.processes, "arguments_for", side_effect=subprocess.TimeoutExpired("ps", 1)):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.processes.assert_owned(child, deadline=1)
+        value = read_json(self.driver.state_path)
+        self.assertIn("observationError", value)
+        self.assertEqual(value["observedProcessGroup"], child.pid)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_prepare_identity_cleanup_preflight_never_waits_for_capture_or_creates_player(self):
+        def prepare():
+            if read_json(self.driver.state_path)["step"] == "browser-launched":
+                self.fixture.prepared_phase = "browserBefore"
+        self.clock.pump = prepare
+        with patch("meeting_continuity_driver.wait_ack", side_effect=AssertionError("Preflight has no native phase")):
+            self.driver.run(preflight_only=True)
+        self.assertTrue(self.driver.preflight_complete)
+        self.assertFalse(self.driver.protocol_complete)
+        self.assertTrue(self.driver.owned_joined)
+        self.assertEqual([kind for kind, _, _ in self.processes.launches], ["chrome"])
+        self.assertEqual(self.fixture.commands, [])
+        for name in ("capture-ready.json", "phase-command.json", "phase-ack.json"):
+            self.assertFalse((self.root / name).exists())
+        self.assertTrue(read_json(self.driver.state_path)["preflightComplete"])
+
+    def test_preflight_rejects_native_capture_evidence_and_joins_owned_child(self):
+        atomic_json(self.root / "capture-ready.json", dict(runID=self.fixture.run_id))
+        with self.assertRaisesRegex(ProtocolError, "no native capture"):
+            self.driver.run(preflight_only=True)
+        self.assertFalse(self.driver.preflight_complete)
+        self.assertTrue(self.driver.owned_joined)
+        self.assertEqual(self.fixture.commands, [])
+
+    def test_detached_copied_helper_is_reported_without_extra_signals_or_join_claim(self):
+        self.processes.metadata[900] = dict(group=901, executable=str(self.processes.chrome_app / "crashpad"))
+        self.processes.statuses[900] = None
+        with patch("meeting_continuity_driver.time.monotonic", side_effect=self.clock.read), \
+             patch("meeting_continuity_driver.time.sleep", side_effect=self.clock.pause), \
+             self.assertRaisesRegex(ProtocolError, "outside joined-child proof"):
+            self.run_driver()
+        self.assertFalse(self.driver.owned_joined)
+        self.assertIsNone(self.processes.statuses[900])
+        self.assertNotIn((901, signal.SIGKILL), self.processes.signals)
+        events = [json.loads(line) for line in (self.root / "driver-events.jsonl").read_text().splitlines()]
+        event = next(value for value in events if value["step"] == "unresolved-copied-bundle-processes")
+        self.assertFalse(event["signalled"])
+        self.assertFalse(event["ownershipProven"])
+        self.assertEqual(event["processes"][0]["processID"], 900)
+
+    def test_detached_helper_natural_exit_is_observed_without_signalling_its_group(self):
+        child = self.processes.child("chrome")
+        detached = dict(processID=900, processGroup=901, executablePath=str(self.processes.chrome_app / "crashpad"))
+        with patch.object(self.processes, "copied_bundle_processes", side_effect=[[detached], []]) as scan, \
+             patch("meeting_continuity_driver.time.monotonic", side_effect=self.clock.read), \
+             patch("meeting_continuity_driver.time.sleep", side_effect=self.clock.pause):
+            self.processes.cleanup()
+        self.assertEqual(scan.call_count, 2)
+        self.assertEqual(scan.call_args_list[0].args, scan.call_args_list[1].args)
+        self.assertEqual(self.processes.statuses[child.pid], -9)
+        self.assertNotIn((901, signal.SIGKILL), self.processes.signals)
+
+    def test_persistent_detached_helper_observation_has_one_thirty_second_budget(self):
+        self.processes.child("chrome")
+        detached = dict(processID=900, processGroup=901, executablePath=str(self.processes.chrome_app / "crashpad"))
+        with patch.object(self.processes, "copied_bundle_processes", return_value=[detached]) as scan, \
+             patch("meeting_continuity_driver.time.monotonic", side_effect=self.clock.read), \
+             patch("meeting_continuity_driver.time.sleep", side_effect=self.clock.pause), \
+             self.assertRaisesRegex(ProtocolError, "outside joined-child proof"):
+            self.processes.cleanup()
+        self.assertGreaterEqual(self.clock.now, 30)
+        self.assertLess(self.clock.now, 30.026)
+        self.assertTrue(all(call.args == (30,) for call in scan.call_args_list))
+        self.assertNotIn((901, signal.SIGKILL), self.processes.signals)
+
+    def test_real_copy_scan_finds_detached_helper_without_signalling(self):
+        self.processes.metadata[900] = dict(group=901, executable=str(self.processes.chrome_app / "crashpad"))
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S Google Chrome Helper\n"):
+            remaining = OwnedProcesses.copied_bundle_processes(self.processes, float("inf"))
+        self.assertEqual(remaining[0]["processID"], 900)
+        self.assertEqual(remaining[0]["processGroup"], 901)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_copy_scan_failed_lookup_of_unknown_foreign_pid_is_reported_without_signals(self):
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S Google Chrome\n"), \
+             patch.object(self.processes, "executable_for", side_effect=ProtocolError("Unreadable")), \
+             patch.object(self.processes, "group_for", return_value=901):
+            self.assertEqual(OwnedProcesses.copied_bundle_processes(self.processes, float("inf")), [])
+        value = read_json(self.driver.state_path)
+        self.assertEqual(value["step"], "unknown-foreign-process-inspection")
+        self.assertFalse(value["owned"])
+        self.assertFalse(value["signalled"])
+        self.assertEqual(self.processes.signals, [])
+
+    def test_copy_scan_unknown_owned_group_member_still_fails_cleanup(self):
+        child = self.processes.child("chrome")
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value=f"900 {child.pid} S Google Chrome\n"), \
+             patch.object(self.processes, "executable_for", side_effect=ProtocolError("Unreadable")):
+            with self.assertRaisesRegex(ProtocolError, "cleanup is unverified"):
+                OwnedProcesses.copied_bundle_processes(self.processes, float("inf"))
+        self.assertEqual(self.processes.signals, [])
+
+    def test_copy_scan_does_not_inspect_unrelated_command(self):
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="4393 4393 S Other App\n"), \
+             patch.object(self.processes, "executable_for", side_effect=AssertionError("Unrelated PID must not be inspected")):
+            self.assertEqual(OwnedProcesses.copied_bundle_processes(self.processes, float("inf")), [])
+
+    def test_copy_scan_snapshot_racing_exit_is_not_signalled_or_reported_live(self):
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="900 901 S Google Chrome\n"), \
+             patch.object(self.processes, "executable_for", side_effect=ProtocolError("Exited")), \
+             patch.object(self.processes, "group_for", side_effect=ProcessLookupError("Gone")):
+            self.assertEqual(OwnedProcesses.copied_bundle_processes(self.processes, float("inf")), [])
+        self.assertEqual(self.processes.signals, [])
+
+    def clone_child(self, label):
+        base = self.root / label
+        self.processes = MockProcesses(self.clock)
+        self.driver.processes = self.processes
+        self.processes.identity_receipt = self.driver.receipt
+        self.processes.chrome_app = base / "owned/Google Chrome.app"
+        self.processes.executable = self.processes.chrome_app / "Contents/MacOS/Google Chrome"
+        self.processes.profile = base / "owned/profile"
+        parent = base / "os/X/com.google.Chrome.code_sign_clone"
+        bundle = parent / "code_sign_clone.Bci7d2/Google Chrome.app.bundle"
+        observed = bundle / "Contents/MacOS/Google Chrome"
+        for path in (self.processes.executable, observed):
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"approved synthetic executable")
+        for app in (self.processes.chrome_app, bundle):
+            for relative in ("Contents/Info.plist", "Contents/_CodeSignature/CodeResources"):
+                path = app / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"synthetic signed metadata")
+        self.processes.launch_executable_sha256 = hashlib.sha256(self.processes.executable.read_bytes()).hexdigest()
+        self.processes.launch_signature = dict(CDHash="a" * 40, TeamIdentifier="TEAM123456",
+                                               designatedRequirement='identifier "com.google.Chrome" and anchor apple generic')
+        initial = self.processes.child("chrome")
+        process = SimpleNamespace(pid=initial.pid, poll=lambda: self.processes.statuses[initial.pid])
+        child = Child(initial.pid, initial.args, initial.kind, process)
+        self.processes.children[child.pid] = child
+        self.processes.metadata[child.pid]["executable"] = str(observed)
+        return child, parent, bundle, observed
+
+    def test_owned_signed_os_clone_preserves_original_launch_predicates(self):
+        child, parent, bundle, observed = self.clone_child("positive-clone")
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run") as verify:
+            self.assertEqual(self.processes.assert_owned(child), [child.pid])
+        events = [json.loads(line) for line in (self.root / "driver-events.jsonl").read_text().splitlines()]
+        identity = next(value for value in events if value["step"] == "ownership-identity")
+        self.assertFalse(identity["predicates"]["executableMatches"])
+        self.assertTrue(identity["predicates"]["relocatedExecutableMatches"])
+        self.assertTrue(identity["predicates"]["launchedExecutableMatches"])
+        self.assertEqual(self.processes.relocated_bundles[child.pid], bundle)
+        self.assertTrue(any("--deep" in call.args[0] for call in verify.call_args_list))
+        self.assertEqual(self.processes.signals, [])
+
+    def test_deep_bundle_verification_has_its_own_cap_and_honors_a_tighter_deadline(self):
+        for deadline, expected_timeout in ((None, 20), (12, 2)):
+            with self.subTest(deadline=deadline):
+                child, parent, bundle, observed = self.clone_child("budget-" + str(deadline))
+                with patch("meeting_continuity_driver.time.monotonic", return_value=10), \
+                     patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+                     patch("meeting_continuity_driver.subprocess.run") as verify:
+                    self.processes.equivalent_executable(child, self.processes.executable,
+                                                         observed, deadline, bundle=bundle)
+                deep = [call for call in verify.call_args_list if "--deep" in call.args[0]]
+                self.assertEqual(len(deep), 1)
+                self.assertEqual(deep[0].kwargs["timeout"], expected_timeout)
+                shallow = [call for call in verify.call_args_list if "--deep" not in call.args[0]]
+                self.assertTrue(all(call.kwargs["timeout"] == min(5, expected_timeout) for call in shallow))
+
+    def test_full_clone_proof_is_once_per_guard_and_not_reused_by_standalone_member_check(self):
+        child, parent, bundle, observed = self.clone_child("proof-scope")
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run") as verify:
+            for expected in (1, 2):
+                self.assertEqual(self.processes.assert_owned(child), [child.pid])
+                self.assertEqual(sum("--deep" in call.args[0] for call in verify.call_args_list), expected)
+            self.assertEqual(self.processes.verify_members(child, [child.pid]), [child.pid])
+            self.assertEqual(sum("--deep" in call.args[0] for call in verify.call_args_list), 3)
+
+    def test_restarted_membership_snapshot_discards_local_leader_proof(self):
+        child, parent, bundle, observed = self.clone_child("proof-snapshot-race")
+        def executable(pid):
+            if pid == 900:
+                raise ProcessLookupError("Helper disappeared")
+            return self.processes.metadata[pid]["executable"]
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch.object(self.processes, "executable_for", side_effect=executable), \
+             patch.object(self.processes, "group_members", side_effect=[[900, child.pid], [child.pid]]), \
+             patch("meeting_continuity_driver.subprocess.run") as verify:
+            self.assertEqual(self.processes.assert_owned(child), [child.pid])
+            self.assertEqual(sum("--deep" in call.args[0] for call in verify.call_args_list), 2)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_local_proof_cannot_adopt_a_stamp_changed_just_after_deep_verification(self):
+        child, parent, bundle, observed = self.clone_child("proof-post-verification-race")
+        prove = self.processes.prove_relocated_leader
+        def change_after_proof(*args):
+            result = prove(*args)
+            observed.write_bytes(b"x" * observed.stat().st_size)
+            return result
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch.object(self.processes, "prove_relocated_leader", side_effect=change_after_proof), \
+             patch("meeting_continuity_driver.subprocess.run"):
+            with self.assertRaisesRegex(ProtocolError, "changed after signed-clone"):
+                self.processes.assert_owned(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_same_guard_leader_proof_requires_fresh_unchanged_identity(self):
+        for fault in ("bytes", "path", "profile", "group", "lifetime", "child"):
+            with self.subTest(fault=fault):
+                child, parent, bundle, observed = self.clone_child("same-guard-" + fault)
+                def snapshot(group, deadline):
+                    if fault == "bytes": observed.write_bytes(b"x" * observed.stat().st_size)
+                    if fault == "path": self.processes.metadata[child.pid]["executable"] = str(self.processes.executable)
+                    if fault == "profile": self.processes.metadata[child.pid]["arguments"] = "chrome --user-data-dir=/foreign"
+                    if fault == "group": self.processes.metadata[child.pid]["group"] = 999
+                    if fault == "lifetime": child.process.poll = lambda: 0
+                    if fault == "child": self.processes.children[child.pid] = Child(child.pid, child.args, child.kind)
+                    return [child.pid]
+                with patch.object(self.processes, "clone_parent", return_value=parent), \
+                     patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+                     patch.object(self.processes, "group_members", side_effect=snapshot), \
+                     patch("meeting_continuity_driver.subprocess.run"):
+                    with self.assertRaisesRegex(ProtocolError, "changed after signed-clone"):
+                        self.processes.assert_owned(child)
+                self.assertEqual(self.processes.signals, [])
+
+    def test_clone_rejects_altered_bytes_signature_profile_group_foreign_path_and_lifetime(self):
+        faults = ("bytes", "reference-bytes", "cdhash", "team", "requirement", "strict", "profile", "group", "foreign-clone", "symlink", "lifetime")
+        for fault in faults:
+            with self.subTest(fault=fault):
+                child, parent, bundle, observed = self.clone_child("clone-fault-" + fault)
+                identity = dict(self.processes.launch_signature)
+                if fault == "bytes": observed.write_bytes(b"x" * observed.stat().st_size)
+                if fault == "reference-bytes":
+                    observed.write_bytes(b"x" * observed.stat().st_size)
+                    self.processes.executable.write_bytes(observed.read_bytes())
+                if fault == "cdhash": identity["CDHash"] = "b" * 40
+                if fault == "team": identity["TeamIdentifier"] = "OTHER12345"
+                if fault == "requirement": identity["designatedRequirement"] = "different requirement"
+                if fault == "profile": self.processes.metadata[child.pid]["arguments"] = "chrome --user-data-dir=/foreign"
+                if fault == "group": self.processes.metadata[child.pid]["group"] = 999
+                if fault == "foreign-clone": parent = self.root / "some-other-user/X/com.google.Chrome.code_sign_clone"
+                if fault == "symlink":
+                    actual = observed.with_name("Actual Chrome")
+                    observed.rename(actual)
+                    observed.symlink_to(actual)
+                if fault == "lifetime": child.process.poll = lambda: 0
+                def signature(path, deadline):
+                    return self.processes.launch_signature if Path(path) == self.processes.executable else identity
+                with patch.object(self.processes, "clone_parent", return_value=parent), \
+                     patch.object(self.processes, "signature_identity", side_effect=signature), \
+                     patch("meeting_continuity_driver.subprocess.run", side_effect=subprocess.CalledProcessError(1, "codesign") if fault == "strict" else None):
+                    with self.assertRaises((ProtocolError, subprocess.CalledProcessError)):
+                        self.processes.assert_owned(child)
+                self.assertEqual(self.processes.signals, [])
+
+    def test_clone_cached_proof_invalidates_changed_bytes_with_restored_mtime(self):
+        child, parent, bundle, observed = self.clone_child("cache-clone")
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run"):
+            self.processes.assert_owned(child)
+            before = observed.stat()
+            observed.write_bytes(b"x" * before.st_size)
+            os.utime(observed, ns=(before.st_atime_ns, before.st_mtime_ns))
+            with self.assertRaisesRegex(ProtocolError, "bytes differ"):
+                self.processes.assert_owned(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_clone_cached_proof_does_not_skip_nested_signature_verification(self):
+        child, parent, bundle, observed = self.clone_child("nested-clone")
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run") as verify:
+            self.processes.assert_owned(child)
+            verify.side_effect = subprocess.CalledProcessError(1, "codesign")
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.processes.assert_owned(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_clone_cache_hit_rejects_file_replaced_during_strict_verification(self):
+        child, parent, bundle, observed = self.clone_child("cache-race-clone")
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run") as verify:
+            self.processes.assert_owned(child)
+            def replace(arguments, **kwargs):
+                if "--deep" in arguments:
+                    observed.write_bytes(b"x" * observed.stat().st_size)
+            verify.side_effect = replace
+            with self.assertRaisesRegex(ProtocolError, "changed during cached"):
+                self.processes.assert_owned(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_clone_helper_requires_relative_executable_equivalence(self):
+        child, parent, bundle, observed = self.clone_child("helper-clone")
+        relative = Path("Contents/Frameworks/Google Chrome Helper")
+        for app, content in ((self.processes.chrome_app, b"approved helper"), (bundle, b"forged__ helper")):
+            path = app / relative
+            path.parent.mkdir(parents=True)
+            path.write_bytes(content)
+        self.processes.metadata[900] = dict(group=child.pid, executable=str(bundle / relative))
+        self.processes.statuses[900] = None
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run"):
+            with self.assertRaisesRegex(ProtocolError, "bytes differ"):
+                self.processes.assert_owned(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_clone_helper_with_positive_byte_and_signature_proof_is_verified(self):
+        child, parent, bundle, observed = self.clone_child("valid-helper-clone")
+        relative = Path("Contents/Frameworks/Google Chrome Helper")
+        for app in (self.processes.chrome_app, bundle):
+            path = app / relative
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"approved helper")
+        self.processes.metadata[900] = dict(group=child.pid, executable=str(bundle / relative))
+        self.processes.statuses[900] = None
+        with patch.object(self.processes, "clone_parent", return_value=parent), \
+             patch.object(self.processes, "signature_identity", return_value=self.processes.launch_signature), \
+             patch("meeting_continuity_driver.subprocess.run"):
+            self.assertEqual(self.processes.assert_owned(child), [child.pid, 900])
+        self.assertIn(900, self.processes.proven_candidate_pids)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_signature_identity_requires_all_equivalence_fields(self):
+        metadata = "CDHash=" + "a" * 40 + "\nTeamIdentifier=TEAM123456\ndesignated => identifier Chrome\n"
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value=metadata):
+            identity = OwnedProcesses.signature_identity(self.processes, Path("/synthetic/Chrome"), None)
+        self.assertEqual(identity["designatedRequirement"], "identifier Chrome")
+        with patch("meeting_continuity_driver.subprocess.check_output", return_value="CDHash=" + "a" * 40):
+            with self.assertRaisesRegex(ProtocolError, "complete CDHash"):
+                OwnedProcesses.signature_identity(self.processes, Path("/synthetic/Chrome"), None)
 
     def test_native_failure_prevents_second_source_process_start(self):
         def fail(sequence):
@@ -330,7 +707,16 @@ class DriverTests(unittest.TestCase):
             with self.assertRaisesRegex(ProtocolError, "disappearance"):
                 self.processes.kill_group(child)
 
-    def test_cleanup_refresh_and_ps_timeout_keep_existing_three_second_deadline(self):
+    def test_process_inspection_timeout_is_capped_without_extending_a_caller_deadline(self):
+        with patch("meeting_continuity_driver.time.monotonic", return_value=10):
+            self.assertEqual(self.processes.process_timeout(None), 5)
+            self.assertEqual(self.processes.process_timeout(30), 5)
+            self.assertEqual(self.processes.process_timeout(10.25), 0.25)
+            for deadline in (10, 9):
+                with self.assertRaisesRegex(ProtocolError, "deadline"):
+                    self.processes.process_timeout(deadline)
+
+    def test_cleanup_refresh_and_ps_timeout_honor_explicit_shorter_deadline(self):
         child = self.processes.child("chrome")
         self.processes.statuses[child.pid] = -9
         with patch("meeting_continuity_driver.time.monotonic", return_value=10):
@@ -339,6 +725,25 @@ class DriverTests(unittest.TestCase):
                 self.processes.process_timeout(10)
             with self.assertRaisesRegex(ProtocolError, "timed out"):
                 self.processes.verify_members(child, [900], deadline=10)
+
+    def test_stop_uses_one_absolute_budget_for_verification_and_signalling(self):
+        child = self.processes.child("chrome")
+        with patch("meeting_continuity_driver.time.monotonic", return_value=10), \
+             patch.object(self.processes, "assert_owned", return_value=[child.pid]) as verify, \
+             patch.object(self.processes, "kill_group") as kill:
+            def joined(*args):
+                self.processes.statuses[child.pid] = -9
+            kill.side_effect = joined
+            self.processes.stop(child)
+        verify.assert_called_once_with(child, 40, require_live=False)
+        kill.assert_called_once_with(child, 40)
+
+    def test_expired_cleanup_budget_never_signals(self):
+        child = self.processes.child("chrome")
+        with patch("meeting_continuity_driver.time.monotonic", return_value=40):
+            with self.assertRaisesRegex(ProtocolError, "termination deadline"):
+                self.processes.kill_group(child, deadline=40)
+        self.assertEqual(self.processes.signals, [])
 
     def test_failed_ack_does_not_progress_and_cancellation_joins_owned_children(self):
         with patch("meeting_continuity_driver.wait_ack", side_effect=ProtocolError("ack failed")):
@@ -386,6 +791,13 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(plan["cuaPlayClicks"], 2)
         self.assertEqual(plan["durationSeconds"], 100)
         self.assertEqual(plan["phaseLimitSeconds"], 60)
+        result = subprocess.run(command + ["--preflight-only"], check=True, capture_output=True, text=True, timeout=3)
+        plan = json.loads(result.stdout)
+        self.assertEqual(plan["mode"], "prepare-identity-cleanup")
+        self.assertFalse(plan["speechStarted"])
+        self.assertFalse(plan["nativeCaptureStarted"])
+        self.assertFalse(plan["serverStarted"])
+        self.assertEqual(plan["cuaPlayClicks"], 0)
 
     def test_cleanup_failure_is_retained_without_claiming_owned_children_joined(self):
         with patch.object(self.processes, "cleanup", side_effect=ProtocolError("unverified cleanup")):

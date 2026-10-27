@@ -17,9 +17,11 @@ if ! pichi_upstream_sha="$(git rev-parse --verify --end-of-options "${pichi_upst
     exit 1
 fi
 if ! git merge-base --is-ancestor "$pichi_upstream_sha" "$pichi_upstream_main_sha"; then
-    printf 'Ref %s (%s) is outside fetched upstream/main history (%s). No worktree created.\n' \
-        "$pichi_upstream_ref" "$pichi_upstream_sha" "$pichi_upstream_main_sha" >&2
-    exit 1
+    if ! python3 -S scripts/dev/verify-published-upstream-release.py "$pichi_upstream_ref" "$pichi_upstream_sha"; then
+        printf 'Ref %s (%s) is outside fetched upstream/main history (%s) and was not verified as a published macOS release. No worktree created.\n' \
+            "$pichi_upstream_ref" "$pichi_upstream_sha" "$pichi_upstream_main_sha" >&2
+        exit 1
+    fi
 fi
 if ! pichi_merge_base="$(git merge-base "$pichi_downstream_sha" "$pichi_upstream_sha")"; then
     printf '%s\n' 'origin/main and the selected upstream ref have no common ancestry. No worktree created.' >&2

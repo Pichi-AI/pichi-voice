@@ -236,7 +236,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private enum TranscriptCorrection {
         case editText(segmentID: MeetingTranscriptSegmentID, previousText: String, previousOriginalText: String?,
-                      previousUserTextEdited: Bool?, previousRevision: Int)
+                      previousUserTextEdited: Bool?, previousPrivacyReplacement: Bool?, previousRevision: Int)
         case rename(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?, previousCustomDisplayName: Bool?)
         case reassign([SpeakerAssignmentCorrection])
         case localUserRole([(speakerID: SessionSpeakerID, previousIsLocalUser: Bool,
@@ -259,10 +259,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         )
         case renameBatch([(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?, previousCustomDisplayName: Bool?)])
 
+        case speakerEdits(previousSpeakers: [MeetingSessionSpeaker], assignments: [SpeakerAssignmentCorrection])
+
         var requiresTranscriptPrivacyPublication: Bool {
             switch self {
             case .editText: return true
-            case .rename, .renameBatch, .reassign, .localUserRole, .nameUnknown, .merge: return false
+            case .rename, .renameBatch, .reassign, .localUserRole, .nameUnknown, .merge, .speakerEdits: return false
             }
         }
     }
@@ -487,6 +489,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         passiveOffer: MeetingSession?,
         resolvingSourceID: MeetingSessionID?
     ) async throws -> MeetingSession {
+        guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         guard self.startReservation == nil else { throw MeetingCoordinatorError.recordingAlreadyActive }
         guard !self.hasBlockingActivityTask,
               self.canBeginNewRecording, !self.isDeleting
@@ -516,6 +519,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         reservation: UUID
     ) async throws -> MeetingSession {
         try Task.checkCancellation()
+        guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         try configuration.validate()
         let selectedModelID = self.settings.selectedSpeechModel.rawValue
         let savedBackendID = self.settings.meetingTranscriptionBackendID
@@ -580,6 +584,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             try await self.validateRecordingModels()
         }
         try Task.checkCancellation()
+        guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
               self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
         let dependencyDescriptor = initialDescriptor
@@ -590,10 +595,12 @@ final class MeetingSessionCoordinator: ObservableObject {
                 configuration: validationSnapshot)
         }
         try Task.checkCancellation()
+        guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
               self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
         try await self.capture.preflightPermissions()
         try Task.checkCancellation()
+        guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
         guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
               self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
         guard self.startReservation == reservation,
@@ -620,6 +627,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         let recordingASRConfiguration: MeetingFinalProcessingConfiguration
         do {
             try Task.checkCancellation()
+            guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
             guard self.startReservation == reservation,
                   self.activeSession?.id == passiveOffer?.id,
                   !self.hasBlockingActivityTaskExceptStart,
@@ -641,6 +649,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 try await self.prepareRecordingSpeakerResources(for: descriptor,
                     configuration: validationSnapshot)
                 try Task.checkCancellation()
+            guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
                 guard self.startReservation == reservation,
                       self.settings.selectedSpeechModel.rawValue == recordingModelID,
                       self.settings.meetingTranscriptionBackendID == savedBackendID,
@@ -1287,7 +1296,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     private func resolveSession(_ id: MeetingSessionID) async throws -> MeetingSession {
         if let active = self.activeSession, active.id == id { return active }
         if let completed = self.latestCompletedSession, completed.id == id { return completed }
-        if let loaded = try await self.store.load(id: id) { return loaded }
+        if let loaded = try await self.store.loadTranscript(id: id) { return loaded }
         throw MeetingCoordinatorError.noActiveMeeting
     }
 
@@ -1311,6 +1320,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 previousText: previous.text,
                 previousOriginalText: previous.originalText,
                 previousUserTextEdited: previous.isUserTextEdited,
+                previousPrivacyReplacement: previous.containsPrivacyReplacement,
                 previousRevision: previous.revision
             )
             guard trimmed != previous.text else { return inverse }
@@ -1369,6 +1379,28 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             try session.setLocalUserSpeaker(id: speakerID, speakerNameFormat: speakerNameFormat)
             return .localUserRole(previous)
+        }
+    }
+
+    @discardableResult
+    func editSpeakers(sessionID: MeetingSessionID, edits: MeetingSpeakerEdits) async throws -> MeetingSession {
+        try await self.performCorrection(sessionID: sessionID) { session in
+            let merges = try edits.resolvedMerges()
+            let previousSpeakers = session.speakers
+            let assignments = session.transcriptSegments.compactMap { segment -> SpeakerAssignmentCorrection? in
+                guard let speakerID = segment.speakerID, merges[speakerID] != nil else { return nil }
+                return SpeakerAssignmentCorrection(segment)
+            }
+            for source in merges.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+                if let target = merges[source] { try session.mergeSpeakers(source, into: target) }
+            }
+            for (speakerID, name) in edits.names {
+                guard session.speakers.contains(where: { $0.id == speakerID && $0.mergedIntoSpeakerID == nil }) else { continue }
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                try session.renameSpeaker(id: speakerID, to: trimmed)
+            }
+            return .speakerEdits(previousSpeakers: previousSpeakers, assignments: assignments)
         }
     }
 
@@ -1518,6 +1550,13 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
         guard target.displayTitle != trimmed else { return target }
 
+        if let directory = try await self.store.existingSessionDirectory(for: sessionID) {
+            let snapshot = target
+            try await Task.detached(priority: .utility) {
+                try MeetingSavedSummary.migrateLegacySummaries(in: directory, for: snapshot)
+            }.value
+        }
+
         target.title = trimmed
         target.defaultTitleBase = nil
         target.updatedAt = Date()
@@ -1599,7 +1638,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         let sessions: [MeetingSession]
         do {
-            sessions = try await self.store.loadAll()
+            sessions = try await self.store.loadHistory()
         } catch {
             self.finishRetentionRead()
             DebugLogger.shared.warning(
@@ -1762,11 +1801,12 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// False when the inverse's target no longer exists; caller must not save or re-push.
     private static func applyInverse(_ correction: TranscriptCorrection, to session: inout MeetingSession) -> Bool {
         switch correction {
-        case let .editText(segmentID, previousText, previousOriginalText, previousUserTextEdited, previousRevision):
+        case let .editText(segmentID, previousText, previousOriginalText, previousUserTextEdited, previousPrivacyReplacement, previousRevision):
             guard let index = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }) else { return false }
             session.transcriptSegments[index].text = previousText
             session.transcriptSegments[index].originalText = previousOriginalText
             session.transcriptSegments[index].isUserTextEdited = previousUserTextEdited
+            session.transcriptSegments[index].containsPrivacyReplacement = previousPrivacyReplacement
             session.transcriptSegments[index].revision = previousRevision
             return true
         case let .rename(speakerID, previousName, previousGeneratedNumber, previousCustomDisplayName):
@@ -1847,6 +1887,11 @@ final class MeetingSessionCoordinator: ObservableObject {
                 restored = true
             }
             return restored
+        case let .speakerEdits(previousSpeakers, assignments):
+            guard Set(session.speakers.map(\.id)) == Set(previousSpeakers.map(\.id)) else { return false }
+            if !assignments.isEmpty, !Self.applyInverse(.reassign(assignments), to: &session) { return false }
+            session.speakers = previousSpeakers
+            return true
         }
     }
 
@@ -2612,7 +2657,23 @@ final class MeetingSessionCoordinator: ObservableObject {
     private func handleCaptureEvent(_ event: MeetingCaptureEvent, generation: UUID) {
         guard self.captureGeneration == generation, var session = self.activeSession else { return }
         var requiresPersistence = true
+        self.liveTranscriptionCoordinator?.recordComparisonCaptureEvent(event)
         switch event {
+        case let .audioComparisonProbeStarted(probe):
+            self.liveTranscriptionCoordinator?.attachComparisonProbe(probe)
+            return // Diagnostic-only: no recording, persistence, navigation or transcript writes.
+        case let .microphoneEchoProtectionChanged(protection):
+            let kind: MeetingInterruptionKind = protection == .unfiltered ? .echoFilteringUnavailable : .echoFilteringRestored
+            if session.events.last(where: { $0.kind == .echoFilteringUnavailable || $0.kind == .echoFilteringRestored })?.kind == kind {
+                return
+            }
+            session.events.append(MeetingSessionEvent(
+                id: UUID(),
+                occurredAt: Date(),
+                kind: kind,
+                trackID: nil,
+                detail: protection.transcriptWarning
+            ))
         case let .trackHealth(trackID, health):
             if health.status == .healthy {
                 self.startupWriterFailures.remove(trackID)
@@ -3124,6 +3185,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 }
 
 enum MeetingCoordinatorError: LocalizedError {
+    case featureDisabled
     case recordingAlreadyActive
     case noActiveMeeting
     case noRecoverableAudio
@@ -3134,6 +3196,8 @@ enum MeetingCoordinatorError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .featureDisabled:
+            return "Enable FluidMeet in Settings to record a meeting."
         case .recordingAlreadyActive:
             return "Another meeting recording is already active."
         case .noActiveMeeting:

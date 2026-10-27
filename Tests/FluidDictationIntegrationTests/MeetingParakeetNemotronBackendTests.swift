@@ -1178,24 +1178,18 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(turns.map(\.speakerID), [speakerA, speakerB, speakerA])
     }
 
-    func testCanonicalMergeKeepsAAmbiguousAAsThreeTurns() {
-        let trackID = UUID()
-        let speakerA = UUID()
-        // The ambiguous segment has no resolved speaker and a different overlap state, so its
-        // key differs from both surrounding A segments even though all three are on one track.
-        let input = [
-            self.canonicalSegment(trackID: trackID, start: 0, end: 1.0, speakerID: speakerA, text: "First"),
-            self.canonicalSegment(
-                trackID: trackID, start: 1.1, end: 1.4, speakerID: nil, text: "Maybe", overlap: .ambiguous
-            ),
-            self.canonicalSegment(trackID: trackID, start: 1.5, end: 2.0, speakerID: speakerA, text: "Second"),
-        ]
-
-        let turns = MeetingProcessingPipeline.mergeCanonicalSegments(input)
-
-        XCTAssertEqual(turns.count, 3)
-        XCTAssertEqual(turns.map(\.text), ["First", "Maybe", "Second"])
-        XCTAssertEqual(turns.map(\.overlap), [.none, .ambiguous, .none])
+    func testCanonicalMergePreservesUncertainNativeMembersAcrossSpeakerAndTrackBoundaries() {
+        let mic = UUID(), application = UUID(), speaker = UUID()
+        var assigned = self.canonicalSegment(trackID: mic, start: 0, end: 1, speakerID: speaker, text: "anchor")
+        var uncertain = self.canonicalSegment(trackID: mic, start: 1, end: 1.2, speakerID: nil, text: "tail", overlap: .ambiguous)
+        var other = self.canonicalSegment(trackID: application, start: 1.2, end: 2, speakerID: nil, text: "other")
+        assigned.nativePrecision = .word
+        uncertain.nativePrecision = .word
+        uncertain.attributionState = .timingUncertain
+        other.nativePrecision = .word
+        let input = [assigned, uncertain, other]
+        let output = MeetingProcessingPipeline.mergeCanonicalSegments(input)
+        XCTAssertEqual(output, input, "Readable continuity must not rewrite native IDs, overlap, uncertainty or source tracks")
     }
 
     func testCanonicalMergeCombinesAdjacentSameKeySegments() {
@@ -1375,7 +1369,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         let runtime = FakeRuntime()
         let backend = self.makeBackend(runtime: runtime)
         let configuration = MeetingFinalProcessingConfiguration(languageCode: "de")
-        let request = self.makeRequest(session: session, directory: try self.makeTempSessionDirectory(), configuration: configuration)
+        let request = try self.makeRequest(session: session, directory: self.makeTempSessionDirectory(), configuration: configuration)
         let plan = try backend.plan(request)
         let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
         runtime.asrSession.responses = [
@@ -2154,7 +2148,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             plan: plan,
             manifest: manifest,
             evidence: bundle.evidence,
-            coverageReceipts: bundle.coverageReceipts
+            coverageReceipts: bundle.coverageReceipts,
+            speakerAttributionPolicy: .init(enableProvisionalSpeakerIdentities: true)
         ))
         XCTAssertEqual(assembly.segments.map(\.text), ["a", "b"])
         XCTAssertEqual(assembly.speakers.count, 2, "The ambiguous fragment gets its own preliminary reading identity")
@@ -2164,6 +2159,114 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(resolved.disposition, .ambiguousUnassigned)
         let outside = try XCTUnwrap(assembly.sidecar.dispositions.first { $0.unitID == unitsByText["c"]?.id })
         XCTAssertEqual(outside.disposition, .outsideActivity)
+    }
+
+    /// These are the actual final-word/previous-word times returned by TDT and Nemotron for
+    /// eight Samantha/Daniel sentences plus a saved meeting endpoint with Float32 rounding.
+    func testKnownSentenceEndingsSurviveBackendAssemblyAndTurnMerge() async throws {
+        let timings: [(anchor: Double, start: Double, end: Double, activityEnd: Double)] = [
+            (1.20, 1.52, 2.16, 1.4_399_999_380_111_694),
+            (1.28, 1.60, 2.24, 1.5_199_999_809_265_137),
+            (1.04, 1.36, 2.00, 1.2_799_999_713_897_705),
+            (1.12, 1.44, 2.08, 1.3_600_000_143_051_147),
+            (1.28, 1.60, 2.00, 1.6_799_999_475_479_126),
+            (1.44, 1.76, 2.80, 1.7_599_999_904_632_568),
+            (1.20, 1.52, 2.16, 1.4_399_999_380_111_694),
+            (1.20, 1.52, 2.16, 1.4_399_999_380_111_694),
+            (18.96, 19.28, 19.60, 19.19_999_885_559_082),
+        ]
+        for (kind, mode) in [
+            (MeetingAudioTrackKind.microphone, MeetingCaptureMode.inRoom),
+            (.microphone, .onlineCall), (.applicationAudio, .onlineCall),
+        ] {
+            for timing in timings {
+                let duration = max(4, timing.end + 1)
+                let chunk = self.makeChunk(sequence: 0, start: 0, end: duration)
+                let track = kind == .microphone
+                    ? self.makeMicTrack(chunks: [chunk], eraStart: 0)
+                    : self.makeAppTrack(chunks: [chunk])
+                let session = self.makeSession(mode: mode, tracks: [track])
+                let runtime = FakeRuntime()
+                let backend = self.makeBackend(runtime: runtime, materializer: FakeMaterializer())
+                let plan = try backend.plan(self.makeRequest(
+                    session: session, directory: self.makeTempSessionDirectory()
+                ))
+                let manifest = try self.makeManifest(plan: plan, observations: [
+                    MeetingAnalysisChunkKey(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: duration),
+                ])
+                let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+                runtime.diarizerFactory.segmentsByEpoch = [epoch.id: [
+                    MeetingNemotronSpeakerSegment(slotIndex: 0, start: 0, end: timing.activityEnd),
+                ]]
+                runtime.asrSession.responses = [.init(text: "been there?", words: [
+                    ASRWordTiming(text: "been", start: timing.anchor, end: timing.start),
+                    ASRWordTiming(text: "there?", start: timing.start, end: timing.end),
+                ])]
+                let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+                guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("missing evidence") }
+                let verdicts = try await MeetingTextOverlapEchoVerdictProvider().echoVerdicts(
+                    for: bundle.evidence, manifest: manifest, plan: plan
+                )
+                let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+                    plan: plan,
+                    manifest: manifest,
+                    evidence: bundle.evidence,
+                    coverageReceipts: bundle.coverageReceipts,
+                    echoVerdicts: verdicts
+                ))
+                XCTAssertEqual(result.segments.map(\.text), ["been", "there?"])
+                XCTAssertEqual(result.segments.first?.attributionState, .assigned)
+                let tail = try XCTUnwrap(bundle.evidence.units.last)
+                let expectedNative: MeetingBackendSpeakerAssignment = timing.activityEnd - timing.start
+                    > MeetingAnalysisManifestSchema.mappingToleranceSeconds
+                    ? .assigned(.init(analysisEpochID: epoch.id, label: "slot-0")) : .unassigned
+                XCTAssertEqual(tail.speaker, expectedNative,
+                    "An ending with direct acoustic overlap stays assigned; boundary retention does not invent evidence")
+                XCTAssertEqual(result.segments.last?.nativeSpeakerAssignment, tail.speaker)
+                XCTAssertEqual(result.sidecar.dispositions.map(\.disposition), [.emitted, .emitted])
+                XCTAssertEqual(tail.analysisStart, timing.start, accuracy: 0.000_001)
+                XCTAssertEqual(tail.analysisEnd, timing.end, accuracy: 0.000_001)
+                let merged = MeetingProcessingPipeline.mergeCanonicalSegments(result.segments)
+                XCTAssertEqual(merged.map(\.text), ["been", "there?"])
+                XCTAssertEqual(merged.map(\.id), result.segments.map(\.id))
+            }
+        }
+    }
+
+    func testNearbyCompetingVoiceKeepsRecoveredEndingUnknown() async throws {
+        let chunk = self.makeChunk(sequence: 0, start: 0, end: 4)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 0)
+        let runtime = FakeRuntime()
+        let backend = self.makeBackend(runtime: runtime)
+        let plan = try backend.plan(self.makeRequest(
+            session: self.makeSession(mode: .inRoom, tracks: [track]),
+            directory: self.makeTempSessionDirectory()
+        ))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            MeetingAnalysisChunkKey(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 4),
+        ])
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        runtime.diarizerFactory.segmentsByEpoch = [epoch.id: [
+            MeetingNemotronSpeakerSegment(slotIndex: 0, start: 0, end: 1.44),
+            MeetingNemotronSpeakerSegment(slotIndex: 1, start: 1.47, end: 1.50),
+        ]]
+        runtime.asrSession.responses = [.init(text: "been there?", words: [
+            ASRWordTiming(text: "been", start: 1.2, end: 1.52),
+            ASRWordTiming(text: "there?", start: 1.52, end: 2.16),
+        ])]
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("missing evidence") }
+        XCTAssertEqual(bundle.evidence.units.last?.speaker, .unassigned)
+        let result = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+            plan: plan,
+            manifest: manifest,
+            evidence: bundle.evidence,
+            coverageReceipts: bundle.coverageReceipts
+        ))
+        XCTAssertEqual(result.segments.map(\.text), ["been", "there?"])
+        XCTAssertNotNil(result.segments.first?.speakerID)
+        XCTAssertEqual(result.segments.last?.nativeSpeakerAssignment, .unassigned,
+            "Readable context must not manufacture an acoustic assignment for the competing tail")
     }
 
     func testCoverageUnionDoesNotDoubleCountDuplicateSpeakerIntervals() {

@@ -248,6 +248,7 @@ nonisolated enum FluidServeMeetings {
         guard directory.identity == entry.directoryIdentity else { throw FluidServeFileBoundary.Rejection.changed }
         struct Stored: Decodable {
             var transcriptHash: String
+            var transcriptHashVersion: Int?
             var text: String
             var promptHash: String?
             var providerID: String?
@@ -259,17 +260,25 @@ nonisolated enum FluidServeMeetings {
         let prefix = "manual-summary-"
         let names = try directory.names(maximumEntries: self.maximumDirectoryEntries)
             .filter { $0.hasPrefix(prefix) && $0.hasSuffix(".json") }
-        let currentHash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: entry.source, timeZone: self.systemTimeZone()))
+        let timeZone = self.systemTimeZone()
+        let legacyHash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: entry.source, timeZone: timeZone))
+        let contentHash = MeetingSummaryInput.contentFingerprint(for: entry.source, timeZone: timeZone)
         let customPromptHash = MeetingSummaryInput.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
         var summaries = try names.compactMap { name -> SavedSummary? in
             let style = String(name.dropFirst(prefix.count).dropLast(".json".count))
             guard let file = try directory.read(name, maximumBytes: self.maximumSummaryBytes, budget: entry.budget),
                   let stored = try? JSONDecoder().decode(Stored.self, from: file.data),
                   stored.providerID != nil, stored.promptVersion == MeetingSummaryInput.currentPromptVersion,
-                  stored.transcriptHash == currentHash,
                   stored.promptHash == (style == "custom" ? customPromptHash : nil),
                   !stored.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return nil }
+            let currentHash: String
+            switch stored.transcriptHashVersion {
+            case nil: currentHash = legacyHash
+            case 2: currentHash = contentHash
+            default: return nil
+            }
+            guard stored.transcriptHash == currentHash else { return nil }
             return SavedSummary(
                 style: style,
                 text: stored.text,

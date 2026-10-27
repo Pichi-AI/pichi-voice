@@ -214,6 +214,8 @@ scratch/
 .local-dependencies/
 
 assets/
+!Sources/Fluid/AppIcon.icon/Assets/
+!Sources/Fluid/AppIcon.icon/Assets/*.svg
 .swiftpm/
 scripts/
 
@@ -283,6 +285,7 @@ builds/
 !/scripts/dev/asr-baseline-inputs.py
 !/scripts/dev/standalone-regression.py
 !/scripts/dev/local-api-live.py
+!/scripts/dev/verify-published-upstream-release.py
 
 # Keep future public history free of personal data and local model artifacts
 /private_assets/
@@ -294,3 +297,8 @@ builds/
 !docs/development/owner-v4-full-evidence-2026-10-21.md
 !docs/development/owner-proof-continuity-2026-10-21.md
 !docs/development/stable-speaker-opening-2026-10-21.md
+# Local Claude Code settings and worktrees
+.claude/
+!/docs/development/upstream-sync-1.6.12.md
+!/docs/development/onboarding-integration-2026-10-22.md
+!docs/development/upstream-sync-1.6.13-beta1.md

@@ -193,6 +193,17 @@ extension SettingsStore {
         }
     }
 
+    /// Feature availability is separate from the user's meeting detection preferences.
+    @MainActor var fluidMeetEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.fluidMeetEnabled) as? Bool ?? true }
+        set {
+            guard newValue != self.fluidMeetEnabled else { return }
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.fluidMeetEnabled)
+            NotificationCenter.default.post(name: .fluidMeetEnabledChanged, object: nil)
+        }
+    }
+
     /// Tier 1 native (Zoom/Teams/Webex) meeting auto-detection (default: ON).
     var meetingAutoDetectEnabled: Bool {
         get {

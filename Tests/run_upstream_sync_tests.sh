@@ -26,6 +26,7 @@ pichi_fixture() {
     mkdir -p "$pichi_upstream/scripts/dev"
     cp "$pichi_source_root/scripts/dev/prepare-upstream-sync.sh" "$pichi_upstream/scripts/dev/"
     cp "$pichi_source_root/scripts/dev/new-worktree.sh" "$pichi_upstream/scripts/dev/"
+    cp "$pichi_source_root/scripts/dev/verify-published-upstream-release.py" "$pichi_upstream/scripts/dev/"
     git -C "$pichi_upstream" init -q -b main
     printf 'baseline\n' > "$pichi_upstream/shared.txt"
     git -C "$pichi_upstream" add .
@@ -94,7 +95,7 @@ pichi_sync missing-release
 [[ "$pichi_status" -ne 0 && "$pichi_output" == *'Cannot resolve upstream ref'* ]] || pichi_fail 'missing ref accepted'
 pichi_assert_equal "$(pichi_worktree_count)" "$pichi_before" 'worktree count after missing ref'
 
-# A tag present on upstream but outside main must not be imported.
+# An unverified tag present on upstream but outside main must not be imported.
 git -C "$pichi_upstream" checkout -q --orphan foreign
 git -C "$pichi_upstream" rm -qrf .
 printf 'unrelated history\n' > "$pichi_upstream/foreign.txt"
@@ -136,3 +137,4 @@ pichi_assert_equal "$(git -C "$pichi_downstream" ls-remote origin refs/heads/mai
     "$pichi_downstream_sha" 'origin main after conflict'
 
 printf '%s\n' 'Upstream sync tests passed: pinned release, default main, frozen base, no update, invalid refs and preserved conflicts.'
+python3 -B -S "$pichi_source_root/Tests/test_published_upstream_release.py"

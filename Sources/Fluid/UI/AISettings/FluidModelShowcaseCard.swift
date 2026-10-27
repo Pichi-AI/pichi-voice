@@ -25,7 +25,13 @@ struct FluidModelShowcaseCard: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 Color.clear.frame(height: 20)
                     .overlay(alignment: .leading) {
-                        if self.isRecommended {
+                        if let badge = presentation.badge {
+                            Text(PichiLocalization.text(badge))
+                                .font(self.theme.typography.captionSmall)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .lineLimit(1)
+                                .padding(.trailing, 24)
+                        } else if self.isRecommended {
                             Text(PichiLocalization.text(self.compact ? "Recommended" : "Recommended for your Mac"))
                                 .font(self.theme.typography.captionStrong)
                                 .foregroundStyle(self.theme.palette.primaryText)
@@ -62,6 +68,9 @@ struct FluidModelShowcaseCard: View {
                     .accessibilityHidden(self.showsInfo)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                         if let language = presentation.language { self.infoRow("Languages", value: language) }
+                        if let memory = self.model.recommendedMemoryGB {
+                            self.infoRow("Recommended", value: PichiLocalization.format("Mac with %lld GB+ RAM", Int64(memory)))
+                        }
                         if let bytes = self.model.artifact.byteCount, bytes > 0 {
                             self.infoRow("Download size", value: "≈\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                         }
@@ -74,6 +83,13 @@ struct FluidModelShowcaseCard: View {
                 Spacer(minLength: self.theme.metrics.spacing.sm)
                 // Separate sibling controls are overlaid by the carousel; never nest buttons.
                 Color.clear.frame(height: 64)
+                    .overlay(alignment: .bottomLeading) {
+                        if self.compact, self.isSelected {
+                            Text(PichiLocalization.text("Active"))
+                                .font(self.theme.typography.captionStrong)
+                                .foregroundStyle(self.theme.palette.accent)
+                        }
+                    }
             }
             .padding(self.theme.metrics.spacing.xl)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -82,7 +98,7 @@ struct FluidModelShowcaseCard: View {
             }
             .overlay {
                 self.shape.strokeBorder(
-                    self.isPreview ? FluidBrandColors.blue.opacity(self.contrast == .increased ? 1 : 0.5) : self.theme.palette.cardBorder,
+                    self.isPreview ? self.theme.palette.accent.opacity(self.contrast == .increased ? 1 : 0.5) : self.theme.palette.cardBorder,
                     lineWidth: self.contrast == .increased ? 2 : 1
                 )
             }
@@ -94,7 +110,7 @@ struct FluidModelShowcaseCard: View {
         .onHover { self.hovered = $0 }
         .animation(self.reduceMotion ? nil : .easeOut(duration: 0.12), value: self.hovered)
         .accessibilityLabel(PichiLocalization.format("Preview %@", self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1")))
-        .accessibilityValue([self.isPreview ? PichiLocalization.text("Previewed") : "", self.isRecommended ? PichiLocalization.text("Recommended for your Mac") : ""].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityValue([self.isPreview ? PichiLocalization.text("Previewed") : "", self.isSelected ? PichiLocalization.text("Selected") : "", self.isRecommended ? PichiLocalization.text("Recommended for your Mac") : ""].filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityHint(self.showsInfo ? self.infoAccessibilityDescription : PichiLocalization.format("%@. %@ Browse without changing the selected model.", PichiLocalization.text(presentation.summary), PichiLocalization.text(presentation.useCase)))
         .overlay(alignment: .topTrailing) {
             // Sibling to the browse button: opening details never selects or activates a model.
@@ -128,6 +144,9 @@ struct FluidModelShowcaseCard: View {
         let presentation = self.model.presentation ?? PrivateAIModelPresentation.forModel(id: self.model.id)
         var details: [String] = []
         if let language = presentation.language { details.append(PichiLocalization.format("Languages: %@", PichiLocalization.text(language))) }
+        if let memory = self.model.recommendedMemoryGB {
+            details.append(PichiLocalization.format("Recommended: Mac with %lld GB or more RAM.", Int64(memory)))
+        }
         if let bytes = self.model.artifact.byteCount, bytes > 0 {
             details.append(PichiLocalization.format("Download size: %@", ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)))
         }

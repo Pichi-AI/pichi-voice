@@ -36,6 +36,7 @@ for pichi_path in AGENTS.md .codex/config.toml .codex/hooks/session-start.py \
     fi
 done
 python3 -S scripts/dev/check-localization.py
+python3 -S scripts/dev/update-mobile-project.py --check
 python3 -S Tests/test_localization_catalog.py
 python3 -S Tests/test_build_identity.py
 python3 -S scripts/dev/check-xcode-build-settings.py

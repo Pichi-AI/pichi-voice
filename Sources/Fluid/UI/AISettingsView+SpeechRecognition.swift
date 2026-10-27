@@ -171,7 +171,8 @@ extension VoiceEngineSettingsView {
                             Text(PichiLocalization.text(creditLine))
                                 .font(self.theme.typography.caption)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
+                                // A fixed vertical size here can push the page above the toolbar.
+                                .lineLimit(2)
                         }
 
                         if let metadata {
@@ -211,6 +212,7 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
                             .lineLimit(2)
+                            .help(model.supportedLanguageNames ?? supportedLanguageCodes)
                     }
 
                     if let metadata {
@@ -733,7 +735,7 @@ extension VoiceEngineSettingsView {
 
     @ViewBuilder
     private func speechModelSubtitle(for model: SettingsStore.SpeechModel) -> some View {
-        if model == .fluidParakeetMini || model == .fluidParakeetPico {
+        if [.fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro].contains(model) {
             // Declared language-support copy is a UI key; Text observes the inherited locale.
             Text(LocalizedStringKey(model.languageSupport))
         } else {

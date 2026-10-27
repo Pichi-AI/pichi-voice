@@ -7,8 +7,7 @@ import FluidAudio
 
 extension SettingsStore {
     enum SpeechModel: String, CaseIterable, Identifiable, Codable {
-        /// Temporarily disabled in UI/runtime while Parakeet word boosting work is prioritized.
-        /// Flip to `true` in a future round to re-enable Qwen without deleting implementation.
+        /// The legacy FluidAudio Qwen preview remains disabled independently of the public GGUF model.
         static let qwenPreviewEnabled = false
 
         // MARK: - FluidAudio Models (Apple Silicon Only)
@@ -17,6 +16,7 @@ extension SettingsStore {
         case parakeetTDTv2 = "parakeet-tdt-v2"
         case fluidParakeetMini = "fluid-parakeet-mini"
         case fluidParakeetPico = "fluid-parakeet-pico"
+        case fluidParakeetPro = "fluid-parakeet-pro"
         case parakeetRealtime = "parakeet-realtime"
         case qwen3Asr = "qwen3-asr"
         case cohereTranscribeSixBit = "cohere-transcribe-6bit"
@@ -41,6 +41,10 @@ extension SettingsStore {
         case whisperMedium = "whisper-medium"
         case whisperLargeTurbo = "whisper-large-turbo"
         case whisperLarge = "whisper-large"
+
+        // MARK: - Other transcribe.cpp Models
+
+        case qwen3Asr17B = "qwen3-asr-1.7b"
 
         var parakeetDescriptor: ParakeetSpeechModelCatalog.Descriptor? {
             ParakeetSpeechModelCatalog.descriptor(forModelID: self.rawValue)
@@ -89,7 +93,7 @@ extension SettingsStore {
         var displayName: String {
             switch self {
             case .gigaam: return "GigaAM v3"
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.displayName ?? self.rawValue
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return self.parakeetDescriptor?.displayName ?? self.rawValue
             case .parakeetRealtime: return "Parakeet Flash (Beta)"
             case .qwen3Asr: return "Qwen3 ASR (Beta)"
             case .cohereTranscribeSixBit: return "Cohere Transcribe"
@@ -104,15 +108,16 @@ extension SettingsStore {
             case .whisperMedium: return "Whisper Medium"
             case .whisperLargeTurbo: return "Whisper Large Turbo"
             case .whisperLarge: return "Whisper Large"
+            case .qwen3Asr17B: return "Qwen3 ASR 1.7B"
             }
         }
 
         var languageSupport: String {
             switch self {
             case .gigaam: return "Russian"
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.languageSupport ?? "English Only"
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return self.parakeetDescriptor?.languageSupport ?? "English Only"
             case .parakeetRealtime: return "English Only (Live Streaming)"
-            case .qwen3Asr: return "30 Languages"
+            case .qwen3Asr, .qwen3Asr17B: return "30 Languages"
             case .cohereTranscribeSixBit: return "14 Languages (Select Manually)"
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "Around 40 Languages"
             case .appleSpeech: return "System Languages"
@@ -125,7 +130,7 @@ extension SettingsStore {
         var downloadSize: String {
             switch self {
             case .gigaam: return String(format: "~%.1f MiB", Double(PichiGigaAMModelStore.defaultDownloadByteCount) / 1_048_576)
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.downloadSize ?? ""
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return self.parakeetDescriptor?.downloadSize ?? ""
             case .parakeetRealtime: return "~428.4 MiB"
             case .qwen3Asr: return "~2.0 GiB"
             case .cohereTranscribeSixBit: return "~1.54 GiB"
@@ -140,13 +145,14 @@ extension SettingsStore {
             case .whisperMedium: return "~793.0 MiB"
             case .whisperLargeTurbo: return "~845.3 MiB"
             case .whisperLarge: return "~1.55 GiB"
+            case .qwen3Asr17B: return "~2.03 GiB"
             }
         }
 
         var expectedDownloadBytes: Int64 {
             switch self {
             case .gigaam: return PichiGigaAMModelStore.defaultDownloadByteCount
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.expectedDownloadBytes ?? 0
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return self.parakeetDescriptor?.expectedDownloadBytes ?? 0
             case .parakeetRealtime: return 449_190_189
             case .qwen3Asr: return 2000 * 1024 * 1024
             case .cohereTranscribeSixBit: return 1_650_748_785
@@ -156,15 +162,16 @@ extension SettingsStore {
             case .whisperBase: return 84_962_880
             case .whisperSmall: return 269_751_136
             case .whisperMedium: return 831_538_144
-            case .whisperLargeTurbo: return 886_381_760
+            case .whisperLargeTurbo: return 886_381_728
             case .whisperLarge: return 1_668_741_440
+            case .qwen3Asr17B: return 2_185_030_624
             case .appleSpeech, .appleSpeechAnalyzer: return 0
             }
         }
 
         var requiresAppleSilicon: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .parakeetRealtime, .qwen3Asr, .qwen3Asr17B, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
             default: return false
             }
         }
@@ -172,13 +179,13 @@ extension SettingsStore {
         var isWhisperModel: Bool {
             switch self {
             case .gigaam: return false
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .parakeetRealtime, .qwen3Asr, .qwen3Asr17B, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
                  .appleSpeechAnalyzer: return false
             default: return true
             }
         }
 
-        /// The GGUF filename for transcribe.cpp Whisper models.
+        /// The GGUF filename for models handled by the existing transcribe.cpp adapter.
         var whisperModelFile: String? {
             switch self {
             case .whisperTiny: return "whisper-tiny-Q8_0.gguf"
@@ -187,6 +194,7 @@ extension SettingsStore {
             case .whisperMedium: return "whisper-medium-Q8_0.gguf"
             case .whisperLargeTurbo: return "whisper-large-v3-turbo-Q8_0.gguf"
             case .whisperLarge: return "whisper-large-v3-Q8_0.gguf"
+            case .qwen3Asr17B: return "Qwen3-ASR-1.7B-Q8_0.gguf"
             default: return nil
             }
         }
@@ -238,7 +246,7 @@ extension SettingsStore {
         /// Requires macOS 15 or later.
         var requiresMacOS15: Bool {
             switch self {
-            case .fluidParakeetMini, .fluidParakeetPico, .qwen3Asr, .cohereTranscribeSixBit: return true
+            case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .qwen3Asr, .cohereTranscribeSixBit: return true
             default: return false
             }
         }
@@ -300,7 +308,7 @@ extension SettingsStore {
         var humanReadableName: String {
             switch self {
             case .gigaam: return "GigaAM - Russian"
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.humanReadableName ?? self.rawValue
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return self.parakeetDescriptor?.humanReadableName ?? self.rawValue
             case .parakeetRealtime: return "Flash Dictation"
             case .qwen3Asr: return "Qwen3 - Multilingual"
             case .cohereTranscribeSixBit: return "Cohere - High Accuracy"
@@ -315,6 +323,7 @@ extension SettingsStore {
             case .whisperMedium: return "Medium Quality"
             case .whisperLargeTurbo: return "Higher Quality but Faster"
             case .whisperLarge: return "Maximum Accuracy"
+            case .qwen3Asr17B: return "Qwen3 - Multilingual 1.7B"
             }
         }
 
@@ -322,7 +331,7 @@ extension SettingsStore {
         var cardDescription: String {
             switch self {
             case .gigaam: return "On-device recognition for Russian speech."
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
                 return self.parakeetDescriptor?.cardDescription ?? ""
             case .parakeetRealtime:
                 return "English-only streaming local dictation with low-latency partial text and end-of-utterance detection."
@@ -352,6 +361,8 @@ extension SettingsStore {
                 return "Near-maximum accuracy with optimized speed."
             case .whisperLarge:
                 return "Best possible accuracy. Large download and memory usage."
+            case .qwen3Asr17B:
+                return "Automatically detects 30 languages. Transcribes on your Mac after you stop recording."
             }
         }
 
@@ -367,7 +378,7 @@ extension SettingsStore {
         var requiredMemoryGB: Double {
             switch self {
             case .gigaam: return 4.0
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .parakeetRealtime:
                 return 4.0
             case .qwen3Asr:
                 return 8.0
@@ -389,6 +400,8 @@ extension SettingsStore {
                 return 6.0
             case .whisperLarge:
                 return 8.0
+            case .qwen3Asr17B:
+                return 6.0
             }
         }
 
@@ -412,7 +425,7 @@ extension SettingsStore {
         var speedRating: Int {
             switch self {
             case .gigaam: return self.libraryMetadata?.performanceRatings.speedRating ?? 0
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.speedRating ?? 0
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return self.parakeetDescriptor?.performanceRatings?.speedRating ?? 0
             case .parakeetRealtime: return 5
             case .qwen3Asr: return 3
             case .cohereTranscribeSixBit: return 3
@@ -426,6 +439,7 @@ extension SettingsStore {
             case .whisperMedium: return 2
             case .whisperLargeTurbo: return 3
             case .whisperLarge: return 1
+            case .qwen3Asr17B: return 3
             }
         }
 
@@ -433,7 +447,7 @@ extension SettingsStore {
         var accuracyRating: Int {
             switch self {
             case .gigaam: return self.libraryMetadata?.performanceRatings.accuracyRating ?? 0
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.accuracyRating ?? 0
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return self.parakeetDescriptor?.performanceRatings?.accuracyRating ?? 0
             case .parakeetRealtime: return 4
             case .qwen3Asr: return 4
             case .cohereTranscribeSixBit: return 5
@@ -447,6 +461,7 @@ extension SettingsStore {
             case .whisperMedium: return 4
             case .whisperLargeTurbo: return 5
             case .whisperLarge: return 5
+            case .qwen3Asr17B: return 5
             }
         }
 
@@ -454,7 +469,7 @@ extension SettingsStore {
         var speedPercent: Double {
             switch self {
             case .gigaam: return self.libraryMetadata?.performanceRatings.speedPercent ?? 0
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.speedPercent ?? 0
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return self.parakeetDescriptor?.performanceRatings?.speedPercent ?? 0
             case .parakeetRealtime: return 1.0
             case .qwen3Asr: return 0.45
             case .cohereTranscribeSixBit: return 0.85
@@ -468,6 +483,7 @@ extension SettingsStore {
             case .whisperMedium: return 0.40
             case .whisperLargeTurbo: return 0.65
             case .whisperLarge: return 0.20
+            case .qwen3Asr17B: return 0.50
             }
         }
 
@@ -475,7 +491,7 @@ extension SettingsStore {
         var accuracyPercent: Double {
             switch self {
             case .gigaam: return self.libraryMetadata?.performanceRatings.accuracyPercent ?? 0
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.accuracyPercent ?? 0
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return self.parakeetDescriptor?.performanceRatings?.accuracyPercent ?? 0
             case .parakeetRealtime: return 0.75
             case .qwen3Asr: return 0.90
             case .cohereTranscribeSixBit: return 0.98
@@ -489,6 +505,7 @@ extension SettingsStore {
             case .whisperMedium: return 0.80
             case .whisperLargeTurbo: return 0.95
             case .whisperLarge: return 1.00
+            case .qwen3Asr17B: return 1.00
             }
         }
 
@@ -497,9 +514,10 @@ extension SettingsStore {
             switch self {
             case .parakeetTDT: return AppBrand.text("FluidVoice Pick")
             case .parakeetTDTv2: return AppBrand.text("FluidVoice Pick")
-            case .fluidParakeetMini, .fluidParakeetPico: return "New"
+            case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro: return "New"
             case .parakeetRealtime: return "Beta"
             case .qwen3Asr: return "Beta"
+            case .qwen3Asr17B: return nil
             case .cohereTranscribeSixBit: return "New"
             case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "New + Beta"
             case .appleSpeechAnalyzer: return "New"
@@ -510,7 +528,7 @@ extension SettingsStore {
         /// Optimization level for Apple Silicon (for display)
         var appleSiliconOptimized: Bool {
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
                 return true
             default:
                 return false
@@ -521,7 +539,7 @@ extension SettingsStore {
         /// Large Whisper models are too slow for streaming, so they only do final transcription on stop.
         var supportsStreaming: Bool {
             switch self {
-            case .qwen3Asr, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
+            case .qwen3Asr, .qwen3Asr17B, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
                 return false // Too slow for real-time chunk processing
             default:
                 return true // All other models support streaming
@@ -531,7 +549,7 @@ extension SettingsStore {
         var supportsPronunciationMatching: Bool {
             #if arch(arm64)
             switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
                 return true
             default:
                 return false
@@ -587,11 +605,11 @@ extension SettingsStore {
         var provider: Provider {
             switch self {
             case .gigaam: return .saluteDevices
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return .nvidia
             case .appleSpeech, .appleSpeechAnalyzer:
                 return .apple
-            case .qwen3Asr:
+            case .qwen3Asr, .qwen3Asr17B:
                 return .qwen
             case .cohereTranscribeSixBit:
                 return .cohere
@@ -611,7 +629,7 @@ extension SettingsStore {
             case .gigaam: return PichiGigaAMModelStore.shared.modelsExistOnDisk()
             case .appleSpeech, .appleSpeechAnalyzer:
                 return true
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
                 #if canImport(FluidAudio)
                 guard let descriptor = self.parakeetDescriptor else { return false }
                 return Self.parakeetModelsExist(descriptor: descriptor)
@@ -657,7 +675,7 @@ extension SettingsStore {
                 return false
                 #endif
             default:
-                // Whisper models
+                // GGUF models handled by the shared native adapter.
                 guard let whisperFile = self.whisperModelFile else { return false }
                 let directory: URL? = AppBrand.cachesDirectory
                     .appendingPathComponent("WhisperModels")
@@ -701,11 +719,11 @@ extension SettingsStore {
         var brandName: String {
             switch self {
             case .gigaam: return "SaluteDevices"
-            case .fluidParakeetMini, .fluidParakeetPico:
+            case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
                 return "FluidVoice"
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return "NVIDIA"
-            case .qwen3Asr:
+            case .qwen3Asr, .qwen3Asr17B:
                 return "Qwen"
             case .cohereTranscribeSixBit:
                 return "Cohere"
@@ -728,11 +746,11 @@ extension SettingsStore {
         var brandColorHex: String {
             switch self {
             case .gigaam: return "#8E8E93" // Neutral: no bundled publisher logo or color
-            case .fluidParakeetMini, .fluidParakeetPico:
+            case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
                 return "#1A75FF" // FluidBrandColors.blue
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return "#76B900"
-            case .qwen3Asr:
+            case .qwen3Asr, .qwen3Asr17B:
                 return "#E67E22"
             case .cohereTranscribeSixBit:
                 return "#FA6B3C"
@@ -753,10 +771,13 @@ extension SettingsStore.SpeechModel {
             return "RU"
         case .parakeetTDT:
             return "BG, HR, CS, DA, NL, EN, ET, FI, FR, DE, EL, HU, IT, LV, LT, MT, PL, PT, RO, SK, SL, ES, SV, RU, UK"
-        case .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime:
+        case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro, .parakeetRealtime:
             return "EN"
         case .cohereTranscribeSixBit:
             return "AR, DE, EL, EN, ES, FR, IT, JA, KO, NL, PL, PT, VI, ZH"
+        case .qwen3Asr, .qwen3Asr17B:
+            // https://huggingface.co/Qwen/Qwen3-ASR-1.7B#released-models-description-and-download
+            return "ZH, EN, YUE, AR, DE, FR, ES, PT, ID, IT, KO, RU, TH, VI, JA, TR, HI, MS, NL, SV, DA, FI, PL, CS, FIL, FA, EL, HU, MK, RO"
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return "40 language-locales"
         case .appleSpeechAnalyzer:
@@ -774,10 +795,14 @@ extension SettingsStore.SpeechModel {
             return """
             Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian, Spanish, Swedish, Russian, and Ukrainian
             """
-        case .fluidParakeetMini, .fluidParakeetPico:
+        case .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:
             return "English"
         case .cohereTranscribeSixBit:
             return "Arabic, German, Greek, English, Spanish, French, Italian, Japanese, Korean, Dutch, Polish, Portuguese, Vietnamese, and Mandarin Chinese"
+        case .qwen3Asr, .qwen3Asr17B:
+            return "Chinese, English, Cantonese, Arabic, German, French, Spanish, Portuguese, Indonesian, Italian, Korean, Russian, Thai, " +
+                "Vietnamese, Japanese, Turkish, Hindi, Malay, Dutch, Swedish, Danish, Finnish, Polish, Czech, Filipino, Persian, Greek, " +
+                "Hungarian, Macedonian, and Romanian"
         case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
             return "Spanish, Italian, Portuguese, Hindi, Korean, English, German, French, Russian, Turkish, Vietnamese, Dutch, Japanese, Arabic, " +
                 "Ukrainian; Polish, Norwegian Bokmal, Finnish, Mandarin, Czech, Bulgarian, Slovak, Swedish, Croatian, Romanian, Estonian, " +

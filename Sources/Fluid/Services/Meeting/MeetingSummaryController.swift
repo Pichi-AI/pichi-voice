@@ -1,25 +1,6 @@
 import Combine
 import Foundation
 
-nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable {
-    case executive, detailed, actions, decisions, participants, topics, custom
-    var id: String {
-        self.rawValue
-    }
-
-    var title: String {
-        switch self {
-        case .executive: "Executive summary"
-        case .detailed: "Detailed summary"
-        case .actions: "Action items"
-        case .decisions: "Key decisions"
-        case .participants: "Participants"
-        case .topics: "Topics discussed"
-        case .custom: "Custom prompt"
-        }
-    }
-}
-
 /// Keeps summary admission separate from ordinary processing, including cloud calls that
 /// do not own a local-model residency token. Tokens survive cancellation until work drains.
 @MainActor
@@ -128,9 +109,16 @@ final class MeetingSummaryController: ObservableObject {
     @Published private(set) var progress: PrivateAIModelDownloadProgress?
     @Published private(set) var output = ""
     @Published private(set) var outputProvenance = ""
+    @Published private(set) var outputNotice = ""
     @Published private(set) var error: String?
     private var operation: Task<Void, Never>?
     private var generation = UUID()
+    private let store: any MeetingSessionStoring
+
+    init(store: any MeetingSessionStoring = MeetingSessionStore.shared) {
+        self.store = store
+    }
+
     var busy: Bool {
         self.downloading || self.generating || self.deleting
     }
@@ -139,32 +127,7 @@ final class MeetingSummaryController: ObservableObject {
         PrivateAIModelRegistry.modelIDs(for: .meetingSummary).first.flatMap { PrivateAIModelRegistry.model(id: $0) }
     }
 
-    nonisolated struct SavedSummary: Codable {
-        let transcriptHash: String
-        let modelID: String
-        let text: String
-        var providerID: String?
-        var providerName: String?
-        var configurationHash: String?
-        var promptVersion: Int?
-        var generatedAt: Date?
-        /// Set for custom-prompt summaries, so an edited prompt does not show an older result.
-        var promptHash: String?
-        /// Display name of an on-device model, whose ID is not meant to be read.
-        var modelName: String?
-
-        var provenance: String {
-            "\(self.providerName ?? "Fluid Intelligence") · \(self.modelName ?? self.modelID)"
-        }
-
-        /// Summaries saved before providers were recorded came from the earlier on-device
-        /// model, which was withdrawn for accuracy; they stay hidden. Older input/prompt
-        /// contracts also require regeneration; their stored text is not deleted.
-        func isCurrent(transcriptHash: String, promptHash: String?) -> Bool {
-            self.providerID != nil && self.promptVersion == MeetingSummaryInput.currentPromptVersion
-                && self.transcriptHash == transcriptHash && self.promptHash == promptHash
-        }
-    }
+    typealias SavedSummary = MeetingSavedSummary
 
     func refresh(session: MeetingSession?, kind: MeetingSummaryKind, customPrompt: String = "") async {
         guard !self.busy else { return }
@@ -172,18 +135,20 @@ final class MeetingSummaryController: ObservableObject {
         self.generation = generation
         self.output = ""
         self.outputProvenance = ""
+        self.outputNotice = ""
         self.error = nil
         self.checking = true
         let model = self.model
+        let store = self.store
         let promptHash = kind == .custom ? MeetingSummaryInput.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)) : nil
         let snapshot = await Task.detached(priority: .utility) { () -> (Bool, SavedSummary?) in
             let installed = model.map { PrivateAIIntegrationService.isModelInstalled($0) } ?? false
             guard let session,
-                  let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
+                  let directory = try? await store.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
                   saved.isCurrent(
-                      transcriptHash: MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)),
+                      session: session,
                       promptHash: promptHash
                   )
             else { return (installed, nil) }
@@ -193,6 +158,7 @@ final class MeetingSummaryController: ObservableObject {
         self.installed = snapshot.0
         self.output = snapshot.1?.text ?? ""
         self.outputProvenance = snapshot.1?.provenance ?? ""
+        self.outputNotice = snapshot.1?.notice ?? ""
         self.checking = false
     }
 
@@ -258,7 +224,9 @@ final class MeetingSummaryController: ObservableObject {
             }
             do {
                 try await MeetingSummaryActivityCoordinator.shared.withRemoteSummary {
-                    let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
+                    let (transcript, contentHash) = await Task.detached(priority: .utility) {
+                        (MeetingSummaryInput.transcript(for: session), MeetingSummaryInput.contentFingerprint(for: session))
+                    }.value
                     guard session.transcriptSegments.contains(where: { !$0.isEcho && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                         throw MeetingPostProcessingError.invalidOutput
                     }
@@ -272,11 +240,11 @@ final class MeetingSummaryController: ObservableObject {
                         languageCode: session.languageCode
                     )
                     try Task.checkCancellation()
-                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                    guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
                         throw MeetingPostProcessingError.checkpointFailed
                     }
                     let saved = SavedSummary(
-                        transcriptHash: MeetingSummaryInput.fingerprint(transcript),
+                        transcriptHash: contentHash,
                         modelID: route.modelID,
                         text: text,
                         providerID: route.providerID,
@@ -284,13 +252,15 @@ final class MeetingSummaryController: ObservableObject {
                         configurationHash: route.configurationHash,
                         promptVersion: MeetingSummaryInput.currentPromptVersion,
                         generatedAt: Date(),
-                        promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil
+                        promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil,
+                        transcriptHashVersion: SavedSummary.currentTranscriptHashVersion
                     )
                     try await Task.detached(priority: .utility) {
                         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
                     }.value
                     self.output = text
                     self.outputProvenance = saved.provenance
+                    self.outputNotice = saved.notice
                 }
             } catch is CancellationError {
                 self.error = nil
@@ -321,7 +291,9 @@ final class MeetingSummaryController: ObservableObject {
             }
             do {
                 try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
-                    let transcript = await Task.detached(priority: .utility) { MeetingSummaryInput.transcript(for: session) }.value
+                    let (transcript, contentHash) = await Task.detached(priority: .utility) {
+                        (MeetingSummaryInput.transcript(for: session), MeetingSummaryInput.contentFingerprint(for: session))
+                    }.value
                     guard transcript.utf8.count <= MeetingSummaryOnDevice.maximumTranscriptBytes else {
                         throw MeetingPostProcessingError.inputTooLarge
                     }
@@ -344,11 +316,11 @@ final class MeetingSummaryController: ObservableObject {
                     }
                     try Task.checkCancellation()
                     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MeetingPostProcessingError.invalidOutput }
-                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                    guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
                         throw MeetingPostProcessingError.checkpointFailed
                     }
                     let saved = SavedSummary(
-                        transcriptHash: MeetingSummaryInput.fingerprint(transcript),
+                        transcriptHash: contentHash,
                         modelID: model.id,
                         text: text,
                         providerID: MeetingSummaryOnDevice.providerID,
@@ -357,13 +329,15 @@ final class MeetingSummaryController: ObservableObject {
                         promptVersion: MeetingSummaryInput.currentPromptVersion,
                         generatedAt: Date(),
                         promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil,
-                        modelName: model.displayName
+                        modelName: model.displayName,
+                        transcriptHashVersion: SavedSummary.currentTranscriptHashVersion
                     )
                     try await Task.detached(priority: .utility) {
                         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
                     }.value
                     self.output = text
                     self.outputProvenance = saved.provenance
+                    self.outputNotice = saved.notice
                 }
             } catch is CancellationError {
                 self.error = nil
@@ -379,5 +353,17 @@ final class MeetingSummaryController: ObservableObject {
 
     func cancel() {
         self.operation?.cancel()
+    }
+}
+
+extension MeetingSavedSummary {
+    var provenance: String {
+        "\(self.providerName ?? "Fluid Intelligence") · \(self.modelName ?? self.modelID)"
+    }
+
+    var notice: String {
+        self.providerID == MeetingSummaryOnDevice.providerID
+            ? "Generated by AI on your Mac. May contain mistakes."
+            : "Generated by AI. May contain mistakes."
     }
 }

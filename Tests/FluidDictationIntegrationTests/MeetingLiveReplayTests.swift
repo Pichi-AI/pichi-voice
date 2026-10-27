@@ -3,6 +3,9 @@ import CoreMedia
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
+#if arch(arm64)
+import FluidAudio
+#endif
 
 /// Opt-in replay harness: drives the REAL `MeetingLiveTranscriptionCoordinator` with a real,
 /// previously-recorded Zoom meeting's decoded microphone/application-audio WAVs, to see what the
@@ -17,6 +20,16 @@ final class MeetingLiveReplayTests: XCTestCase {
     private static let chunkFrames = 320 // 20ms @ 16kHz
     private static let sampleRate: Double = 16_000
     private static let trailingSilenceSeconds: Double = 3
+
+    func testReplayBufferUsesPerFrameTiming() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate, channels: 1, interleaved: false))
+        let pcm = try XCTUnwrap(Self.makeBuffer(format: format, samples: [Float](repeating: 0, count: Self.chunkFrames)[...]))
+        let description = try XCTUnwrap(Self.makeFormatDescription(format: format))
+        let sample = try XCTUnwrap(Self.makeSampleBuffer(pcm: pcm, formatDescription: description, pts: CMTime(seconds: 7, preferredTimescale: 16_000)))
+        XCTAssertEqual(CMSampleBufferGetDuration(sample).seconds, 0.02, accuracy: 0.000_001)
+        XCTAssertEqual(CMSampleBufferGetPresentationTimeStamp(sample).seconds, 7, accuracy: 0.000_001)
+        XCTAssertEqual(CMSampleBufferGetNumSamples(sample), Self.chunkFrames)
+    }
 
     func testReplayRealMeetingThroughLiveCoordinator() async throws {
         let env = ProcessInfo.processInfo.environment
@@ -209,6 +222,125 @@ final class MeetingLiveReplayTests: XCTestCase {
         }
     }
 
+    #if arch(arm64)
+    /// Compare explicitly supplied before/after AEC clips with a local-only final ASR model.
+    func testCompareBeforeAndAfterCancellationWithFinalASR() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["FLUIDVOICE_COMPARISON_REPLAY"] == "1" else {
+            throw XCTSkip("Set FLUIDVOICE_COMPARISON_REPLAY=1 and explicit comparison inputs to run this experiment.")
+        }
+        // Reuse the main harness's source-specific phrase and explicit-path validation.
+        _ = try ReplayFixture(environment: env)
+        let directory = try Self.explicitReplayDirectory("FLUIDVOICE_COMPARISON_CLIPS", environment: env)
+        let modelDirectory = try Self.explicitReplayDirectory("FLUIDVOICE_COMPARISON_TDT_MODELS", environment: env)
+        var clips: [(name: String, stage: String, samples: [Float], expected: String)] = []
+        for clip in ["voice-alone", "voice-with-video", "short-comment"] {
+            let key = "FLUIDVOICE_COMPARISON_EXPECTED_" + clip.uppercased().replacingOccurrences(of: "-", with: "_")
+            let expected = ReplayFixture.normalize(try XCTUnwrap(env[key], "Provide a known phrase for each comparison clip"))
+            guard !expected.isEmpty else { throw Self.invalidReplayInput("Comparison phrase must contain words: \(key)") }
+            for stage in ["microphone-before-aec", "microphone-after-aec"] {
+                let path = directory.appendingPathComponent("\(clip)-\(stage).wav").path
+                let samples = try Self.load16kMonoFloatSamples(path: path, maximumSeconds: 30)
+                guard !samples.isEmpty else { throw Self.invalidReplayInput("Comparison clip is empty") }
+                clips.append((clip, stage, samples, expected))
+            }
+        }
+        let models = try await AsrModels.loadLocalOnly(from: modelDirectory, version: .v2)
+        let manager = AsrManager(config: .default)
+        do {
+            try await manager.initialize(models: models)
+            for clip in clips {
+                try Task.checkCancellation()
+                try await manager.resetDecoderState()
+                let result = try await manager.transcribe(clip.samples, source: .microphone)
+                print("[comparison-asr] \(clip.name) \(clip.stage): \(result.text)")
+                XCTAssertTrue(ReplayFixture.normalize(result.text).contains(clip.expected),
+                    "\(clip.name) \(clip.stage) missed its explicit fixture phrase")
+            }
+            try await manager.resetDecoderState()
+        } catch {
+            try? await manager.resetDecoderState()
+            throw error
+        }
+    }
+
+    /// Exercise the cached recognizer without app callbacks, echo filtering or forced resets.
+    func testReplayDirectRecognizerWithoutForcedResets() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["FLUIDVOICE_DIRECT_LIVE_REPLAY"] == "1" else {
+            throw XCTSkip("Set FLUIDVOICE_DIRECT_LIVE_REPLAY=1 and explicit replay inputs to run this experiment.")
+        }
+        let fixture = try ReplayFixture(environment: env)
+        let modelDirectory = try Self.explicitReplayDirectory("FLUIDVOICE_DIRECT_LIVE_MODELS", environment: env)
+        let samples = try Self.load16kMonoFloatSamples(path: fixture.applicationPath, maximumSeconds: 30)
+        guard !samples.isEmpty else { throw Self.invalidReplayInput("Direct replay clip is empty") }
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate, channels: 1, interleaved: false))
+        let manager = StreamingEouAsrManager(chunkSize: .ms160)
+        final class Transcript: @unchecked Sendable {
+            let lock = NSLock()
+            var latest = ""
+            func record(_ text: String) { self.lock.withLock { self.latest = text } }
+            func read() -> String { self.lock.withLock { self.latest } }
+        }
+        let transcript = Transcript()
+        do {
+            // Unlike the downloading loader, this API consumes only the explicitly selected cache.
+            try await manager.loadModels(modelDir: modelDirectory)
+            let silence = try XCTUnwrap(Self.makeBuffer(format: format, samples: [Float](repeating: 0, count: 16_000)[...]))
+            try await manager.appendAudio(silence)
+            try await manager.processBufferedAudio()
+            await manager.reset()
+            await manager.setPartialTranscriptCallback { transcript.record($0) }
+            let requestedSeconds = Double(env["FLUIDVOICE_DIRECT_LIVE_SECONDS"] ?? "25") ?? 25
+            guard requestedSeconds.isFinite else { throw Self.invalidReplayInput("Direct replay duration must be finite") }
+            let seconds = min(30, max(1, requestedSeconds))
+            let limit = min(samples.count, Int(seconds * Self.sampleRate))
+            let start = ProcessInfo.processInfo.systemUptime
+            for offset in stride(from: 0, to: limit, by: Self.chunkFrames) {
+                try Task.checkCancellation()
+                let end = min(offset + Self.chunkFrames, limit)
+                let pcm = try XCTUnwrap(Self.makeBuffer(format: format, samples: samples[offset..<end]))
+                try await manager.appendAudio(pcm)
+                try await manager.processBufferedAudio()
+                // Fixed real-time pacing prevents queue/model pressure caused by synthetic acceleration.
+                let wait = Double(end) / Self.sampleRate - (ProcessInfo.processInfo.systemUptime - start)
+                if wait > 0.001 { try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+                if end % 16_000 == 0 { print("[direct] audioSecond=\(end / 16_000) text=\(transcript.read())") }
+            }
+            print("[direct] before-finish=\(transcript.read())")
+            if env["FLUIDVOICE_DIRECT_PAD_FINISH"] == "1" {
+                await manager.injectSilence(1.28)
+                try await manager.processBufferedAudio()
+                print("[direct] after-padding=\(transcript.read())")
+            }
+            let finished = try await manager.finish()
+            print("[direct] finish=\(finished)")
+            let observed = ReplayFixture.normalize(finished + " " + transcript.read())
+            XCTAssertTrue(observed.contains(fixture.applicationText), "Direct replay missed the explicit application phrase")
+            XCTAssertFalse(observed.contains(fixture.microphoneText), "A source-specific microphone phrase appeared in application replay")
+            await manager.reset()
+        } catch {
+            await manager.reset()
+            throw error
+        }
+    }
+    #endif
+
+    private static func invalidReplayInput(_ message: String) -> NSError {
+        NSError(domain: "MeetingLiveReplayTests", code: 8, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    private static func explicitReplayDirectory(_ key: String, environment: [String: String]) throws -> URL {
+        guard let path = environment[key], NSString(string: path).isAbsolutePath else {
+            throw self.invalidReplayInput("Explicit absolute model/fixture directory required: \(key)")
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw self.invalidReplayInput("Replay directory is missing: \(key)")
+        }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
     // MARK: - Helpers
 
     private struct ReplayFixture {
@@ -332,13 +464,20 @@ final class MeetingLiveReplayTests: XCTestCase {
         }
     }
 
-    private static func load16kMonoFloatSamples(path: String) throws -> [Float] {
+    private static func load16kMonoFloatSamples(path: String, maximumSeconds: Double? = nil) throws -> [Float] {
         let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: path) else {
             throw NSError(domain: "MeetingLiveReplayTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Fixture not found at \(path)"])
         }
         let inputFile = try AVAudioFile(forReading: url)
         let inputFormat = inputFile.processingFormat
+        if let maximumSeconds {
+            guard inputFormat.sampleRate.isFinite, (8_000...192_000).contains(inputFormat.sampleRate),
+                  inputFile.length >= 0, Double(inputFile.length) / inputFormat.sampleRate <= maximumSeconds,
+                  inputFormat.channelCount > 0, inputFormat.channelCount <= 8 else {
+                throw self.invalidReplayInput("Explicit diagnostic clips must be bounded to \(maximumSeconds) seconds and at most eight channels")
+            }
+        }
         guard let desiredFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: self.sampleRate, channels: 1, interleaved: false) else {
             throw NSError(domain: "MeetingLiveReplayTests", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not build target format"])
         }
@@ -444,7 +583,7 @@ final class MeetingLiveReplayTests: XCTestCase {
         guard copyStatus == kCMBlockBufferNoErr else { return nil }
 
         var timing = CMSampleTimingInfo(
-            duration: CMTime(value: CMTimeValue(frameCount), timescale: CMTimeScale(self.sampleRate)),
+            duration: CMTime(value: 1, timescale: CMTimeScale(self.sampleRate)),
             presentationTimeStamp: pts,
             decodeTimeStamp: .invalid
         )

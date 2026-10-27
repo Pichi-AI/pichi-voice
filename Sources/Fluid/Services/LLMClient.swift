@@ -113,11 +113,16 @@ final nonisolated class LLMClient: @unchecked Sendable {
     /// Default timeout for LLM requests (30 seconds)
     static let defaultTimeoutSeconds: TimeInterval = 30
 
-    /// URLSession configured with appropriate timeouts
-    private let session: URLSession
+    /// Idle refresh applies separately to the client's standard and redirect-safe cloud pools.
+    static let idleConnectionLimit: TimeInterval = 45
+    private var session: URLSession
     private let localSession: URLSession
-    private let cloudSession: URLSession
+    private var cloudSession: URLSession
     private let cloudAuthorization: CloudTextProviderAuthorization
+    private let idleConnectionLimit: TimeInterval
+    private let sessionLock = NSLock()
+    private var activeRequests: [Bool: Int] = [:]
+    private var lastRequestEnd: [Bool: Date] = [:]
 
     /// Learns which models reject `temperature` so later requests stop sending it.
     private let temperatureSupport: ModelTemperatureSupport
@@ -134,21 +139,27 @@ final nonisolated class LLMClient: @unchecked Sendable {
         localConfig.timeoutIntervalForRequest = OllamaChatAdapter.maximumTimeoutSeconds
         localConfig.timeoutIntervalForResource = OllamaChatAdapter.maximumTimeoutSeconds * 2
         self.localSession = URLSession(configuration: localConfig, delegate: CloudTextProviderTransport.redirectPolicy, delegateQueue: nil)
-        self.cloudSession = CloudTextProviderTransport.session
+        // This pool may rotate after idle. Never invalidate a session shared with another service.
+        self.cloudSession = URLSession(configuration: CloudTextProviderTransport.session.configuration,
+            delegate: CloudTextProviderTransport.redirectPolicy, delegateQueue: nil)
         self.cloudAuthorization = .shared
         self.temperatureSupport = .shared
         self.ownedSessionDidCreate = nil
+        self.idleConnectionLimit = Self.idleConnectionLimit
     }
 
     /// Test seam for deterministic transport fixtures; callers own the session configuration.
     init(session: URLSession, temperatureSupport: ModelTemperatureSupport = .shared,
+         idleConnectionLimit: TimeInterval = LLMClient.idleConnectionLimit,
          ownedSessionDidCreate: (@Sendable (LLMClientSessionLifetime) -> Void)? = nil) {
         self.session = session
         self.localSession = session
-        self.cloudSession = session
+        self.cloudSession = URLSession(configuration: session.configuration,
+            delegate: session.delegate, delegateQueue: session.delegateQueue)
         self.cloudAuthorization = CloudTextProviderAuthorization(session: session)
         self.temperatureSupport = temperatureSupport
         self.ownedSessionDidCreate = ownedSessionDidCreate
+        self.idleConnectionLimit = idleConnectionLimit
     }
 
     // MARK: - Response Types
@@ -280,7 +291,9 @@ final nonisolated class LLMClient: @unchecked Sendable {
         // and headers; invalidate only after inference has returned or cancelled.
         let boundedLocalSession = OllamaChatAdapter.supports(config.baseURL)
             ? try self.makeBoundedLocalSession(config) : nil
-        let transport = boundedLocalSession?.session ?? self.transportSession(for: request)
+        let usesCloudPool = CloudTextProvider.descriptor(forEndpoint: request.url?.absoluteString ?? "") != nil
+        let transport = boundedLocalSession?.session ?? self.acquireSession(cloud: usesCloudPool)
+        defer { if boundedLocalSession == nil { self.releaseSession(cloud: usesCloudPool) } }
         do {
             let response = try await self.executeWithRetry(request: request, config: config, session: transport)
             if let boundedLocalSession {
@@ -372,6 +385,32 @@ final nonisolated class LLMClient: @unchecked Sendable {
         throw lastError ?? LLMError.networkError(
             NSError(domain: "LLMClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Request failed after retries"])
         )
+    }
+
+    /// Refresh only an idle owned pool. Concurrent calls keep their immutable session,
+    /// and recreation preserves the delegate that rejects credential-bearing redirects.
+    private func acquireSession(cloud: Bool) -> URLSession {
+        self.sessionLock.withLock {
+            let current = cloud ? self.cloudSession : self.session
+            var selected = current
+            if self.activeRequests[cloud, default: 0] == 0,
+               let lastEnd = self.lastRequestEnd[cloud],
+               Date().timeIntervalSince(lastEnd) > self.idleConnectionLimit {
+                selected = URLSession(configuration: current.configuration,
+                    delegate: current.delegate, delegateQueue: current.delegateQueue)
+                if cloud { self.cloudSession = selected } else { self.session = selected }
+                current.finishTasksAndInvalidate()
+            }
+            self.activeRequests[cloud, default: 0] += 1
+            return selected
+        }
+    }
+
+    private func releaseSession(cloud: Bool) {
+        self.sessionLock.withLock {
+            self.activeRequests[cloud, default: 0] -= 1
+            self.lastRequestEnd[cloud] = Date()
+        }
     }
 
     // MARK: - Request Building
@@ -644,14 +683,6 @@ final nonisolated class LLMClient: @unchecked Sendable {
         }
 
         return input
-    }
-
-    private func transportSession(for request: URLRequest) -> URLSession {
-        if let url = request.url, url.path == "/api/chat", var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
-            components.path = "/v1"
-            if let baseURL = components.url?.absoluteString, OllamaChatAdapter.supports(baseURL) { return self.localSession }
-        }
-        return CloudTextProvider.descriptor(forEndpoint: request.url?.absoluteString ?? "") == nil ? self.session : self.cloudSession
     }
 
     /// Native calls have a finite total response lifetime, including streams that

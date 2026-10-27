@@ -682,6 +682,21 @@ final class MobileNavigationUITests: XCTestCase {
         }
         openNavigation("settings", title: "Settings")
         XCTAssertTrue(app.otherElements["settings.root"].exists || app.buttons["settings.privacy"].exists)
+        let storageFooter = app.staticTexts["Audio recordings and transcripts are stored on this device."].firstMatch
+        if app.tabBars.firstMatch.exists && storageFooter.exists {
+            let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+            for step in 0..<3 where !app.windows.firstMatch.frame.contains(storageFooter.frame)
+                || !storageFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty {
+                XCTAssertTrue(scroll.isHittable)
+                scroll.swipeUp()
+                capture("03-settings-footer-scroll-\(step)")
+            }
+            XCTAssertTrue(storageFooter.isHittable)
+            XCTAssertTrue(app.windows.firstMatch.frame.contains(storageFooter.frame),
+                          "The complete storage footer must remain inside the visible application window")
+            XCTAssertTrue(storageFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty,
+                          "Normal scrolling must expose the complete storage footer above the floating tab bar")
+        }
         app.buttons["settings.privacy"].tap()
         XCTAssertTrue(app.switches["privacy.saveAudio"].waitForExistence(timeout: 5))
         // The app may already contain user-selected preferences. Fresh defaults belong to
@@ -1519,8 +1534,15 @@ final class MobileNavigationUITests: XCTestCase {
             func assertSpeaker(_ id: String, _ name: String, step: String) throws {
                 let paragraph = row(id)
                 try revealParagraphAboveNavigation(paragraph, step: "participant-correction-\(language)-\(step)")
-                XCTAssertTrue(paragraph.staticTexts[name].firstMatch.waitForExistence(timeout: 5),
-                              "Only the selected fragment's participant caption may change")
+                // Captions are the paragraph's native change-speaker buttons.
+                // Scope both the identifier and exact label to this paragraph.
+                let caption = paragraph.buttons["transcript.reassign.\(id)"]
+                XCTAssertTrue(caption.waitForExistence(timeout: 5))
+                let expectedSpeaker = XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "label == %@", name), object: caption)
+                XCTAssertEqual(XCTWaiter.wait(for: [expectedSpeaker], timeout: 5), .completed,
+                               "Only the selected fragment's participant caption may change")
+                XCTAssertEqual(caption.label, name)
             }
             func openAssignment(_ id: String, step: String) throws {
                 try revealParagraphAboveNavigation(row(id), step: "participant-correction-\(language)-\(step)")
@@ -2028,11 +2050,29 @@ final class MobileNavigationUITests: XCTestCase {
         // SwiftUI exposes an identified full-width row plus its native UISwitch.
         // A row-center tap lands on the label; operate the observed backing control.
         let bounds = row.frame
-        let control = try XCTUnwrap(app.switches.allElementsBoundByIndex.first {
-            bounds.contains($0.frame) && $0.frame.width > 0 && $0.frame.width < bounds.width / 2
-        })
-        XCTAssertTrue(control.isHittable)
-        control.tap()
+        let previousValue = try XCTUnwrap(row.value as? String)
+        XCTAssertTrue(["0", "1"].contains(previousValue), "The identified switch must expose a binary value")
+        let controls = app.switches.allElementsBoundByIndex.filter {
+            let frame = $0.frame
+            // Native UISwitch artwork can extend slightly outside its SwiftUI row.
+            return frame.width > 0 && frame.width < bounds.width / 2
+                && bounds.contains(CGPoint(x: frame.midX, y: frame.midY))
+        }
+        XCTAssertLessThanOrEqual(controls.count, 1, "The identified row must have at most one backing switch")
+        if controls.count == 1, let control = controls.first {
+            XCTAssertTrue(control.isHittable)
+            control.tap()
+        } else if controls.isEmpty {
+            // A standalone Toggle may expose the native switch itself as the row.
+            // Match the existing setup acceptance action on the reviewed trailing control.
+            XCTAssertTrue(row.isHittable)
+            row.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        }
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard row.exists, let value = row.value as? String, ["0", "1"].contains(value) else { return false }
+            return value != previousValue
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed)
     }
 
     private func capture(_ step: String) {

@@ -21,6 +21,110 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         XCTAssertFalse(updater.isUpdateInProgress)
     }
 
+    func testUnconfiguredDistributionRejectsRollbackBeforeDiscoveryOrInstallation() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.updater.updatesEnabledForTesting = false
+        context.defaults.set(true, forKey: SettingsStore.UpdateKeys.betaReleasesEnabled)
+        let lastCheck = Date(timeIntervalSince1970: 1234)
+        context.defaults.set(lastCheck, forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate)
+        context.fixture.setReply(version: "v0.0.1", downloadable: true)
+        var installs = 0
+        context.updater.simulationInstallHandler = { installs += 1 }
+
+        do {
+            try await context.updater.installPreviousRelease(version: "v0.0.1")
+            XCTFail("An unconfigured distribution must fail before release discovery")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, SimpleUpdateError.distributionNotConfigured.localizedDescription)
+        }
+        XCTAssertEqual(context.fixture.requestCount, 0)
+        XCTAssertEqual(installs, 0)
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+        XCTAssertNil(context.updater.availableUpdateVersion)
+        XCTAssertEqual(context.defaults.object(forKey: SettingsStore.UpdateKeys.betaReleasesEnabled) as? Bool, true)
+        XCTAssertEqual(context.defaults.object(forKey: SettingsStore.UpdateKeys.lastUpdateCheckDate) as? Date, lastCheck)
+    }
+
+    func testRollbackListOnlyOffersOlderInstallableReleases() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        for (version, downloadable, expected) in [
+            ("v0.0.1", true, ["v0.0.1"]),
+            ("v99.0.0", true, []),
+            ("v0.0.1", false, []),
+        ] {
+            context.fixture.setReply(version: version, downloadable: downloadable)
+            let options = try await context.updater.fetchRecentReleaseBuildOptions(
+                owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName, olderThanCurrent: true
+            )
+            XCTAssertEqual(options.map(\.version), expected)
+            XCTAssertFalse(context.updater.isUpdateInProgress, "Listing versions never starts installation")
+        }
+        context.fixture.setReply(version: "v0.0.1", downloadable: true, archiveRepository: "unrelated-app")
+        let unrelated = try await context.updater.fetchRecentReleaseBuildOptions(
+            owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName, olderThanCurrent: true
+        )
+        XCTAssertTrue(unrelated.isEmpty, "An archive from another application is not installable")
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+    }
+
+    func testSelectedRollbackInstallsOnlyTheExactOlderRelease() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.fixture.setReply(version: "v0.0.1", downloadable: true)
+        var installs = 0
+        context.updater.simulationInstallHandler = { installs += 1 }
+        try await context.updater.installPreviousRelease(version: "v0.0.1")
+        XCTAssertEqual(installs, 1)
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+        XCTAssertNil(context.defaults.object(forKey: SettingsStore.UpdateKeys.betaReleasesEnabled))
+        for selected in ["v0.0.2", "v99.0.0"] {
+            context.fixture.setReply(version: "v99.0.0")
+            do {
+                try await context.updater.installPreviousRelease(version: selected)
+                XCTFail("A missing or newer release must never install")
+            } catch {}
+        }
+        XCTAssertEqual(installs, 1)
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+    }
+
+    func testFailedRollbackReleasesGateForRetry() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.fixture.setReply(version: "v0.0.1", downloadable: true)
+        context.updater.simulationInstallHandler = { throw URLError(.cannotConnectToHost) }
+        do {
+            try await context.updater.installPreviousRelease(version: "v0.0.1")
+            XCTFail("Expected installation failure")
+        } catch {}
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+        var installs = 0
+        context.updater.simulationInstallHandler = { installs += 1 }
+        try await context.updater.installPreviousRelease(version: "v0.0.1")
+        XCTAssertEqual(installs, 1)
+    }
+
+    func testRollbackRejectsConcurrentInstallAndCancelledDiscovery() async throws {
+        let context = try UpdateTestContext()
+        defer { context.cleanup() }
+        context.fixture.setReply(version: "v0.0.1", held: true, downloadable: true)
+        var installs = 0
+        context.updater.simulationInstallHandler = { installs += 1 }
+        let pending = Task { try await context.updater.installPreviousRelease(version: "v0.0.1") }
+        try await self.waitFor { context.fixture.requestCount == 1 }
+        do {
+            try await context.updater.installPreviousRelease(version: "v0.0.1")
+            XCTFail("Concurrent operations must be rejected")
+        } catch {}
+        pending.cancel()
+        context.fixture.release()
+        do { try await pending.value; XCTFail("Cancelled request must not install") } catch {}
+        XCTAssertEqual(installs, 0)
+        XCTAssertFalse(context.updater.isUpdateInProgress)
+    }
+
     func testPopupPreferenceBackupDecodesFalseAndMissingLegacyField() throws {
         var payload = SettingsStore.shared.makeBackupPayload()
         payload.showUpdatePopups = false
@@ -581,13 +685,22 @@ private final nonisolated class UpdateFixture: @unchecked Sendable {
 
     var requestCount: Int { self.lock.withLock { self.count } }
 
-    func setReply(version: String?, status: Int = 200, held: Bool = false) {
+    func setReply(
+        version: String?, status: Int = 200, held: Bool = false, downloadable: Bool = false,
+        archiveRepository: String = AppBrand.repositoryName
+    ) {
         self.lock.withLock {
             self.status = status
             self.held = held
             self.body = version.map {
-                """
-                [{"tag_name":"\($0)","prerelease":false,"assets":[]}]
+                let raw = $0.hasPrefix("v") ? String($0.dropFirst()) : $0
+                let assets = downloadable
+                    ? """
+                    [{"name":"\(archiveRepository)-\(raw).zip","content_type":"application/zip","browser_download_url":"https://example.com/build.zip"}]
+                    """
+                    : "[]"
+                return """
+                [{"tag_name":"\($0)","prerelease":false,"assets":\(assets)}]
                 """
             } ?? "[{\"tag_name\":\"v0.0.1\",\"prerelease\":false,\"assets\":[]}]"
         }

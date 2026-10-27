@@ -12,7 +12,7 @@ final class MeetingHistorySnapshot: ObservableObject {
     private var refreshRequested = false
 
     init(load: @escaping @Sendable () async throws -> [MeetingSession] = {
-        try await MeetingSessionStore.shared.loadAll()
+        try await MeetingSessionStore.shared.loadHistory()
     }) {
         self.load = load
     }

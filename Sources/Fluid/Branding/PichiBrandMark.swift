@@ -87,7 +87,23 @@ struct PichiBrandMark: View {
         return image
     }
     static var customImage: UIImage? { self.image(BrandPackageStore.shared.snapshot(), role: .primary) }
+
+    static var appIcon: UIImage {
+        let snapshot = BrandPackageStore.shared.snapshot()
+        return self.image(snapshot, role: .primary)
+            ?? (snapshot.hasOverride ? nil : AppBrand.distribution.appIconAsset.flatMap { UIImage(named: $0) })
+            ?? UIImage(systemName: "waveform") ?? UIImage()
+    }
     #endif
+
+    /// The app icon in SwiftUI on either platform, for onboarding and other branded surfaces.
+    static var appIconImage: Image {
+        #if canImport(AppKit)
+        Image(nsImage: self.appIcon)
+        #else
+        Image(uiImage: self.appIcon)
+        #endif
+    }
 
     var body: some View {
         let variant = self.theme.variant ?? self.colorScheme

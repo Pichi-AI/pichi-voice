@@ -698,7 +698,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
     /// Version 15: merge frozen word attribution with main without resuming distinct version-14 rules.
     /// Version 16: admit protected speech at sealed empty ASR boundaries while capture continues.
-    static let pipelineVersion = 16
+    /// Version 17: upstream unfiltered-microphone admission with downstream native attribution preserved.
+    nonisolated static let pipelineVersion = 17
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1912,7 +1913,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             status: segment.status.rawValue,
             completeness: segment.completeness.rawValue,
             isLikelyEcho: segment.isLikelyEcho,
-            attributionState: segment.attributionState?.rawValue
+            attributionState: (segment.attributionState ?? (segment.speakerID != nil ? .assigned : .unassigned)).rawValue
         )
     }
 

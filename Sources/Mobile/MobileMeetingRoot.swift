@@ -269,6 +269,8 @@ struct MobileMeetingRoot: View {
                         .padding(.horizontal, 12)
                         .background(destination == item ? theme.palette.accent : .clear, in: RoundedRectangle(cornerRadius: theme.metrics.corners.md))
                         .foregroundStyle(destination == item ? theme.palette.accentForeground : theme.palette.primaryText)
+                        // A clear background takes no touches; the full row does.
+                        .contentShape(RoundedRectangle(cornerRadius: theme.metrics.corners.md))
                 }.buttonStyle(.plain)
                     .accessibilityIdentifier("navigation.\(item.rawValue)")
                     .accessibilityAddTraits(destination == item ? .isSelected : [])
@@ -311,7 +313,10 @@ struct MobileMeetingRoot: View {
             case .history: history
             case .settings:
                 MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
-                    required: required, privacyActivation: privacyActivation, reportError: report)
+                    required: required, privacyActivation: privacyActivation,
+                    canReplaySetup: coordinator.isQuiescent && !isBusy && asr.activeExclusiveActivity == nil
+                        && asr.downloadingModelId == nil,
+                    reportError: report)
             }
         }
         .navigationTitle(item == .meetings ? AppBrand.meetingName : PichiLocalization.text(item.title))
@@ -789,7 +794,7 @@ struct MobileMeetingRoot: View {
                         else { playback.toggle(sessionID: session.id, segmentIDs: paragraph.segments.map(\.id)) }
                     } label: {
                         Image(systemName: isAudioExpanded ? "xmark" : "play.fill")
-                            .frame(minWidth: 44, minHeight: 44)
+                            .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                     }.disabled(!coordinator.isQuiescent).accessibilityLabel(PichiLocalization.text(isAudioExpanded ? "Close audio player" : "Audio"))
                         .accessibilityIdentifier("transcript.audio.\(segment.id)")
                 }
@@ -798,7 +803,7 @@ struct MobileMeetingRoot: View {
                         kind: paragraph.segments.count == 1 ? .segment(segment) : .paragraph(paragraph.segments),
                         text: paragraph.text)
                 } label: {
-                    Image(systemName: "pencil").frame(minWidth: 44, minHeight: 44)
+                    Image(systemName: "pencil").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                 }.disabled(!coordinator.isQuiescent).accessibilityLabel(PichiLocalization.text("Edit"))
                     .accessibilityIdentifier("transcript.edit.\(segment.id)")
             }.buttonStyle(.borderless)
@@ -955,20 +960,21 @@ private struct MeetingParticipantInlineEditor: View {
                 .accessibilityIdentifier("transcript.participant.name")
             HStack(spacing: theme.metrics.spacing.md) {
                 Button { save(name) } label: {
-                    Text(PichiLocalization.text("Save")).frame(minWidth: 44, minHeight: 44)
+                    Text(PichiLocalization.text("Save")).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                 }.disabled(!canSave)
                     .accessibilityIdentifier("transcript.participant.save")
                 Button(action: cancel) {
-                    Text(PichiLocalization.text("Cancel")).frame(minWidth: 44, minHeight: 44)
+                    Text(PichiLocalization.text("Cancel")).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                 }.accessibilityIdentifier("transcript.participant.cancel")
             }.frame(minHeight: 44)
             Button(action: designate) {
                 Text(PichiLocalization.text(isLocalUser ? "Remove You designation" : "This is me"))
-                    .frame(minWidth: 44, minHeight: 44, alignment: .leading)
+                    .frame(minWidth: 44, minHeight: 44, alignment: .leading).contentShape(Rectangle())
             }.accessibilityIdentifier("transcript.participant.\(isLocalUser ? "removeYou" : "markYou")")
             if let reassign {
                 Button(action: reassign) {
                     Text(PichiLocalization.text("Change speaker")).frame(minWidth: 44, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                 }.accessibilityIdentifier("transcript.participant.changeSpeaker")
             }
         }.font(theme.typography.captionStrong)
@@ -1077,14 +1083,17 @@ private struct MeetingSpeakerAssignmentSheet: View {
     private func participantList(for segments: [MeetingTranscriptSegment]) -> some View {
         List {
             Section {
-                ForEach(draft.session.readableSpeakers) { speaker in
+                // Corrections can restore an active identity with no readable fragments yet.
+                ForEach(draft.session.activeSpeakers) { speaker in
                     Button {
                         assign(segments.map(\.id), speaker.id)
                     } label: {
                         Text(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language))
                             .font(theme.typography.body)
-                            .frame(minHeight: 44)
-                    }.accessibilityIdentifier("transcript.reassign.target.\(speaker.id)")
+                            .foregroundStyle(theme.palette.primaryText)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }.buttonStyle(.automatic)
+                        .accessibilityIdentifier("transcript.reassign.target.\(speaker.id)")
                 }
             } footer: {
                 Text(PichiLocalization.text("Only the selected text changes speaker. Other fragments keep their speakers."))

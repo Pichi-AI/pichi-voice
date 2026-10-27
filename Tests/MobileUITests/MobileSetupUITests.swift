@@ -116,6 +116,54 @@ final class MobileSetupUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Parent stages a completed setup (MobileSetupVersion=1) in the owned simulator's persistent domain.
+    /// A launch argument would pin completion, so replay must change the stored value.
+    func testReplayOnboardingReturnsToWelcome() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light"]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        let sidebar = app.buttons["navigation.settings"]
+        // Far from the label and icon: the whole sidebar row must respond.
+        if sidebar.waitForExistence(timeout: 5) { sidebar.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap() }
+        else { app.tabBars.buttons["Настройки"].tap() }
+        let replay = app.buttons["settings.replaySetup"]
+        XCTAssertTrue(replay.waitForExistence(timeout: 10))
+        XCTAssertTrue(replay.isEnabled, "Replay is available while no meeting is active")
+        capture("replay-00-settings")
+        replay.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 10))
+        capture("replay-01-welcome")
+        // A quick second tap must not act on the page that is still arriving.
+        app.buttons["onboarding.next"].doubleTap()
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.1"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["onboarding.step.2"].firstMatch.waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["onboarding.cancel"].exists, "The second tap must not start model preparation")
+        XCTAssertFalse(app.descendants(matching: .any)["onboarding.error"].exists)
+        capture("replay-02-one-page-per-double-tap")
+        app.terminate()
+    }
+
+    /// Only the hero scales to a phone; the highlights below or beside it keep their reading size.
+    func testWelcomeHighlightsKeepReadingSizeOnPhone() throws {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("Phone layout") }
+        let app = XCUIApplication()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light",
+                               "-MobileSetupVersion", "0", "-MobileSetupStep", "0"]
+        app.launch()
+        for (orientation, name) in [(UIDeviceOrientation.portrait, "portrait"), (.landscapeLeft, "landscape")] {
+            XCUIDevice.shared.orientation = orientation
+            XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 15))
+            let highlight = app.staticTexts["Текст встречи во время разговора"]
+            XCTAssertTrue(highlight.waitForExistence(timeout: 5))
+            XCTAssertGreaterThanOrEqual(highlight.frame.height, 18, "The highlights must not shrink with the hero")
+            XCTAssertTrue(app.buttons["onboarding.next"].isHittable)
+            capture("welcome-phone-\(name)")
+        }
+        XCUIDevice.shared.orientation = .portrait
+        app.terminate()
+    }
+
     func testLocationPreferencePersistsInSettingsAfterPermissionDenial() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light", "-MobileSetupVersion", "1"]

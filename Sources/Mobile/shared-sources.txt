@@ -20,9 +20,11 @@ Sources/Fluid/Services/ASRService+iOS.swift
 Sources/Fluid/Services/AudioBufferConverter.swift
 Sources/Fluid/Services/AudioSpectrumMeter.swift
 Sources/Fluid/Services/AutomaticDictionaryCorrectionDetector.swift
+Sources/Fluid/Services/BuiltInDictionary.swift
 Sources/Fluid/Services/CompactSpeechModelReleaseCatalog.swift
 Sources/Fluid/Services/DebugLogger.swift
 Sources/Fluid/Services/DictionaryAudioInspection.swift
+Sources/Fluid/Services/DictionaryAudioSpan.swift
 Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift
 Sources/Fluid/Services/DictionaryExperimentalMatcher.swift
 Sources/Fluid/Services/DictionaryLearningEvidence.swift
@@ -33,6 +35,7 @@ Sources/Fluid/Services/DictionaryPronunciationExperiment.swift
 Sources/Fluid/Services/DictionaryPronunciationReferences.swift
 Sources/Fluid/Services/DictionaryReplacementProtection.swift
 Sources/Fluid/Services/DictionaryTemporalEncoder.swift
+Sources/Fluid/Services/DictionaryStampMatcher.swift
 Sources/Fluid/Services/DictionaryTrainingEndpointDetector.swift
 Sources/Fluid/Services/ExternalCoreMLModelRegistry.swift
 Sources/Fluid/Services/ExternalCoreMLTranscriptionProvider.swift
@@ -85,6 +88,7 @@ Sources/Fluid/Services/Meeting/MeetingASRPreparedScope.swift
 Sources/Fluid/Services/Meeting/MeetingASRServiceContract.swift
 Sources/Fluid/Services/Meeting/MeetingAppRegistry.swift
 Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift
+Sources/Fluid/Services/Meeting/MeetingAudioComparisonProbe.swift
 Sources/Fluid/Services/Meeting/MeetingAudioChunkLedger.swift
 Sources/Fluid/Services/Meeting/MeetingAudioChunkWriter.swift
 Sources/Fluid/Services/Meeting/MeetingAudioExporter.swift
@@ -93,7 +97,9 @@ Sources/Fluid/Services/Meeting/MeetingCaptureControlling.swift
 Sources/Fluid/Services/Meeting/MeetingEchoDetector.swift
 Sources/Fluid/Services/Meeting/MeetingEchoSignalScorer.swift
 Sources/Fluid/Services/Meeting/MeetingMicrophoneEvidence.swift
+Sources/Fluid/Services/Meeting/MeetingMicrophonePCMNormalizer.swift
 Sources/Fluid/Services/Meeting/MeetingModelResidencyCoordinator.swift
+Sources/Fluid/Services/Meeting/MeetingLocationService.swift
 Sources/Fluid/Services/Meeting/MeetingModels.swift
 Sources/Fluid/Services/Meeting/MeetingPCMStoragePolicy.swift
 Sources/Fluid/Services/Meeting/MeetingPCMTranscriptBatch.swift
@@ -142,12 +148,16 @@ Sources/Fluid/Theme/AppTheme.swift
 Sources/Fluid/Theme/Components/FluidDropdown.swift
 Sources/Fluid/Theme/Components/FluidGlassControls.swift
 Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift
+Sources/Fluid/Theme/Components/OnboardingComponents.swift
+Sources/Fluid/Theme/Components/OnboardingFittedContent.swift
+Sources/Fluid/Theme/Components/OnboardingStepCard.swift
 Sources/Fluid/Theme/FluidTypography.swift
 Sources/Fluid/Theme/NativeButtonStyles.swift
 Sources/Fluid/Theme/ThemeEnvironment.swift
 Sources/Fluid/UI/FlowLayout.swift
 Sources/Fluid/UI/MeetingAudioPresentation.swift
 Sources/Fluid/UI/MeetingHistorySnapshot.swift
+Sources/Fluid/UI/MeetingLocationSettingsContent.swift
 Sources/Fluid/UI/MeetingInlineCaptionText.swift
 Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift
 Sources/Fluid/UI/MeetingPendingSpeechView.swift
@@ -173,3 +183,5 @@ Sources/Fluid/Services/Privacy/TranscriptSensitiveDictionary.swift
 Sources/Fluid/Persistence/SettingsStore+SensitiveDataDictionary.swift
 
 Sources/Fluid/Services/Meeting/MeetingTimelineTrace.swift
+Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift
+Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift

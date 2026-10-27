@@ -2,8 +2,8 @@ import Foundation
 
 /// Edit this definition for each release. The renderer and acknowledgement logic stay unchanged.
 struct ReleaseHighlightsContent {
-    enum Destination { case meetings, dashboard, aiProviders }
-    enum Preview { case meeting, dashboard, models }
+    enum Destination { case meetings, dashboard, aiProviders, voiceEngine }
+    enum Preview { case meeting, dashboard, models, speech }
 
     struct Feature: Identifiable {
         let id: String
@@ -21,38 +21,29 @@ struct ReleaseHighlightsContent {
     var officialSiteNotice: String? = nil
     let features: [Feature]
 
-    static func current(hasPrivateAI: Bool) -> Self {
+    static func current(hasPrivateAI _: Bool) -> Self {
         Self(
-            release: "1.6.12",
-            title: "Meeting summaries and agent integrations",
-            subtitle: "Meeting detection, model compatibility, and read-only agent access.",
+            release: "1.6.13-beta.1",
+            title: "New speech models and steadier captions",
+            subtitle: "Fluid Speech Pro, Qwen dictation, and smoother live captions.",
             features: [
                 Feature(
-                    id: "summaries",
-                    preview: .meeting,
-                    eyebrow: "YOUR MEETINGS, WITH SOURCES",
-                    title: "Meeting summaries with sources",
-                    detail: "Generate grounded summaries with transcript source references. Existing provider connections share the meeting workspace.",
-                    action: "Open meetings",
-                    destination: .meetings
+                    id: "speech-pro", preview: .speech, eyebrow: "NEW SPEECH MODEL",
+                    title: "Fluid Speech Pro",
+                    detail: "An English speech model for dictation on your Mac.",
+                    action: "Open Voice Engine", destination: .voiceEngine
                 ),
                 Feature(
-                    id: "integrations",
-                    preview: .meeting,
-                    eyebrow: "MEET YOUR CODING AGENTS",
-                    title: "Connect your coding agents",
-                    detail: "Let coding agents read completed transcripts and saved summaries after enabling read-only sharing in meeting settings.",
-                    action: "Open meetings",
-                    destination: .meetings
+                    id: "qwen", preview: .speech, eyebrow: "MULTILINGUAL SPEECH",
+                    title: "Qwen3 ASR 1.7B",
+                    detail: "Automatic detection of 30 languages with on-device transcription.",
+                    action: "Open Voice Engine", destination: .voiceEngine
                 ),
                 Feature(
-                    id: "compatibility",
-                    preview: .models,
-                    eyebrow: "YOUR AI, YOUR WAY",
-                    title: "AI provider compatibility",
-                    detail: "Sampling support follows provider metadata; local and cloud connections keep their existing configuration.",
-                    action: "Explore AI providers",
-                    destination: .aiProviders
+                    id: "captions", preview: .dashboard, eyebrow: "LIVE TEXT",
+                    title: "Steadier live captions",
+                    detail: "Read live text with steadier wrapping and Reduce Motion support.",
+                    action: "Open dashboard", destination: .dashboard
                 ),
             ]
         )

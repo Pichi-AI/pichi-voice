@@ -78,11 +78,17 @@ actor MeetingIOSCaptureStopProbe {
 }
 
 actor MeetingDesktopCaptureStopProbe {
+    // Explicit diagnostic recording is disabled in this model-free PCM probe.
+    // If enabled accidentally, fail rather than create a comparison recording.
+    struct ComparisonProbe: Sendable {
+        func stop() async { fatalError("Audio comparison recording is outside this probe") }
+    }
     private struct ActiveCapture {
         let sessionID: MeetingSessionID
         let runtime: MeetingCaptureStopRuntimeProbe
         let writers: [MeetingCaptureStopWriterProbe]
         let memoryConsumer: MeetingCaptureStopConsumerProbe?
+        let comparisonProbe: ComparisonProbe? = nil
     }
     private var activeCapture: ActiveCapture?
     private var stopTask: Task<MeetingCaptureStopResult, Error>?

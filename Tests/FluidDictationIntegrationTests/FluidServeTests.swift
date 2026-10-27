@@ -217,19 +217,24 @@ final class FluidServeTests: XCTestCase {
         let session = self.session(title: "Template cache versions")
         try self.save(session)
         let entry = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
-        let transcriptHash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
-        for version in [nil, 1, MeetingSummaryInput.currentPromptVersion + 1, MeetingSummaryInput.currentPromptVersion] as [Int?] {
-            try self.saveSummary("Versioned synthetic output.", style: "executive", for: session, promptVersion: version)
-            let file = self.directory(for: session).appendingPathComponent("manual-summary-executive.json")
-            let before = try Data(contentsOf: file)
-            let saved = try JSONDecoder().decode(MeetingSummaryController.SavedSummary.self, from: before)
-            let appWouldShow = saved.isCurrent(transcriptHash: transcriptHash, promptHash: nil)
-            XCTAssertEqual(appWouldShow, version == MeetingSummaryInput.currentPromptVersion)
-            XCTAssertEqual(FluidServeMeetings.savedSummaries(for: entry).map(\.style), appWouldShow ? ["executive"] : [])
-            let result = self.run("meet", "summary", "latest", "--style", "executive")
-            XCTAssertEqual(result.exitCode, appWouldShow ? 0 : 1)
-            XCTAssertEqual(result.output.contains("Versioned synthetic output."), appWouldShow)
-            XCTAssertEqual(try Data(contentsOf: file), before, "Invalidating an old template must not delete its stored text")
+        for hashVersion in [nil, 2, 99] as [Int?] {
+            let transcriptHash = hashVersion == 2
+                ? MeetingSummaryInput.contentFingerprint(for: session)
+                : MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+            for version in [nil, 1, MeetingSummaryInput.currentPromptVersion + 1, MeetingSummaryInput.currentPromptVersion] as [Int?] {
+                try self.saveSummary("Versioned synthetic output.", style: "executive", for: session,
+                    transcriptHash: transcriptHash, promptVersion: version, transcriptHashVersion: hashVersion)
+                let file = self.directory(for: session).appendingPathComponent("manual-summary-executive.json")
+                let before = try Data(contentsOf: file)
+                let saved = try JSONDecoder().decode(MeetingSummaryController.SavedSummary.self, from: before)
+                let appWouldShow = saved.isCurrent(session: session, promptHash: nil)
+                XCTAssertEqual(appWouldShow, version == MeetingSummaryInput.currentPromptVersion && hashVersion != 99)
+                XCTAssertEqual(FluidServeMeetings.savedSummaries(for: entry).map(\.style), appWouldShow ? ["executive"] : [])
+                let result = self.run("meet", "summary", "latest", "--style", "executive")
+                XCTAssertEqual(result.exitCode, appWouldShow ? 0 : 1)
+                XCTAssertEqual(result.output.contains("Versioned synthetic output."), appWouldShow)
+                XCTAssertEqual(try Data(contentsOf: file), before, "Invalidating an old template must not delete its stored text")
+            }
         }
     }
 
@@ -271,6 +276,30 @@ final class FluidServeTests: XCTestCase {
         let row = try XCTUnwrap(list.output.split(separator: "\n").last)
         XCTAssertTrue(row.contains("  1 min  "), "With no end time the length comes from the last turn (35 s), not from zero or from now: \(row)")
         XCTAssertEqual(try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first).meeting.durationSeconds, 35)
+    }
+
+    func testVersionedSummariesSurviveTitleChangesButNotTranscriptChanges() throws {
+        var session = self.session(title: "Weekly sync")
+        try self.save(session)
+        let hash = MeetingSummaryInput.contentFingerprint(for: session)
+        try self.saveSummary("Detailed recap.", style: "detailed", for: session, transcriptHash: hash, transcriptHashVersion: 2)
+        try self.saveSummary("Custom recap.", style: "custom", for: session, transcriptHash: hash, promptHash: MeetingSummaryInput.fingerprint("Focus on risks"), transcriptHashVersion: 2)
+        try self.saveSummary("Unknown format.", style: "topics", for: session, transcriptHash: hash, transcriptHashVersion: 99)
+        try self.saveSummary("Legacy recap.", style: "executive", for: session)
+        let original = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: original, customPrompt: "Focus on risks").map(\.style), ["custom", "detailed", "executive"])
+
+        session.title = "Renamed weekly sync"
+        try self.save(session)
+        let renamed = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: renamed, customPrompt: "Focus on risks").map(\.style), ["custom", "detailed"])
+        XCTAssertEqual(FluidServeMeetings.savedSummaries(for: renamed, customPrompt: "New prompt").map(\.style), ["detailed"])
+        XCTAssertTrue(self.run("meet", "summary", "latest", "--style", "detailed").output.hasSuffix("Detailed recap."))
+
+        session.transcriptSegments[0].text = "Corrected transcript"
+        try self.save(session)
+        let corrected = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
+        XCTAssertTrue(FluidServeMeetings.savedSummaries(for: corrected, customPrompt: "Focus on risks").isEmpty)
     }
 
     func testCommandNeverChangesTheMeetingsFolder() throws {
@@ -854,7 +883,8 @@ final class FluidServeTests: XCTestCase {
         providerID: String? = "on-device",
         transcriptHash: String? = nil,
         promptHash: String? = nil,
-        promptVersion: Int? = MeetingSummaryInput.currentPromptVersion
+        promptVersion: Int? = MeetingSummaryInput.currentPromptVersion,
+        transcriptHashVersion: Int? = nil
     ) throws {
         let saved = MeetingSummaryController.SavedSummary(
             transcriptHash: transcriptHash ?? MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)),
@@ -864,7 +894,8 @@ final class FluidServeTests: XCTestCase {
             promptVersion: promptVersion,
             generatedAt: Date(timeIntervalSince1970: 1_700_000_500),
             promptHash: promptHash,
-            modelName: "Qwen3.5 9B"
+            modelName: "Qwen3.5 9B",
+            transcriptHashVersion: transcriptHashVersion
         )
         try JSONEncoder().encode(saved).write(to: self.directory(for: session).appendingPathComponent("manual-summary-\(style).json"))
     }

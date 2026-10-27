@@ -253,7 +253,7 @@ SHELL_PROBES = (
     "stats_snapshot", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
-    "diarization_repeatability", "dictionary_training_save", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
+    "delivery_failure_copy", "diarization_repeatability", "dictionary_training_save", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
     "meeting_speaker_attribution",
     "settings_backup_concurrency",
 )
@@ -261,6 +261,7 @@ PROBES = tuple(sorted(
     [Probe(f"Tests/run_{name}_tests.sh", "sh") for name in SHELL_PROBES]
     + [Probe(f"Tests/run_{name}_tests.py", "python3") for name in PYTHON_PROBES]
     + [Probe("Tests/run_clipboard_backup_reproduction.sh", "sh"),
+       Probe("Tests/run_overlay_captions.sh", "sh"),
        Probe("Tests/run_meeting_asr_prepared_provider_tests.sh", "bash"),
        Probe("Tests/run_meeting_idle_prepared_resource_tests.sh", "bash"),
        Probe("Tests/run_meeting_privacy_context_tests.sh", "bash"),

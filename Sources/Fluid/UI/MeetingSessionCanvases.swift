@@ -53,6 +53,13 @@ struct MeetingRecordingCanvas: View {
                 Divider()
             }
 
+            if let warning = self.session.microphoneEchoWarning {
+                MeetingAudioTranscriptNotice(
+                    text: "Some audio may have an echo.",
+                    detail: warning,
+                    isSubtle: true
+                )
+            }
             MeetingLiveTranscriptCard(snapshot: self.liveTranscript, pendingSpeech: self.pendingSpeech)
 
             Divider()
@@ -351,11 +358,9 @@ struct MeetingResultCanvas: View {
     let onReassignSegment: (MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
     var onEditTranscriptSegment: (MeetingTranscriptSegmentID, String, Int) async -> String? = { _, _, _ in "Transcript editing is unavailable." }
     let onNameUnknownSegment: (MeetingTranscriptSegmentID, String) -> Void
-    let onRenameSpeaker: (SessionSpeakerID, String) -> Void
-    let onMergeSpeakers: (SessionSpeakerID, SessionSpeakerID) -> Void
-    let onUndo: () -> Void
+    let onUndo: () async -> Bool
     let onRenameSession: (String) -> Void
-    let onAssignSpeakers: ([SessionSpeakerID: String]) async -> String?
+    let onAssignSpeakers: (MeetingSpeakerEdits) async -> String?
     let onClose: (() -> Void)?
     var summaryASRService: ASRService? = nil
 
@@ -366,9 +371,9 @@ struct MeetingResultCanvas: View {
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.locale) private var locale
+    @Environment(\.undoManager) private var undoManager
+    @StateObject private var correctionUndo = MeetingCorrectionUndoRegistration()
     @State private var pendingEditedSegment: MeetingTranscriptSegment?
-    @State private var pendingRenameSpeaker: MeetingSessionSpeaker?
-    @State private var pendingRenameText = ""
     @State private var pendingNameUnknownSegmentID: MeetingTranscriptSegmentID?
     @State private var pendingUnknownSpeakerName = ""
     @State private var isRenamingSession = false
@@ -457,8 +462,17 @@ struct MeetingResultCanvas: View {
 
                 if self.visibleDocumentSection == .summary {
                     MeetingSummaryView(session: self.session, asrService: self.summaryASRService, isQuiescent: self.isQuiescent)
-                        .id("\(self.session.id)-\(self.session.updatedAt)")
+                        .id(self.session.id)
                 } else {
+                    if let warning = self.session.microphoneEchoWarning {
+                        MeetingAudioTranscriptNotice(
+                            text: "Some audio may have an echo.",
+                            detail: warning,
+                            isSubtle: true
+                        )
+                    } else if self.session.events.contains(where: { $0.kind == .transcriptCoverageIncomplete }) {
+                        MeetingAudioTranscriptNotice(text: "Some recorded audio was not transcribed.")
+                    }
                     if !activeSpeakers.isEmpty {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                             self.speakerStrip(activeSpeakers)
@@ -497,6 +511,7 @@ struct MeetingResultCanvas: View {
                                         language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language
                                     ) ?? "",
                                     showsSpeakerLabel: row.showsLabel,
+                                    isUnknownSpeaker: row.presentation.participantID == nil,
                                     speakerTint: row.speaker.flatMap { self.speakerTints[$0.id] },
                                     onRenameSpeakerTapped: {
                                         if let speaker = row.speaker {
@@ -506,7 +521,11 @@ struct MeetingResultCanvas: View {
                                             self.pendingUnknownSpeakerName = ""
                                         }
                                     },
-                                    reassignTargets: self.session.readableSpeakers.filter { $0.id != row.presentation.participantID },
+                                    onNameUnknown: {
+                                        self.pendingNameUnknownSegmentID = row.segment.id
+                                        self.pendingUnknownSpeakerName = ""
+                                    },
+                                    reassignTargets: self.session.activeSpeakers.filter { $0.id != row.presentation.participantID },
                                     isQuiescent: self.isQuiescent,
                                     onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) },
                                     canPlayAudio: self.session.retention.audioDeletedAt == nil && self.session.hasFinalizedAudio && self.isQuiescent,
@@ -514,7 +533,21 @@ struct MeetingResultCanvas: View {
                                     playback: self.playback,
                                     isLoadingAudio: self.playback.activeSegmentID == row.segment.id && self.playback.isLoading,
                                     onPlayAudio: { self.playback.toggle(sessionID: self.session.id, segmentID: row.segment.id) },
-                                    onEditText: { if self.isQuiescent { self.pendingEditedSegment = row.segment } }
+                                    isEditingText: self.pendingEditedSegment?.id == row.segment.id,
+                                    onEditText: { if self.isQuiescent { self.pendingEditedSegment = row.segment } },
+                                    onSaveText: { text in
+                                        guard let editing = self.pendingEditedSegment, editing.id == row.segment.id else {
+                                            return PichiLocalization.text("This paragraph is no longer being edited.")
+                                        }
+                                        let error = await self.onEditTranscriptSegment(editing.id, text, editing.revision)
+                                        if error == nil, self.pendingEditedSegment?.id == editing.id {
+                                            self.pendingEditedSegment = nil
+                                        }
+                                        return error
+                                    },
+                                    onCancelEditText: {
+                                        if self.pendingEditedSegment?.id == row.segment.id { self.pendingEditedSegment = nil }
+                                    }
                                 )
                             }
                         }
@@ -527,25 +560,25 @@ struct MeetingResultCanvas: View {
         }
         // Separate the document and modifier chains to bound SwiftUI type checking.
         let lifecycle = document.id(self.session.id)
-        .sheet(item: self.$pendingEditedSegment) { segment in
-            MeetingTranscriptTextEditor(
-                text: segment.text,
-                onSave: { text in
-                    let error = await self.onEditTranscriptSegment(segment.id, text, segment.revision)
-                    if error == nil { self.pendingEditedSegment = nil }
-                    return error
-                },
-                onCancel: { self.pendingEditedSegment = nil }
-            )
-        }
         .onAppear {
             self.documentSection = self.visibleDocumentSection
+            self.refreshUndoRegistration()
         }
         .onChange(of: self.appServices.activeMeetingSummarySession?.id) { _, _ in
             self.documentSection = self.visibleDocumentSection
         }
-        .onDisappear { self.playback.stop() }
-        .onChange(of: self.session.id) { _, _ in self.playback.stop() }
+        .onDisappear {
+            self.playback.stop()
+            self.correctionUndo.detach()
+        }
+        .onChange(of: self.canRegisterUndo) { _, _ in self.refreshUndoRegistration() }
+        .onChange(of: self.session.updatedAt) { _, _ in self.refreshUndoRegistration() }
+        .onChange(of: self.undoManager) { _, _ in self.refreshUndoRegistration() }
+        .onChange(of: self.session.id) { _, _ in
+            self.playback.stop()
+            self.pendingEditedSegment = nil
+            self.refreshUndoRegistration()
+        }
         .onChange(of: self.session.retention.audioDeletedAt) { _, _ in self.playback.stop() }
         .onChange(of: self.isQuiescent) { _, value in if !value { self.playback.stop() } }
         .onChange(of: self.documentSection) { _, _ in self.playback.stop() }
@@ -555,25 +588,7 @@ struct MeetingResultCanvas: View {
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
             self.copied = false
         }
-        let speakerRenaming = lifecycle.alert(
-            "Rename Speaker",
-            isPresented: Binding(
-                get: { self.pendingRenameSpeaker != nil },
-                set: { if !$0 { self.pendingRenameSpeaker = nil } }
-            )
-        ) {
-            TextField("Speaker name", text: self.$pendingRenameText)
-            Button("Cancel", role: .cancel) { self.pendingRenameSpeaker = nil }
-            Button("Rename") {
-                if let speaker = self.pendingRenameSpeaker {
-                    self.onRenameSpeaker(speaker.id, self.pendingRenameText)
-                }
-                self.pendingRenameSpeaker = nil
-            }
-        } message: {
-            Text("Enter a new name for this speaker.")
-        }
-        speakerRenaming.alert(
+        lifecycle.alert(
             "Name Unknown Speaker",
             isPresented: Binding(
                 get: { self.pendingNameUnknownSegmentID != nil },
@@ -660,7 +675,7 @@ struct MeetingResultCanvas: View {
     static func speakerAccuracyNote(speakerCount: Int) -> String? {
         guard speakerCount > 0 else { return nil }
         guard speakerCount > self.reliableSpeakerLimit else {
-            return PichiLocalization.text("Speaker labels are automatic and may not be exact. Click a name to fix it.")
+            return PichiLocalization.text("Speaker labels are automatic. Name speakers above; double-click a paragraph to edit its text.")
         }
         return PichiLocalization.format("%lld speakers found. Above %lld, labels are less reliable: one person may show up twice, or two people as one.", speakerCount, self.reliableSpeakerLimit)
     }
@@ -677,10 +692,18 @@ struct MeetingResultCanvas: View {
     }
 
     private func speakerStrip(_ speakers: [MeetingSessionSpeaker]) -> some View {
-        HStack(spacing: self.theme.metrics.spacing.md) {
-            Text("Speakers")
-                .font(self.theme.typography.caption)
-                .foregroundStyle(self.theme.palette.tertiaryText)
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Text("Speakers")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
+                Spacer(minLength: 0)
+                Button("Edit speakers", systemImage: "pencil") {
+                    self.presentAssignSpeakers(focusing: nil)
+                }
+                .fluidGlassAction()
+                .disabled(!self.isQuiescent)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: self.theme.metrics.spacing.lg) {
                     ForEach(speakers) { speaker in
@@ -692,7 +715,16 @@ struct MeetingResultCanvas: View {
                             action: { self.presentAssignSpeakers(focusing: speaker.id) }
                         )
                         .disabled(!self.isQuiescent)
-                        .contextMenu { self.speakerChipMenu(for: speaker) }
+                        .contextMenu {
+                            if let onSetLocalUserSpeaker = self.onSetLocalUserSpeaker {
+                                Button(PichiLocalization.text(speaker.isLocalUser ? "Remove You designation" : "Mark as You"),
+                                       systemImage: speaker.isLocalUser ? "person.crop.circle.badge.minus" : "person.crop.circle.badge.checkmark") {
+                                    onSetLocalUserSpeaker(speaker.isLocalUser ? nil : speaker.id)
+                                }
+                                .disabled(!self.isQuiescent)
+                                .help(PichiLocalization.text("The You label applies only to this meeting."))
+                            }
+                        }
                     }
                 }
                 .padding(.vertical, self.theme.metrics.spacing.xs)
@@ -715,12 +747,13 @@ struct MeetingResultCanvas: View {
         Menu {
             Menu("Export", systemImage: "square.and.arrow.up") {
                 Button("Text…") { self.onExportTranscript(self.session, .text, self.showsProbableEchoes) }
+                Button("Markdown…") { self.onExportTranscript(self.session, .markdown, self.showsProbableEchoes) }
                 Button("JSON…") { self.onExportTranscript(self.session, .json, self.showsProbableEchoes) }
             }
             .disabled(!hasText || self.documentSection != .transcript)
             Divider()
             self.renameMeetingAction
-            Button("Undo correction", systemImage: "arrow.uturn.backward", action: self.onUndo)
+            Button("Undo correction", systemImage: "arrow.uturn.backward") { Task { _ = await self.onUndo() } }
                 .disabled(!self.canUndo || !self.isQuiescent)
             if self.hasEchoSegments {
                 Divider()
@@ -752,36 +785,20 @@ struct MeetingResultCanvas: View {
         .disabled(!self.isQuiescent)
     }
 
-    @ViewBuilder
-    private func speakerChipMenu(for speaker: MeetingSessionSpeaker) -> some View {
-        Button("Rename…", systemImage: "pencil") {
-            self.pendingRenameSpeaker = speaker
-            self.pendingRenameText = speaker.displayName
-        }
-        .disabled(!self.isQuiescent)
-        if let onSetLocalUserSpeaker = self.onSetLocalUserSpeaker {
-            Button(PichiLocalization.text(speaker.isLocalUser ? "Remove You designation" : "Mark as You"),
-                   systemImage: speaker.isLocalUser ? "person.crop.circle.badge.minus" : "person.crop.circle.badge.checkmark") {
-                onSetLocalUserSpeaker(speaker.isLocalUser ? nil : speaker.id)
-            }
-            .disabled(!self.isQuiescent)
-            .help(PichiLocalization.text("The You label applies only to this meeting."))
-        }
-        if !speaker.isLocalUser {
-            let eligibleTargets = self.session.readableSpeakers.filter {
-                $0.id != speaker.id && !$0.isLocalUser && $0.trackKind == speaker.trackKind
-            }
-            if !eligibleTargets.isEmpty {
-                Menu("Merge into") {
-                    ForEach(eligibleTargets) { target in
-                        Button(MeetingTranscriptExporter.speakerDisplayName(target, language: PichiLocalization.language)) {
-                            self.onMergeSpeakers(speaker.id, target.id)
-                        }
-                    }
-                }
-                .disabled(!self.isQuiescent)
-            }
-        }
+    private var canRegisterUndo: Bool {
+        self.canUndo && self.isQuiescent && self.documentSection == .transcript
+            && self.pendingEditedSegment == nil
+            && self.pendingNameUnknownSegmentID == nil && !self.isRenamingSession
+            && !self.isShowingAssignSpeakers
+    }
+
+    private func refreshUndoRegistration() {
+        self.correctionUndo.refresh(
+            manager: self.undoManager,
+            sessionID: self.session.id,
+            isEnabled: self.canRegisterUndo,
+            action: self.onUndo
+        )
     }
 
     private func displayName(for speaker: MeetingSessionSpeaker) -> String {
@@ -1003,6 +1020,21 @@ struct MeetingFailureCanvas: View {
     }
 }
 
+private struct MeetingAudioTranscriptNotice: View {
+    let text: String
+    var detail: String? = nil
+    var isSubtle = false
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Label(PichiLocalization.text(self.text), systemImage: self.isSubtle ? "info.circle" : "exclamationmark.triangle")
+            .font(self.theme.typography.caption)
+            .foregroundStyle(self.isSubtle ? self.theme.palette.secondaryText : self.theme.palette.warning)
+            .fixedSize(horizontal: false, vertical: true)
+            .help(PichiLocalization.text(self.detail ?? self.text))
+    }
+}
+
 private struct MeetingTrackHealthRow: View {
     let title: String
     let systemImage: String
@@ -1123,8 +1155,10 @@ private struct MeetingTranscriptSegmentRow: View {
     let segment: MeetingTranscriptSegment
     let speakerName: String
     let showsSpeakerLabel: Bool
+    let isUnknownSpeaker: Bool
     let speakerTint: Color?
     let onRenameSpeakerTapped: (() -> Void)?
+    let onNameUnknown: () -> Void
     let reassignTargets: [MeetingSessionSpeaker]
     let isQuiescent: Bool
     let onReassign: (SessionSpeakerID) -> Void
@@ -1133,7 +1167,10 @@ private struct MeetingTranscriptSegmentRow: View {
     let playback: MeetingSegmentPlayback
     let isLoadingAudio: Bool
     let onPlayAudio: () -> Void
+    let isEditingText: Bool
     let onEditText: () -> Void
+    let onSaveText: (String) async -> String?
+    let onCancelEditText: () -> Void
 
     @Environment(\.theme) private var theme
 
@@ -1148,10 +1185,28 @@ private struct MeetingTranscriptSegmentRow: View {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     if self.showsSpeakerLabel { self.speakerLabel }
                     Spacer(minLength: self.theme.metrics.spacing.md)
-                    Button(PichiLocalization.text("action.edit", defaultValue: "Edit"), systemImage: "pencil", action: self.onEditText)
+                    Button(PichiLocalization.text("action.edit", defaultValue: "Edit"), systemImage: "pencil") { self.beginEditing() }
                         .fluidGlassAction()
-                        .disabled(!self.isQuiescent)
+                        .disabled(!self.isQuiescent || self.isEditingText)
                         .help("Edit text, or double-click this paragraph")
+                    if self.isUnknownSpeaker {
+                        Menu {
+                            ForEach(self.reassignTargets) { target in
+                                Button(target.displayName) {
+                                    self.playback.stop()
+                                    self.onReassign(target.id)
+                                }
+                            }
+                            Divider()
+                            Button("New speaker…", action: self.onNameUnknown)
+                        } label: {
+                            Label("Assign speaker", systemImage: "tag")
+                        }
+                        .fluidGlassAction()
+                        .disabled(!self.isQuiescent || self.isEditingText)
+                        .help("Tag this unknown paragraph with a speaker")
+                        .accessibilityLabel("Assign speaker to unknown paragraph")
+                    }
                     Button {
                         if self.isAudioExpanded { self.playback.stop() } else { self.onPlayAudio() }
                     } label: {
@@ -1164,14 +1219,23 @@ private struct MeetingTranscriptSegmentRow: View {
                     .accessibilityLabel(self.isAudioExpanded ? PichiLocalization.text("Close audio player") : PichiLocalization.format("Play audio chunk for %@", self.speakerName))
                 }
                 .frame(minHeight: 28)
-                Text(self.segment.text)
-                    .font(self.theme.typography.body)
-                    .foregroundStyle(self.theme.palette.primaryText)
-                    .lineSpacing(5)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .simultaneousGesture(TapGesture(count: 2).onEnded { if self.isQuiescent { self.onEditText() } })
-                    .accessibilityAction(named: Text("Edit text")) { if self.isQuiescent { self.onEditText() } }
+                if self.isEditingText {
+                    MeetingTranscriptTextEditor(
+                        text: self.segment.text,
+                        onSave: self.onSaveText,
+                        onCancel: self.onCancelEditText
+                    )
+                } else {
+                    Text(self.segment.text)
+                        .font(self.theme.typography.body)
+                        .foregroundStyle(self.theme.palette.primaryText)
+                        .lineSpacing(5)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(TapGesture(count: 2).onEnded { self.beginEditing() })
+                        .accessibilityAction(named: Text("Edit text")) { self.beginEditing() }
+                }
                 if self.segment.isEcho {
                     Text("Probable echo").font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 }
@@ -1183,6 +1247,8 @@ private struct MeetingTranscriptSegmentRow: View {
             }
         }
         .contextMenu {
+            Button("Edit text", systemImage: "pencil") { self.beginEditing() }
+                .disabled(!self.isQuiescent || self.isEditingText)
             if let onRenameSpeakerTapped = self.onRenameSpeakerTapped {
                 Button("Rename Speaker", systemImage: "person.crop.circle", action: onRenameSpeakerTapped)
                     .disabled(!self.isQuiescent)
@@ -1190,16 +1256,23 @@ private struct MeetingTranscriptSegmentRow: View {
             Menu(PichiLocalization.text("Reassign to")) {
                 ForEach(self.reassignTargets) { target in
                     Button(MeetingTranscriptExporter.speakerDisplayName(target, language: PichiLocalization.language)) {
+                        self.playback.stop()
                         self.onReassign(target.id)
                     }
+                    .disabled(!self.isQuiescent)
                 }
             }
-            .disabled(!self.isQuiescent || self.reassignTargets.isEmpty)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
             "\(MeetingTranscriptExporter.timestampText(self.segment.start.seconds)), \(self.speakerName), \(self.segment.text)"
         )
+    }
+
+    private func beginEditing() {
+        guard self.isQuiescent else { return }
+        self.playback.stop()
+        self.onEditText()
     }
 
     private var speakerLabel: some View {
@@ -1236,6 +1309,8 @@ private struct MeetingTranscriptSegmentRow: View {
     }
 }
 
+/// Inline paragraph editing: no sheet and no recording/model work. Keep the draft on save
+/// failure; the caller holds the starting segment revision for stale-edit protection.
 struct MeetingTranscriptTextEditor: View {
     let onSave: (String) async -> String?
     let onCancel: () -> Void
@@ -1243,6 +1318,7 @@ struct MeetingTranscriptTextEditor: View {
     @State private var text: String
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @FocusState private var isFocused: Bool
 
     init(text: String, onSave: @escaping (String) async -> String?, onCancel: @escaping () -> Void) {
         self._text = State(initialValue: text)
@@ -1251,52 +1327,67 @@ struct MeetingTranscriptTextEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-            Text("Edit transcript")
-                .font(self.theme.typography.title)
-                .accessibilityAddTraits(.isHeader)
-            Text("Correct this paragraph. Its timestamps, speaker, and recording stay the same.")
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.secondaryText)
-            TextEditor(text: self.$text)
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+            TextField("Transcript text", text: self.$text, axis: .vertical)
+                .textFieldStyle(.plain)
                 .font(self.theme.typography.body)
-                .scrollContentBackground(.hidden)
+                .foregroundStyle(self.theme.palette.primaryText)
+                .lineSpacing(5)
+                .lineLimit(1...20)
                 .padding(self.theme.metrics.spacing.sm)
                 .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
-                .frame(minHeight: 200)
+                .overlay {
+                    RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
+                        .strokeBorder(self.theme.palette.accent.opacity(0.45), lineWidth: 1)
+                }
+                .focused(self.$isFocused)
                 .disabled(self.isSaving)
-                .accessibilityLabel("Transcript text")
+                .accessibilityLabel("Edit transcript paragraph")
+                .onSubmit { self.save() }
+                .onKeyPress(.return) {
+                    self.save()
+                    return .handled
+                }
+                .onExitCommand { if !self.isSaving { self.onCancel() } }
+                .task {
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    self.isFocused = true
+                }
             if let errorMessage {
                 Text(PichiLocalization.text(errorMessage))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.warning)
             }
-            FluidGlassControlGroup {
-                HStack {
-                    Button("Cancel", action: self.onCancel)
-                        .meetingGlassAction()
-                        .keyboardShortcut(.cancelAction)
-                        .disabled(self.isSaving)
-                    Spacer()
-                    Button(self.isSaving ? PichiLocalization.text("Saving…") : PichiLocalization.text("Save")) {
-                        guard !self.isSaving else { return }
-                        self.isSaving = true
-                        Task { @MainActor in
-                            self.errorMessage = await self.onSave(self.text)
-                            self.isSaving = false
-                        }
+            HStack(spacing: self.theme.metrics.spacing.sm) {
+                Text("Enter to save · Escape to cancel")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                Spacer(minLength: 0)
+                FluidGlassControlGroup {
+                    HStack(spacing: self.theme.metrics.spacing.sm) {
+                        Button("Cancel", action: self.onCancel)
+                            .fluidGlassAction()
+                            .disabled(self.isSaving)
+                        Button(self.isSaving ? PichiLocalization.text("Saving…") : PichiLocalization.text("Save"), action: self.save)
+                            .fluidGlassAction(prominent: true)
+                            .keyboardShortcut(.return, modifiers: .command)
+                            .disabled(self.isSaving || self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    .meetingGlassAction(prominent: true)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(self.isSaving || self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }
-        .padding(self.theme.metrics.spacing.xl)
-        .frame(width: 560)
-        .frame(minHeight: 400)
-        .background(self.theme.palette.windowBackground)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .appTheme(self.theme)
-        .interactiveDismissDisabled(self.isSaving)
+    }
+
+    private func save() {
+        guard !self.isSaving, !self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        self.isSaving = true
+        Task { @MainActor in
+            self.errorMessage = await self.onSave(self.text)
+            self.isSaving = false
+            if self.errorMessage != nil { self.isFocused = true }
+        }
     }
 }

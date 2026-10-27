@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import signal
 import subprocess
 import sys
@@ -65,6 +66,126 @@ class OwnedProcesses:
         self.profile.mkdir(mode=0o700)
         self.children = {}
         self.statuses = {}
+        self.identity_receipt = None
+        self.relocated_bundles = {}
+        self.executable_proofs = {}
+        self.proven_candidate_pids = set()
+        self.launch_executable_sha256 = digest(self.executable)
+        self.launch_signature = self.signature_identity(self.executable, None)
+
+    def clone_parent(self, deadline):
+        temporary = subprocess.check_output(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], text=True,
+                                            timeout=self.process_timeout(deadline)).strip()
+        directory = Path(temporary).resolve(strict=True)
+        if directory.name != "T" or directory.stat().st_uid != os.getuid():
+            raise ProtocolError("Cannot establish this user's OS-managed clone directory.")
+        return directory.parent / "X" / "com.google.Chrome.code_sign_clone"
+
+    def file_stamp(self, path):
+        info = regular_file(path)
+        if path.resolve(strict=True) != path:
+            raise ProtocolError("Signed executable proof requires canonical regular files.")
+        return (info.st_dev, info.st_ino, info.st_uid, info.st_mode, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+
+    def signature_identity(self, path, deadline):
+        output = subprocess.check_output(["/usr/bin/codesign", "--display", "--verbose=4", "-r-", str(path)],
+                                         stderr=subprocess.STDOUT, text=True,
+                                         timeout=self.process_timeout(deadline))
+        identity = {}
+        for line in output.splitlines():
+            for field in ("CDHash", "TeamIdentifier"):
+                if line.startswith(field + "="):
+                    identity[field] = line.split("=", 1)[1]
+            if line.startswith("designated => "):
+                identity["designatedRequirement"] = line.removeprefix("designated => ")
+        if (not re.fullmatch(r"[0-9a-fA-F]{40}", identity.get("CDHash", ""))
+                or not re.fullmatch(r"[A-Z0-9]{10}", identity.get("TeamIdentifier", ""))
+                or not identity.get("designatedRequirement")):
+            raise ProtocolError("Signed executable lacks a complete CDHash, team or designated requirement.")
+        return identity
+
+    def equivalent_executable(self, child, expected, observed, deadline, bundle=None):
+        expected, observed = Path(expected), Path(observed)
+        # Signature bytes are in the executable. Include resource-seal/Info stamps for a
+        # bundle proof, and inode/ctime so writes or replacements invalidate cached proof.
+        paths = [expected, observed]
+        if bundle is not None:
+            paths += [app / "Contents" / name for app in (self.chrome_app, bundle)
+                      for name in ("Info.plist", "_CodeSignature/CodeResources")]
+        stamps = tuple(self.file_stamp(path) for path in paths)
+        if stamps[0][4] != stamps[1][4]:
+            raise ProtocolError("Relocated executable size differs from the verified owned copy.")
+        if bundle is not None:
+            # A seal's own stamp cannot establish that all sealed nested files stayed
+            # unchanged. Revalidate the whole clone on every leader guard, even on cache hits.
+            subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(bundle)],
+                           check=True, timeout=self.process_timeout(deadline, limit=20), stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        key = (child.pid, str(expected), str(observed), stamps)
+        if key in self.executable_proofs:
+            if stamps != tuple(self.file_stamp(path) for path in paths):
+                raise ProtocolError("Signed executable changed during cached relocation verification.")
+            return self.executable_proofs[key]
+        def digest(path):
+            result = hashlib.sha256()
+            with path.open("rb") as stream:
+                while block := stream.read(1024 * 1024):
+                    self.process_timeout(deadline)
+                    result.update(block)
+            return result.hexdigest()
+        expected_hash, observed_hash = digest(expected), digest(observed)
+        if expected_hash != observed_hash or (expected == self.executable and expected_hash != self.launch_executable_sha256):
+            raise ProtocolError("Relocated executable bytes differ from the verified owned copy.")
+        for target in (expected, observed):
+            arguments = ["/usr/bin/codesign", "--verify", "--strict"]
+            subprocess.run(arguments + [str(target)], check=True, timeout=self.process_timeout(deadline),
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        identity = self.signature_identity(expected, deadline)
+        if (self.signature_identity(observed, deadline) != identity
+                or (expected == self.executable and identity != self.launch_signature)):
+            raise ProtocolError("Relocated executable signature differs from the verified owned copy.")
+        if stamps != tuple(self.file_stamp(path) for path in paths):
+            raise ProtocolError("Signed executable changed during relocation verification.")
+        proof = dict(sha256=expected_hash, **identity)
+        self.executable_proofs[key] = proof
+        return proof
+
+    def prove_relocated_leader(self, child, executable, deadline):
+        if (child.process is None or child.process.pid != child.pid or child.process.poll() is not None
+                or self.children.get(child.pid) is not child):
+            raise ProtocolError("Relocation requires the live owned spawned Chrome child.")
+        observed = Path(executable)
+        bundle = observed.parent.parent.parent
+        if (observed != bundle / "Contents/MacOS/Google Chrome"
+                or bundle.name != "Google Chrome.app.bundle"
+                or not re.fullmatch(r"code_sign_clone\.[A-Za-z0-9]{6}", bundle.parent.name)
+                or bundle.parent.parent != self.clone_parent(deadline)
+                or observed.resolve(strict=True) != observed):
+            raise ProtocolError("Executable is not this user's canonical OS-managed Chrome clone.")
+        proof = self.equivalent_executable(child, self.executable, observed, deadline, bundle=bundle)
+        if self.poll(child) is not None or self.group_for(child.pid) != child.pid:
+            raise ProtocolError("Owned Chrome lifetime changed during relocation verification.")
+        self.relocated_bundles[child.pid] = bundle
+        self.proven_candidate_pids.add(child.pid)
+        self.record_identity("owned-executable-relocation-proven", processID=child.pid,
+                             originalExecutable=str(self.executable), relocatedExecutable=executable,
+                             relocatedBundle=str(bundle), **proof)
+        return True
+
+    def relocated_member(self, child, pid, executable, deadline):
+        bundle = self.relocated_bundles.get(child.pid)
+        if bundle is None:
+            return False
+        observed = Path(executable)
+        try:
+            relative = observed.relative_to(bundle)
+        except ValueError:
+            return False
+        self.equivalent_executable(child, self.chrome_app / relative, observed, deadline,
+                                   bundle=bundle if pid == child.pid else None)
+        self.proven_candidate_pids.add(pid)
+        return True
 
     def chrome(self, url):
         parsed = urlsplit(url)
@@ -132,11 +253,13 @@ class OwnedProcesses:
     def group_for(self, pid):
         return os.getpgid(pid)
 
-    def process_timeout(self, deadline):
-        remaining = 2 if deadline is None else deadline - time.monotonic()
+    def process_timeout(self, deadline, limit=5):
+        # Deep bundle verification is slower than process inspection; neither may
+        # extend an explicit absolute ownership or cleanup deadline.
+        remaining = limit if deadline is None else deadline - time.monotonic()
         if remaining <= 0:
             raise ProtocolError("Owned process verification deadline expired.")
-        return min(2, remaining)
+        return min(limit, remaining)
 
     def arguments_for(self, pid, deadline=None):
         return subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "command="], text=True,
@@ -149,6 +272,7 @@ class OwnedProcesses:
                 if int(pgid) == group and not state.startswith("Z")]
 
     def assert_owned(self, child, deadline=None, require_live=True):
+        deadline = deadline if deadline is not None else time.monotonic() + 30
         if self.children.get(child.pid) is not child:
             raise ProtocolError("Refuse to signal a foreign process.")
         if self.poll(child) is not None:
@@ -156,22 +280,87 @@ class OwnedProcesses:
                 raise ProtocolError("Refuse to signal an exited process.")
             return []
         expected = str(self.executable) if child.kind == "chrome" else "/usr/bin/afplay"
-        if (self.executable_for(child.pid) != expected or self.group_for(child.pid) != child.pid
-                or child.args[0] != expected or (child.kind == "chrome"
-                and (f"--user-data-dir={self.profile}" not in child.args
-                     or f"--user-data-dir={self.profile}" not in self.arguments_for(child.pid, deadline).split()))):
-            raise ProtocolError("Owned executable, profile or process group does not match.")
-        verified = self.verify_members(child, self.group_members(child.pid, deadline), deadline)
+        leader_proof = None
+        observation = dict(processID=child.pid, kind=child.kind, expectedExecutable=expected,
+                           expectedProcessGroup=child.pid, launchedExecutable=child.args[0])
+        try:
+            observation["observedExecutable"] = self.executable_for(child.pid)
+            observation["observedProcessGroup"] = self.group_for(child.pid)
+            predicates = dict(executableMatches=observation["observedExecutable"] == expected,
+                              processGroupMatches=observation["observedProcessGroup"] == child.pid,
+                              launchedExecutableMatches=child.args[0] == expected)
+            observation["predicates"] = predicates
+            if child.kind == "chrome":
+                profile = f"--user-data-dir={self.profile}"
+                arguments = self.arguments_for(child.pid, deadline).split()
+                # The URL contains an ephemeral fixture token. Retain actual process arguments
+                # for diagnosis without copying that query into the private ownership journal.
+                observation["observedArguments"] = [
+                    argument.split("?", 1)[0] + "?<fixture-query-redacted>"
+                    if argument.startswith("http://127.0.0.1:") else argument for argument in arguments]
+                observation["expectedProfileArgument"] = profile
+                predicates.update(launchedProfileMatches=profile in child.args,
+                                  observedProfileMatches=profile in arguments)
+                if not predicates["executableMatches"] and all(value for name, value in predicates.items()
+                                                                 if name != "executableMatches"):
+                    observed_stamp = self.file_stamp(Path(observation["observedExecutable"]))
+                    predicates["relocatedExecutableMatches"] = self.prove_relocated_leader(
+                        child, observation["observedExecutable"], deadline)
+                    leader_proof = (child, observation["observedExecutable"], observed_stamp)
+            observation["predicates"] = predicates
+        except Exception as error:
+            observation["observationError"] = str(error)
+            self.record_identity("ownership-identity", **observation)
+            raise
+        self.record_identity("ownership-identity", **observation)
+        failed = [name for name, matches in predicates.items() if not matches
+                  and not (name == "executableMatches" and predicates.get("relocatedExecutableMatches"))]
+        if failed:
+            raise ProtocolError("Owned process identity does not match: " + ", ".join(failed) + ".")
+        verified = self.verify_members(child, self.group_members(child.pid, deadline), deadline,
+                                       leader_proof=leader_proof)
         if require_live:
             self.require_live_owner(child, verified)
         return verified
+
+    def record_identity(self, step, **fields):
+        if self.identity_receipt is not None:
+            self.identity_receipt(step, **fields)
+
+    def copied_bundle_processes(self, deadline):
+        """Report surviving copy users, including detached helpers; never signal them."""
+        output = subprocess.check_output(
+            ["/bin/ps", "-U", str(os.getuid()), "-o", "pid=,pgid=,stat=,comm="], text=True,
+            timeout=self.process_timeout(deadline))
+        remaining = []
+        for row in output.splitlines():
+            if time.monotonic() >= deadline:
+                raise ProtocolError("Copied Chrome cleanup inspection deadline expired.")
+            pid, group, state, command = row.split(None, 3)
+            if state.startswith("Z"):
+                continue
+            known = int(group) in self.children or int(pid) in self.proven_candidate_pids
+            if not known and "Google Chrome" not in command and "chrome_crashpad_handler" not in command:
+                continue
+            try:
+                executable = self.executable_for(int(pid))
+            except (ProtocolError, ProcessLookupError) as error:
+                if known:
+                    raise ProtocolError(f"Cannot inspect an owned candidate PID {pid}; cleanup is unverified.") from error
+                self.record_identity("unknown-foreign-process-inspection", processID=int(pid), processGroup=int(group),
+                                     owned=False, signalled=False)
+                continue
+            if (executable.startswith(str(self.chrome_app) + "/")
+                    or any(executable.startswith(str(bundle) + "/") for bundle in self.relocated_bundles.values())):
+                remaining.append(dict(processID=int(pid), processGroup=int(group), executablePath=executable))
+        return remaining
 
     def require_live_owner(self, child, verified):
         if self.children.get(child.pid) is not child or child.pid not in verified or self.poll(child) is not None:
             raise ProtocolError("Owned live leader disappeared during verification.")
 
-    def verify_members(self, child, members, deadline=None):
-        deadline = deadline if deadline is not None else time.monotonic() + 3
+    def verify_members(self, child, members, deadline=None, leader_proof=None):
+        deadline = deadline if deadline is not None else time.monotonic() + 30
         pending, verified = list(members), []
         while pending:
             if time.monotonic() >= deadline:
@@ -187,10 +376,30 @@ class OwnedProcesses:
                     raise ProtocolError("Refuse an unverified live or reused group member.") from error
                 # The old PS snapshot raced exit. Reverify the complete fresh snapshot,
                 # including any newly observed members, before allowing a group signal.
-                pending, verified = list(current), []
+                pending, verified, leader_proof = list(current), [], None
                 continue
             owned_player = child.kind == "player" and pid == child.pid and executable == "/usr/bin/afplay"
-            owned_chrome = child.kind == "chrome" and executable.startswith(str(self.chrome_app) + "/")
+            owned_chrome = False
+            if child.kind == "chrome":
+                if pid == child.pid and leader_proof is not None:
+                    # Reuse only the full clone verification performed earlier in this
+                    # assert_owned call. Never persist this proof across guards.
+                    proven_child, proven_path, proven_stamp = leader_proof
+                    profile = f"--user-data-dir={self.profile}"
+                    if (proven_child is not child or self.children.get(pid) is not child
+                            or child.process is None or child.process.pid != pid
+                            or child.process.poll() is not None or self.poll(child) is not None
+                            or executable != proven_path
+                            or self.file_stamp(Path(executable)) != proven_stamp
+                            or self.group_for(pid) != child.pid
+                            or profile not in child.args
+                            or profile not in self.arguments_for(pid, deadline).split()):
+                        raise ProtocolError("Owned leader changed after signed-clone verification.")
+                    owned_chrome = True
+                elif executable.startswith(str(self.chrome_app) + "/"):
+                    owned_chrome = True
+                else:
+                    owned_chrome = self.relocated_member(child, pid, executable, deadline)
             if not (owned_player or owned_chrome):
                 raise ProtocolError("Refuse to signal an unverified process group member.")
             verified.append(pid)
@@ -207,7 +416,8 @@ class OwnedProcesses:
     def stop(self, child):
         if self.children.get(child.pid) is not child:
             raise ProtocolError("Refuse cleanup of a foreign process.")
-        deadline = time.monotonic() + 3
+        # One absolute budget includes full signed-clone proof, signalling and join.
+        deadline = time.monotonic() + 30
         if self.poll(child) is None:
             verified = self.assert_owned(child, deadline, require_live=False)
             if child.pid in verified and self.poll(child) is None:
@@ -229,6 +439,8 @@ class OwnedProcesses:
         raise ProtocolError("Owned process group did not join after termination.")
 
     def kill_group(self, child, deadline=None):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise ProtocolError("Owned process termination deadline expired.")
         try:
             self.send_group(child.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -244,6 +456,23 @@ class OwnedProcesses:
                 self.stop(child)
             except Exception as error:
                 errors.append(str(error))
+        if any(child.kind == "chrome" for child in self.children.values()):
+            try:
+                # Detached vendor helpers can exit shortly after their joined browser.
+                # Observe natural exit only; an unproven process is never signalled.
+                deadline = time.monotonic() + 30
+                remaining = self.copied_bundle_processes(deadline)
+                while remaining and time.monotonic() < deadline:
+                    time.sleep(0.025)
+                    if time.monotonic() >= deadline:
+                        break
+                    remaining = self.copied_bundle_processes(deadline)
+                if remaining:
+                    self.record_identity("unresolved-copied-bundle-processes", processes=remaining,
+                                         signalled=False, ownershipProven=False)
+                    errors.append("Copied Chrome processes remain outside joined-child proof; no extra signals sent.")
+            except Exception as error:
+                errors.append(str(error))
         if errors:
             raise ProtocolError("Owned fixture cleanup failed: " + "; ".join(errors))
 
@@ -257,11 +486,13 @@ class Driver:
         self.capture_seen = None
         self.protocol_complete = False
         self.owned_joined = False
+        self.preflight_complete = False
         self.failure = None
         self.state_path = fixture.root / "driver-state.json"
         journal = fixture.root / "driver-events.jsonl"
         if self.state_path.exists() or self.state_path.is_symlink() or journal.exists() or journal.is_symlink():
             raise ProtocolError("Use a fresh driver run.")
+        self.processes.identity_receipt = self.receipt
 
     def check(self):
         if self.fixture.root.resolve(strict=True) != self.fixture.root:
@@ -324,13 +555,23 @@ class Driver:
             self.pause(0.025)
         raise ProtocolError("Natural playback completion timed out.")
 
-    def run(self):
+    def run(self, preflight_only=False):
         try:
             self.check()
             browser = self.processes.chrome(self.url("browserBefore", self.before))
             self.receipt("browser-launched", processID=browser.pid, executablePath=browser.args[0])
             self.until(lambda: self.fixture.prepared_phase == "browserBefore", 30)
-            self.receipt("prepared-before-capture", processID=browser.pid, speechStarted=False)
+            self.processes.assert_owned(browser)
+            self.receipt("prepared-before-capture", processID=browser.pid, speechStarted=False,
+                         identityVerified=True)
+            if preflight_only:
+                if any((self.fixture.root / name).exists() or (self.fixture.root / name).is_symlink()
+                       for name in ("capture-ready.json", "phase-command.json", "phase-ack.json", "outcome.json")):
+                    raise ProtocolError("Preflight requires no native capture or phase files.")
+                self.preflight_complete = True
+                self.receipt("preflight-complete", nativeCaptureStarted=False, speechStarted=False,
+                             cuaPlayClicks=0)
+                return
             self.until(lambda: (self.fixture.root / "capture-ready.json").exists(), 120)
             self.capture_seen = self.clock()
             self.fixture.authorize(dict(runID=self.fixture.run_id, token=self.fixture.token))
@@ -382,7 +623,7 @@ class Driver:
                 self.processes.cleanup()
                 self.owned_joined = True
                 self.receipt("owned-processes-joined", protocolComplete=self.protocol_complete,
-                             failure=self.failure, liveOwnedChildren=0)
+                             preflightComplete=self.preflight_complete, failure=self.failure, liveOwnedChildren=0)
             except Exception as error:
                 self.failure = str(error)
                 self.receipt("cleanup-failed", reason=str(error))
@@ -397,12 +638,19 @@ def main():
         parser.add_argument("--" + option, required=True)
     parser.add_argument("--port", required=True, type=int)
     parser.add_argument("--dry-run", action="store_true", help="Print the concrete plan without serving or launching anything")
+    parser.add_argument("--preflight-only", action="store_true",
+                        help="Prepare the browser, verify identity and join cleanup without native capture or Play")
     args = parser.parse_args()
     if (args.chrome_app != args.workspace / "Google Chrome.app" or args.second_wave.parent != args.stimulus_dir
             or not NAME.fullmatch(args.second_wave.name) or args.before_wav == args.after_wav
             or not NAME.fullmatch(args.before_wav) or not NAME.fullmatch(args.after_wav) or not 1 <= args.port <= 65535):
         parser.error("Use the workspace's Google Chrome copy, distinct named WAVs and one localhost port.")
     if args.dry_run:
+        if args.preflight_only:
+            print(json.dumps(dict(runID=str(uuid.UUID(args.run_id)).upper(), mode="prepare-identity-cleanup",
+                nativeCaptureStarted=False, speechStarted=False, applicationLaunched=False, serverStarted=False,
+                prepareLimitSeconds=30, cuaPlayClicks=0)))
+            return
         print(json.dumps(dict(runID=str(uuid.UUID(args.run_id)).upper(), nativeCaptureStarted=False,
             applicationLaunched=False, serverStarted=False, durationSeconds=100, phaseLimitSeconds=60,
             cues=["prepared-before-capture", "await-first-cua-play", "await-final-cua-play"], cuaPlayClicks=2,
@@ -423,7 +671,7 @@ def main():
     worker = threading.Thread(target=server.serve_forever)
     worker.start()
     try:
-        driver.run()
+        driver.run(preflight_only=args.preflight_only)
     finally:
         server.shutdown()
         worker.join(3)
@@ -432,6 +680,7 @@ def main():
             driver.receipt("server-cleanup-failed")
             raise ProtocolError("Fixture server thread did not join.")
         driver.receipt("fixture-server-joined", protocolComplete=driver.protocol_complete,
+                       preflightComplete=driver.preflight_complete,
                        failure=driver.failure, ownedProcessesJoined=driver.owned_joined,
                        liveOwnedChildren=0 if driver.owned_joined else None, serverRunning=False)
 

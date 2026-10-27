@@ -54,4 +54,11 @@ nonisolated enum MeetingSummaryInput {
     static func fingerprint(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
+
+    static func contentFingerprint(for session: MeetingSession, timeZone: TimeZone? = nil) -> String {
+        // Keep the title in the model's input, but exclude it from summary validity.
+        var source = session
+        source.title = ""
+        return self.fingerprint(self.transcript(for: source, timeZone: timeZone))
+    }
 }

@@ -43671,6 +43671,23 @@
         }
       }
     },
+    "Your meetings, models and voice profile are kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your meetings, models and voice profile are kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встречи, модели и голосовой профиль сохранятся."
+          }
+        }
+      }
+    },
     "Your mic will record the room.": {
       "extractionState": "manual",
       "localizations": {
@@ -53716,6 +53733,2325 @@
           "stringUnit": {
             "state": "translated",
             "value": "Изменения геолокации применяются сразу, даже если закрыть окно без сохранения остальных настроек."
+          }
+        }
+      }
+    },
+    "%@ already recognises this word. Nothing new was saved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ already recognises this word. Nothing new was saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ уже распознаёт это слово. Новых данных не сохранено."
+          }
+        }
+      }
+    },
+    "%@ · Saved on this Mac": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · Saved on this Mac"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · Сохранена на этом Mac"
+          }
+        }
+      }
+    },
+    "%lld of %lld words": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld of %lld words"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слов: %lld из %lld"
+          }
+        }
+      }
+    },
+    "Add a spelling correction": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add a spelling correction"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавить исправление написания"
+          }
+        }
+      }
+    },
+    "Add a word manually": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add a word manually"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавить слово вручную"
+          }
+        }
+      }
+    },
+    "Add spelling": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add spelling"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавить вариант"
+          }
+        }
+      }
+    },
+    "Add to dictionary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to dictionary"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавить в словарь"
+          }
+        }
+      }
+    },
+    "All of %@’s transcript will belong to %@ when you save changes.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All of %@’s transcript will belong to %@ when you save changes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "После сохранения все реплики участника %@ будут принадлежать участнику %@."
+          }
+        }
+      }
+    },
+    "Assign speaker": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assign speaker"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Назначить участника"
+          }
+        }
+      }
+    },
+    "Assign speaker to unknown paragraph": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assign speaker to unknown paragraph"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Назначить участника неизвестному фрагменту"
+          }
+        }
+      }
+    },
+    "Automatic update checks": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic update checks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматическая проверка обновлений"
+          }
+        }
+      }
+    },
+    "Cancel merge": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel merge"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отменить объединение"
+          }
+        }
+      }
+    },
+    "Check Again": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check Again"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить ещё раз"
+          }
+        }
+      }
+    },
+    "Check for new versions once per hour.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check for new versions once per hour."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверять новые версии раз в час."
+          }
+        }
+      }
+    },
+    "Check stable and preview releases. Preview builds may be less reliable.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check stable and preview releases. Preview builds may be less reliable."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверять стабильные и предварительные версии. Предварительные сборки могут быть менее надёжными."
+          }
+        }
+      }
+    },
+    "Checked %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checked %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверено %@"
+          }
+        }
+      }
+    },
+    "Checking for updates…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking for updates…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка обновлений…"
+          }
+        }
+      }
+    },
+    "Checking what we heard": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking what we heard"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверяем распознанный текст"
+          }
+        }
+      }
+    },
+    "Choose a version": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a version"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите версию"
+          }
+        }
+      }
+    },
+    "Choose an earlier version. FluidVoice will restart.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an earlier version. FluidVoice will restart."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите предыдущую версию. FluidVoice перезапустится."
+          }
+        }
+      }
+    },
+    "Confirm merge": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm merge"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подтвердить объединение"
+          }
+        }
+      }
+    },
+    "Correct spelling": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correct spelling"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Правильное написание"
+          }
+        }
+      }
+    },
+    "Couldn't load online versions. Your saved version is still available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't load online versions. Your saved version is still available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось загрузить версии из сети. Сохранённая версия по-прежнему доступна."
+          }
+        }
+      }
+    },
+    "Couldn't load versions. Check your connection and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn't load versions. Check your connection and try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось загрузить версии. Проверьте соединение и повторите попытку."
+          }
+        }
+      }
+    },
+    "Edit speakers": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit speakers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменить участников"
+          }
+        }
+      }
+    },
+    "Edit transcript paragraph": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit transcript paragraph"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменить фрагмент расшифровки"
+          }
+        }
+      }
+    },
+    "Enable FluidMeet": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable FluidMeet"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить FluidMeet"
+          }
+        }
+      }
+    },
+    "Enable FluidMeet in FluidMeet Settings to use this shortcut": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable FluidMeet in FluidMeet Settings to use this shortcut"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой горячей клавиши включите FluidMeet в настройках FluidMeet"
+          }
+        }
+      }
+    },
+    "Enter the spelling %@ gets wrong.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter the spelling %@ gets wrong."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Введите вариант, который %@ распознаёт неверно."
+          }
+        }
+      }
+    },
+    "Enter to save · Escape to cancel": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter to save · Escape to cancel"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter: сохранить · Escape: отменить"
+          }
+        }
+      }
+    },
+    "Export Transcript (Markdown)…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export Transcript (Markdown)…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспорт расшифровки (Markdown)…"
+          }
+        }
+      }
+    },
+    "Finish or cancel the summary before starting a new meeting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish or cancel the summary before starting a new meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершите или отмените сводку перед началом новой встречи"
+          }
+        }
+      }
+    },
+    "Finish pronunciation learning": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish pronunciation learning"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершите обучение произношению"
+          }
+        }
+      }
+    },
+    "Finish the current meeting recording or processing before turning FluidMeet off.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish the current meeting recording or processing before turning FluidMeet off."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перед отключением FluidMeet завершите текущую запись или обработку встречи."
+          }
+        }
+      }
+    },
+    "Finish the current word recording or save first": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish the current word recording or save first"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала завершите запись слова или сохраните его"
+          }
+        }
+      }
+    },
+    "FluidMeet Settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidMeet Settings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки FluidMeet"
+          }
+        }
+      }
+    },
+    "FluidMeet start stop toggle recording keyboard hotkey": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidMeet start stop toggle recording keyboard hotkey"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidMeet начать остановить переключить запись клавиатура горячая клавиша"
+          }
+        }
+      }
+    },
+    "Get ready to say it again": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get ready to say it again"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приготовьтесь произнести слово ещё раз"
+          }
+        }
+      }
+    },
+    "Getting ready…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Getting ready…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовка…"
+          }
+        }
+      }
+    },
+    "Heard correctly: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Heard correctly: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознано правильно: %@"
+          }
+        }
+      }
+    },
+    "Hide test": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide test"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрыть проверку"
+          }
+        }
+      }
+    },
+    "Include beta releases": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Include beta releases"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Учитывать бета-версии"
+          }
+        }
+      }
+    },
+    "Installing an update…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installing an update…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установка обновления…"
+          }
+        }
+      }
+    },
+    "Learn the spelling of": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Learn the spelling of"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Учимся распознавать написание"
+          }
+        }
+      }
+    },
+    "Learn your pronunciation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Learn your pronunciation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Учимся распознавать ваше произношение"
+          }
+        }
+      }
+    },
+    "Loading versions…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading versions…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка версий…"
+          }
+        }
+      }
+    },
+    "Markdown…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Markdown…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Markdown…"
+          }
+        }
+      }
+    },
+    "Meeting Correction": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting Correction"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправление встречи"
+          }
+        }
+      }
+    },
+    "Meeting Recording Shortcut": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting Recording Shortcut"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Горячая клавиша записи встречи"
+          }
+        }
+      }
+    },
+    "Merge %@ with another speaker": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Merge %@ with another speaker"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Объединить %@ с другим участником"
+          }
+        }
+      }
+    },
+    "Merge speakers?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Merge speakers?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Объединить участников?"
+          }
+        }
+      }
+    },
+    "Merge…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Merge…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Объединить…"
+          }
+        }
+      }
+    },
+    "New speaker…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New speaker…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новый участник…"
+          }
+        }
+      }
+    },
+    "No earlier versions are available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No earlier versions are available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предыдущие версии недоступны."
+          }
+        }
+      }
+    },
+    "No other meeting-audio speakers": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No other meeting-audio speakers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Других участников в аудио встречи нет"
+          }
+        }
+      }
+    },
+    "No other microphone speakers": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No other microphone speakers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Других участников с микрофона нет"
+          }
+        }
+      }
+    },
+    "No spelling corrections yet.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No spelling corrections yet."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправлений написания пока нет."
+          }
+        }
+      }
+    },
+    "Not checked yet": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not checked yet"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ещё не проверялось"
+          }
+        }
+      }
+    },
+    "Not recorded yet": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not recorded yet"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ещё не записано"
+          }
+        }
+      }
+    },
+    "Pause automatic recording to review or edit spellings (Esc)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause automatic recording to review or edit spellings (Esc)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приостановите автоматическую запись для просмотра или изменения написаний (Esc)"
+          }
+        }
+      }
+    },
+    "Pause learning": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause learning"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приостановить обучение"
+          }
+        }
+      }
+    },
+    "Pause learning before editing spellings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause learning before editing spellings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приостановите обучение перед изменением вариантов написания."
+          }
+        }
+      }
+    },
+    "Pause learning to edit spelling corrections": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause learning to edit spelling corrections"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приостановите обучение для изменения исправлений написания"
+          }
+        }
+      }
+    },
+    "Record and transcribe meetings. Turning this off hides FluidMeet and stops meeting detection. Your saved meetings are kept.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record and transcribe meetings. Turning this off hides FluidMeet and stops meeting detection. Your saved meetings are kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывайте и расшифровывайте встречи. При отключении раздел FluidMeet скрывается, а обнаружение встреч прекращается. Сохранённые встречи остаются."
+          }
+        }
+      }
+    },
+    "Recording stopped. Press Record to continue.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording stopped. Press Record to continue."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись остановлена. Нажмите «Записать», чтобы продолжить."
+          }
+        }
+      }
+    },
+    "Remove a spelling before adding another.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove a spelling before adding another."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалите один вариант написания, чтобы добавить другой."
+          }
+        }
+      }
+    },
+    "Remove spelling %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove spelling %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить вариант написания %@"
+          }
+        }
+      }
+    },
+    "Remove this spelling correction; keep the voice examples": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove this spelling correction; keep the voice examples"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить это исправление написания, сохранив голосовые примеры"
+          }
+        }
+      }
+    },
+    "Rename voices or merge duplicate speakers. Changes apply when you save.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename voices or merge duplicate speakers. Changes apply when you save."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Переименуйте голоса или объедините повторяющихся участников. Изменения применятся после сохранения."
+          }
+        }
+      }
+    },
+    "Return to recording setup": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Return to recording setup"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вернуться к настройке записи"
+          }
+        }
+      }
+    },
+    "Return to recording setup; the current meeting stays saved": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Return to recording setup; the current meeting stays saved"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вернуться к настройке записи; текущая встреча останется сохранённой"
+          }
+        }
+      }
+    },
+    "Roll Back": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Roll Back"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Откатить"
+          }
+        }
+      }
+    },
+    "Roll back": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Roll back"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Откат версии"
+          }
+        }
+      }
+    },
+    "Roll back to %@?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Roll back to %@?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Откатить до %@?"
+          }
+        }
+      }
+    },
+    "Rollback version": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rollback version"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Версия для отката"
+          }
+        }
+      }
+    },
+    "Rolling Back…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rolling Back…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Откат…"
+          }
+        }
+      }
+    },
+    "Save changes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save changes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранить изменения"
+          }
+        }
+      }
+    },
+    "Save your changes before testing this word.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save your changes before testing this word."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохраните изменения перед проверкой этого слова."
+          }
+        }
+      }
+    },
+    "Say only the word, then pause.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Say only the word, then pause."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Произнесите только слово, затем сделайте паузу."
+          }
+        }
+      }
+    },
+    "Say “%@” now": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Say “%@” now"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Произнесите «%@» сейчас"
+          }
+        }
+      }
+    },
+    "Some audio may have an echo.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some audio may have an echo."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В части аудио возможно эхо."
+          }
+        }
+      }
+    },
+    "Some recorded audio was not transcribed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some recorded audio was not transcribed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Часть записанного аудио не расшифрована."
+          }
+        }
+      }
+    },
+    "Speak again when “Recording” appears.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speak again when “Recording” appears."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Говорите снова, когда появится надпись «Запись»."
+          }
+        }
+      }
+    },
+    "Speaker labels are automatic. Name speakers above; double-click a paragraph to edit its text.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker labels are automatic. Name speakers above; double-click a paragraph to edit its text."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Участники определены автоматически. Задайте имена выше; дважды нажмите на фрагмент, чтобы изменить текст."
+          }
+        }
+      }
+    },
+    "Spelling corrections": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spelling corrections"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправления написания"
+          }
+        }
+      }
+    },
+    "Start / Stop Meeting": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start / Stop Meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начать / остановить встречу"
+          }
+        }
+      }
+    },
+    "Tag this unknown paragraph with a speaker": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tag this unknown paragraph with a speaker"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Назначить участника этому неизвестному фрагменту"
+          }
+        }
+      }
+    },
+    "Text to replace": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text to replace"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заменяемый текст"
+          }
+        }
+      }
+    },
+    "That is already the correct spelling.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That is already the correct spelling."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это уже правильное написание."
+          }
+        }
+      }
+    },
+    "That spelling already belongs to a saved word.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That spelling already belongs to a saved word."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот вариант написания уже относится к сохранённому слову."
+          }
+        }
+      }
+    },
+    "That spelling is already in this list.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That spelling is already in this list."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот вариант написания уже есть в списке."
+          }
+        }
+      }
+    },
+    "These spellings are already covered. Nothing new was saved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These spellings are already covered. Nothing new was saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эти варианты написания уже учтены. Новых данных не сохранено."
+          }
+        }
+      }
+    },
+    "This paragraph is no longer being edited.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This paragraph is no longer being edited."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот фрагмент больше не редактируется."
+          }
+        }
+      }
+    },
+    "Toggle meeting recording using your saved source": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toggle meeting recording using your saved source"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включение и остановка записи встречи с выбранным источником"
+          }
+        }
+      }
+    },
+    "Try %lld": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try %lld"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Попытка %lld"
+          }
+        }
+      }
+    },
+    "Try this word with your dictation shortcut.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Try this word with your dictation shortcut."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте это слово с помощью сочетания клавиш для диктовки."
+          }
+        }
+      }
+    },
+    "Two speakers are both named \"%@\". Give them different names, or merge them here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Two speakers are both named \"%@\". Give them different names, or merge them here."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Два участника названы «%@». Задайте разные имена или объедините их здесь."
+          }
+        }
+      }
+    },
+    "Updates": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updates"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновления"
+          }
+        }
+      }
+    },
+    "Use 160 characters or fewer.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use 160 characters or fewer."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Введите не более 160 символов."
+          }
+        }
+      }
+    },
+    "Use a keyboard key with a modifier for meeting recording": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use a keyboard key with a modifier for meeting recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для записи встречи используйте клавишу с модификатором"
+          }
+        }
+      }
+    },
+    "Version %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Версия %@"
+          }
+        }
+      }
+    },
+    "Version %@ is available": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %@ is available"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступна версия %@"
+          }
+        }
+      }
+    },
+    "Wait for recording to start": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wait for recording to start"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дождитесь начала записи"
+          }
+        }
+      }
+    },
+    "Wait for the next recording": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wait for the next recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дождитесь следующей записи"
+          }
+        }
+      }
+    },
+    "We didn’t catch “%@”. Try your shortcut again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "We didn’t catch “%@”. Try your shortcut again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось распознать «%@». Снова нажмите сочетание клавиш."
+          }
+        }
+      }
+    },
+    "What %@ types instead": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What %@ types instead"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что %@ печатает вместо этого"
+          }
+        }
+      }
+    },
+    "When off, available updates still appear in the top bar and here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When off, available updates still appear in the top bar and here."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При отключении доступные обновления по-прежнему отображаются в верхней панели и здесь."
+          }
+        }
+      }
+    },
+    "Will merge into %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Will merge into %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Будет объединён с %@"
+          }
+        }
+      }
+    },
+    "With": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "With"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На"
+          }
+        }
+      }
+    },
+    "Your microphone voice is kept separate": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your microphone voice is kept separate"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваш голос с микрофона остаётся отдельно"
+          }
+        }
+      }
+    },
+    "meetings recording disable turn off enable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "meetings recording disable turn off enable"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "встречи запись отключить выключить включить"
+          }
+        }
+      }
+    },
+    "“%@” was recognised correctly.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“%@” was recognised correctly."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "«%@» распознано правильно."
+          }
+        }
+      }
+    },
+    "Use my active screen to improve dictation accuracy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use my active screen to improve dictation accuracy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать активное окно для повышения точности диктовки"
+          }
+        }
+      }
+    },
+    "Checking screen access…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking screen access…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка доступа к экрану…"
+          }
+        }
+      }
+    },
+    "Screen access allowed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen access allowed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к экрану разрешён"
+          }
+        }
+      }
+    },
+    "Mac with %lld GB+ RAM": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac with %lld GB+ RAM"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac с %lld ГБ ОЗУ или больше"
+          }
+        }
+      }
+    },
+    "Recommended: Mac with %lld GB or more RAM.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recommended: Mac with %lld GB or more RAM."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуется Mac с %lld ГБ ОЗУ или больше."
+          }
+        }
+      }
+    },
+    "On-screen context": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On-screen context"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Контекст активного окна"
+          }
+        }
+      }
+    },
+    "Allow screen access": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow screen access"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешить доступ к экрану"
+          }
+        }
+      }
+    },
+    "Allow %@ under Screen & System Audio Recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow %@ under Screen & System Audio Recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешите %@ в разделе «Запись экрана и системного аудио»."
+          }
+        }
+      }
+    },
+    "macOS calls this Screen Recording access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS calls this Screen Recording access."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В macOS это разрешение называется «Запись экрана»."
+          }
+        }
+      }
+    },
+    "Supported models: %@. Everything is processed on your device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supported models: %@. Everything is processed on your device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поддерживаемые модели: %@. Вся обработка выполняется на вашем устройстве."
+          }
+        }
+      }
+    },
+    "On. Click to change it in Settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On. Click to change it in Settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включён. Нажмите, чтобы изменить в настройках."
+          }
+        }
+      }
+    },
+    "Off. Click to turn it on in Settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off. Click to turn it on in Settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выключен. Нажмите, чтобы включить в настройках."
+          }
+        }
+      }
+    },
+    "On-screen context, %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On-screen context, %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Контекст активного окна: %@"
+          }
+        }
+      }
+    },
+    "Opens the setting in Settings, Experimental.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens the setting in Settings, Experimental."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открывает параметр в разделе «Настройки», «Экспериментальные функции»."
+          }
+        }
+      }
+    },
+    "on": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "on"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "включён"
+          }
+        }
+      }
+    },
+    "off": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "off"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "выключен"
+          }
+        }
+      }
+    },
+    "New speech models and steadier captions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New speech models and steadier captions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новые модели речи и более плавные субтитры"
+          }
+        }
+      }
+    },
+    "Fluid Speech Pro, Qwen dictation, and smoother live captions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fluid Speech Pro, Qwen dictation, and smoother live captions."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fluid Speech Pro, диктовка Qwen и более плавные субтитры в реальном времени."
+          }
+        }
+      }
+    },
+    "NEW SPEECH MODEL": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "NEW SPEECH MODEL"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "НОВАЯ МОДЕЛЬ РЕЧИ"
+          }
+        }
+      }
+    },
+    "An English speech model for dictation on your Mac.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An English speech model for dictation on your Mac."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель для диктовки на английском языке на вашем Mac."
+          }
+        }
+      }
+    },
+    "Open Voice Engine": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Voice Engine"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть распознавание речи"
+          }
+        }
+      }
+    },
+    "MULTILINGUAL SPEECH": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MULTILINGUAL SPEECH"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "МНОГОЯЗЫЧНОЕ РАСПОЗНАВАНИЕ"
+          }
+        }
+      }
+    },
+    "Automatic detection of 30 languages with on-device transcription.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic detection of 30 languages with on-device transcription."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматическое определение 30 языков с расшифровкой на устройстве."
+          }
+        }
+      }
+    },
+    "LIVE TEXT": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LIVE TEXT"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ТЕКСТ В РЕАЛЬНОМ ВРЕМЕНИ"
+          }
+        }
+      }
+    },
+    "Steadier live captions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Steadier live captions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Более плавные субтитры"
+          }
+        }
+      }
+    },
+    "Read live text with steadier wrapping and Reduce Motion support.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read live text with steadier wrapping and Reduce Motion support."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Читайте текст с более стабильным переносом строк и поддержкой уменьшения движения."
+          }
+        }
+      }
+    },
+    "Modifier-only keys can't cancel recording. Use Esc or include a regular key.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modifier-only keys can't cancel recording. Use Esc or include a regular key."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для отмены записи недостаточно клавиш-модификаторов. Используйте Esc или добавьте обычную клавишу."
+          }
+        }
+      }
+    },
+    "Research preview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Research preview"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исследовательская версия"
+          }
+        }
+      }
+    },
+    "Our best cleanup model yet": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Our best cleanup model yet"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Наша наиболее точная модель обработки текста"
+          }
+        }
+      }
+    },
+    "Our most accurate model, built for clear dictation in noisy places. Runs on your Mac.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Our most accurate model, built for clear dictation in noisy places. Runs on your Mac."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Наша наиболее точная модель для чёткой диктовки в шумной обстановке. Работает на вашем Mac."
+          }
+        }
+      }
+    },
+    "Automatically detects 30 languages. Transcribes on your Mac after you stop recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically detects 30 languages. Transcribes on your Mac after you stop recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматически определяет 30 языков. Расшифровывает на вашем Mac после остановки записи."
           }
         }
       }

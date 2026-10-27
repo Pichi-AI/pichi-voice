@@ -90,3 +90,16 @@ nonisolated protocol MeetingMemoryAudioConsuming: Sendable {
 extension MeetingMemoryAudioConsuming {
     var rejectionReason: String? { nil }
 }
+
+// Capture events are runtime contracts, independent of persisted meeting codecs.
+nonisolated enum MeetingCaptureEvent: Sendable {
+    /// Explicit local investigation only; never persisted as a session interruption.
+    case audioComparisonProbeStarted(MeetingAudioComparisonProbe)
+    case trackHealth(trackID: MeetingAudioTrackID, health: MeetingTrackHealth)
+    /// Presentation-only status. The writer owns persisted capture eras; this cannot restart capture.
+    case microphoneEchoProtectionChanged(MeetingMicrophoneEchoProtection)
+    case chunkFinalized(trackID: MeetingAudioTrackID, chunk: MeetingAudioChunk, format: MeetingAudioFormat)
+    case interrupted(kind: MeetingInterruptionKind, trackID: MeetingAudioTrackID?, detail: String?)
+    /// `ack` is `nil` for downgrades — the mic is already dead, no race to gate on.
+    case captureMethodChanged(trackID: MeetingAudioTrackID, method: MeetingAudioTrackCaptureMethod, ack: MeetingCaptureMethodChangeAck?)
+}

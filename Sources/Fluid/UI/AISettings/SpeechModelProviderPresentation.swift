@@ -30,6 +30,8 @@ extension SettingsStore.SpeechModel.Provider {
             SpeechModelProviderPresentation(mark: .asset("Provider_OpenAI"), background: .neutral)
         case .cohere:
             SpeechModelProviderPresentation(mark: .asset("Provider_Cohere"), background: .accent)
+        case .qwen:
+            SpeechModelProviderPresentation(mark: .asset("Provider_Qwen"), background: .neutral)
         default:
             SpeechModelProviderPresentation(mark: .systemSymbol("waveform"), background: .accent)
         }

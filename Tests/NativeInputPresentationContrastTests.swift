@@ -16,7 +16,7 @@ enum NativeInputPresentationContrastTests {
                 switch self.kind {
                 case 0: ProductionWPMEditor()
                 case 1: MeetingTranscriptTextEditor(text: "Ёжик ёлка synthetic paragraph", onSave: { _ in nil }, onCancel: {})
-                default: EditDictionaryEntrySheet(entry: .init(id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!, triggers: ["синтетика"], replacement: "Ёжик ёлка"), existingTriggers: [], onSave: { _ in })
+                default: EditDictionaryEntrySheet(entry: .init(id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!, triggers: ["синтетика"], replacement: "Ёжик ёлка"), existingTriggers: [], isCaptureBusy: false, onSave: { _ in })
                 }
             }
             // Deliberately no appTheme or colorScheme on the outside adapter.
@@ -75,18 +75,22 @@ enum NativeInputPresentationContrastTests {
                     window.appearance = NSApp.appearance
                     await self.settle(host)
                     let current = self.inputs(host)
-                    precondition(current.count == (kind == 2 ? 2 : 1), "Exact production roots must mount all native inputs")
+                    // A focused native TextField has a shared NSTextView field editor;
+                    // count it once as a control, but verify both views below.
+                    let controls = current.filter { ($0 as? NSTextView)?.isFieldEditor != true }
+                    precondition(controls.count == (kind == 2 ? 2 : 1), "Exact production roots must mount all native controls: brand=\(brand) kind=\(kind) step=\(step) controls=\(controls.count) views=\(current.map { String(describing: type(of: $0)) + (($0 as? NSTextView)?.isFieldEditor == true ? ":fieldEditor" : "") })")
                     if !retainedInputs.isEmpty {
                         precondition(zip(current, retainedInputs).allSatisfy { $0 === $1 }, "Hot themes retain native input identity")
                     }
                     retainedInputs = current
                     for input in current {
-                        precondition(input.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == (physical == .dark ? .darkAqua : .aqua), "Actual input presentation must own its portable native appearance")
+                        precondition(input.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == (physical == .dark ? .darkAqua : .aqua), "Actual input presentation must own its portable native appearance: brand=\(brand) kind=\(kind) step=\(step) view=\(type(of: input))")
                         var contrast = 0.0
                         input.effectiveAppearance.performAsCurrentDrawingAppearance {
                             if let field = input as? NSTextField {
                                 precondition(!field.stringValue.isEmpty)
-                                let fill = kind == 0 ? self.components(.textBackgroundColor) : UIContrastTests.components(state.theme.palette.windowBackground)
+                                let fill = kind == 0 ? self.components(.textBackgroundColor)
+                                    : UIContrastTests.components(kind == 1 ? state.theme.palette.cardBackground : state.theme.palette.windowBackground)
                                 contrast = UIContrastTests.contrast(self.components(field.textColor ?? .textColor), fill)
                             } else if let editor = input as? NSTextView {
                                 precondition(!editor.string.isEmpty)
@@ -108,7 +112,7 @@ enum NativeInputPresentationContrastTests {
             }
         }
         try JSONSerialization.data(withJSONObject: records, options: [.prettyPrinted, .sortedKeys]).write(to: directory.appendingPathComponent("native-input-presentation-results.json"))
-        print("Native input roots: 36 retained dark/light/dark cases, 48 native inputs, three brands plus validated inversion, normal text >=4.5; only outside environment(theme) + caller brand tint")
+        print("Native input roots: 36 retained dark/light/dark cases, 48 native controls plus their shared field editors, three brands plus validated inversion, normal text >=4.5; only outside environment(theme) + caller brand tint")
         print("SKIP: no physical focus/active selection, no native app reachability claim. Existing participant probe retains its separate caret >=3 and NONKEY inactive selection >=3 gates.")
     }
 }
