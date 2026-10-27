@@ -90,7 +90,8 @@ def configs(label, test=False, hosted=False):
         elif test:
             settings.update(TEST_TARGET_NAME="PichiVoiceMobile", BUNDLE_LOADER="", TEST_HOST="")
         else:
-            settings.update(INFOPLIST_FILE="Sources/Mobile/Info.plist", ASSETCATALOG_COMPILER_APPICON_NAME="MobileAppIcon",
+            settings.update(INFOPLIST_FILE="Sources/Mobile/Info.plist", CODE_SIGN_ENTITLEMENTS="Sources/Mobile/Mobile.entitlements",
+                ASSETCATALOG_COMPILER_APPICON_NAME="MobileAppIcon",
                 CURRENT_PROJECT_VERSION="5", MARKETING_VERSION="0.1.0", ENABLE_PREVIEWS="YES", PICHI_SOURCE_REVISION="unknown")
         rendered = " ".join(f"{key} = {quoted(value)};" for key, value in settings.items())
         config_ids.append(obj(label+" "+name, f"isa = XCBuildConfiguration; buildSettings = {{ {rendered} }}; name = {name};"))
