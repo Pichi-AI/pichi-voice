@@ -321,6 +321,8 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     /// Optional so existing capture snapshots retain after-recording behavior.
     var speakerProcessingMode: MeetingSpeakerProcessingMode? = nil
     var piiRedactionEnabled: Bool? = nil
+    /// A frozen local data-handling requirement, independent of the inference backend.
+    var requiresEncryptedPersistence: Bool? = nil
     /// An explicit request override, separate from ambient saved-backend preferences.
     /// Nil keeps the selected speech model's registered route.
     var transcriptionBackendID: String? = nil
@@ -339,7 +341,8 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         speakerLabelsEnabled: Bool = true,
         speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording,
         piiRedactionEnabled: Bool = false,
-        transcriptionBackendID: String? = nil
+        transcriptionBackendID: String? = nil,
+        requiresEncryptedPersistence: Bool = false
     ) {
         self.mode = mode
         self.title = title
@@ -355,6 +358,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         self.speakerProcessingMode = speakerLabelsEnabled && speakerProcessingMode == .streaming ? .streaming : nil
         self.piiRedactionEnabled = piiRedactionEnabled
         self.transcriptionBackendID = transcriptionBackendID
+        self.requiresEncryptedPersistence = requiresEncryptedPersistence ? true : nil
     }
 
     var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
@@ -1167,6 +1171,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var speakerLabelsEnabled: Bool? = nil
     var speakerProcessingMode: MeetingSpeakerProcessingMode? = nil
     var piiRedactionEnabled: Bool? = nil
+    /// New protected-delivery captures persist local transcript data as ciphertext.
+    var requiresEncryptedPersistence: Bool? = nil
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil
@@ -1192,6 +1198,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.languageCode = configuration.languageCode
         self.mode = configuration.mode
         self.audioStorageMode = configuration.audioStorageMode
+        self.requiresEncryptedPersistence = configuration.requiresEncryptedPersistence
         self.speakerLabelsEnabled = configuration.speakerLabelsEnabled
         self.speakerProcessingMode = configuration.speakerProcessingMode
         self.piiRedactionEnabled = configuration.piiRedactionEnabled
