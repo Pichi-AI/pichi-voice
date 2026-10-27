@@ -8,6 +8,7 @@ import Foundation
 final class MobileAccountInteraction: ObservableObject {
     enum Action { case signIn, switchPerson, workspace, organization, logout, cancel, guest }
     @Published private(set) var action: Action?
+    @Published private(set) var presentationRevision = UUID()
     @Published private var selectionError: (generation: UUID, code: AccountError)?
     let session: AccountSessionService
     private let requireTransitionAdmission: @MainActor () throws -> Void
@@ -114,6 +115,9 @@ final class MobileAccountInteraction: ObservableObject {
     }
 
     func cancelOwnedSignInOnDisappear(profileBoundaryChanged: Bool = false) {
+        // Native tab/split navigation can retain a hidden Account panel. Retire its
+        // transient draft and focus even when no authentication task is running.
+        presentationRevision = UUID()
         guard !profileBoundaryChanged, action == .signIn || action == .switchPerson else { return }
         cancelSignIn()
     }
@@ -376,6 +380,8 @@ private struct MobileAccountPanel: View {
     @State private var legacyPassword = ""
     @State private var confirmingLegacyLogout = false
     @State private var legacyLogoutContext: AccountContext?
+    private enum LegacyField: Hashable { case email, password }
+    @FocusState private var legacyFocus: LegacyField?
     @Environment(\.theme) private var theme
 
     init(session: AccountSessionService, interaction suppliedInteraction: MobileAccountInteraction? = nil,
@@ -421,17 +427,21 @@ private struct MobileAccountPanel: View {
             }
         }
         .onChange(of: interaction.action != nil) { _, active in actionChanged(active) }
+        .onChange(of: interaction.presentationRevision) { _, _ in
+            legacyFocus = nil; legacyEmail = ""; legacyPassword = ""
+            confirmingLegacyLogout = false; legacyLogoutContext = nil
+        }
         .onChange(of: privateProfile.projectionRevision) { _, _ in
-            legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false; legacyLogoutContext = nil
+            legacyFocus = nil; legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false; legacyLogoutContext = nil
             interaction.privateProjectionDidChange()
         }
         .onChange(of: privateProfile.isPrivateDataVisible) { _, visible in
-            if !visible { legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false; legacyLogoutContext = nil }
+            if !visible { legacyFocus = nil; legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false; legacyLogoutContext = nil }
             interaction.privateProjectionDidChange()
         }
         .onAppear { presentedProjectionRevision = privateProfile.projectionRevision }
         .onChange(of: session.generation) { _, _ in
-            legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false; legacyLogoutContext = nil
+            legacyFocus = nil; legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false; legacyLogoutContext = nil
         }
         .confirmationDialog(PichiLocalization.text("account.legacy.logoutTitle", defaultValue: "Sign out on all devices?"),
                             isPresented: $confirmingLegacyLogout, titleVisibility: .visible) {
@@ -444,7 +454,7 @@ private struct MobileAccountPanel: View {
             Text(PichiLocalization.text("account.legacy.logoutWarning", defaultValue: "Signing out ends your account sessions on every device, including the web app."))
         }
         .onDisappear {
-            legacyEmail = ""; legacyPassword = ""
+            legacyFocus = nil; legacyEmail = ""; legacyPassword = ""
             // N2 can conceal/remove this presentation during the command's own
             // admission. That is not a user request to cancel authentication.
             interaction.cancelOwnedSignInOnDisappear(
@@ -475,10 +485,12 @@ private struct MobileAccountPanel: View {
                 }
                 TextField(PichiLocalization.text("account.legacy.email", defaultValue: "Email"), text: $legacyEmail)
                     .textContentType(.username).keyboardType(.emailAddress)
+                    .focused($legacyFocus, equals: .email)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .disabled(!interaction.canSignIn).accessibilityIdentifier("account.legacy.email")
                 SecureField(PichiLocalization.text("account.legacy.password", defaultValue: "Password"), text: $legacyPassword)
-                    .textContentType(.password).disabled(!interaction.canSignIn)
+                    .textContentType(.password).focused($legacyFocus, equals: .password)
+                    .disabled(!interaction.canSignIn)
                     .accessibilityIdentifier("account.legacy.password")
                 Text(PichiLocalization.text("account.legacy.sessionOnly", defaultValue: "Your password is used only to sign in. Sign in again after restarting the app."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
@@ -488,7 +500,7 @@ private struct MobileAccountPanel: View {
                 defaultValue: session.state == .reauthenticationRequired ? "Sign in again" : "Sign in")) {
                     if session.isLegacySession {
                         let email = legacyEmail.trimmingCharacters(in: .whitespacesAndNewlines), password = legacyPassword
-                        legacyPassword = ""
+                        legacyFocus = nil; legacyPassword = ""
                         interaction.signIn(email: email, password: password)
                     } else { interaction.signIn() }
                 }

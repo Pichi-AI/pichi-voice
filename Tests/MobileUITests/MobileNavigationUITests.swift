@@ -691,6 +691,7 @@ final class MobileNavigationUITests: XCTestCase {
             // Do not submit credentials or create any remote session.
             openNavigation("meetings", title: language == "ru" ? "Встречи" : "Meetings")
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5), "The visible Meetings control must actually leave the Account screen")
+            XCTAssertEqual(app.keyboards.count, 0, "Leaving Account must dismiss its secure input keyboard")
             openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
             if app.buttons["settings.account"].exists { app.buttons["settings.account"].tap() }
             XCTAssertTrue(app.secureTextFields["account.legacy.password"].waitForExistence(timeout: 5))
