@@ -17,6 +17,7 @@ actor MeetingRecordingKeychainStore {
         var result: CFTypeRef?
         let status = SecItemCopyMatching(request as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
+        if let unavailable = ProtectedDataAccessError.keychainFailure(status) { throw unavailable }
         guard status == errSecSuccess, let data = result as? Data, data.count == 32 else {
             throw MeetingRecordingCipher.Failure.unavailableKey
         }
@@ -32,6 +33,7 @@ actor MeetingRecordingKeychainStore {
         insert[kSecValueData as String] = secret
         insert[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let status = SecItemAdd(insert as CFDictionary, nil)
+        if let unavailable = ProtectedDataAccessError.keychainFailure(status) { throw unavailable }
         guard status == errSecSuccess || status == errSecDuplicateItem,
               let verified = try load(profileID: profileID) else { throw MeetingRecordingCipher.Failure.unavailableKey }
         if status == errSecSuccess {
