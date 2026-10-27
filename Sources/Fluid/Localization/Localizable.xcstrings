@@ -58282,6 +58282,227 @@
           }
         }
       }
+    },
+    "account.legacy.email": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Электронная почта"
+          }
+        }
+      }
+    },
+    "account.legacy.password": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пароль"
+          }
+        }
+      }
+    },
+    "account.legacy.sessionOnly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your password is used only to sign in. Sign in again after restarting the app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пароль используется только для входа. После перезапуска приложения войдите снова."
+          }
+        }
+      }
+    },
+    "account.legacy.logoutTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign out on all devices?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выйти на всех устройствах?"
+          }
+        }
+      }
+    },
+    "account.legacy.logoutWarning": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing out ends your current Pichi sessions on every device, including the web app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выход завершит текущие сеансы Pichi на всех устройствах, включая веб-приложение."
+          }
+        }
+      }
+    },
+    "cloud.legacy.destination": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Destination"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Куда отправляем"
+          }
+        }
+      }
+    },
+    "cloud.legacy.employee": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Employee to assess"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сотрудник для оценки"
+          }
+        }
+      }
+    },
+    "cloud.legacy.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send protected transcript"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправить защищённый транскрипт"
+          }
+        }
+      }
+    },
+    "cloud.legacy.confirm": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send this protected transcript to the selected account and workspace?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправить защищённый транскрипт в выбранную учётную запись и рабочее пространство?"
+          }
+        }
+      }
+    },
+    "cloud.legacy.protectedOnly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only the completed protected text, participant names and timing are sent. Check the destination, employee, source participant and criteria before sending."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправляются только завершённый защищённый текст, имена участников и время. Проверьте адрес, сотрудника, участника записи и критерии перед отправкой."
+          }
+        }
+      }
+    },
+    "cloud.legacy.consent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable protected delivery before starting a new recording. Each completed recording requires a separate Send action."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включите отправку защищённого текста до начала новой записи. Для каждой завершённой записи нужно отдельно нажать «Отправить»."
+          }
+        }
+      }
+    },
+    "cloud.legacy.accountID": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account ID"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID учётной записи"
+          }
+        }
+      }
+    },
+    "cloud.legacy.workspaceID": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace ID"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID рабочего пространства"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

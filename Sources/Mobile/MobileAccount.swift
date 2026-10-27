@@ -32,6 +32,11 @@ final class MobileAccountInteraction: ObservableObject {
         begin(.signIn) { await self.session.signIn() }
     }
 
+    func signIn(email: String, password: String) {
+        guard canSignIn else { return }
+        begin(.signIn) { await self.session.signIn(email: email, password: password) }
+    }
+
     func switchPerson() {
         guard action == nil, session.state == .signedIn, session.isSignInAvailable,
               let expected = session.context, session.isCurrent(expected) else { return }
@@ -347,6 +352,9 @@ private struct MobileAccountPanel: View {
     var actionChanged: (Bool) -> Void
     @StateObject private var interaction: MobileAccountInteraction
     @State private var presentedProjectionRevision: UUID?
+    @State private var legacyEmail = ""
+    @State private var legacyPassword = ""
+    @State private var confirmingLegacyLogout = false
     @Environment(\.theme) private var theme
 
     init(session: AccountSessionService, interaction suppliedInteraction: MobileAccountInteraction? = nil,
@@ -390,10 +398,23 @@ private struct MobileAccountPanel: View {
             }
         }
         .onChange(of: interaction.action != nil) { _, active in actionChanged(active) }
-        .onChange(of: privateProfile.projectionRevision) { _, _ in interaction.privateProjectionDidChange() }
-        .onChange(of: privateProfile.isPrivateDataVisible) { _, _ in interaction.privateProjectionDidChange() }
+        .onChange(of: privateProfile.projectionRevision) { _, _ in
+            legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false
+            interaction.privateProjectionDidChange()
+        }
+        .onChange(of: privateProfile.isPrivateDataVisible) { _, visible in
+            if !visible { legacyEmail = ""; legacyPassword = ""; confirmingLegacyLogout = false }
+            interaction.privateProjectionDidChange()
+        }
         .onAppear { presentedProjectionRevision = privateProfile.projectionRevision }
+        .confirmationDialog(PichiLocalization.text("account.legacy.logoutTitle", defaultValue: "Sign out on all devices?"),
+                            isPresented: $confirmingLegacyLogout, titleVisibility: .visible) {
+            Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out"), role: .destructive) { interaction.logout() }
+        } message: {
+            Text(PichiLocalization.text("account.legacy.logoutWarning", defaultValue: "Signing out ends your current Pichi sessions on every device, including the web app."))
+        }
         .onDisappear {
+            legacyEmail = ""; legacyPassword = ""
             // N2 can conceal/remove this presentation during the command's own
             // admission. That is not a user request to cancel authentication.
             interaction.cancelOwnedSignInOnDisappear(
@@ -410,10 +431,32 @@ private struct MobileAccountPanel: View {
             Button(PichiLocalization.text("account.action.cancelSignIn", defaultValue: "Cancel sign-in")) { interaction.cancelSignIn() }
                 .disabled(interaction.action == .cancel || interaction.action == .guest)
                 .accessibilityIdentifier("account.cancelSignIn")
-        } else if session.configuration != nil {
+        } else if session.isConfigured {
+            if session.isLegacySession {
+                if let destination = session.legacyConfiguration?.apiBaseURL.host {
+                    Text(verbatim: destination).font(theme.typography.captionStrong)
+                        .accessibilityIdentifier("account.legacy.destination")
+                }
+                TextField(PichiLocalization.text("account.legacy.email", defaultValue: "Email"), text: $legacyEmail)
+                    .textContentType(.username).keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .disabled(!interaction.canSignIn).accessibilityIdentifier("account.legacy.email")
+                SecureField(PichiLocalization.text("account.legacy.password", defaultValue: "Password"), text: $legacyPassword)
+                    .textContentType(.password).disabled(!interaction.canSignIn)
+                    .accessibilityIdentifier("account.legacy.password")
+                Text(PichiLocalization.text("account.legacy.sessionOnly", defaultValue: "Your password is used only to sign in. Sign in again after restarting the app."))
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Button(PichiLocalization.text(session.state == .reauthenticationRequired ? "account.action.reauthenticate" : "account.action.signIn",
-                defaultValue: session.state == .reauthenticationRequired ? "Sign in again" : "Sign in")) { interaction.signIn() }
-                .disabled(!interaction.canSignIn)
+                defaultValue: session.state == .reauthenticationRequired ? "Sign in again" : "Sign in")) {
+                    if session.isLegacySession {
+                        let email = legacyEmail.trimmingCharacters(in: .whitespacesAndNewlines), password = legacyPassword
+                        legacyPassword = ""
+                        interaction.signIn(email: email, password: password)
+                    } else { interaction.signIn() }
+                }
+                .disabled(!interaction.canSignIn || (session.isLegacySession && (legacyEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || legacyPassword.isEmpty)))
                 .accessibilityIdentifier("account.signIn")
             if !session.isSignInAvailable {
                 Text(PichiLocalization.text("account.unavailable", defaultValue: "Sign-in is not available yet. You can continue using this device."))
@@ -470,10 +513,14 @@ private struct MobileAccountPanel: View {
             ProgressView(PichiLocalization.text("account.state.updating", defaultValue: "Updating account"))
                 .accessibilityIdentifier("account.updating")
         }
-        Button(PichiLocalization.text("account.action.switchPerson", defaultValue: "Switch account")) { interaction.switchPerson() }
+        Button(PichiLocalization.text("account.action.switchPerson", defaultValue: "Switch account")) {
+            if session.isLegacySession { confirmingLegacyLogout = true } else { interaction.switchPerson() }
+        }
             .disabled(interaction.action != nil || !session.isSignInAvailable)
             .accessibilityIdentifier("account.switchPerson")
-        Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out"), role: .destructive) { interaction.logout() }
+        Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out"), role: .destructive) {
+            if session.isLegacySession { confirmingLegacyLogout = true } else { interaction.logout() }
+        }
             .disabled(interaction.action != nil).accessibilityIdentifier("account.signOut")
     }
 }
@@ -575,7 +622,7 @@ struct MobileCloudSyncSettings: View {
                     set: { enabled in command(.toggle(enabled)) { try await service.setCloudSyncEnabled(enabled) } }))
                     .disabled(isBusy || unavailable)
                     .accessibilityIdentifier("cloud.sync.toggle")
-                Text(MobileCloudCopy.text("consent"))
+                Text(MobileCloudCopy.text(service.isLegacySession ? "legacy.consent" : "consent"))
                     .font(theme.typography.bodySmall).fixedSize(horizontal: false, vertical: true)
                 Text(MobileCloudCopy.text("history"))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
@@ -631,6 +678,7 @@ struct MobileCloudSyncSettings: View {
     @Published var loaded: (context: MobilePrivatePublicationContext, status: PichiCloudPublicationStatus)?
     @Published var loadFailed = false
     @Published var assessmentTarget: MobileCloudAssessmentTarget?
+    @Published var legacyTarget: MobileLegacySendTarget?
     private var observers = Set<AnyCancellable>()
 
     init(profiles: PrivateProfileService = .shared) {
@@ -641,7 +689,7 @@ struct MobileCloudSyncSettings: View {
         }.store(in: &observers)
     }
 
-    private func clear() { loaded = nil; loadFailed = false; assessmentTarget = nil }
+    private func clear() { loaded = nil; loadFailed = false; assessmentTarget = nil; legacyTarget = nil }
     func prepareForPrivateProfileTransition() async throws { clear() }
 }
 
@@ -696,6 +744,9 @@ struct MobileCloudRecordingStatus: View {
         .sheet(item: $projection.assessmentTarget) { target in
             MobileCloudAssessmentSheet(target: target, service: service, interaction: interaction)
         }
+        .sheet(item: $projection.legacyTarget) { target in
+            MobileLegacySendSheet(target: target, service: service, interaction: interaction)
+        }
     }
 
     private var canLoad: Bool {
@@ -723,7 +774,15 @@ struct MobileCloudRecordingStatus: View {
         if MobileCloudCopy.canUseNetwork(service.snapshot) {
             switch status {
             case .queued:
-                cloudButton("action.send", action: .send(recordingID)) { try await service.send(recordingID) }
+                if service.isLegacySession {
+                    Button(MobileCloudCopy.text("action.send")) {
+                        guard interaction.publications.admit() != nil else { return }
+                        projection.legacyTarget = .init(recordingID: recordingID)
+                    }.disabled(interaction.action != nil)
+                        .accessibilityIdentifier("cloud.legacy.open.\(recordingID)")
+                } else {
+                    cloudButton("action.send", action: .send(recordingID)) { try await service.send(recordingID) }
+                }
             case .retryScheduled(let date):
                 cloudButton("action.retry", action: .retry(recordingID)) { try await service.retry(recordingID) }
                     .disabled(date > Date())
@@ -751,6 +810,193 @@ struct MobileCloudRecordingStatus: View {
         Button(MobileCloudCopy.text(key)) { interaction.run(action) { _ in try await operation() } }
             .disabled(interaction.action != nil)
             .accessibilityIdentifier("cloud.recording.action.\(recordingID)")
+    }
+}
+
+private struct MobileLegacySendTarget: Identifiable {
+    let id = UUID()
+    let recordingID: MeetingSessionID
+}
+
+/// A private, transient selection draft. Delivery and frozen bytes remain in the shared outbox.
+@MainActor private final class MobileLegacySendState: ObservableObject, PrivateProfileTransitionParticipant {
+    @Published private(set) var options: LegacyPublicationOptions?
+    @Published var employeeID = ""
+    @Published var participantID: UUID?
+    @Published var criteriaIDs = Set<String>()
+    @Published private(set) var working = false
+    @Published private(set) var failed = false
+    @Published private(set) var completed = false
+    @Published var confirming = false
+    private let target: MobileLegacySendTarget
+    private let service: PichiCloudPublicationService
+    private let interaction: MobileCloudInteraction
+    private let admission: MobilePrivatePublicationTasks.Admission?
+    private var task: Task<Void, Never>?
+    private var retirement: Task<Void, Never>?
+    private var closed = false
+    private var observers = Set<AnyCancellable>()
+
+    init(target: MobileLegacySendTarget, service: PichiCloudPublicationService,
+         interaction: MobileCloudInteraction, profiles: PrivateProfileService = .shared) {
+        self.target = target; self.service = service; self.interaction = interaction
+        self.admission = interaction.publications.admit()
+        profiles.register(self)
+        profiles.$projectionRevision.dropFirst().sink { [weak self] _ in self?.close() }.store(in: &observers)
+        profiles.$isPrivateDataVisible.dropFirst().sink { [weak self] visible in
+            if !visible { self?.close() }
+        }.store(in: &observers)
+    }
+    private var isCurrent: Bool {
+        !closed && admission.map { interaction.publications.canPublish($0) } == true
+    }
+    var destinationAccountID: String? { isCurrent ? admission?.context.profile.context?.identity.internalUserID : nil }
+    var destinationWorkspaceID: String? { isCurrent ? admission?.context.profile.context?.workspaceID : nil }
+    var canSubmit: Bool {
+        guard isCurrent, !working, MobileCloudCopy.canUseNetwork(service.snapshot),
+              let options, options.employees.contains(where: { $0.id == employeeID }),
+              let participantID, options.participants.contains(where: { $0.id == participantID }) else { return false }
+        return !criteriaIDs.isEmpty && criteriaIDs.count <= MobileCloudAssessmentSelection.maximumCriteria
+            && criteriaIDs.isSubset(of: Set(options.criteria.map(\.id)))
+    }
+    func load() {
+        guard isCurrent, !working else { return }
+        options = nil; employeeID = ""; participantID = nil; criteriaIDs = []; confirming = false
+        run(.options(target.recordingID)) { current in
+            let page = try await self.service.legacyAssessmentOptions(for: self.target.recordingID)
+            guard self.accepts(current) else { return }
+            self.options = page
+        }
+    }
+    func toggleCriterion(_ id: String) {
+        guard isCurrent, !working, options?.criteria.contains(where: { $0.id == id }) == true else { return }
+        if criteriaIDs.contains(id) { criteriaIDs.remove(id) }
+        else if criteriaIDs.count < MobileCloudAssessmentSelection.maximumCriteria { criteriaIDs.insert(id) }
+    }
+    func submit() {
+        confirming = false
+        guard canSubmit, let participantID else { return }
+        let employee = employeeID, criteria = criteriaIDs.sorted()
+        run(.send(target.recordingID)) { current in
+            try await self.service.sendLegacy(self.target.recordingID, userID: employee,
+                participantID: participantID, criteriaIDs: criteria)
+            guard self.accepts(current) else { return }
+            self.options = nil; self.employeeID = ""; self.participantID = nil; self.criteriaIDs = []
+            self.completed = true
+        }
+    }
+    private func accepts(_ current: MobilePrivatePublicationTasks.Admission) -> Bool {
+        isCurrent && admission?.context == current.context && interaction.publications.canPublish(current)
+    }
+    private func run(_ action: MobileCloudInteraction.Action,
+                     operation: @escaping @MainActor (MobilePrivatePublicationTasks.Admission) async throws -> Void) {
+        guard isCurrent, !working else { return }
+        working = true; failed = false
+        task = interaction.run(action) { current in
+            defer { self.working = false; self.task = nil }
+            guard self.accepts(current) else { return }
+            do { try await operation(current) }
+            catch {
+                guard self.accepts(current) else { return }
+                self.options = nil; self.employeeID = ""; self.participantID = nil; self.criteriaIDs = []
+                self.failed = true
+            }
+        }
+        if task == nil { working = false; failed = true }
+    }
+    func close() {
+        closed = true; options = nil; employeeID = ""; participantID = nil; criteriaIDs = []
+        confirming = false; failed = false
+        let pending = task; pending?.cancel()
+        guard retirement == nil else { return }
+        retirement = Task { @MainActor in
+            await pending?.value
+            self.working = false; self.task = nil; self.retirement = nil
+        }
+    }
+    func prepareForPrivateProfileTransition() async throws { close(); await retirement?.value }
+}
+
+private struct MobileLegacySendSheet: View {
+    @ObservedObject var service: PichiCloudPublicationService
+    @ObservedObject var interaction: MobileCloudInteraction
+    @StateObject private var state: MobileLegacySendState
+    @Environment(\.theme) private var theme
+    @Environment(\.dismiss) private var dismiss
+    init(target: MobileLegacySendTarget, service: PichiCloudPublicationService, interaction: MobileCloudInteraction) {
+        self.service = service; self.interaction = interaction
+        self._state = StateObject(wrappedValue: MobileLegacySendState(target: target, service: service, interaction: interaction))
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(MobileCloudCopy.text("legacy.destination")) {
+                    if let destination = service.legacyDestinationURL?.host {
+                        Text(verbatim: destination).font(theme.typography.bodyStrong)
+                    }
+                    if let account = state.destinationAccountID {
+                        LabeledContent(MobileCloudCopy.text("legacy.accountID")) { Text(verbatim: account) }
+                    }
+                    if let workspace = state.destinationWorkspaceID {
+                        LabeledContent(MobileCloudCopy.text("legacy.workspaceID")) { Text(verbatim: workspace) }
+                    }
+                    if let title = state.options?.title { Text(verbatim: title).font(theme.typography.bodyStrong) }
+                    Text(MobileCloudCopy.text("legacy.protectedOnly"))
+                        .font(theme.typography.bodySmall).fixedSize(horizontal: false, vertical: true)
+                }
+                if state.working { ProgressView(MobileCloudCopy.text("assessment.loading")) }
+                if state.failed {
+                    Text(MobileCloudCopy.text("commandFailed")).foregroundStyle(theme.palette.warning)
+                    Button(PichiLocalization.text("Try again")) { state.load() }.disabled(state.working)
+                }
+                if let options = state.options {
+                    Section(MobileCloudCopy.text("legacy.employee")) {
+                        ForEach(options.employees, id: \.id) { employee in
+                            choice(employee.name, selected: state.employeeID == employee.id) { state.employeeID = employee.id }
+                                .accessibilityIdentifier("cloud.legacy.employee.\(employee.id)")
+                        }
+                    }
+                    Section(MobileCloudCopy.text("assessment.participant")) {
+                        ForEach(options.participants, id: \.id) { participant in
+                            choice(participant.displayName, selected: state.participantID == participant.id) { state.participantID = participant.id }
+                                .accessibilityIdentifier("cloud.legacy.participant.\(participant.id)")
+                        }
+                    }
+                    Section(MobileCloudCopy.text("assessment.criteria")) {
+                        ForEach(options.criteria, id: \.id) { criterion in
+                            choice(criterion.name, selected: state.criteriaIDs.contains(criterion.id)) { state.toggleCriterion(criterion.id) }
+                                .accessibilityIdentifier("cloud.legacy.criterion.\(criterion.id)")
+                        }
+                    }
+                }
+                Button(MobileCloudCopy.text("action.send")) { state.confirming = true }
+                    .disabled(!state.canSubmit || interaction.action != nil)
+                    .accessibilityIdentifier("cloud.legacy.send")
+            }.font(theme.typography.body).foregroundStyle(theme.palette.primaryText)
+                .navigationTitle(MobileCloudCopy.text("legacy.title"))
+                .toolbar { ToolbarItem(placement: .cancellationAction) {
+                    Button(PichiLocalization.text("Cancel")) { state.close(); dismiss() }
+                } }
+                .confirmationDialog(MobileCloudCopy.text("legacy.confirm"), isPresented: $state.confirming, titleVisibility: .visible) {
+                    Button(MobileCloudCopy.text("action.send")) { state.submit() }
+                        .disabled(!state.canSubmit)
+                } message: {
+                    Text(verbatim: [service.legacyDestinationURL?.absoluteString, state.destinationAccountID,
+                        state.destinationWorkspaceID, state.options?.title].compactMap { $0 }.joined(separator: "\n"))
+                }
+        }
+        .task { state.load() }
+        .onChange(of: state.completed) { _, done in if done { dismiss() } }
+        .onDisappear { state.close() }
+    }
+    private func choice(_ name: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(verbatim: name).fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(theme.palette.accent) }
+            }.frame(minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(.plain).disabled(state.working)
     }
 }
 

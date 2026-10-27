@@ -280,7 +280,7 @@ struct MobileOnboarding: View {
             Label(PichiLocalization.text("Your meeting setup is ready"), systemImage: "checkmark.circle.fill")
                 .font(theme.typography.sectionTitle).foregroundStyle(theme.palette.success)
                 .frame(maxWidth: .infinity)
-            if accountSession.configuration != nil {
+            if accountSession.isConfigured {
                 MobileAccountOnboarding(session: accountSession, continueAsGuest: next,
                     actionChanged: { accountActionIsActive = $0 }, cloudPublication: cloudPublication)
             }

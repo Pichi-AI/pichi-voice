@@ -27,7 +27,7 @@ struct MobileSettingsRoot: View {
 
     var body: some View {
         List {
-            if accountSession.configuration != nil {
+            if accountSession.isConfigured {
                 Section {
                     NavigationLink(value: MobileSettingsDestination.account) {
                         Label(PichiLocalization.text("account.title", defaultValue: "Account"), systemImage: "person.crop.circle")
