@@ -372,6 +372,14 @@ extension AccountLegacySessionChecks {
         expect(invalidatedRestart.context == nil, "known revoked session cannot resurrect offline")
         await invalidated.shutdown(); await invalidatedRestart.shutdown()
 
+        LegacyHTTPFixtureProtocol.configure(cookie: cookie)
+        let selectionStore = LegacyMemorySessionStore(), selection = try make(selectionStore)
+        await selection.signIn(email: "synthetic@example.invalid", password: "memory-only")
+        LegacyHTTPFixtureProtocol.configure(meStatus: 401)
+        do { try await selection.selectWorkspace(organizationID: "7", workspaceID: "9"); fatalError("revoked workspace selection succeeded") } catch { checks += 1 }
+        expect(await selectionStore.session == nil && selection.state == .reauthenticationRequired, "known revocation while selecting workspace clears restart admission")
+        await selection.shutdown()
+
         LegacyHTTPFixtureProtocol.configure(cookie: "auth_token=synthetic-short; Path=/; HttpOnly; Secure; Max-Age=30")
         let refreshStore = LegacyMemorySessionStore(), refreshing = try make(refreshStore)
         await refreshing.signIn(email: "synthetic@example.invalid", password: "memory-only")

@@ -499,13 +499,33 @@ extension AccountSessionService {
         if authenticationCommand?.id == commandID { authenticationCommand = nil }
     }
 
-    private func freshLegacySnapshot() async throws -> AccountSnapshot {
+    private func freshLegacySnapshot(for expected: AccountContext? = nil) async throws -> AccountSnapshot {
         guard let legacyTransport else { throw AccountError.unconfigured }
-        // Refresh cannot revive an expired session and never changes the server TTL.
-        if let cookie = try await legacyTransport.sessionCookie(), cookie.expiresAt.timeIntervalSinceNow <= 60 {
-            try await legacyTransport.refreshSession()
+        do {
+            // Refresh cannot revive an expired session or change the server TTL.
+            if let cookie = try await legacyTransport.sessionCookie(), cookie.expiresAt.timeIntervalSinceNow <= 60 {
+                try await legacyTransport.refreshSession()
+            }
+            let snapshot = try await legacyTransport.account()
+            if let expected {
+                try check(expected.generation)
+                guard context == expected else { throw AccountError.staleOperation }
+                guard snapshot.stableIdentity == expected.identity else { throw AccountError.invalidAccount }
+                if let organization = expected.organizationID, let workspace = expected.workspaceID {
+                    guard snapshot.activeOrganizationID == organization,
+                          snapshot.contains(organizationID: organization, workspaceID: workspace) else { throw AccountError.permissionDenied }
+                }
+            }
+            return snapshot
+        } catch {
+            if let expected, context == expected, generation == expected.generation {
+                let failure = sanitized(error)
+                if [.reauthenticationRequired, .invalidAccount, .permissionDenied].contains(failure) {
+                    await invalidateLegacyRestoration(for: expected, failure: failure)
+                } else if error is LegacyAccountConnectivityFailure { isAwaitingLegacyServerValidation = true }
+            }
+            throw error
         }
-        return try await legacyTransport.account()
     }
 
     private func persistLegacySession(snapshot: AccountSnapshot, context expected: AccountContext) async throws {
@@ -630,7 +650,7 @@ extension AccountSessionService {
               ownedOperation == nil, state == .signedIn, let old = context else { throw AccountError.busy }
         let id = UUID()
         let task = Task { @MainActor in
-            let snapshot = try await self.freshLegacySnapshot()
+            let snapshot = try await self.freshLegacySnapshot(for: old)
             try snapshot.validateLegacy(origin: configuration.apiBaseURL)
             try self.check(old.generation)
             guard snapshot.stableIdentity == old.identity,
@@ -696,7 +716,7 @@ extension AccountSessionService {
             throw AccountError.invalidConfiguration
         }
         do {
-            let snapshot = try await self.freshLegacySnapshot()
+            let snapshot = try await self.freshLegacySnapshot(for: expected)
             try snapshot.validateLegacy(origin: configuration.apiBaseURL)
             guard isCurrent(expected) else { throw AccountError.staleOperation }
             guard snapshot.stableIdentity == expected.identity, snapshot.activeOrganizationID == organization,
