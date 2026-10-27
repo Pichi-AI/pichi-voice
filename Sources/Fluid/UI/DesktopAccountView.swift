@@ -329,6 +329,8 @@ private enum DesktopAccountCopy {
             PichiLocalization.text("account.error.revocationUnavailable", defaultValue: "Signed out on this device. The server could not confirm revocation of this device's session.")
         case .previousAccountReturned:
             PichiLocalization.text("account.error.previousAccountReturned", defaultValue: "The same account was returned. Try switching again and choose a different account.")
+        case .captchaRequired, .browserLoginRequired, .rateLimited:
+            PichiLocalization.text("account.error.\(error.rawValue)")
         }
     }
 }
