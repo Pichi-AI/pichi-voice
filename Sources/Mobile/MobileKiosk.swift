@@ -352,10 +352,11 @@ struct MobileKioskSettings: View {
         .navigationTitle(PichiLocalization.text("Restricted mode"))
         .accessibilityIdentifier("kiosk.settings")
         .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button(PichiLocalization.text("Done")) { focusedField = nil }
-                    .accessibilityIdentifier("kiosk.keyboardDone")
+            if focusedField != nil {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(PichiLocalization.text("Done")) { focusedField = nil }
+                        .accessibilityIdentifier("kiosk.keyboardDone")
+                }
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -393,10 +394,11 @@ private struct MobileKioskUnlock: View {
             .disabled(access.isBusy)
             .navigationTitle(PichiLocalization.text("Administrator"))
             .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button(PichiLocalization.text("Done")) { passwordFocused = false }
-                        .accessibilityIdentifier("kiosk.keyboardDone")
+                if passwordFocused {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(PichiLocalization.text("Done")) { passwordFocused = false }
+                            .accessibilityIdentifier("kiosk.keyboardDone")
+                    }
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button(PichiLocalization.text("Cancel")) { dismiss() }
