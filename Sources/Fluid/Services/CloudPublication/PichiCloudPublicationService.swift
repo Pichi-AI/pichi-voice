@@ -89,8 +89,8 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     /// Parent capture composition freezes memory-only audio and the existing Privacy
     /// operation only after this encrypted future-capture queue has passed preflight.
     func prepareAutomaticCapture() async throws -> Bool {
-        guard account.isLegacySession, account.context != nil else { return false }
         return try await command {
+            guard self.account.isLegacySession, self.account.context != nil else { return false }
             let (profile, context, store, consent) = try self.currentScope()
             guard try await consent.automaticPublicationEnabled(for: context) else { return false }
             try await self.ensureRecordingCipher(profile: profile, context: context, store: store)
@@ -725,9 +725,11 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         }
         // Wake only the existing task after this bounded local operation. No HTTP or
         // coordinator deletion is awaited from the persistence callback itself.
-        self.workerDelay?.cancel()
-        if let (profile, context, store, _) = try? currentScope(expected: admission.profile), !userPaused {
-            startWorker(profile: profile, context: context, store: store)
+        await MainActor.run {
+            self.workerDelay?.cancel()
+            if let (profile, context, store, _) = try? self.currentScope(expected: admission.profile), !self.userPaused {
+                self.startWorker(profile: profile, context: context, store: store)
+            }
         }
     }
 
