@@ -63,7 +63,7 @@ actor AccountKeychainStore: AccountCredentialStoring {
         guard try load() == nil else { throw AccountError.credentialsUnavailable }
     }
     private func accountScope(_ identity: AccountIdentity) -> String {
-        Data(SHA256.hash(data: try! JSONEncoder().encode([identity.issuer, identity.subject, identity.internalUserID])))
+        Data(SHA256.hash(data: try! JSONEncoder().encode(identity.storageComponents)))
             .map { String(format: "%02x", $0) }.joined()
     }
 }

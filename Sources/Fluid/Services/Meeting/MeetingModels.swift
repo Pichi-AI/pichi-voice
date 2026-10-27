@@ -1112,6 +1112,7 @@ nonisolated struct MeetingSpeakerEdits: Equatable, Sendable {
 /// Optional identity fields distinguish legacy guest data from a verified account admission.
 nonisolated struct MeetingProfileOwnership: Codable, Equatable, Sendable {
     let profileID: String
+    var legacyOrigin: String? = nil
     let issuer: String?
     let subject: String?
     let internalUserID: String?

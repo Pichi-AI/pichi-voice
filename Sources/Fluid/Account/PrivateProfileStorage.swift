@@ -67,8 +67,8 @@ nonisolated enum PrivateProfileStorage {
             return .init(id: "guest", context: nil, generation: generation,
                 rootDirectory: legacy, legacyRootDirectory: legacy, isReadable: true)
         }
-        let parts = [AppBrand.storageNamespace, context.identity.issuer, context.identity.subject,
-            context.identity.internalUserID, context.organizationID ?? "", context.workspaceID ?? ""]
+        let parts = [AppBrand.storageNamespace] + context.identity.storageComponents
+            + [context.organizationID ?? "", context.workspaceID ?? ""]
         guard parts.prefix(4).allSatisfy({ !$0.isEmpty && $0.utf8.count <= 4096 }),
               (context.organizationID == nil) == (context.workspaceID == nil),
               context.organizationID?.isEmpty != true, context.workspaceID?.isEmpty != true

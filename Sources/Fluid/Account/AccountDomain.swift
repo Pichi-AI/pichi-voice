@@ -1,6 +1,44 @@
 import Foundation
 
 typealias AccountConfiguration = BrandDistribution.AccountConfiguration
+typealias LegacyAccountConfiguration = BrandDistribution.LegacyAccountConfiguration
+
+/// One destination contract for the existing durable publication stores. OIDC encoding
+/// remains the original flat object so existing consent and outbox files keep their scope.
+nonisolated enum AccountPublicationConfiguration: Codable, Equatable, Sendable {
+    case oidc(AccountConfiguration)
+    case legacy(LegacyAccountConfiguration)
+    private enum CodingKeys: String, CodingKey { case legacySession }
+    init(from decoder: any Decoder) throws {
+        let keyed = try decoder.container(keyedBy: CodingKeys.self)
+        if let legacy = try keyed.decodeIfPresent(LegacyAccountConfiguration.self, forKey: .legacySession) {
+            self = .legacy(legacy)
+        } else { self = .oidc(try AccountConfiguration(from: decoder)) }
+    }
+    func encode(to encoder: any Encoder) throws {
+        switch self {
+        case .oidc(let value): try value.encode(to: encoder)
+        case .legacy(let value):
+            var keyed = encoder.container(keyedBy: CodingKeys.self)
+            try keyed.encode(value, forKey: .legacySession)
+        }
+    }
+    var apiBaseURL: URL { switch self { case .oidc(let c): c.apiBaseURL; case .legacy(let c): c.apiBaseURL } }
+    var bundleIdentifier: String { switch self { case .oidc(let c): c.bundleIdentifier; case .legacy(let c): c.bundleIdentifier } }
+    var scopeIdentifier: String {
+        switch self {
+        case .oidc(let c): [c.bundleIdentifier, c.issuer.absoluteString, c.clientID, c.apiAudience, c.apiBaseURL.absoluteString].joined(separator: "|")
+        case .legacy(let c): [c.bundleIdentifier, "legacy-session", c.apiBaseURL.absoluteString].joined(separator: "|")
+        }
+    }
+    func validate() throws { switch self { case .oidc(let c): try c.validate(); case .legacy(let c): try c.validate() } }
+    func matches(_ identity: AccountIdentity) -> Bool {
+        switch self {
+        case .oidc(let c): !identity.isLegacySession && identity.issuer == c.issuer.absoluteString
+        case .legacy(let c): identity.legacyOrigin == c.apiBaseURL.absoluteString && identity.issuer.isEmpty && identity.subject.isEmpty
+        }
+    }
+}
 
 nonisolated enum AccountSessionState: String, Sendable {
     case unconfigured, signedOut, signingIn, signedIn, reauthenticationRequired
@@ -11,6 +49,15 @@ nonisolated struct AccountIdentity: Codable, Equatable, Sendable {
     let issuer: String
     let subject: String
     let internalUserID: String
+    var legacyOrigin: String? = nil
+    var isLegacySession: Bool { legacyOrigin != nil }
+    var storageComponents: [String] {
+        if let legacyOrigin { return ["legacy-session", legacyOrigin, internalUserID] }
+        return [issuer, subject, internalUserID]
+    }
+    static func legacy(origin: URL, internalUserID: String) -> Self {
+        .init(issuer: "", subject: "", internalUserID: internalUserID, legacyOrigin: origin.absoluteString)
+    }
 }
 
 /// Frozen admission context. A generation is process-local and changes at every boundary.
@@ -23,21 +70,26 @@ nonisolated struct AccountContext: Equatable, Sendable {
 
 nonisolated struct AccountSnapshot: Codable, Equatable, Sendable {
     struct User: Codable, Equatable, Sendable { let id: String; let displayName: String; let email: String? }
-    struct ExternalIdentity: Codable, Equatable, Sendable { let issuer: String; let subject: String }
+    struct ExternalIdentity: Codable, Equatable, Sendable {
+        let issuer: String
+        let subject: String
+        var legacyOrigin: String? = nil
+    }
     struct Workspace: Codable, Equatable, Sendable { let id: String; let name: String; let capabilities: [String] }
     struct Organization: Codable, Equatable, Sendable { let id: String; let name: String; let workspaces: [Workspace] }
     let schemaVersion: Int
     let account: User
     let identity: ExternalIdentity
     let organizations: [Organization]
+    var activeOrganizationID: String? = nil
 
     var stableIdentity: AccountIdentity {
-        .init(issuer: identity.issuer, subject: identity.subject, internalUserID: account.id)
+        .init(issuer: identity.issuer, subject: identity.subject, internalUserID: account.id, legacyOrigin: identity.legacyOrigin)
     }
 
     func validate(issuer: String, subject: String) throws {
         func valid(_ id: String) -> Bool { !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && id.utf8.count <= 512 }
-        guard schemaVersion == 1, identity.issuer == issuer, identity.subject == subject,
+        guard schemaVersion == 1, identity.legacyOrigin == nil, identity.issuer == issuer, identity.subject == subject,
               valid(account.id), organizations.count <= 100,
               Set(organizations.map(\.id)).count == organizations.count else { throw AccountError.invalidAccount }
         for organization in organizations {
@@ -60,6 +112,7 @@ nonisolated enum AccountError: String, Error, Sendable {
     case invalidToken, invalidAccount, invalidConfiguration, invalidResponse
     case credentialsUnavailable, networkUnavailable, reauthenticationRequired, permissionDenied
     case workspaceUnavailable, staleOperation, revocationUnavailable, previousAccountReturned
+    case captchaRequired, browserLoginRequired, rateLimited
 }
 
 /// Credentials never enter ObservableObject/UI projections, logs or provider API-key storage.

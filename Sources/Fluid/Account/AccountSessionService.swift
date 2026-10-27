@@ -9,6 +9,16 @@ import Foundation
     @Published private(set) var presentationError: AccountError?
     @Published private(set) var generation = UUID()
     let configuration: AccountConfiguration?
+    let legacyConfiguration: LegacyAccountConfiguration?
+    private let legacyTransport: (any LegacyAccountTransporting)?
+    private var legacySessionActive = false
+    var isConfigured: Bool { configuration != nil || legacyConfiguration != nil }
+    var isLegacySession: Bool { legacyConfiguration != nil }
+    var legacyLogoutRevokesAllSessions: Bool { isLegacySession }
+    var publicationConfiguration: AccountPublicationConfiguration? {
+        if let legacyConfiguration { return .legacy(legacyConfiguration) }
+        return configuration.map(AccountPublicationConfiguration.oidc)
+    }
     private let browser: any AccountBrowserAuthenticating
     private let transport: any AccountTransporting
     private let credentials: any AccountCredentialStoring
@@ -39,17 +49,19 @@ import Foundation
     private var latestDeviceRefreshToken: String?
 
     private var canAdmitSignIn: Bool {
-        configuration != nil && lifecycle?.isAccountIsolationReady == true
+        isConfigured && lifecycle?.isAccountIsolationReady == true
             && !boundaryInProgress && !cleanupRequired && !isShuttingDown
     }
     var isSignInAvailable: Bool { canAdmitSignIn && authenticationCommand == nil }
 
     init(configuration: AccountConfiguration?, browser: any AccountBrowserAuthenticating,
          transport: any AccountTransporting, credentials: any AccountCredentialStoring,
-         lifecycle: (any AccountSessionLifecycle)? = nil, restoration: AccountRestorationPolicy? = nil) {
+         lifecycle: (any AccountSessionLifecycle)? = nil, restoration: AccountRestorationPolicy? = nil,
+         legacyConfiguration: LegacyAccountConfiguration? = nil, legacyTransport: (any LegacyAccountTransporting)? = nil) {
         self.configuration = configuration; self.browser = browser; self.transport = transport
+        self.legacyConfiguration = legacyConfiguration; self.legacyTransport = legacyTransport
         self.credentials = credentials; self.lifecycle = lifecycle; self.restoration = restoration ?? AccountRestorationPolicy()
-        self.state = configuration == nil ? .unconfigured : .signedOut
+        self.state = configuration == nil && legacyConfiguration == nil ? .unconfigured : .signedOut
     }
 
     /// Composition-only handoff. UI must never manufacture an isolation participant.
@@ -60,6 +72,7 @@ import Foundation
     }
 
     func signIn() async {
+        if isLegacySession { presentationError = .reauthenticationRequired; return }
         let reauthentication = state == .reauthenticationRequired
         await runAuthenticationCommand(logoutFirst: reauthentication,
             requiresExplicitIdentity: reauthentication, excluding: nil)
@@ -68,6 +81,7 @@ import Foundation
     /// Explicit person switch requests a fresh browser interaction and rejects the prior
     /// verified identity if a federated provider nevertheless returns it without a choice.
     func switchPerson() async {
+        if isLegacySession { await logout(); return }
         let previousIdentity = context?.identity ?? grant?.identity
         await runAuthenticationCommand(logoutFirst: true,
             requiresExplicitIdentity: true, excluding: previousIdentity)
@@ -209,6 +223,7 @@ import Foundation
     }
 
     func selectWorkspace(organizationID: String, workspaceID: String) async throws {
+        if isLegacySession { try await selectLegacyWorkspace(organizationID: organizationID, workspaceID: workspaceID); return }
         guard !isShuttingDown, authenticationCommand == nil, !boundaryInProgress,
               !cleanupRequired, ownedOperation == nil, state == .signedIn,
               let account, grant != nil, let oldContext = context else { throw AccountError.busy }
@@ -245,6 +260,7 @@ import Foundation
 
     /// N2 checks this immutable context again before accepting a transfer result.
     func authorizedAccess(for expected: AccountContext) async throws -> AccountAuthorizedAccess {
+        guard !isLegacySession else { throw AccountError.invalidState }
         guard !isShuttingDown, authenticationCommand == nil, !boundaryInProgress,
               !cleanupRequired, ownedOperation == nil, state == .signedIn,
               expected == context, let current = grant else { throw AccountError.staleOperation }
@@ -330,7 +346,7 @@ import Foundation
         let persisted = try? await credentials.load()
         let revokeToken = latestDeviceRefreshToken ?? (persisted ?? previousGrant)?.refreshToken
         grant = nil; context = nil; account = nil; requiresAccountValidation = false
-        state = configuration == nil ? .unconfigured : .signedOut
+        state = isConfigured ? .signedOut : .unconfigured
         do { try await lifecycle?.transition(from: previousContext, to: nil, generation: captured) }
         catch { cleanupRequired = true; presentationError = sanitized(error) }
         do { try await credentials.clear() }
@@ -340,6 +356,14 @@ import Foundation
             catch { if presentationError == nil { presentationError = .revocationUnavailable } }
         }
         latestDeviceRefreshToken = nil
+        if let legacyTransport {
+            if legacySessionActive {
+                do { try await legacyTransport.logout() }
+                catch { if presentationError == nil { presentationError = .revocationUnavailable } }
+            }
+            await legacyTransport.clearSession()
+            legacySessionActive = false
+        }
     }
 
     /// Termination joins account work and closes only this service's HTTP session. Persisted grant remains.
@@ -362,6 +386,8 @@ import Foundation
         ownedOperation = nil; refreshTask = nil; refreshID = nil
         try? await lifecycle?.transition(from: context, to: nil, generation: generation)
         await transport.shutdown()
+        await legacyTransport?.shutdown()
+        legacySessionActive = false
     }
 
     func isCurrent(_ context: AccountContext) -> Bool {
@@ -371,6 +397,8 @@ import Foundation
 
     private func failedAdmission(_ error: Error, generation captured: UUID) async {
         let failure = sanitized(error)
+        await legacyTransport?.clearSession()
+        legacySessionActive = false
         do { try restoration.inhibit() } catch { cleanupRequired = true }
         do { try await lifecycle?.transition(from: context, to: nil, generation: captured) }
         catch { cleanupRequired = true }
@@ -391,6 +419,152 @@ import Foundation
     private func sanitized(_ error: Error) -> AccountError {
         if error is CancellationError { return .cancelled }
         return error as? AccountError ?? .networkUnavailable
+    }
+}
+
+extension AccountSessionService {
+    /// Password lifetime is limited to this joined command. Legacy sessions are intentionally
+    /// memory-only and never enter AccountCredentialStoring or provider API-key settings.
+    func signIn(email: String, password: String, captchaToken: String? = nil) async {
+        guard !Task.isCancelled else { return }
+        guard let legacyConfiguration, let legacyTransport else { presentationError = .unconfigured; return }
+        guard authenticationCommand == nil, !isShuttingDown else { presentationError = .busy; return }
+        let commandID = UUID()
+        let task = Task { @MainActor in
+            if self.state == .reauthenticationRequired { await self.logoutSession() }
+            guard !Task.isCancelled, self.authenticationCommand?.id == commandID else { return }
+            guard self.canAdmitSignIn, self.ownedOperation == nil, self.context == nil else {
+                self.presentationError = self.cleanupRequired ? .credentialsUnavailable : .isolationRequired; return
+            }
+            self.presentationError = nil; self.state = .signingIn; self.generation = UUID()
+            let captured = self.generation, operationID = UUID()
+            let operation = Task { @MainActor in
+                do {
+                    try legacyConfiguration.validate()
+                    guard self.configuration == nil else { throw AccountError.invalidConfiguration }
+                    let snapshot = try await legacyTransport.login(email: email, password: password, captchaToken: captchaToken)
+                    try snapshot.validateLegacy(origin: legacyConfiguration.apiBaseURL)
+                    try self.check(captured)
+                    let next = AccountContext(identity: snapshot.stableIdentity, organizationID: nil, workspaceID: nil, generation: captured)
+                    try await self.lifecycle?.transition(from: nil, to: next, generation: captured)
+                    try self.check(captured)
+                    self.legacySessionActive = true
+                    self.account = snapshot; self.context = next; self.state = .signedIn
+                } catch {
+                    if self.generation == captured { await self.failedAdmission(error, generation: captured) }
+                    throw error
+                }
+            }
+            self.ownedOperation = OwnedOperation(id: operationID, kind: .admission, task: operation)
+            await withTaskCancellationHandler { _ = try? await operation.value } onCancel: { operation.cancel() }
+            if self.ownedOperation?.id == operationID { self.ownedOperation = nil }
+            if Task.isCancelled { await self.logoutSession() }
+        }
+        authenticationCommand = AuthenticationCommand(id: commandID, task: task)
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        if authenticationCommand?.id == commandID { authenticationCommand = nil }
+    }
+
+    private func selectLegacyWorkspace(organizationID: String, workspaceID: String) async throws {
+        guard let legacyTransport, let configuration = legacyConfiguration,
+              !isShuttingDown, authenticationCommand == nil, !boundaryInProgress, !cleanupRequired,
+              ownedOperation == nil, state == .signedIn, let old = context else { throw AccountError.busy }
+        let id = UUID()
+        let task = Task { @MainActor in
+            let snapshot = try await legacyTransport.account()
+            try snapshot.validateLegacy(origin: configuration.apiBaseURL)
+            try self.check(old.generation)
+            guard snapshot.stableIdentity == old.identity,
+                  snapshot.activeOrganizationID == organizationID,
+                  snapshot.contains(organizationID: organizationID, workspaceID: workspaceID) else { throw AccountError.workspaceUnavailable }
+            self.generation = UUID()
+            let next = AccountContext(identity: old.identity, organizationID: organizationID, workspaceID: workspaceID, generation: self.generation)
+            do {
+                try await self.lifecycle?.transition(from: old, to: next, generation: next.generation)
+                try self.check(next.generation)
+                self.account = snapshot; self.context = next
+            } catch {
+                if self.generation == next.generation { await self.failedAdmission(error, generation: next.generation) }
+                throw error
+            }
+        }
+        ownedOperation = OwnedOperation(id: id, kind: .workspace, task: task)
+        defer { if ownedOperation?.id == id { ownedOperation = nil } }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
+    /// Organization switching replaces the server cookie and retires the previous local
+    /// profile before admitting the response. A workspace must then be selected explicitly.
+    func selectLegacyOrganization(_ organizationID: String) async throws {
+        guard let legacyTransport, let configuration = legacyConfiguration,
+              !isShuttingDown, authenticationCommand == nil, !boundaryInProgress, !cleanupRequired,
+              ownedOperation == nil, state == .signedIn, let old = context,
+              account?.organizations.contains(where: { $0.id == organizationID }) == true else { throw AccountError.busy }
+        generation = UUID()
+        let captured = generation, id = UUID()
+        let task = Task { @MainActor in
+            do {
+                try await self.lifecycle?.transition(from: old, to: nil, generation: captured)
+                try self.check(captured)
+                let snapshot = try await legacyTransport.switchOrganization(organizationID)
+                try snapshot.validateLegacy(origin: configuration.apiBaseURL)
+                try self.check(captured)
+                guard snapshot.stableIdentity == old.identity, snapshot.activeOrganizationID == organizationID else { throw AccountError.invalidAccount }
+                let next = AccountContext(identity: old.identity, organizationID: nil, workspaceID: nil, generation: captured)
+                try await self.lifecycle?.transition(from: nil, to: next, generation: captured)
+                try self.check(captured)
+                self.account = snapshot; self.context = next
+            } catch {
+                if self.generation == captured { await self.failedAdmission(error, generation: captured) }
+                throw error
+            }
+        }
+        ownedOperation = OwnedOperation(id: id, kind: .workspace, task: task)
+        defer { if ownedOperation?.id == id { ownedOperation = nil } }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
+    /// Fresh identity and editable-workspace evidence precede every protected operation.
+    /// The publication service remains the single owner of transfer/retry/outbox work.
+    func performAuthorizedLegacyRequest(for expected: AccountContext, request: URLRequest) async throws -> LegacyAccountHTTPResponse {
+        guard let legacyTransport, let configuration = legacyConfiguration, isCurrent(expected),
+              let workspace = expected.workspaceID, let organization = expected.organizationID else { throw AccountError.staleOperation }
+        guard Self.isLegacyPublicationRequest(request, workspace: workspace, origin: configuration.apiBaseURL) else {
+            throw AccountError.invalidConfiguration
+        }
+        do {
+            let snapshot = try await legacyTransport.account()
+            try snapshot.validateLegacy(origin: configuration.apiBaseURL)
+            guard isCurrent(expected) else { throw AccountError.staleOperation }
+            guard snapshot.stableIdentity == expected.identity, snapshot.activeOrganizationID == organization,
+                  snapshot.contains(organizationID: organization, workspaceID: workspace) else { throw AccountError.permissionDenied }
+            account = snapshot
+            let response = try await legacyTransport.perform(request)
+            try Task.checkCancellation()
+            guard isCurrent(expected) else { throw AccountError.staleOperation }
+            if response.status == 401 { state = .reauthenticationRequired; presentationError = .reauthenticationRequired }
+            return response
+        } catch {
+            let failure = sanitized(error)
+            if isCurrent(expected), [.reauthenticationRequired, .invalidAccount, .permissionDenied].contains(failure) {
+                state = .reauthenticationRequired; presentationError = failure
+            }
+            throw error
+        }
+    }
+
+    private static func isLegacyPublicationRequest(_ request: URLRequest, workspace: String, origin: URL) -> Bool {
+        guard let url = request.url, url.scheme == "https", url.host == origin.host, url.port == origin.port,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+              request.value(forHTTPHeaderField: "Authorization") == nil, request.value(forHTTPHeaderField: "Cookie") == nil,
+              request.value(forHTTPHeaderField: "Origin") == nil, request.value(forHTTPHeaderField: "Referer") == nil else { return false }
+        let method = request.httpMethod ?? "GET", path = url.path
+        if method == "POST" { return path == "/api/recordings/transcript" }
+        guard method == "GET", request.httpBody == nil else { return false }
+        if path == "/api/workspaces/" + workspace + "/users" || path == "/api/evaluation-criteria/names" { return true }
+        let prefix = "/api/recordings/"
+        guard path.hasPrefix(prefix), let id = Int(path.dropFirst(prefix.count)), id > 0, id <= 2_147_483_647 else { return false }
+        return path == prefix + String(id)
     }
 }
 

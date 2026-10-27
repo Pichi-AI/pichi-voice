@@ -13,6 +13,7 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
     var expectedSigningTeam: String?
     var feedbackEndpoint: String?
     var account: AccountConfiguration?
+    var legacyAccount: LegacyAccountConfiguration?
 
     static let unconfigured = BrandDistribution(formatVersion: 1)
 
@@ -39,7 +40,11 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
                 throw BrandProfile.ValidationError.invalid("Distribution asset names are invalid.")
             }
         }
+        guard account == nil || legacyAccount == nil else {
+            throw BrandProfile.ValidationError.invalid("Select one account authentication mode.")
+        }
         try self.account?.validate()
+        try self.legacyAccount?.validate()
         if let feedbackEndpoint { try BrandProfile.validateHTTPS(feedbackEndpoint) }
         if let expectedSigningTeam {
             guard expectedSigningTeam.range(of: "^[A-Z0-9]{10}$", options: .regularExpression) != nil else {
@@ -95,6 +100,26 @@ extension BrandDistribution {
                   bundleIdentifier.count <= 200,
                   [clientID, apiAudience].allSatisfy({ !$0.isEmpty && $0.count <= 200 && $0.rangeOfCharacter(from: .controlCharacters) == nil }) else {
                 throw BrandProfile.ValidationError.invalid("Invalid account client configuration.")
+            }
+        }
+    }
+}
+
+// Existing cookie sessions are deliberately configured separately from OIDC trust.
+extension BrandDistribution {
+    nonisolated struct LegacyAccountConfiguration: Codable, Equatable, Sendable {
+        let apiBaseURL: URL
+        let bundleIdentifier: String
+
+        func validate() throws {
+            try BrandProfile.validateHTTPS(apiBaseURL.absoluteString)
+            guard let host = apiBaseURL.host, !host.isEmpty,
+                  apiBaseURL.user == nil, apiBaseURL.password == nil,
+                  apiBaseURL.path.isEmpty, apiBaseURL.query == nil, apiBaseURL.fragment == nil,
+                  !apiBaseURL.absoluteString.hasSuffix("/"),
+                  bundleIdentifier.range(of: "^[a-z][a-z0-9-]*(?:\\.[a-z][a-z0-9-]*){2,}$", options: .regularExpression) != nil,
+                  bundleIdentifier.count <= 200 else {
+                throw BrandProfile.ValidationError.invalid("Invalid legacy session origin.")
             }
         }
     }

@@ -2,8 +2,9 @@ import Foundation
 
 nonisolated extension MeetingProfileOwnership {
     init(profile: PrivateProfileSnapshot) {
-        profileID = profile.id; issuer = profile.context?.identity.issuer
-        subject = profile.context?.identity.subject; internalUserID = profile.context?.identity.internalUserID
+        profileID = profile.id; legacyOrigin = profile.context?.identity.legacyOrigin
+        issuer = profile.context?.identity.isLegacySession == true ? nil : profile.context?.identity.issuer
+        subject = profile.context?.identity.isLegacySession == true ? nil : profile.context?.identity.subject; internalUserID = profile.context?.identity.internalUserID
         organizationID = profile.context?.organizationID; workspaceID = profile.context?.workspaceID
     }
 
