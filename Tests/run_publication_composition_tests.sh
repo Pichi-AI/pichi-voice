@@ -25,12 +25,23 @@ nonisolated struct MeetingResultSidecarStore {
     }
 }
 SWIFT
+python3 - "$task_test_dir/ApplicationSupport.swift" <<'PY_SUPPORT'
+from pathlib import Path
+import sys
+source = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipeline.swift').read_text()
+versions = [line.strip() for line in source.splitlines() if line.strip().startswith('nonisolated static let pipelineVersion =')]
+if len(versions) != 1:
+    raise SystemExit('Expected one production pipeline version declaration')
+with Path(sys.argv[1]).open('a') as target:
+    target.write('\nnonisolated enum MeetingProcessingPipeline { ' + versions[0] + ' }\n')
+PY_SUPPORT
 python3 Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift"
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Account/AccountDomain.swift Sources/Fluid/Account/AccountPKCE.swift \
+    Sources/Fluid/Account/AccountLegacyTransport.swift Sources/Fluid/Account/AccountPublicationConfiguration.swift \
     Sources/Fluid/Account/AccountSessionService.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Account/PrivateProfileService.swift Sources/Fluid/Account/PrivateProfileMeetingStore.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
@@ -39,6 +50,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     "$task_test_dir/AttributionTypes.swift" "$task_test_dir/ApplicationSupport.swift" \
