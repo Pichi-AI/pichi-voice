@@ -5,8 +5,9 @@ import UIKit
 enum MobileMeetingRecordingActions {
     @MainActor static func start(coordinator: MeetingSessionCoordinator,
                                  required: MobileRequiredResources,
-                                 privacyActivation: MobilePrivacyActivation) async throws {
-        try await required.prepare(modelID: SettingsStore.shared.selectedSpeechModel.rawValue)
+                                 privacyActivation: MobilePrivacyActivation,
+                                 settings: SettingsStore = .shared) async throws {
+        try await required.prepare(modelID: settings.selectedSpeechModel.rawValue)
         try await privacyActivation.waitUntilReadyIfRequested()
         let configuration = try await coordinator.defaultConfiguration(mode: .inRoom,
             title: PichiLocalization.text("In-room meeting"))
