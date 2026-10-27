@@ -70,7 +70,7 @@ extension PichiPublicationOutboxTests {
 
         func createSource() async throws -> MeetingSession {
             var configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic automatic Ёё", languageCode: "ru",
-                microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"))
+                microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"), timestampDefaultTitle: true)
             configuration.audioStorageMode = .memoryOnly; configuration.piiRedactionEnabled = true
             configuration.requiresEncryptedPersistence = true
             let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
@@ -102,6 +102,20 @@ extension PichiPublicationOutboxTests {
         check(await transport.postCount() == 0 && cleanup.calls == 0, "Offline server validation sends no source and deletes nothing")
         check(service.snapshot.automaticRecordingIDs.contains(source.id) && service.snapshot.deleteLocalAfterAcceptance,
               "Current account projection identifies automatic records and its future retention setting")
+        var maintained = try await meetings.loadTranscript(id: source.id)!
+        let acceptedLocalRevision = try PichiProtectedPublicationSource.localFingerprint(for: maintained)
+        maintained.updatedAt = maintained.updatedAt.addingTimeInterval(90)
+        maintained.retention.audioDeletedAt = maintained.endedAt
+        maintained.retention.retainAudioUntil = nil
+        try await meetings.save(maintained)
+        check(try record(source.id)?.localSourceSHA256 == acceptedLocalRevision
+            && PichiProtectedPublicationSource.localFingerprint(for: maintained) == acceptedLocalRevision,
+              "Post-freeze audio retention and update-clock maintenance cannot strand accepted local cleanup")
+        check(maintained.displayTitle(language: .english) != maintained.displayTitle(language: .russian),
+              "The deletion fixture actually has presentation-dependent generated titles")
+        var renamed = maintained; renamed.title += " user edit"; renamed.defaultTitleBase = nil
+        check(try PichiProtectedPublicationSource.localFingerprint(for: renamed) != acceptedLocalRevision,
+              "A real title edit remains newer user work despite normalized maintenance metadata")
         await transport.setOffline(false); await transport.loseNextResponse()
         await service.notifyServerAvailabilityChanged()
         try await wait {
