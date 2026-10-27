@@ -167,4 +167,119 @@ final class MobileKioskAccessTests: XCTestCase {
         XCTAssertEqual(store.writes, 1)
         try await access.unlock(password: "password")
     }
+
+    func testVoiceWelcomeIsClaimedOnceAndDoesNotRepeatAfterRelaunch() async throws {
+        let store = MemoryStore()
+        let access = MobileKioskAccess(storage: store)
+        try await access.enable(password: "password", confirmation: "password")
+        XCTAssertTrue(try access.claimVoiceWelcome())
+        let writes = store.writes
+        XCTAssertFalse(try access.claimVoiceWelcome())
+        let relaunched = MobileKioskAccess(storage: store)
+        XCTAssertTrue(relaunched.isEnabled)
+        XCTAssertFalse(try relaunched.claimVoiceWelcome())
+        XCTAssertEqual(store.writes, writes, "A consumed entry does not need another storage mutation")
+        XCTAssertFalse(String(decoding: try XCTUnwrap(store.data), as: UTF8.self).contains("password"))
+    }
+
+    func testVoiceWelcomeRearmsOnlyAfterLeavingAndEnablingAgain() async throws {
+        let store = MemoryStore()
+        let access = MobileKioskAccess(storage: store)
+        try await access.enable(password: "password", confirmation: "password")
+        XCTAssertTrue(try access.claimVoiceWelcome())
+        try await access.enable(password: "password")
+        XCTAssertFalse(try access.claimVoiceWelcome(), "Authenticating an already enabled entry does not rearm setup")
+        try await access.unlock(password: "password")
+        XCTAssertFalse(try access.claimVoiceWelcome())
+        try await access.enable(password: "password")
+        XCTAssertTrue(try access.claimVoiceWelcome())
+        XCTAssertFalse(try MobileKioskAccess(storage: store).claimVoiceWelcome())
+    }
+
+    func testOldCredentialDoesNotPromptUntilANewEntry() async throws {
+        let store = MemoryStore()
+        try await MobileKioskAccess(storage: store).enable(password: "password", confirmation: "password")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(store.data)) as? [String: Any])
+        object.removeValue(forKey: "voiceWelcomePending")
+        store.data = try JSONSerialization.data(withJSONObject: object)
+        let access = MobileKioskAccess(storage: store)
+        XCTAssertTrue(access.isEnabled)
+        XCTAssertTrue(access.isAvailable)
+        XCTAssertFalse(try access.claimVoiceWelcome())
+        try await access.unlock(password: "password")
+        try await access.enable(password: "password")
+        XCTAssertTrue(try access.claimVoiceWelcome())
+    }
+
+    func testUnconfiguredAndDisabledVoiceClaimsDoNotEnableOrWriteCredentials() async throws {
+        let store = MemoryStore()
+        let access = MobileKioskAccess(storage: store)
+        XCTAssertFalse(try access.claimVoiceWelcome())
+        XCTAssertFalse(access.isEnabled)
+        XCTAssertEqual(store.writes, 0)
+        try await access.enable(password: "password", confirmation: "password")
+        try await access.unlock(password: "password")
+        let saved = store.data, writes = store.writes
+        XCTAssertFalse(try MobileKioskAccess(storage: store).claimVoiceWelcome())
+        XCTAssertFalse(access.isEnabled)
+        XCTAssertEqual(store.writes, writes)
+        XCTAssertEqual(store.data, saved)
+    }
+
+    func testFailedVoiceClaimWriteStaysLockedAndCanBeRetriedWithoutLosingWelcome() async throws {
+        let store = MemoryStore()
+        let access = MobileKioskAccess(storage: store)
+        try await access.enable(password: "password", confirmation: "password")
+        let saved = store.data
+        store.failWrite = true
+        await expect(.unavailable) { _ = try access.claimVoiceWelcome() }
+        XCTAssertTrue(access.isEnabled)
+        XCTAssertFalse(access.isAvailable)
+        XCTAssertEqual(store.data, saved)
+        store.failWrite = false
+        XCTAssertTrue(try access.claimVoiceWelcome())
+        XCTAssertTrue(access.isEnabled)
+        XCTAssertTrue(access.isAvailable)
+        XCTAssertFalse(try MobileKioskAccess(storage: store).claimVoiceWelcome())
+    }
+
+    func testFailedVoiceClaimReadStaysLockedAndCanRecover() async throws {
+        let store = MemoryStore()
+        let access = MobileKioskAccess(storage: store)
+        try await access.enable(password: "password", confirmation: "password")
+        store.failRead = true
+        await expect(.unavailable) { _ = try access.claimVoiceWelcome() }
+        XCTAssertTrue(access.isEnabled)
+        XCTAssertFalse(access.isAvailable)
+        store.failRead = false
+        XCTAssertTrue(try access.claimVoiceWelcome())
+        XCTAssertTrue(access.isEnabled)
+    }
+
+    func testVoiceClaimPreservesPasswordCooldownAndVerifier() async throws {
+        let store = MemoryStore()
+        let access = MobileKioskAccess(storage: store)
+        try await access.enable(password: "password", confirmation: "password")
+        for _ in 0..<4 { await expect(.incorrectPassword) { try await access.unlock(password: "wrong") } }
+        await expect(.temporarilyLocked) { try await access.unlock(password: "wrong") }
+        let before = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(store.data)) as? [String: Any])
+        XCTAssertTrue(try access.claimVoiceWelcome())
+        let after = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(store.data)) as? [String: Any])
+        for key in ["salt", "verifier", "iterations", "enabled", "failedAttempts", "retryAfter"] {
+            XCTAssertEqual(before[key] as? NSObject, after[key] as? NSObject, "Claim changed credential field \(key)")
+        }
+        await expect(.temporarilyLocked) { try await access.unlock(password: "password") }
+        XCTAssertTrue(access.isEnabled)
+    }
+
+    func testVoiceClaimCannotInterleaveAnAwaitedPasswordOperation() async throws {
+        let store = MemoryStore()
+        let access = MobileKioskAccess(storage: store)
+        let enabling = Task { try await access.enable(password: "password", confirmation: "password") }
+        for _ in 0..<100 where !access.isBusy { await Task.yield() }
+        XCTAssertTrue(access.isBusy)
+        await expect(.busy) { _ = try access.claimVoiceWelcome() }
+        try await enabling.value
+        XCTAssertTrue(try access.claimVoiceWelcome())
+    }
 }

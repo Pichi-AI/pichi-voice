@@ -78,6 +78,8 @@ final class MobileKioskAccess: ObservableObject {
         var verifier: Data
         var iterations: UInt32 = 600_000
         var enabled: Bool
+        // Missing in older credentials. Only an explicit new entry may offer setup.
+        var voiceWelcomePending: Bool?
         var failedAttempts = 0
         var retryAfter: Date?
 
@@ -114,6 +116,7 @@ final class MobileKioskAccess: ObservableObject {
         let credential: Credential
         if let stored = try loadOrLock() {
             var enabled = try await authenticate(password: password, credential: stored)
+            if !stored.enabled { enabled.voiceWelcomePending = true }
             enabled.enabled = true
             credential = enabled
         } else {
@@ -127,7 +130,7 @@ final class MobileKioskAccess: ObservableObject {
             }
             guard status == errSecSuccess else { throw AccessError.unavailable }
             let verifier = try await Self.derive(password: password, salt: salt)
-            credential = Credential(salt: salt, verifier: verifier, enabled: true)
+            credential = Credential(salt: salt, verifier: verifier, enabled: true, voiceWelcomePending: true)
         }
         try persistOrLock(credential)
     }
@@ -140,7 +143,20 @@ final class MobileKioskAccess: ObservableObject {
         guard let stored = try loadOrLock() else { throw AccessError.unavailable }
         var credential = try await authenticate(password: password, credential: stored)
         credential.enabled = false
+        credential.voiceWelcomePending = false
         try persistOrLock(credential)
+    }
+
+    /// Claims this entry's one opportunity before the caller checks whether a voice exists.
+    /// Consuming the protected marker first prevents an app relaunch from reopening setup.
+    /// The synchronous main-actor transaction is shared by all application scenes.
+    func claimVoiceWelcome() throws -> Bool {
+        guard !isBusy else { throw AccessError.busy }
+        guard var credential = try loadOrLock(), credential.enabled,
+              credential.voiceWelcomePending == true else { return false }
+        credential.voiceWelcomePending = false
+        try persistOrLock(credential)
+        return true
     }
 
     private func authenticate(password: String, credential stored: Credential) async throws -> Credential {
