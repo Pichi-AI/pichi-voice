@@ -133,6 +133,50 @@ extension MeetingSessionStoreCheckpointTests {
             if let bytes = try? Data(contentsOf: url), bytes.range(of: Data(session.title.utf8)) != nil { leaked = true }
         }
         check(!leaked, "No protected title remains in manifest, index or atomic temporary files")
+        var guarded = session; guarded.id = UUID(); guarded.title = "Accepted local version"
+        try await store.create(guarded)
+        let owned = guarded.profileOwnership!
+        var edited = guarded; edited.title = "Newer unsent local edit"
+        try await store.save(edited)
+        do {
+            try await store.delete(id: guarded.id, expectedOwnership: owned, validating: { source in
+                guard source.title == "Accepted local version" else { throw EncryptionDeletionProbeFailure.changed }
+            })
+            check(false, "Deletion must reject a local edit committed before its atomic validation")
+        } catch { check(true, "Deletion rejects a newer local edit before touching its files") }
+        let preserved = try await store.load(id: guarded.id)
+        check(preserved == edited, "Rejected cleanup retains the full newer encrypted recording")
+        let race = EncryptionDeletionGate()
+        let deletionID = guarded.id
+        let deletion = Task {
+            try await store.delete(id: deletionID, expectedOwnership: owned, validating: { source in
+                guard source.title == "Newer unsent local edit" else { throw EncryptionDeletionProbeFailure.changed }
+                race.enterAndWait()
+            })
+        }
+        for _ in 0..<200 where !race.entered { try await Task.sleep(for: .milliseconds(5)) }
+        check(race.entered, "Production delete invokes validation under its actor-owned deletion turn")
+        let lateEdit = edited
+        let writer = Task { try await store.save(lateEdit) }
+        race.release()
+        try await deletion.value
+        do { try await writer.value; check(false, "A writer cannot slip between validation and removal") }
+        catch { check(true, "A writer queued during atomic deletion receives the existing tombstone rejection") }
+        let deleted = try await store.load(id: deletionID)
+        check(deleted == nil, "Successful guarded deletion leaves no resurrected session")
         print("Encrypted recording persistence: \(count) synthetic CryptoKit/filesystem checks passed; no Keychain access")
     }
+}
+
+private nonisolated enum EncryptionDeletionProbeFailure: Error { case changed }
+private nonisolated final class EncryptionDeletionGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var didEnter = false
+    var entered: Bool { lock.lock(); defer { lock.unlock() }; return didEnter }
+    func enterAndWait() {
+        lock.lock(); didEnter = true; lock.unlock()
+        precondition(semaphore.wait(timeout: .now() + 3) == .success, "Deletion fixture gate timed out")
+    }
+    func release() { semaphore.signal() }
 }
