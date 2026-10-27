@@ -58503,6 +58503,57 @@
           }
         }
       }
+    },
+    "account.error.captchaRequired": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A browser verification is required. Complete the account check on the destination website, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Требуется проверка в браузере. Пройдите проверку учётной записи на сайте сервера и повторите попытку."
+          }
+        }
+      }
+    },
+    "account.error.browserLoginRequired": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account requires browser sign-in. Password sign-in is unavailable for this account."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой учётной записи нужен вход через браузер. Вход по паролю недоступен."
+          }
+        }
+      }
+    },
+    "account.error.rateLimited": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many sign-in attempts. Wait before trying again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много попыток входа. Подождите и повторите попытку."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

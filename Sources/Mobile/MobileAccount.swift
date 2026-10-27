@@ -293,6 +293,9 @@ nonisolated enum MobileAccountCopy {
         case .staleOperation: fallback = "Your account changed. Please try again from the current account."
         case .revocationUnavailable: fallback = "Signed out on this device. The server could not confirm revocation of this device's session."
         case .previousAccountReturned: fallback = "The same account was returned. Try switching again and choose a different account."
+        case .captchaRequired: fallback = "A browser verification is required. Complete the account check on the destination website, then try again."
+        case .browserLoginRequired: fallback = "This account requires browser sign-in. Password sign-in is unavailable for this account."
+        case .rateLimited: fallback = "Too many sign-in attempts. Wait before trying again."
         }
         return PichiLocalization.text("account.error.\(error.rawValue)", language: language, bundle: bundle, defaultValue: fallback)
     }
