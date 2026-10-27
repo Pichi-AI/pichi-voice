@@ -426,6 +426,13 @@ private struct MobileAccountPanel: View {
                     .accessibilityIdentifier("account.error")
             }
         }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button(PichiLocalization.text("Done")) { legacyFocus = nil }
+                    .accessibilityIdentifier("account.legacy.dismissKeyboard")
+            }
+        }
         .onChange(of: interaction.action != nil) { _, active in actionChanged(active) }
         .onChange(of: interaction.presentationRevision) { _, _ in
             legacyFocus = nil; legacyEmail = ""; legacyPassword = ""
@@ -486,10 +493,12 @@ private struct MobileAccountPanel: View {
                 TextField(PichiLocalization.text("account.legacy.email", defaultValue: "Email"), text: $legacyEmail)
                     .textContentType(.username).keyboardType(.emailAddress)
                     .focused($legacyFocus, equals: .email)
+                    .submitLabel(.next).onSubmit { legacyFocus = .password }
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .disabled(!interaction.canSignIn).accessibilityIdentifier("account.legacy.email")
                 SecureField(PichiLocalization.text("account.legacy.password", defaultValue: "Password"), text: $legacyPassword)
                     .textContentType(.password).focused($legacyFocus, equals: .password)
+                    .submitLabel(.done).onSubmit { legacyFocus = nil }
                     .disabled(!interaction.canSignIn)
                     .accessibilityIdentifier("account.legacy.password")
                 Text(PichiLocalization.text("account.legacy.sessionOnly", defaultValue: "Your password is used only to sign in. Sign in again after restarting the app."))

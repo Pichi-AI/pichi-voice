@@ -686,6 +686,10 @@ final class MobileNavigationUITests: XCTestCase {
             email.tap(); email.typeText("synthetic@example.invalid")
             capture("legacy-\(language)-\(appearance)-email")
             password.tap(); password.typeText("synthetic-only")
+            let done = app.buttons["account.legacy.dismissKeyboard"]
+            XCTAssertTrue(done.waitForExistence(timeout: 5) && done.isHittable)
+            done.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
             XCTAssertTrue(app.buttons["account.signIn"].isEnabled)
             capture("legacy-\(language)-\(appearance)-secure-password")
             // Do not submit credentials or create any remote session.
