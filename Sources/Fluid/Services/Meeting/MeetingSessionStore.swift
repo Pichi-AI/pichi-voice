@@ -5,6 +5,7 @@ import Foundation
 nonisolated protocol MeetingSessionStoring: Sendable {
     /// Freeze local ownership under the existing capture admission, before the first manifest.
     func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership?
+    func captureOwnership(for id: MeetingSessionID, configuration: MeetingCaptureConfiguration) async throws -> MeetingProfileOwnership?
     func cancelCaptureAdmission(for id: MeetingSessionID) async
     func create(_ session: MeetingSession) async throws
     func save(_ session: MeetingSession) async throws
@@ -16,6 +17,7 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL?
     func delete(id: MeetingSessionID) async throws
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws
     /// Removes the `tracks/` directory and any processing checkpoint, leaving the manifest and
     /// transcript untouched. Idempotent — missing paths are not an error.
     func deleteAudioFiles(for id: MeetingSessionID) async throws
@@ -27,6 +29,15 @@ nonisolated extension MeetingSessionStoring {
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
     func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership? { nil }
     func cancelCaptureAdmission(for id: MeetingSessionID) async {}
+    func captureOwnership(for id: MeetingSessionID, configuration: MeetingCaptureConfiguration) async throws -> MeetingProfileOwnership? {
+        guard configuration.requiresEncryptedPersistence != true else { throw CocoaError(.featureUnsupported) }
+        return try await self.captureOwnership(for: id)
+    }
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
+        guard let session = try await self.load(id: id) else { return }
+        guard session.profileOwnership == expectedOwnership else { throw CocoaError(.fileWriteNoPermission) }
+        try await self.delete(id: id)
+    }
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
