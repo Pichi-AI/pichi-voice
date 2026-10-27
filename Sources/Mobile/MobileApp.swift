@@ -432,16 +432,16 @@ struct PichiVoiceMobileApp: App {
     var body: some Scene {
         WindowGroup {
             AdaptiveAppTheme(accent: settings.accentColor) {
-                #if DEBUG
-                if ProcessInfo.processInfo.environment["PICHI_UI_CAPTION_REVIEW"] == "1" {
-                    MobileCaptionScrollReview()
-                } else {
-                    meetingRoot
-                }
+                #if DEBUG && targetEnvironment(simulator)
+                if MobileAutomaticSettingsReview.isRequested { MobileAutomaticSettingsReview() }
+                else { ordinaryRoot }
                 #else
-                meetingRoot
+                ordinaryRoot
                 #endif
             }.task {
+                #if DEBUG && targetEnvironment(simulator)
+                if MobileAutomaticSettingsReview.isRequested { return }
+                #endif
                 #if DEBUG
                 // Hosted unit probes own their injected model operations. The ordinary
                 // UI-test application runs in another process and retains real startup.
@@ -467,15 +467,33 @@ struct PichiVoiceMobileApp: App {
             // This one source owns both initial and later phase values, so its old
             // captured scene cannot overwrite a newer foreground event after restore.
             .onChange(of: scenePhase, initial: true) { _, phase in
+                #if DEBUG && targetEnvironment(simulator)
+                if MobileAutomaticSettingsReview.isRequested { return }
+                #endif
                 Task { await services.setSceneActive(phase == .active) }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+                #if DEBUG && targetEnvironment(simulator)
+                if MobileAutomaticSettingsReview.isRequested { return }
+                #endif
                 Task { await services.protectedDataDidBecomeAvailable() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                #if DEBUG && targetEnvironment(simulator)
+                if MobileAutomaticSettingsReview.isRequested { return }
+                #endif
                 Task { await services.didReceiveMemoryWarning() }
             }
         }
+    }
+
+    @ViewBuilder private var ordinaryRoot: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["PICHI_UI_CAPTION_REVIEW"] == "1" { MobileCaptionScrollReview() }
+        else { meetingRoot }
+        #else
+        meetingRoot
+        #endif
     }
 
     @ViewBuilder private var meetingRoot: some View {
