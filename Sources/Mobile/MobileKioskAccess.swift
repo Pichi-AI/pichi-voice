@@ -66,7 +66,7 @@ final class MobileKioskAccess: ObservableObject {
             case .confirmationMismatch: PichiLocalization.text("The passwords do not match.")
             case .incorrectPassword: PichiLocalization.text("The administrator password is incorrect.")
             case .temporarilyLocked: PichiLocalization.text("Too many attempts. Wait one minute before trying again.")
-            case .unavailable: PichiLocalization.text("Kiosk security is unavailable. Access remains locked. Try again after unlocking the device.")
+            case .unavailable: PichiLocalization.text("Administrator access is unavailable. Try again after unlocking the device.")
             case .busy: PichiLocalization.text("A password check is already in progress.")
             }
         }

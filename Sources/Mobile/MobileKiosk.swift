@@ -15,23 +15,39 @@ enum MobileMeetingRecordingActions {
     }
 }
 
-/// Replaces the entire administrative navigation tree, including its presentations.
-/// No transcript, participant, history or export view is constructed in this subtree.
+/// The operator surface uses the ordinary recording and voice-profile owners while
+/// leaving administrative configuration, transcripts, history and exports outside its tree.
 struct MobileKioskRoot: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
     @ObservedObject var required: MobileRequiredResources
     @ObservedObject var privacyActivation: MobilePrivacyActivation
     @ObservedObject var access: MobileKioskAccess
+    @StateObject private var voice: MeetingOwnerVoiceEnrollmentModel
     @Environment(\.theme) private var theme
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var isBusy = false
+    @State private var showSettings = false
     @State private var showUnlock = false
     @State private var recordingError = false
+    @State private var checkedEntry = false
+    @State private var showVoiceWelcome = false
     @State private var awakeToken: UUID?
 
+    init(coordinator: MeetingSessionCoordinator, required: MobileRequiredResources,
+         privacyActivation: MobilePrivacyActivation, access: MobileKioskAccess,
+         audioArbiter: any MeetingAudioActivityArbitrating,
+         voiceProfileService: MeetingOwnerVoiceProfileService = .shared) {
+        self.coordinator = coordinator; self.required = required
+        self.privacyActivation = privacyActivation; self.access = access
+        _voice = StateObject(wrappedValue: MeetingOwnerVoiceEnrollmentModel(
+            audioArbiter: audioArbiter, service: voiceProfileService))
+    }
+
+    private var compactHeight: Bool { verticalSizeClass == .compact }
     private var status: String {
         if !access.isAvailable {
-            return "Kiosk security is unavailable. Access remains locked. Try again after unlocking the device."
+            return "Administrator access is unavailable. Try again after unlocking the device."
         }
         if recordingError { return "Recording could not be completed. Contact your administrator." }
         switch coordinator.state {
@@ -46,74 +62,170 @@ struct MobileKioskRoot: View {
 
     var body: some View {
         NavigationStack {
-            GeometryReader { geometry in
-                ScrollView {
-                    VStack(spacing: theme.metrics.spacing.xxl) {
-                        Spacer(minLength: 24)
-                        Image(systemName: coordinator.isRecording ? "record.circle.fill" : "mic.circle")
-                            .font(theme.typography.displayTitle)
-                            .foregroundStyle(coordinator.isRecording ? theme.palette.accent : theme.palette.secondaryText)
-                            .accessibilityHidden(true)
-                        Text(PichiLocalization.text(status))
-                            .font(theme.typography.title).multilineTextAlignment(.center)
-                            .accessibilityIdentifier("kiosk.status")
-                        if coordinator.isRecording || !coordinator.isQuiescent {
-                            TimelineView(.periodic(from: .now, by: 1)) { _ in
-                                Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))
-                                    .font(theme.typography.displayTitle).monospacedDigit()
-                                    .accessibilityIdentifier("kiosk.timer")
-                            }
-                        }
-                        if coordinator.isRecording {
-                            Button { stop() } label: {
-                                Label(PichiLocalization.text("Stop Recording"), systemImage: "stop.fill")
-                                    .foregroundStyle(theme.palette.accentForeground)
-                                    .frame(maxWidth: .infinity).padding(.vertical, 12)
-                            }.buttonStyle(.borderedProminent)
-                                .disabled(isBusy).accessibilityIdentifier("kiosk.stop")
-                        } else if coordinator.isQuiescent && !isBusy {
-                            Button { start() } label: {
-                                Label(PichiLocalization.text("Start Recording"), systemImage: "record.circle")
-                                    .foregroundStyle(theme.palette.accentForeground)
-                                    .frame(maxWidth: .infinity).padding(.vertical, 12)
-                            }.buttonStyle(.borderedProminent)
-                                .disabled(!access.isAvailable).accessibilityIdentifier("kiosk.start")
-                        } else {
-                            ProgressView().accessibilityIdentifier("kiosk.progress")
-                        }
-                        Spacer(minLength: 24)
-                    }
-                    .frame(maxWidth: 480).padding(24)
-                    .frame(maxWidth: .infinity, minHeight: geometry.size.height)
+            Group {
+                if !checkedEntry {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if showVoiceWelcome {
+                    voiceWelcome
+                } else {
+                    recorder
                 }
             }
             .background(theme.palette.windowBackground)
             .foregroundStyle(theme.palette.primaryText)
-            .navigationTitle(PichiLocalization.text("Kiosk mode"))
+            .navigationTitle(AppBrand.meetingName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showUnlock = true } label: {
-                        Label(PichiLocalization.text("Administrator"), systemImage: "lock.shield")
-                    }.accessibilityIdentifier("kiosk.admin")
+                if checkedEntry && !showVoiceWelcome {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { showSettings = true } label: {
+                            Label(PichiLocalization.text("Settings"), systemImage: "gearshape")
+                        }.accessibilityIdentifier("kiosk.settings.open")
+                    }
                 }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if checkedEntry && !showVoiceWelcome { recordingControls }
             }
         }
         .accessibilityIdentifier("kiosk.root")
-        .sheet(isPresented: $showUnlock) { MobileKioskUnlock(access: access) }
-        .task { await coordinator.ensureRestored() }
+        .sheet(isPresented: $showSettings) {
+            MobileKioskVoiceSettings(voice: voice, coordinator: coordinator) {
+                showSettings = false
+            } openAdministrator: {
+                showUnlock = true
+            }
+            .sheet(isPresented: $showUnlock) { MobileKioskUnlock(access: access) }
+            .interactiveDismissDisabled(voice.isBusy)
+        }
+        .task {
+            await coordinator.ensureRestored()
+            do {
+                // Consume before the asynchronous profile read: a relaunch never repeats
+                // this entry's offer, even if the user closes the app on this question.
+                if try access.claimVoiceWelcome() {
+                    await voice.refresh()
+                    try Task.checkCancellation()
+                    showVoiceWelcome = !voice.hasProfile
+                }
+                checkedEntry = true
+            } catch is CancellationError {
+                return
+            } catch {
+                // The access owner has already failed closed. Only its recovery entry
+                // remains reachable, with recording disabled until storage is available.
+                checkedEntry = true
+            }
+        }
         .onChange(of: coordinator.state) { _, _ in updateAwake() }
         .onChange(of: scenePhase) { _, phase in
             updateAwake()
             if phase != .active { showUnlock = false }
+            if phase == .background { voice.cancel(); showSettings = false }
         }
         .onAppear { updateAwake() }
-        .onDisappear { releaseAwake() }
+        .onDisappear { voice.cancel(); releaseAwake() }
+    }
+
+    private var voiceWelcome: some View {
+        ScrollView {
+            VStack(spacing: theme.metrics.spacing.xxl) {
+                Image(systemName: "person.wave.2")
+                    .font(theme.typography.titleIcon).foregroundStyle(theme.palette.accentText)
+                    .accessibilityHidden(true)
+                Text(PichiLocalization.text("Would you like to set up your voice?"))
+                    .font(theme.typography.title).multilineTextAlignment(.center)
+                Text(PichiLocalization.text("Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."))
+                    .font(theme.typography.body).foregroundStyle(theme.palette.secondaryText)
+                    .multilineTextAlignment(.center)
+                VStack(spacing: theme.metrics.spacing.md) {
+                    Button {
+                        showVoiceWelcome = false; showSettings = true
+                    } label: {
+                        Text(PichiLocalization.text("Set up my voice"))
+                            .foregroundStyle(theme.palette.accentForeground)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }.buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("kiosk.voiceWelcome.setup")
+                    Button(PichiLocalization.text("Not now")) { showVoiceWelcome = false }
+                        .buttonStyle(.bordered).accessibilityIdentifier("kiosk.voiceWelcome.skip")
+                }
+            }
+            .padding(24).frame(maxWidth: 632)
+            .frame(maxWidth: .infinity)
+            .padding(.top, compactHeight ? 12 : 48)
+        }.accessibilityIdentifier("kiosk.voiceWelcome")
+    }
+
+    private var recorder: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: theme.metrics.spacing.xxl) {
+                    HStack {
+                        Label(PichiLocalization.text(status),
+                              systemImage: coordinator.isRecording ? "record.circle" : "mic")
+                            .font(theme.typography.bodyStrong)
+                            .foregroundStyle(coordinator.isRecording ? theme.palette.accentText : theme.palette.primaryText)
+                            .accessibilityIdentifier("kiosk.status")
+                        Spacer(minLength: 12)
+                        if coordinator.isRecording || !coordinator.isQuiescent {
+                            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                                Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))
+                                    .font(theme.typography.title).monospacedDigit()
+                                    .accessibilityIdentifier("kiosk.timer")
+                            }
+                        }
+                    }
+                    Spacer(minLength: compactHeight ? 0 : 24)
+                    AudioWaveformBars(color: theme.palette.accent, barCount: 7,
+                        barWidth: 12, barSpacing: 10, minHeight: 8,
+                        maxHeight: compactHeight ? 64 : 144,
+                        level: { CGFloat(coordinator.trackHealth[.microphone]?.level ?? 0) },
+                        noiseThreshold: 0.02, isAnimating: coordinator.isRecording,
+                        isIdleWaveEnabled: false)
+                        .foregroundStyle(theme.palette.accent)
+                        .frame(maxWidth: .infinity, minHeight: compactHeight ? 80 : 176)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(PichiLocalization.text("Microphone"))
+                        .accessibilityIdentifier("kiosk.waveform")
+                    Spacer(minLength: compactHeight ? 0 : 24)
+                }
+                .padding(compactHeight ? 12 : 24)
+                .frame(maxWidth: 1000, minHeight: geometry.size.height)
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    @ViewBuilder private var recordingControls: some View {
+        Group {
+            if coordinator.isRecording {
+                Button { stop() } label: {
+                    Label(PichiLocalization.text("Stop Recording"), systemImage: "stop.fill")
+                        .foregroundStyle(theme.palette.accentForeground)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                }.buttonStyle(.borderedProminent)
+                    .disabled(isBusy).accessibilityIdentifier("kiosk.stop")
+            } else if coordinator.isQuiescent && !isBusy {
+                Button { start() } label: {
+                    Label(PichiLocalization.text("Start Recording"), systemImage: "record.circle")
+                        .foregroundStyle(theme.palette.accentForeground)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                }.buttonStyle(.borderedProminent)
+                    .disabled(!access.isAvailable || voice.isBusy)
+                    .accessibilityIdentifier("kiosk.start")
+            } else {
+                ProgressView().frame(maxWidth: .infinity, minHeight: 48)
+                    .accessibilityIdentifier("kiosk.progress")
+            }
+        }
+        .padding(.horizontal, 24).padding(.vertical, 12)
+        .background(theme.palette.toolbarBackground)
     }
 
     private func start() {
+        guard !voice.isBusy else { return }
         run {
-            // Reset only terminal presentation state. The coordinator preserves prior sessions.
             if case .completed = coordinator.state { try coordinator.resetForNewMeeting() }
             try await MobileMeetingRecordingActions.start(coordinator: coordinator,
                 required: required, privacyActivation: privacyActivation)
@@ -121,28 +233,60 @@ struct MobileKioskRoot: View {
     }
 
     private func stop() { run { _ = try await coordinator.stopAndTranscribe() } }
-
     private func run(_ operation: @escaping @MainActor () async throws -> Void) {
         guard !isBusy else { return }
-        isBusy = true
-        recordingError = false
+        isBusy = true; recordingError = false
         Task { @MainActor in
             defer { isBusy = false }
             do { try await operation() } catch { recordingError = true }
         }
     }
-
     private func updateAwake() {
         if scenePhase == .active && coordinator.isRecording {
             if awakeToken == nil { awakeToken = MobilePresentationAwakeRegistry.shared.acquire() }
         } else { releaseAwake() }
     }
-
     private func releaseAwake() {
         if let token = awakeToken {
-            awakeToken = nil
-            MobilePresentationAwakeRegistry.shared.release(token)
+            awakeToken = nil; MobilePresentationAwakeRegistry.shared.release(token)
         }
+    }
+}
+
+/// The operator can manage only their own voice. The shared enrollment transaction
+/// remains alive in the root while cancellation drains and hands the audio lease back.
+private struct MobileKioskVoiceSettings: View {
+    @ObservedObject var voice: MeetingOwnerVoiceEnrollmentModel
+    @ObservedObject var coordinator: MeetingSessionCoordinator
+    let close: () -> Void
+    let openAdministrator: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(PichiLocalization.text("My voice")) {
+                    MeetingOwnerVoiceSettingsContent(model: voice, microphone: nil)
+                        .disabled(!coordinator.isQuiescent)
+                    if !coordinator.isQuiescent {
+                        Text(PichiLocalization.text("Finish the current recording or transcription before setting up your voice."))
+                            .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    }
+                }
+                Section {
+                    Button(action: openAdministrator) {
+                        Label(PichiLocalization.text("Administrator"), systemImage: "lock.shield")
+                    }.disabled(voice.isBusy).accessibilityIdentifier("kiosk.admin")
+                }
+            }
+            .navigationTitle(PichiLocalization.text("Settings"))
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(PichiLocalization.text("Done"), action: close)
+                        .disabled(voice.isBusy).accessibilityIdentifier("kiosk.settings.done")
+                }
+            }
+        }.accessibilityIdentifier("kiosk.limitedSettings")
     }
 }
 
@@ -231,7 +375,7 @@ private struct MobileKioskUnlock: View {
                 if let error {
                     Text(error).accessibilityIdentifier("kiosk.passwordError")
                 }
-                Button(PichiLocalization.text("Exit kiosk mode")) {
+                Button(PichiLocalization.text("Unlock")) {
                     Task { @MainActor in
                         do { try await access.unlock(password: password); dismiss() }
                         catch { self.error = error.localizedDescription }

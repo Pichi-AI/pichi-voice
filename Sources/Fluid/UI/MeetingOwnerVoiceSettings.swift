@@ -10,8 +10,14 @@ struct MeetingOwnerVoiceSettingsContent: View {
     @StateObject private var model: MeetingOwnerVoiceEnrollmentModel
 
     init(audioArbiter: any MeetingAudioActivityArbitrating, microphone: MeetingMicrophoneIdentity?) {
+        self.init(model: MeetingOwnerVoiceEnrollmentModel(audioArbiter: audioArbiter), microphone: microphone)
+    }
+
+    /// A restricted host observes the same transaction to keep recording and dismissal
+    /// unavailable until microphone cancellation and resource handback have joined.
+    init(model: MeetingOwnerVoiceEnrollmentModel, microphone: MeetingMicrophoneIdentity?) {
         self.microphone = microphone
-        self._model = StateObject(wrappedValue: MeetingOwnerVoiceEnrollmentModel(audioArbiter: audioArbiter))
+        self._model = StateObject(wrappedValue: model)
     }
 
     var body: some View {

@@ -314,7 +314,8 @@ struct PichiVoiceMobileApp: App {
     @ViewBuilder private var meetingRoot: some View {
         if kiosk.isEnabled {
             MobileKioskRoot(coordinator: services.meetingSessionCoordinator, required: services.requiredResources,
-                privacyActivation: services.privacyActivation, access: kiosk)
+                privacyActivation: services.privacyActivation, access: kiosk,
+                audioArbiter: services.meetingAudioActivityArbiter)
         } else if !settings.mobileSetupCompleted {
             MobileOnboarding(asr: services.asr, required: services.requiredResources, privacy: services.privacyActivation,
                 audioArbiter: services.meetingAudioActivityArbiter)

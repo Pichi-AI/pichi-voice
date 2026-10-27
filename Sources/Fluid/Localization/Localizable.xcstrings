@@ -56407,6 +56407,54 @@
           }
         }
       }
+    },
+    "Would you like to set up your voice?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Would you like to set up your voice?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроить свой голос?"
+          }
+        }
+      }
+    },
+    "Administrator access is unavailable. Try again after unlocking the device.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Administrator access is unavailable. Try again after unlocking the device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ администратора недоступен. Разблокируйте устройство и попробуйте снова."
+          }
+        }
+      }
+    },
+    "Unlock": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unlock"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разблокировать"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
