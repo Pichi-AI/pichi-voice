@@ -305,9 +305,12 @@ final class MobileKioskUITests: XCTestCase {
         let field = app.secureTextFields[identifier]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
+                      "The native keyboard must be ready before secure input")
         // A field entry is one interaction. Type immediately after focus rather than
         // suspending a transient secure-keyboard state for the visual review pause.
         field.typeText(value)
+        waitForSecureEntry(field, count: value.count)
         capture(step)
     }
 
@@ -315,8 +318,19 @@ final class MobileKioskUITests: XCTestCase {
         let field = app.secureTextFields[identifier]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count) + value)
+        waitForSecureEntry(field, count: value.count)
         capture(step)
+    }
+
+    private func waitForSecureEntry(_ field: XCUIElement, count: Int) {
+        let entered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let maskedValue = field.value as? String else { return false }
+            return maskedValue.count == count && !maskedValue.isEmpty
+        }, object: field)
+        XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 5), .completed,
+                       "Secure input must reach the field before taking the review frame")
     }
 
     private func tap(_ target: XCUIElement, step: String, waitFor identifier: String? = nil) {

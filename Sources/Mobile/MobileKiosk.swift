@@ -330,14 +330,18 @@ struct MobileKioskSettings: View {
                 Text(PichiLocalization.text("To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access."))
             }
             Section(PichiLocalization.text("Administrator password")) {
-                SecureField(PichiLocalization.text(access.hasPassword ? "Current password" : "Password"), text: $password)
+                SecureField(PichiLocalization.text(access.hasPassword ? "Current password" : "Password"), text: $password,
+                            prompt: Text(PichiLocalization.text(access.hasPassword ? "Current password" : "Password"))
+                                .foregroundStyle(theme.palette.secondaryText))
                     .textContentType(access.hasPassword ? .password : .newPassword)
                     .focused($focusedField, equals: .password)
                     .submitLabel(access.hasPassword ? .done : .next)
                     .onSubmit { focusedField = access.hasPassword ? nil : .confirmation }
                     .accessibilityIdentifier("kiosk.password")
                 if !access.hasPassword {
-                    SecureField(PichiLocalization.text("Confirm password"), text: $confirmation)
+                    SecureField(PichiLocalization.text("Confirm password"), text: $confirmation,
+                                prompt: Text(PichiLocalization.text("Confirm password"))
+                                    .foregroundStyle(theme.palette.secondaryText))
                         .textContentType(.newPassword).accessibilityIdentifier("kiosk.confirmation")
                         .focused($focusedField, equals: .confirmation)
                         .submitLabel(.done).onSubmit { focusedField = nil }
@@ -391,7 +395,9 @@ private struct MobileKioskUnlock: View {
     var body: some View {
         NavigationStack {
             Form {
-                SecureField(PichiLocalization.text("Administrator password"), text: $password)
+                SecureField(PichiLocalization.text("Administrator password"), text: $password,
+                            prompt: Text(PichiLocalization.text("Administrator password"))
+                                .foregroundStyle(theme.palette.secondaryText))
                     .textContentType(.password).accessibilityIdentifier("kiosk.unlockPassword")
                     .focused($passwordFocused).submitLabel(.done)
                     .onSubmit { passwordFocused = false }
