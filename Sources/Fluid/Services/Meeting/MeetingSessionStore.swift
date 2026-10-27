@@ -349,7 +349,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
     /// Validation and removal execute in one actor turn with no suspension, so an
     /// admitted save cannot overwrite the source between comparison and deletion.
     func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership,
-                validating: @Sendable (MeetingSession) throws -> Void) throws {
+                validating: @Sendable (MeetingSession) throws -> Void) async throws {
         try Task.checkCancellation()
         if let session = try self.load(id: id) {
             guard session.profileOwnership == expectedOwnership else { throw CocoaError(.fileWriteNoPermission) }

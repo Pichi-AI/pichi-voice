@@ -143,7 +143,9 @@ extension MeetingSessionStoreCheckpointTests {
                 guard source.title == "Accepted local version" else { throw EncryptionDeletionProbeFailure.changed }
             })
             check(false, "Deletion must reject a local edit committed before its atomic validation")
-        } catch { check(true, "Deletion rejects a newer local edit before touching its files") }
+        } catch EncryptionDeletionProbeFailure.changed {
+            check(true, "Deletion rejects a newer local edit before touching its files")
+        } catch { check(false, "Guarded deletion must invoke validation rather than an unsupported default") }
         let preserved = try await store.load(id: guarded.id)
         check(preserved == edited, "Rejected cleanup retains the full newer encrypted recording")
         let race = EncryptionDeletionGate()
