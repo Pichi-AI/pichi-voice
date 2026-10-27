@@ -62,13 +62,14 @@ final class AppServices: ObservableObject {
          accountSession: AccountSessionService? = nil,
          privateProfiles: PrivateProfileService? = nil,
          publicationHTTP: (any PichiPublicationHTTPPerforming)? = nil,
+         recordingCipher: (@MainActor @Sendable (PrivateProfileSnapshot) async throws -> MeetingRecordingCipher)? = nil,
          privacy: PichiTranscriptPrivacyService? = nil,
          privacyRedactor: (any TranscriptTextRedacting)? = nil,
          microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil,
          recordingActivity: MobileRecordingActivityOwner? = nil) {
         let isProductionComposition = store == nil && settings == nil && accountSession == nil
             && privateProfiles == nil && injectedCapture == nil && privacy == nil && privacyRedactor == nil
-            && microphoneResolver == nil && publicationHTTP == nil
+            && microphoneResolver == nil && publicationHTTP == nil && recordingCipher == nil
         // Only a deliberate facade injection can install an observer in a fixture.
         // A generic test store must never touch the global facade or production HTTP.
         let publicationStore = isProductionComposition ? PrivateProfileMeetingStore.shared
@@ -126,24 +127,33 @@ final class AppServices: ObservableObject {
             defaultConfigurationResolver: { mode, title in
                 // Preferences are one immutable request snapshot. Async discovery/preparation
                 // cannot substitute later Settings values into a running meeting.
+                let profile = publicationStore.map { _ in PrivateProfileStorage.current }
+                let automaticDelivery = try await publicationStore?.prepareAutomaticCapture() ?? false
                 let preferences = settings.meetingRecordingDefaults
                 let modelID = settings.selectedSpeechModel.rawValue
                 let savedBackendID = settings.meetingTranscriptionBackendID
-                let storageMode: MeetingAudioStorageMode = settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
+                let storageMode: MeetingAudioStorageMode = automaticDelivery ? .memoryOnly
+                    : settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
                 let speakerLabelsEnabled = settings.meetingSpeakerLabelsEnabled
                 let speakerProcessingMode = settings.meetingSpeakerProcessingMode(for: mode)
                 let piiRedactionEnabled = settings.meetingPIIRedactionRequested
+                guard !automaticDelivery || piiRedactionEnabled else {
+                    throw NSError(domain: "ProtectedRecording", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                        PichiLocalization.text("cloud.automatic.requiresPrivacy", defaultValue: "Turn on Data cleanup before recording with automatic protected delivery.")])
+                }
                 let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
                 let language = preferences.languageCode.flatMap { supported.contains($0) ? $0 : nil }
                     ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
                 let microphone = try await resolveMicrophone(preferences.microphoneCoreAudioUID)
                 try Task.checkCancellation()
                 guard settings.selectedSpeechModel.rawValue == modelID,
-                      settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
+                      settings.meetingTranscriptionBackendID == savedBackendID,
+                      profile.map({ PrivateProfileStorage.isReadable($0) && PrivateProfileStorage.acceptsNewWork }) != false
+                else { throw CancellationError() }
                 let configuration = MeetingCaptureConfiguration(mode: mode, title: title, languageCode: language,
                     microphone: microphone, timestampDefaultTitle: true, audioStorageMode: storageMode,
                     speakerLabelsEnabled: speakerLabelsEnabled, speakerProcessingMode: speakerProcessingMode,
-                    piiRedactionEnabled: piiRedactionEnabled)
+                    piiRedactionEnabled: piiRedactionEnabled, requiresEncryptedPersistence: automaticDelivery)
                 // Deployment admission uses the frozen privacy request. The processing owner
                 // prepares its pinned text redactor before recognizing or publishing speech.
                 if storageMode == .memoryOnly || configuration.effectiveSpeakerProcessingMode == .streaming {
@@ -178,6 +188,26 @@ final class AppServices: ObservableObject {
             Task { @MainActor in await self?.idleResourcesChanged() }
         }.store(in: &idlePreparationObservers)
         observeIdleResourceStores()
+        let recordingKeys = isProductionComposition
+            ? MeetingRecordingKeychainStore(namespace: (Bundle.main.bundleIdentifier ?? AppBrand.keychainService) + ".recording-encryption.v1") : nil
+        let resolveRecordingCipher: @MainActor @Sendable (PrivateProfileSnapshot, Bool) async throws -> MeetingRecordingCipher? = { profile, create in
+            guard !profile.isGuest, let publicationStore else { return nil }
+            guard PrivateProfileStorage.isReadable(profile) else { throw AccountError.staleOperation }
+            let cipher: MeetingRecordingCipher?
+            if let recordingCipher { cipher = try await recordingCipher(profile) }
+            else if let recordingKeys {
+                if let existing = try await recordingKeys.load(profileID: profile.id) { cipher = existing }
+                else {
+                    let sourceExists = try await publicationStore.hasEncryptedPersistenceData(in: profile)
+                    let outboxExists = try PichiPublicationOutboxStore.hasEncryptedPersistenceData(in: profile)
+                    guard !sourceExists, !outboxExists else { throw MeetingRecordingCipher.Failure.unavailableKey }
+                    cipher = create ? try await recordingKeys.loadOrCreate(profileID: profile.id) : nil
+                }
+            } else { cipher = nil }
+            guard PrivateProfileStorage.isReadable(profile) else { throw AccountError.staleOperation }
+            if let cipher { try await publicationStore.installEncryptionCipher(cipher, for: profile) }
+            return cipher
+        }
         do {
             try self.privateProfiles.configure(isBusy: { [weak self] in
                 guard let self else { return true }
@@ -192,6 +222,7 @@ final class AppServices: ObservableObject {
                 try await PrivateProfileSources.prepare(coordinator: self.meetingSessionCoordinator, asr: self.asr)
             }, activate: { [weak self] profile in
                 guard let self else { throw AccountError.isolationRequired }
+                _ = try await resolveRecordingCipher(profile, false)
                 try await PrivateProfileSources.activate(profile, asr: self.asr)
                 self.privacyActivation.restore()
             }, conceal: { [weak self] in
@@ -209,7 +240,17 @@ final class AppServices: ObservableObject {
                 ? self.accountSession.configuration.flatMap { try? PichiPublicationHTTPClient(configuration: $0) }
                 : publicationHTTP
             let service = PichiCloudPublicationService(account: self.accountSession, meetings: publicationStore,
-                profiles: self.privateProfiles, http: http)
+                profiles: self.privateProfiles, http: http,
+                recordingCipher: { profile in
+                    guard let cipher = try await resolveRecordingCipher(profile, true) else { throw MeetingRecordingCipher.Failure.unavailableKey }
+                    return cipher
+                }, deleteAcceptedRecording: { [weak self] id, owner in
+                    guard let self else { throw AccountError.staleOperation }
+                    let profile = PrivateProfileStorage.current
+                    guard owner.matches(profile), PrivateProfileStorage.isReadable(profile),
+                          self.privateProfiles.isPrivateDataVisible, !self.privateProfiles.isTransitioning else { throw AccountError.staleOperation }
+                    try await self.meetingSessionCoordinator.deleteSession(id: id, expectedOwnership: owner)
+                })
             self.cloudPublicationActivation = PichiCloudPublicationActivation(service: service,
                 account: self.accountSession, profiles: self.privateProfiles)
         }
@@ -271,6 +312,8 @@ final class AppServices: ObservableObject {
 
     func setSceneActive(_ active: Bool) async {
         isSceneActive = active
+        cloudPublication?.notifySceneActive(active)
+        if active { await accountSession.restoreAfterConnectivity() }
         await updateIdlePreparation()
     }
 
