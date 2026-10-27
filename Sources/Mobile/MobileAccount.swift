@@ -6,7 +6,7 @@ import Foundation
 /// whose service contract deliberately has no separate published busy state.
 @MainActor
 final class MobileAccountInteraction: ObservableObject {
-    enum Action { case signIn, switchPerson, workspace, logout, cancel, guest }
+    enum Action { case signIn, switchPerson, workspace, organization, logout, cancel, guest }
     @Published private(set) var action: Action?
     @Published private var selectionError: (generation: UUID, code: AccountError)?
     let session: AccountSessionService
@@ -61,6 +61,22 @@ final class MobileAccountInteraction: ObservableObject {
                 // Validation may fail before the service publishes an error. A replaced
                 // account/generation must never acquire this former selection's error.
                 if self.session.context == expected, self.session.generation == expected.generation {
+                    self.selectionError = (expected.generation, error as? AccountError ?? .networkUnavailable)
+                }
+            }
+        }
+    }
+
+    func selectLegacyOrganization(_ organizationID: String) {
+        guard action == nil, session.isLegacySession, let expected = session.context,
+              session.isCurrent(expected) else { return }
+        begin(.organization) {
+            guard self.session.isCurrent(expected) else { return }
+            do {
+                try self.requireTransitionAdmission()
+                try await self.session.selectLegacyOrganization(organizationID)
+            } catch {
+                if self.session.generation == expected.generation {
                     self.selectionError = (expected.generation, error as? AccountError ?? .networkUnavailable)
                 }
             }
@@ -504,6 +520,12 @@ private struct MobileAccountPanel: View {
             VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
                 Text(organization.name).font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                if session.isLegacySession && account.activeOrganizationID != organization.id {
+                    Button(PichiLocalization.text("account.legacy.chooseOrganization", defaultValue: "Choose this organization")) {
+                        interaction.selectLegacyOrganization(organization.id)
+                    }.disabled(interaction.action != nil || !session.isCurrent(context))
+                        .accessibilityIdentifier("account.organization.\(organization.id)")
+                }
                 ForEach(organization.workspaces, id: \.id) { workspace in
                     let selected = context.organizationID == organization.id && context.workspaceID == workspace.id
                     Button { interaction.selectWorkspace(organizationID: organization.id, workspaceID: workspace.id) } label: {

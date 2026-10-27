@@ -58554,6 +58554,23 @@
           }
         }
       }
+    },
+    "account.legacy.chooseOrganization": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose this organization"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать эту организацию"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
