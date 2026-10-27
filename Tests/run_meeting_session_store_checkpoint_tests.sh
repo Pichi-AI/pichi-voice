@@ -82,6 +82,8 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
+    Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift \
+    Sources/Fluid/Services/Meeting/MeetingRecordingKeychainStore.swift \
     "$task_test_dir/PipelineVersion.swift" \
     Sources/Fluid/Account/AccountDomain.swift \
     Sources/Fluid/Account/PrivateProfileStorage.swift \
@@ -91,6 +93,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift \
     Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     "$task_test_dir/ApplicationSupport.swift" Tests/MeetingSessionStoreCheckpointTests.swift \
+    Tests/MeetingRecordingEncryptionTests.swift \
     Tests/MeetingTranscriptReadingContractTests.swift \
     Tests/MeetingProtectedTranscriptExportTests.swift \
     Tests/PichiProtectedPublicationSourceTests.swift \

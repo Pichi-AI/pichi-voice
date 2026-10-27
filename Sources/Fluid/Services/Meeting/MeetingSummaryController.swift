@@ -161,7 +161,7 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
         let promptHash = kind == .custom ? MeetingSummaryInput.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)) : nil
         let snapshot = await Task.detached(priority: .utility) { () -> (Bool, SavedSummary?) in
             let installed = model.map { PrivateAIIntegrationService.isModelInstalled($0) } ?? false
-            guard let session,
+            guard let session, session.requiresEncryptedPersistence != true,
                   let directory = try? await store.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")),
                   let saved = try? JSONDecoder().decode(SavedSummary.self, from: data),
@@ -261,9 +261,6 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
                         languageCode: session.languageCode
                     )
                     try Task.checkCancellation()
-                    guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
-                        throw MeetingPostProcessingError.checkpointFailed
-                    }
                     let saved = SavedSummary(
                         transcriptHash: contentHash,
                         modelID: route.modelID,
@@ -276,9 +273,14 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
                         promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil,
                         transcriptHashVersion: SavedSummary.currentTranscriptHashVersion
                     )
-                    try await Task.detached(priority: .utility) {
-                        try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
-                    }.value
+                    if session.requiresEncryptedPersistence != true {
+                        guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
+                            throw MeetingPostProcessingError.checkpointFailed
+                        }
+                        try await Task.detached(priority: .utility) {
+                            try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
+                        }.value
+                    }
                     self.output = text
                     self.outputProvenance = saved.provenance
                     self.outputNotice = saved.notice
@@ -338,9 +340,6 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
                     }
                     try Task.checkCancellation()
                     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MeetingPostProcessingError.invalidOutput }
-                    guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
-                        throw MeetingPostProcessingError.checkpointFailed
-                    }
                     let saved = SavedSummary(
                         transcriptHash: contentHash,
                         modelID: model.id,
@@ -354,9 +353,14 @@ final class MeetingSummaryController: ObservableObject, PrivateProfileTransition
                         modelName: model.displayName,
                         transcriptHashVersion: SavedSummary.currentTranscriptHashVersion
                     )
-                    try await Task.detached(priority: .utility) {
-                        try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
-                    }.value
+                    if session.requiresEncryptedPersistence != true {
+                        guard let directory = try await self.store.existingSessionDirectory(for: session.id) else {
+                            throw MeetingPostProcessingError.checkpointFailed
+                        }
+                        try await Task.detached(priority: .utility) {
+                            try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("manual-summary-\(kind.rawValue).json"), options: .atomic)
+                        }.value
+                    }
                     self.output = text
                     self.outputProvenance = saved.provenance
                     self.outputNotice = saved.notice

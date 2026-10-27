@@ -244,7 +244,8 @@ final class PichiMeetingSummaryController: ObservableObject, PrivateProfileTrans
         let baseIdentity = configuration.baseCacheIdentity
         let offline = historical
         let cached = await Task.detached(priority: .utility) { () -> PichiMeetingSummaryArtifact? in
-            guard let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
+            guard session.requiresEncryptedPersistence != true,
+                  let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("pichi-meeting-summary.json")),
                   let artifact = try? JSONDecoder().decode(PichiMeetingSummaryArtifact.self, from: data),
                   artifact.transcriptHash == hash,
@@ -301,14 +302,16 @@ final class PichiMeetingSummaryController: ObservableObject, PrivateProfileTrans
                                                           generatedAt: Date(), document: output,
                                                           baseConfigurationIdentity: configuration.baseCacheIdentity,
                                                           modelArtifactID: result.configuration.modelArtifactID)
-                guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
-                    self.failure = .noSavedDirectory
-                    return
+                if session.requiresEncryptedPersistence != true {
+                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                        self.failure = .noSavedDirectory
+                        return
+                    }
+                    try Task.checkCancellation()
+                    try await Task.detached(priority: .utility) {
+                        try JSONEncoder().encode(artifact).write(to: directory.appendingPathComponent("pichi-meeting-summary.json"), options: .atomic)
+                    }.value
                 }
-                try Task.checkCancellation()
-                try await Task.detached(priority: .utility) {
-                    try JSONEncoder().encode(artifact).write(to: directory.appendingPathComponent("pichi-meeting-summary.json"), options: .atomic)
-                }.value
             } catch let error as PichiMeetingSummaryCleanupError {
                 if self.generationID == generationID { self.failure = .underlying(error) }
             } catch is CancellationError {
