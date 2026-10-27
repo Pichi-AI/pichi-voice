@@ -22,6 +22,9 @@ struct MobileAutomaticSettingsReview: View {
                 Text(PichiLocalization.text("Done")).accessibilityIdentifier("automatic.review.closed")
             } else if state.failed {
                 Text(PichiLocalization.text("Unavailable")).accessibilityIdentifier("automatic.review.failed")
+                    .toolbar { ToolbarItem(placement: .confirmationAction) {
+                        Button(PichiLocalization.text("Close")) { state.close() }.accessibilityIdentifier("automatic.review.close")
+                    } }
             } else { ProgressView().accessibilityIdentifier("automatic.review.preparing") }
         }.task { await state.start() }.onDisappear { state.close() }
     }
@@ -39,6 +42,7 @@ struct MobileAutomaticSettingsReview: View {
     @Published private(set) var failed = false
     private var setup: Task<Void, Never>?
     private var cleanup: Task<Void, Never>?
+    private var failurePending = false
     private var root: URL?
     private var previous: PrivateProfileSnapshot?
     private var wasAdmitted = false
@@ -79,7 +83,10 @@ struct MobileAutomaticSettingsReview: View {
                 self.cloudUI = cloudUI
                 fixture = Fixture(account: account, accountUI: MobileAccountInteraction(session: account,
                     requireTransitionAdmission: { [profiles] in try profiles.requireTransitionAdmission() }), cloud: cloud, cloudUI: cloudUI)
-            } catch { failed = true }
+            } catch {
+                failurePending = true
+                close() // Cleanup joins this setup task after it returns, without a self-await.
+            }
         }
         setup = task
         await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
@@ -92,11 +99,12 @@ struct MobileAutomaticSettingsReview: View {
         cleanup = Task { @MainActor in
             await pending?.value
             fixture = nil
-            await cloudUI?.prepareForPrivateProfileTransition()
+            do { try await cloudUI?.prepareForPrivateProfileTransition() }
+            catch { failurePending = true }
             await cloud?.shutdown(); await account?.shutdown(); await meetings.finishProfileTransition()
             cloudUI = nil; cloud = nil; account = nil
             if let previous { PrivateProfileStorage.select(previous); if !wasAdmitted { PrivateProfileStorage.closeAdmission() } }
-            do { if let root { try FileManager.default.removeItem(at: root) }; root = nil; previous = nil; closed = true }
+            do { if let root { try FileManager.default.removeItem(at: root) }; root = nil; previous = nil; closed = !failurePending; failed = failurePending }
             catch { failed = true }
             cleanup = nil
         }
