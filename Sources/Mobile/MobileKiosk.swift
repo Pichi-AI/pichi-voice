@@ -32,6 +32,7 @@ struct MobileKioskRoot: View {
     @State private var recordingError = false
     @State private var checkedEntry = false
     @State private var showVoiceWelcome = false
+    @State private var voiceOfferExpired = false
     @State private var awakeToken: UUID?
 
     init(coordinator: MeetingSessionCoordinator, required: MobileRequiredResources,
@@ -106,7 +107,7 @@ struct MobileKioskRoot: View {
                 if try access.claimVoiceWelcome() {
                     await voice.refresh()
                     try Task.checkCancellation()
-                    showVoiceWelcome = !voice.hasProfile
+                    showVoiceWelcome = !voice.hasProfile && !voiceOfferExpired && scenePhase != .background
                 }
                 checkedEntry = true
             } catch is CancellationError {
@@ -121,7 +122,11 @@ struct MobileKioskRoot: View {
         .onChange(of: scenePhase) { _, phase in
             updateAwake()
             if phase != .active { showUnlock = false }
-            if phase == .background { voice.cancel(); showSettings = false }
+            if phase == .background {
+                voiceOfferExpired = true
+                showVoiceWelcome = false
+                voice.cancel(); showSettings = false
+            }
         }
         .onAppear { updateAwake() }
         .onDisappear { voice.cancel(); releaseAwake() }
