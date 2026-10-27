@@ -331,7 +331,7 @@ final class MobileKioskUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-        for _ in previous { app.keyboards.keys["delete"].tap() }
+        for _ in previous { app.keyboards.keys["delete"].firstMatch.tap() }
         typeNativeDigits(value)
         capture(step)
     }
@@ -344,10 +344,10 @@ final class MobileKioskUITests: XCTestCase {
         XCTAssertTrue(value.allSatisfy { $0.isASCII && $0.isNumber })
         guard let first = value.first else { return }
         if !app.keyboards.keys[String(first)].exists {
-            app.keyboards.keys["more"].tap()
+            app.keyboards.keys["more"].firstMatch.tap()
         }
         for digit in value {
-            let key = app.keyboards.keys[String(digit)]
+            let key = app.keyboards.keys[String(digit)].firstMatch
             XCTAssertTrue(key.waitForExistence(timeout: 3))
             key.tap()
         }
