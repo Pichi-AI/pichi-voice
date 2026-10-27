@@ -368,11 +368,18 @@ import Foundation
         }
         latestDeviceRefreshToken = nil
         if let legacyTransport {
-            if legacySessionActive && legacyRemoteRevocationRequested {
+            let hadActiveLegacySession = legacySessionActive
+            let attemptedRemoteRevocation = legacyRemoteRevocationRequested
+            if hadActiveLegacySession && attemptedRemoteRevocation {
                 do { try await legacyTransport.logout() }
                 catch { if presentationError == nil { presentationError = .revocationUnavailable } }
             }
             await legacyTransport.clearSession()
+            // A late explicit logout can join after local retirement discarded its
+            // cookie. Do not report all-device revocation without server evidence.
+            if hadActiveLegacySession && legacyRemoteRevocationRequested && !attemptedRemoteRevocation && presentationError == nil {
+                presentationError = .revocationUnavailable
+            }
             legacySessionActive = false
             legacyRemoteRevocationRequested = false
         }

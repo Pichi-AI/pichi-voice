@@ -4,6 +4,8 @@ private actor LegacyFixture: LegacyAccountTransporting {
     var userID = "41", editable = true, uploads = 0, logouts = 0
     var gate: CheckedContinuation<Void, Never>?
     var hold = false
+    var holdClear = false
+    var clearGate: CheckedContinuation<Void, Never>?
     func snapshot() -> AccountSnapshot {
         .init(schemaVersion: 1, account: .init(id: userID, displayName: "Synthetic", email: nil),
             identity: .init(issuer: "", subject: "", legacyOrigin: "https://legacy.example"),
@@ -15,7 +17,7 @@ private actor LegacyFixture: LegacyAccountTransporting {
     func switchOrganization(_ id: String) -> AccountSnapshot { snapshot() }
     func perform(_ request: URLRequest) -> LegacyAccountHTTPResponse { uploads += 1; return .init(status: 202, body: Data("{}".utf8), retryAfter: nil) }
     func logout() { logouts += 1 }
-    func clearSession() {}
+    func clearSession() async { if holdClear { await withCheckedContinuation { clearGate = $0 } } }
     func shutdown() {}
     func holdAccount() { hold = true }
     var waiting: Bool { gate != nil }
@@ -23,6 +25,9 @@ private actor LegacyFixture: LegacyAccountTransporting {
     func changeUser(_ id: String) { userID = id }
     func revoke() { editable = false }
     func restoreWorkspace() { editable = true }
+    func holdRetirement() { holdClear = true }
+    var retirementWaiting: Bool { clearGate != nil }
+    func releaseRetirement() { holdClear = false; clearGate?.resume(); clearGate = nil }
 }
 private actor LegacyUnusedCredentials: AccountCredentialStoring {
     var saves = 0
@@ -48,6 +53,10 @@ private nonisolated struct LegacyUnusedOIDC: AccountTransporting {
 }
 
 @MainActor enum AccountLegacySessionChecks {
+    private static func until(_ predicate: () async -> Bool) async {
+        for _ in 0..<10_000 { if await predicate() { return }; await Task.yield() }
+        fatalError("Synthetic legacy gate did not open")
+    }
     static func run() async throws -> Int {
         var checks = 0
         func expect(_ value: Bool, _ label: String) { precondition(value, label); checks += 1 }
@@ -87,7 +96,7 @@ private nonisolated struct LegacyUnusedOIDC: AccountTransporting {
         do { _ = try await service.performAuthorizedLegacyRequest(for: old, request: bad); fatalError("mixed credentials accepted") } catch { checks += 1 }
         await fixture.holdAccount()
         let delayed = Task { try await service.performAuthorizedLegacyRequest(for: old, request: request) }
-        while !(await fixture.waiting) { await Task.yield() }
+        await until { await fixture.waiting }
         await service.logout()
         expect(service.context == nil && service.account == nil && lifecycle.transitions >= 3, "logout clears profile projection")
         expect(await fixture.logouts == 1, "explicit server logout once")
@@ -107,6 +116,105 @@ private nonisolated struct LegacyUnusedOIDC: AccountTransporting {
         expect(await fixture.logouts == 1 && service.state == .signedOut, "guest continuation retires only local session")
         await service.shutdown()
         expect(await credentials.saves == 0, "legacy never persists a grant")
+        let lateFixture = LegacyFixture()
+        let lateService = AccountSessionService(configuration: nil, browser: LegacyUnusedBrowser(), transport: LegacyUnusedOIDC(), credentials: LegacyUnusedCredentials(),
+            lifecycle: LegacyLifecycle(), legacyConfiguration: config, legacyTransport: lateFixture)
+        await lateService.signIn(email: "synthetic@example.invalid", password: "synthetic-only")
+        await lateFixture.holdRetirement()
+        let localRetirement = Task { await lateService.retireLegacySession() }
+        await until { await lateFixture.retirementWaiting }
+        let explicitLogout = Task { await lateService.logout() }
+        for _ in 0..<20 { await Task.yield() }
+        await lateFixture.releaseRetirement()
+        await localRetirement.value; await explicitLogout.value
+        expect(await lateFixture.logouts == 0 && lateService.presentationError == .revocationUnavailable, "late all-device logout reports unproved revocation")
+        await lateService.shutdown()
+        return checks
+    }
+}
+
+/// Intercepts the actual ephemeral URLSession. These fixtures never open a socket.
+private nonisolated final class LegacyHTTPFixtureProtocol: URLProtocol, @unchecked Sendable {
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var requests: [URLRequest] = []
+        var loginStatus = 200
+        var loginBody = "{}"
+        var cookie = "auth_token=synthetic-cookie; Path=/; HttpOnly; Secure"
+        var permission = "edit"
+    }
+    private static let state = State()
+    static func configure(status: Int = 200, body: String = "{}", cookie: String = "auth_token=synthetic-cookie; Path=/; HttpOnly; Secure", permission: String = "edit") {
+        state.lock.lock(); defer { state.lock.unlock() }
+        state.requests = []; state.loginStatus = status; state.loginBody = body; state.cookie = cookie; state.permission = permission
+    }
+    static var requests: [URLRequest] { state.lock.lock(); defer { state.lock.unlock() }; return state.requests }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.state.lock.lock()
+        Self.state.requests.append(request)
+        let status = Self.state.loginStatus, loginBody = Self.state.loginBody, cookie = Self.state.cookie, permission = Self.state.permission
+        Self.state.lock.unlock()
+        var responseStatus = 200, headers = ["Content-Type": "application/json"], body = "{}"
+        switch request.url!.path {
+        case "/api/auth/login": responseStatus = status; body = loginBody; if status == 200 { headers["Set-Cookie"] = cookie }
+        case "/api/auth/me": body = #"{"user":{"id":41,"fullName":"Synthetic","organizationId":7}}"#
+        case "/api/auth/organizations": body = #"{"organizations":[{"id":7,"name":"Demo"}],"currentOrganizationId":7}"#
+        case "/api/workspaces": body = #"{"organization":{"id":7},"workspaces":[{"id":9,"name":"Demo","organizationId":7}]}"#
+        case "/api/workspaces/9/user-permission": body = "{\"permission\":\"" + permission + "\"}"
+        case "/api/auth/logout": headers["Set-Cookie"] = "auth_token=; Path=/; HttpOnly; Max-Age=0"
+        default: break
+        }
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: responseStatus, httpVersion: "HTTP/1.1", headerFields: headers)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+extension AccountLegacySessionChecks {
+    static func http() async throws -> Int {
+        var checks = 0
+        func expect(_ value: Bool, _ label: String) { precondition(value, label); checks += 1 }
+        let config = LegacyAccountConfiguration(apiBaseURL: URL(string: "https://legacy.example")!, bundleIdentifier: "ai.example.voice")
+        func transport() throws -> LegacyAccountHTTPTransport {
+            let session = URLSessionConfiguration.ephemeral; session.protocolClasses = [LegacyHTTPFixtureProtocol.self]
+            return try LegacyAccountHTTPTransport(configuration: config, sessionConfiguration: session)
+        }
+        LegacyHTTPFixtureProtocol.configure()
+        let first = try transport()
+        let snapshot = try await first.login(email: "synthetic@example.invalid", password: "synthetic-only", captchaToken: nil)
+        expect(snapshot.stableIdentity == .legacy(origin: config.apiBaseURL, internalUserID: "41") && snapshot.contains(organizationID: "7", workspaceID: "9"), "actual adapter verifies fresh me and editable workspace")
+        let requests = LegacyHTTPFixtureProtocol.requests
+        expect(requests.count == 5 && requests.first?.value(forHTTPHeaderField: "Cookie") == nil, "login begins with empty owned jar")
+        expect(requests.dropFirst().allSatisfy { $0.value(forHTTPHeaderField: "Cookie") == "auth_token=synthetic-cookie" }, "same isolated cookie used for fresh account ACL checks")
+        expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil && $0.value(forHTTPHeaderField: "Origin") == nil && $0.value(forHTTPHeaderField: "Referer") == nil }, "no bearer or origin spoofing")
+        let second = try transport()
+        _ = try await second.perform(URLRequest(url: config.apiBaseURL.appendingPathComponent("api/auth/me")))
+        expect(LegacyHTTPFixtureProtocol.requests.last?.value(forHTTPHeaderField: "Cookie") == nil, "second transport never shares a cookie")
+        await second.shutdown()
+        try await first.logout()
+        _ = try await first.perform(URLRequest(url: config.apiBaseURL.appendingPathComponent("api/auth/me")))
+        expect(LegacyHTTPFixtureProtocol.requests.last?.value(forHTTPHeaderField: "Cookie") == nil, "logout clears local cookie")
+        await first.shutdown()
+        for (status, body, expected) in [(429, "{\"requireCaptcha\":true}", AccountError.captchaRequired), (429, "{}", .rateLimited), (403, "{\"message\":\"error.auth.ciam_required\"}", .browserLoginRequired), (401, "{}", .reauthenticationRequired)] {
+            LegacyHTTPFixtureProtocol.configure(status: status, body: body)
+            let blocked = try transport()
+            do { _ = try await blocked.login(email: "synthetic@example.invalid", password: "synthetic-only", captchaToken: nil); fatalError("guard bypass") }
+            catch { expect(error as? AccountError == expected, "server guard gives stable actionable failure") }
+            await blocked.shutdown()
+        }
+        LegacyHTTPFixtureProtocol.configure(permission: "view")
+        let view = try transport()
+        let viewSnapshot = try await view.login(email: "synthetic@example.invalid", password: "synthetic-only", captchaToken: nil)
+        expect(!viewSnapshot.contains(organizationID: "7", workspaceID: "9"), "view workspace omitted from import destinations")
+        await view.shutdown()
+        LegacyHTTPFixtureProtocol.configure(cookie: "auth_token=synthetic; Domain=other.example; Path=/; HttpOnly; Secure")
+        let foreign = try transport()
+        do { _ = try await foreign.login(email: "synthetic@example.invalid", password: "synthetic-only", captchaToken: nil); fatalError("foreign cookie accepted") } catch { checks += 1 }
+        await foreign.shutdown()
+        LegacyHTTPFixtureProtocol.configure()
         return checks
     }
 }
