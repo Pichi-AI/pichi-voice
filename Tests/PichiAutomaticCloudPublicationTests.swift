@@ -205,6 +205,15 @@ extension PichiPublicationOutboxTests {
         let postedAfterOff = await transport.postCount()
         check(!service.snapshot.cloudSyncEnabled && postedAfterOff == postedBeforeOff,
               "Disabled publication still completes previously authorized local cleanup without another network upload")
+        let knownAutomaticIDs: Set<UUID> = [source.id, editedSource.id, lateEdited.id, acceptedBeforeOff.id]
+        var coherentProjection = true
+        for _ in 0..<130 {
+            _ = try await service.status(for: UUID())
+            let visible = Set(service.snapshot.items.keys)
+            coherentProjection = coherentProjection && service.snapshot.automaticRecordingIDs == knownAutomaticIDs.intersection(visible)
+        }
+        check(coherentProjection && service.snapshot.items.count <= 128,
+              "Bounded status and automatic-mode projections stay coherent when old history rows are evicted")
         await account.logout(); await account.signIn(email: "b@synthetic.example", password: "synthetic-only")
         try await account.selectWorkspace(organizationID: "17", workspaceID: "9"); try await service.refresh()
         check(!service.snapshot.cloudSyncEnabled && !service.snapshot.deleteLocalAfterAcceptance

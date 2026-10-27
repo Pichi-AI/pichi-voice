@@ -286,9 +286,10 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         for record in records { items[record.sessionID] = Self.status(record) }
         let availability: PichiCloudPublicationAvailability = self.offLatch?.profileID == profile.id && self.offLatch?.failed == true
             ? .storageUnavailable : self.userPaused ? .paused : (self.http == nil && !self.account.isLegacySession) ? .transportUnavailable : .ready
+        let visibleItems = self.bounded(items)
         self.snapshot = .init(availability: availability,
-            cloudSyncEnabled: enabled, items: self.bounded(items), deleteLocalAfterAcceptance: deleteLocal,
-            automaticRecordingIDs: self.snapshot.automaticRecordingIDs.union(records.filter { $0.automaticAccountContext == true }.map(\.sessionID)).intersection(Set(items.keys)))
+            cloudSyncEnabled: enabled, items: visibleItems, deleteLocalAfterAcceptance: deleteLocal,
+            automaticRecordingIDs: self.snapshot.automaticRecordingIDs.union(records.filter { $0.automaticAccountContext == true }.map(\.sessionID)).intersection(Set(visibleItems.keys)))
     }
 
     private func statusBody(_ id: MeetingSessionID) async throws -> PichiCloudPublicationStatus {
@@ -1076,10 +1077,11 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             if self.analysisPolls[id] == nil { self.analysisPolls[id] = (0, Date().addingTimeInterval(1)) }
         } else { self.analysisPolls.removeValue(forKey: id) }
         self.itemOrder.removeAll { $0 == id }; self.itemOrder.append(id)
+        let visibleItems = self.bounded(items)
         self.snapshot = .init(availability: self.snapshot.availability,
-            cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.bounded(items),
+            cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: visibleItems,
             deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
-            automaticRecordingIDs: automaticIDs.intersection(Set(self.bounded(items).keys)))
+            automaticRecordingIDs: automaticIDs.intersection(Set(visibleItems.keys)))
     }
 
     private func bounded(_ items: [MeetingSessionID: PichiCloudPublicationStatus]) -> [MeetingSessionID: PichiCloudPublicationStatus] {
