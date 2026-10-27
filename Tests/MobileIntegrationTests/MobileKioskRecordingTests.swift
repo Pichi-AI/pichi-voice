@@ -17,7 +17,7 @@ final class MobileKioskRecordingTests: XCTestCase {
         let fixture = try Fixture()
         addTeardownBlock { await fixture.cleanup() }
         let host = try KioskWindow(coordinator: fixture.coordinator, required: fixture.required,
-            privacy: fixture.privacy, access: fixture.access)
+            privacy: fixture.privacy, access: fixture.access, audioArbiter: fixture.arbiter)
         defer { host.close() }
         try await settle()
         try capture(host, step: "01-ready")
@@ -35,6 +35,9 @@ final class MobileKioskRecordingTests: XCTestCase {
             XCTAssertEqual(fixture.settings.selectedSpeechModel, .whisperSmall)
             XCTAssertEqual(fixture.settings.meetingAudioRetentionPolicy, .never)
             XCTAssertTrue(fixture.settings.meetingSaveAudio)
+            let measuredPeak = await fixture.capture.measuredPeak
+            XCTAssertGreaterThan(measuredPeak, 0.02, "The invented PCM must exceed the ordinary waveform noise threshold")
+            try await waitForMicrophoneLevel(fixture.coordinator, expectedPeak: measuredPeak)
             try await Task.sleep(for: .milliseconds(1100))
             XCTAssertGreaterThanOrEqual(fixture.coordinator.elapsedTime, 1)
             try await settle()
@@ -59,7 +62,7 @@ final class MobileKioskRecordingTests: XCTestCase {
             XCTAssertTrue(fixture.coordinator.isQuiescent)
             XCTAssertFalse(fixture.arbiter.hasLease)
             try await settle()
-                try capture(host, step: "0\(ordinal * 3 + 1)-saved-\(ordinal)")
+            try capture(host, step: "0\(ordinal * 3 + 1)-saved-\(ordinal)")
 
             let reloadedStore = MeetingSessionStore(rootDirectory: fixture.root.appendingPathComponent("meetings"))
             let loaded = try await reloadedStore.load(id: finished.id)
@@ -104,6 +107,17 @@ final class MobileKioskRecordingTests: XCTestCase {
         }
         XCTAssertTrue(processing.isWaiting, "Stop must reach the injected processing boundary")
         guard processing.isWaiting else { throw SyntheticFailure.preparation }
+    }
+
+    private func waitForMicrophoneLevel(_ coordinator: MeetingSessionCoordinator, expectedPeak: Float) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while coordinator.trackHealth[.microphone]?.status != .healthy, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let health = try XCTUnwrap(coordinator.trackHealth[.microphone],
+            "The capture event must reach the same microphone meter used by ordinary recording")
+        XCTAssertEqual(health.status, .healthy)
+        XCTAssertEqual(health.level, expectedPeak, accuracy: 0.0001)
     }
 
     private func settle() async throws { try await Task.sleep(for: .milliseconds(150)) }
@@ -189,6 +203,7 @@ final class MobileKioskRecordingTests: XCTestCase {
     private actor SyntheticCapture: MeetingCaptureControlling {
         private var writer: MeetingAudioChunkWriter?
         private var startedAt = Date()
+        private(set) var measuredPeak: Float = 0
 
         func preflightPermissions() async throws {}
 
@@ -208,9 +223,19 @@ final class MobileKioskRecordingTests: XCTestCase {
             let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 24_000))
             pcm.frameLength = 24_000
             let samples = try XCTUnwrap(pcm.floatChannelData?[0])
-            for frame in 0..<24_000 { samples[frame] = 0.1 * sin(Float(frame) * 0.1) }
+            measuredPeak = 0
+            for frame in 0..<24_000 {
+                let value = 0.1 * sin(Float(frame) * 0.1)
+                samples[frame] = value
+                measuredPeak = max(measuredPeak, abs(value))
+            }
             let sample = try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm, presentationTime: .zero)
             guard output.enqueue(sample) else { throw SyntheticFailure.preparation }
+            // The production iOS capture reports the accepted PCM's peak through this event.
+            // Keep the returned track waiting so the test verifies that event-to-meter path.
+            eventHandler(.trackHealth(trackID: track.id, health: .init(status: .healthy,
+                lastPresentationTime: .init(value: 0, timescale: 16_000), lastSampleAt: Date(),
+                level: min(1, measuredPeak), droppedSampleCount: 0, detail: nil, silentForSeconds: 0)))
             return .init(tracks: [track], firstPresentationTime: .init(value: 0, timescale: 16_000))
         }
 
@@ -277,7 +302,8 @@ final class MobileKioskRecordingTests: XCTestCase {
         weak var previous: UIWindow?
 
         init(coordinator: MeetingSessionCoordinator, required: MobileRequiredResources,
-             privacy: MobilePrivacyActivation, access: MobileKioskAccess) throws {
+             privacy: MobilePrivacyActivation, access: MobileKioskAccess,
+             audioArbiter: any MeetingAudioActivityArbitrating) throws {
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
                 .first { $0.activationState == .foregroundActive })
             previous = scene.windows.first { $0.isKeyWindow }
@@ -285,7 +311,7 @@ final class MobileKioskRecordingTests: XCTestCase {
             window.windowLevel = .init(rawValue: UIWindow.Level.normal.rawValue + 1)
             window.rootViewController = UIHostingController(rootView: AdaptiveAppTheme(accent: .blue) {
                 MobileKioskRoot(coordinator: coordinator, required: required,
-                    privacyActivation: privacy, access: access)
+                    privacyActivation: privacy, access: access, audioArbiter: audioArbiter)
             })
             window.makeKeyAndVisible()
             window.layoutIfNeeded()
