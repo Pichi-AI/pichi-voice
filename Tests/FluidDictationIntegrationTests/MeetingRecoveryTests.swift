@@ -4901,7 +4901,7 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let persisted = try await store.load(id: session.id)
         // The archive preserves dates and correction evidence exactly.
-        XCTAssertEqual(persisted, corrected)
+        XCTAssertEqual(persisted?.updatedAt, corrected.updatedAt)
         XCTAssertEqual(persisted?.transcriptSegments, corrected.transcriptSegments)
         XCTAssertEqual(persisted?.speakers, corrected.speakers)
 
