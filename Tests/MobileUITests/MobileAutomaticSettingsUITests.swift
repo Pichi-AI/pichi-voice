@@ -35,6 +35,8 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
         let privacy = app.buttons["settings.privacy"]
         XCTAssertTrue(privacy.waitForExistence(timeout: 5))
         privacy.tap()
+        XCTAssertTrue(app.switches["privacy.saveAudio"].waitForExistence(timeout: 5))
+        capture("guest-privacy-opened")
         let encryption = app.switches["privacy.encryptLocalRecordings"]
         expose(encryption, in: app, step: "guest-encryption-visible")
         XCTAssertTrue(encryption.isEnabled)
@@ -122,9 +124,15 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
     }
 
     private func expose(_ element: XCUIElement, in app: XCUIApplication, step: String) {
-        let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.scrollViews.firstMatch
         for index in 0..<7 where !element.isHittable {
-            XCTAssertTrue(scroll.exists && scroll.isHittable)
+            // Navigation and sheets can retain a non-hittable list underneath the
+            // current form. Scroll only the visible native container.
+            let candidates = app.collectionViews.allElementsBoundByIndex
+                + app.scrollViews.allElementsBoundByIndex + app.tables.allElementsBoundByIndex
+            guard let scroll = candidates.first(where: { $0.exists && $0.isHittable }) else {
+                XCTFail("The visible settings form must provide a hittable scroll container")
+                return
+            }
             if element.exists && element.frame.midY < app.windows.firstMatch.frame.midY { scroll.swipeDown() }
             else { scroll.swipeUp() }
             capture(step + "-scroll-\(index)")
