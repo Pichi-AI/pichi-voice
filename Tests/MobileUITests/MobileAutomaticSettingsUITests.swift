@@ -21,9 +21,17 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
         app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light",
             "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
         app.launch()
+        XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
         let settings = app.buttons["navigation.settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 15))
-        settings.tap()
+        if settings.exists && settings.isHittable { settings.tap() }
+        else {
+            // The compact native TabView exposes the localized tab label rather
+            // than the sidebar identifier. Use the same route as navigation tests.
+            let tab = app.tabBars.buttons["Настройки"]
+            XCTAssertTrue(tab.waitForExistence(timeout: 5) && tab.isHittable)
+            tab.tap()
+        }
+        capture("guest-settings-opened")
         let privacy = app.buttons["settings.privacy"]
         XCTAssertTrue(privacy.waitForExistence(timeout: 5))
         privacy.tap()
