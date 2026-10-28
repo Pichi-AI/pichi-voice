@@ -106,8 +106,13 @@ extension MeetingSessionStoreCheckpointTests {
         do { try await store.create(retained); check(false, "Encrypted mode cannot quietly create unencrypted retained audio") }
         catch { check(true, "Encrypted mode cannot quietly create unencrypted retained audio") }
         var noPrivacy = session; noPrivacy.id = UUID(); noPrivacy.piiRedactionEnabled = false
-        do { try await store.create(noPrivacy); check(false, "The secure delivery mode keeps the existing Privacy requirement") }
-        catch { check(true, "The secure delivery mode keeps the existing Privacy requirement") }
+        try await store.create(noPrivacy)
+        let noPrivacyFile = storeRoot.appendingPathComponent(noPrivacy.id.uuidString).appendingPathComponent("session.json")
+        let noPrivacyLoaded = try await store.load(id: noPrivacy.id)
+        check(MeetingRecordingCipher.isEncryptedEnvelope(try Data(contentsOf: noPrivacyFile))
+            && noPrivacyLoaded == noPrivacy
+            && noPrivacy.isLocalContentConcealed,
+              "Independent local encryption persists concealed ciphertext even with PII redaction OFF")
         var otherOwner = session; otherOwner.id = UUID()
         otherOwner.profileOwnership = .init(profileID: "another-profile", issuer: nil, subject: nil,
             internalUserID: "18", organizationID: "19", workspaceID: "23")
