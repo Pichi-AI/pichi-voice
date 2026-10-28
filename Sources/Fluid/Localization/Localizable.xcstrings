@@ -59663,6 +59663,23 @@
           }
         }
       }
+    },
+    "recording.settings.scope": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text cleanup and encryption apply to new recordings. Audio retention applies to existing recordings too. When deletion after sync is on, unchanged recordings already confirmed by the server are also removed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очистка текста и шифрование применяются к новым записям. Срок хранения аудио действует и для существующих записей. При включённом удалении после синхронизации удаляются также неизменённые записи, приём которых уже подтверждён сервером."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

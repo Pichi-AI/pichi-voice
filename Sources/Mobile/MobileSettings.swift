@@ -346,7 +346,7 @@ private struct MobilePrivacySettings: View {
             }
             MobileSensitiveDictionarySettings { entry in dictionaryEdit = .init(entry: entry) }
             Section {
-                Text(PichiLocalization.text("Changes apply to new meetings. Audio retention also applies to existing recordings."))
+                Text(PichiLocalization.text("recording.settings.scope"))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
         }.navigationTitle(PichiLocalization.text("Data cleanup")).accessibilityIdentifier("settings.privacy.detail")
