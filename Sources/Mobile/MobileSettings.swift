@@ -193,24 +193,22 @@ extension View {
     func mobileSettingsPage() -> some View { modifier(MobileSettingsColumn()).buttonStyle(MobileSettingsActionRowStyle()) }
 }
 
-/// A grouped-row action reads as one: accent text across the row, the outlined style's red for a
-/// destructive role, and the secondary color while unavailable. Rows that are navigation-like,
-/// such as Replay onboarding, keep the native automatic style.
-private struct MobileSettingsActionRowStyle: ButtonStyle {
+/// A grouped-row action reads as one: accent text, the outlined style's readable red for a
+/// destructive role, and the secondary color while unavailable. The native automatic style keeps
+/// the whole row as its touch target and highlight. Replay onboarding keeps its own native row.
+private struct MobileSettingsActionRowStyle: PrimitiveButtonStyle {
     func makeBody(configuration: Configuration) -> some View { Row(configuration: configuration) }
 
     private struct Row: View {
-        let configuration: ButtonStyle.Configuration
+        let configuration: PrimitiveButtonStyleConfiguration
         @Environment(\.theme) private var theme
         @Environment(\.isEnabled) private var isEnabled
 
         var body: some View {
-            configuration.label
+            Button(configuration)
+                .buttonStyle(.automatic)
                 .foregroundStyle(!isEnabled ? theme.palette.secondaryText
-                    : configuration.role == .destructive ? Color.red : theme.palette.accentText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .opacity(configuration.isPressed ? 0.5 : 1)
+                    : configuration.role == .destructive ? theme.palette.readableText(.red) : theme.palette.accentText)
         }
     }
 }
@@ -371,16 +369,6 @@ private struct MobileVoiceEngineSettings: View {
                 }
             }
             .task { await refresh() }.accessibilityIdentifier("settings.models.detail")
-            .confirmationDialog(pendingDeletion?.displayName ?? "", isPresented: Binding(
-                get: { pendingDeletion != nil }, set: { if !$0 { pendingDeletion = nil } }
-            ), titleVisibility: .visible, presenting: pendingDeletion) { model in
-                Button(PichiLocalization.text("Delete model"), role: .destructive) {
-                    pendingDeletion = nil
-                    Task { do { try await asr.clearModelCache(for: model); await refresh() } catch { reportError(error) } }
-                }.accessibilityIdentifier("model.delete.confirm")
-            } message: { _ in
-                Text(PichiLocalization.text("The model will be removed from this device. Meetings and transcripts stay."))
-            }
     }
 
     private func summary(of model: SettingsStore.SpeechModel) -> some View {
@@ -431,6 +419,17 @@ private struct MobileVoiceEngineSettings: View {
                 }
                 Button(PichiLocalization.text("Delete"), role: .destructive) { pendingDeletion = model }
                     .disabled(asr.activeExclusiveActivity != nil).accessibilityIdentifier("model.delete.\(model.id)")
+                    // Attached to its own row, so an iPad popover points at the Delete row.
+                    .confirmationDialog(model.displayName, isPresented: Binding(
+                        get: { pendingDeletion == model }, set: { if !$0 { pendingDeletion = nil } }
+                    ), titleVisibility: .visible) {
+                        Button(PichiLocalization.text("Delete model"), role: .destructive) {
+                            pendingDeletion = nil
+                            Task { do { try await asr.clearModelCache(for: model); await refresh() } catch { reportError(error) } }
+                        }.accessibilityIdentifier("model.delete.confirm")
+                    } message: {
+                        Text(PichiLocalization.text("The model will be removed from this device. Meetings and transcripts stay."))
+                    }
             } else if model.supportsAutomaticDownload {
                 Button(PichiLocalization.text("Download")) {
                     Task {
