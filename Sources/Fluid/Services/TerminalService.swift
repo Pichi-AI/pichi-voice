@@ -268,7 +268,9 @@ private nonisolated final class TerminalCommandExecution: @unchecked Sendable {
         }
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
-        let arguments = ["/bin/zsh", "-c", command].map { strdup($0) } + [nil]
+        let arguments = ["/bin/zsh", "-c", command].map { (argument: String) in
+            argument.withCString { strdup($0) }
+        } + [nil]
         let variables = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {
             for value in arguments + variables { free(value) }
