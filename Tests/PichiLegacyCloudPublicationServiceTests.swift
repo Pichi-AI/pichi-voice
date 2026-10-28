@@ -106,7 +106,11 @@ extension PichiPublicationOutboxTests {
         check(try await meetings.loadTranscript(id: source.id) != nil,
               "Accepted manual legacy data is retained while current cleanup is OFF")
         try await service.setDeleteLocalAfterAcceptance(true)
-        try await wait { try await meetings.loadTranscript(id: source.id) == nil }
+        let compactedManualFile = PrivateProfileStorage.current.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1/settled/"
+            + source.id.uuidString.lowercased() + ".json")
+        try await wait {
+            try JSONDecoder().decode(PichiPublicationOutboxRecord.self, from: Data(contentsOf: compactedManualFile)).sourcePurged == true
+        }
         check(try await service.status(for: source.id) == receiptBeforeManualCleanup,
               "Manual legacy cleanup keeps the original accepted receipt")
         check(await transport.postCount() == 2,

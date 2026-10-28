@@ -28,11 +28,10 @@ extension PichiPublicationOutboxTests {
         var meetings = PrivateProfileMeetingStore()
         let cleanup = AutomaticCleanupOwner(store: meetings)
         let keyOwner = AutomaticCipherOwner()
-        var localEncryption = false
         func makeService(_ store: PrivateProfileMeetingStore) -> PichiCloudPublicationService {
             .init(account: account, meetings: store, profiles: profiles,
                 recordingCipher: { try await keyOwner.load($0) },
-                localEncryptionRequested: { _ in localEncryption },
+                localEncryptionRequested: { _ in keyOwner.localEncryptionEnabled },
                 deleteAcceptedRecording: { try await cleanup.delete($0, owner: $1, expectedSourceSHA256: $2) })
         }
         var service = makeService(meetings)
@@ -42,16 +41,16 @@ extension PichiPublicationOutboxTests {
         let guest = PrivateProfileStorage.current
         let ordinary = try await service.prepareCapturePersistencePolicy()
         check(ordinary == .init() && keyOwner.loads == 0, "Default guest recording does not create a local key or grant delivery")
-        localEncryption = true
+        keyOwner.localEncryptionEnabled = true
         keyOwner.holdNextLoad = true
         let startingGuest = Task { try await service.prepareCapturePersistencePolicy() }
         try await wait { keyOwner.isHolding }
-        localEncryption = false
+        keyOwner.localEncryptionEnabled = false
         keyOwner.releaseLoad()
         let guestPolicy = try await startingGuest.value
         check(guestPolicy.requiresEncryptedPersistence,
               "Changing the checkbox during key preflight cannot downgrade the admitted security snapshot")
-        localEncryption = true
+        keyOwner.localEncryptionEnabled = true
         check(guestPolicy.requiresEncryptedPersistence && !guestPolicy.requiresPIIRedaction,
               "Guest-local encryption is independent of account consent and PII cleanup")
         var guestConfiguration = MeetingCaptureConfiguration(mode: .inRoom, title: "Guest confidential Ёё",
@@ -96,14 +95,14 @@ extension PichiPublicationOutboxTests {
         keyOwner.missing = false; try await service.restoreEncryptedLocalStorage()
         check(try await meetings.loadTranscript(id: guestSource.id)?.title == guestSource.title,
               "An unlocked cold guest restores its original key before any new capture is prepared")
-        localEncryption = false
+        keyOwner.localEncryptionEnabled = false
         let disabledGuest = try await service.prepareCapturePersistencePolicy()
         let retainedGuestBytes = try Data(contentsOf: guestFile)
         check(disabledGuest == .init() && retainedGuestBytes == guestBytes,
               "Changing future encryption policy does not rewrite or decrypt existing history")
         await service.shutdown(); meetings = PrivateProfileMeetingStore(); cleanup.store = meetings
         service = makeService(meetings); try await service.install()
-        localEncryption = true; keyOwner.holdNextLoad = true
+        keyOwner.localEncryptionEnabled = true; keyOwner.holdNextLoad = true
         let guestBeforeLogin = Task { try await service.prepareCapturePersistencePolicy() }
         try await wait { keyOwner.isHolding }
         let signingIn = Task { await account.signIn(email: "a@synthetic.example", password: "synthetic-only") }
@@ -113,7 +112,7 @@ extension PichiPublicationOutboxTests {
         catch is CancellationError { check(true, "The real profile transition cancels and joins its pending guest encryption preflight") }
         catch AccountError.staleOperation { check(true, "The committed owner fence rejects the older guest preflight") }
         await signingIn.value
-        localEncryption = false; keyOwner.loads = 0
+        keyOwner.localEncryptionEnabled = false; keyOwner.loads = 0
         check(try await service.prepareAutomaticCapture() == false && keyOwner.loads == 0,
               "Signed-in accounts without a selected workspace keep ordinary local recording available")
         check(try await meetings.loadTranscript(id: guestSource.id) == nil,
@@ -397,6 +396,7 @@ extension PichiPublicationOutboxTests {
 private enum AutomaticFixtureFailure: Error { case timeout, busy }
 @MainActor private final class AutomaticCipherOwner {
     var locked = false; var missing = false; var loads = 0; var holdNextLoad = false
+    var localEncryptionEnabled = false
     private(set) var isHolding = false
     private var loadGate: CheckedContinuation<Void, Never>?
     func releaseLoad() { loadGate?.resume(); loadGate = nil }

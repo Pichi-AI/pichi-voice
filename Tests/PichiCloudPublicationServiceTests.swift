@@ -29,10 +29,10 @@ extension PichiPublicationOutboxTests {
             transport: identity, credentials: FacadeSyntheticCredentials(), lifecycle: profiles)
         let http = FacadeFixtureHTTP()
         let meetings = PrivateProfileMeetingStore.shared
-        var localEncryption = false
+        let localEncryption = FacadeLocalEncryptionChoice()
         let service = PichiCloudPublicationService(account: account, meetings: meetings, profiles: profiles, http: http,
             recordingCipher: { try MeetingRecordingCipher(profileID: $0.id, key: Data(repeating: 0x67, count: 32)) },
-            localEncryptionRequested: { _ in localEncryption },
+            localEncryptionRequested: { _ in localEncryption.enabled },
             deleteAcceptedRecording: { id, owner, digest in
                 try await meetings.delete(id: id, expectedOwnership: owner, validating: { source in
                     try Task.checkCancellation()
@@ -406,7 +406,7 @@ extension PichiPublicationOutboxTests {
         check(try await meetings.loadTranscript(id: first.id) != nil,
               "Current cleanup OFF retains an accepted manual OIDC recording")
         try await service.setDeleteLocalAfterAcceptance(true)
-        try await wait { try await meetings.loadTranscript(id: first.id) == nil }
+        try await wait { try durable(PrivateProfileStorage.current, id: first.id, settled: true).sourcePurged == true }
         let compactedOIDC = try durable(PrivateProfileStorage.current, id: first.id, settled: true)
         check(compactedOIDC.sourcePurged == true && compactedOIDC.transcriptBytes == nil
             && compactedOIDC.receipt == retainedOIDCReceipt && compactedOIDC.automaticAccountContext != true,
@@ -422,7 +422,7 @@ extension PichiPublicationOutboxTests {
         check(await http.count() == requestsBeforeOIDCCleanup,
               "Manual OIDC receipt cleanup issues no new POST, GET or PATCH")
         try await service.setDeleteLocalAfterAcceptance(false)
-        localEncryption = true
+        localEncryption.enabled = true
         let localPolicy = try await service.prepareCapturePersistencePolicy()
         check(localPolicy.requiresEncryptedPersistence && !localPolicy.requiresPIIRedaction,
               "OIDC local encryption is independent of publication consent")
@@ -458,6 +458,7 @@ extension PichiPublicationOutboxTests {
     }
 }
 
+@MainActor private final class FacadeLocalEncryptionChoice { var enabled = false }
 private enum FacadeProbeFailure: Error { case timeout }
 @MainActor private final class FacadeSyntheticBrowser: AccountBrowserAuthenticating {
     func authenticate(url: URL, callbackScheme: String) async throws -> URL {
