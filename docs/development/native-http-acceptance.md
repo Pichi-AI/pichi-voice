@@ -35,11 +35,12 @@ Inject these variables into the mobile integration test host, not just the paren
 
 For a `test-without-building` run, copy the generated mobile `.xctestrun` beside its original before changing its target environment; `__TESTROOT__` paths remain relative to that directory. The existing `configure_targets` function in `scripts/dev/macos-regression.py` can populate the supported `PICHI_` environment variables in either `.xctestrun` format. Use only the mobile integration target and these specific methods. Do not invoke the macOS build or test wrapper to configure mobile testing.
 
-The three ordinary methods cover:
+The four ordinary methods cover:
 
 | Method | Required evidence |
 | --- | --- |
 | `testEncryptedCaptureRealHTTPSReceiptHistoryAndCurrentDeletePolicy` | Real encrypted capture and History, durable receipt, wrong-owner refusal, busy coordinator refusal, current OFF retaining deferred work, current ON reconciling that receipt while automatic sending is off |
+| `testLostCommittedResponseRetainsSourceWithDeletionOnUntilDurableReceipt` | Deletion ON during a committed but lost response retains the encrypted local source; retry persists a matching receipt before source removal, with one server recording/import/charge |
 | `testLostCommittedResponseRetriesIdenticalBodyWithoutDuplicateImportOrCharge` | Lost response after upstream commit, no local receipt or deletion before retry, two identical request bodies, one real source/import/recording/charge, edited source retained |
 | `testOfflineQueueSurvivesFreshAccountStoreAndForegroundNetworkWake` | Encrypted offline queue, joined service/account shutdown, fresh account transport and store, cached same-owner restore, existing network and foreground wakes reaching a receipt |
 

@@ -298,6 +298,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     ) {
         guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         let previousActivity = self.meetingMenuPresentation.activity
+        let concealsActiveSource = activeSession?.isLocalContentConcealed == true
+        let activeSourceName = concealsActiveSource ? nil : activeSession?.capturedApplication?.displayName
+        let activeSourceOrRoom = concealsActiveSource ? nil : (activeSourceName ?? "In-room meeting")
+        let completedSourceName = latestCompletedSession?.isLocalContentConcealed == true
+            ? nil : latestCompletedSession?.capturedApplication?.displayName
         switch state {
         case .recording, .recordingDegraded:
             break
@@ -312,44 +317,44 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             self.meetingStartError = nil
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .preparing,
-                sourceName: activeSession?.capturedApplication?.displayName,
+                sourceName: activeSourceName,
                 startedAt: activeSession?.startedAt
             )
         case .recording, .recordingDegraded:
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .recording,
-                sourceName: activeSession?.capturedApplication?.displayName ?? "In-room meeting",
+                sourceName: activeSourceOrRoom,
                 startedAt: activeSession?.startedAt
             )
         case .stopping:
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .stopping,
-                sourceName: activeSession?.capturedApplication?.displayName ?? "In-room meeting",
+                sourceName: activeSourceOrRoom,
                 startedAt: activeSession?.startedAt
             )
         case .processing:
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .processing,
-                sourceName: activeSession?.capturedApplication?.displayName,
+                sourceName: activeSourceName,
                 startedAt: nil
             )
         case .completed:
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .completed,
-                sourceName: latestCompletedSession?.capturedApplication?.displayName,
+                sourceName: completedSourceName,
                 startedAt: nil
             )
         case .interrupted:
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .interrupted,
-                sourceName: activeSession?.capturedApplication?.displayName,
+                sourceName: activeSourceName,
                 startedAt: activeSession?.startedAt,
                 attentionStatus: Self.interruptionStatus(for: activeSession)
             )
         case let .failed(_, failure):
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .failed,
-                sourceName: activeSession?.capturedApplication?.displayName,
+                sourceName: activeSourceName,
                 startedAt: activeSession?.startedAt,
                 attentionStatus: Self.failureStatus(for: activeSession, failure: failure)
             )

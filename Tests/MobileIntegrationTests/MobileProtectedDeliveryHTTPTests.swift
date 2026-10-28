@@ -60,6 +60,41 @@ final class MobileProtectedDeliveryHTTPTests: XCTestCase {
         try await run.assertOneServerRecording(source.id, minimumAttempts: 1)
     }
 
+    func testLostCommittedResponseRetainsSourceWithDeletionOnUntilDurableReceipt() async throws {
+        let fixture = try HTTPFixture.configuration()
+        let run = try HTTPFixture(configuration: fixture, attach: { self.add($0) })
+        addTeardownBlock { await run.cleanup(preserveFailure: (self.testRun?.failureCount ?? 1) > 0) }
+        try await run.start()
+        try await run.service.setDeleteLocalAfterAcceptance(true)
+        try await run.control(["dropNextSuccessfulImportResponse": true, "offlineAfterDroppedResponse": true])
+        let source = try await run.record()
+        try await run.wait {
+            let ledger = try await run.ledger(source.id)
+            let state = try run.outbox(source.id)?.state
+            return ledger.attempts.contains { $0.outcome == "dropped_after_commit" }
+                && state == .retryScheduled
+        }
+
+        let unconfirmed = try XCTUnwrap(run.outbox(source.id))
+        XCTAssertNil(unconfirmed.receipt)
+        XCTAssertFalse(unconfirmed.sourcePurged == true,
+            "Current deletion ON still requires a durable matching receipt")
+        let retained = try await run.store.loadTranscript(id: source.id)
+        XCTAssertNotNil(retained, "A lost response cannot delete the encrypted local source")
+        try run.assertCiphertext(source.id)
+        try await run.assertOneServerRecording(source.id, minimumAttempts: 1)
+
+        try await run.control(["offline": false])
+        await run.service.notifySceneActive(true)
+        try await run.wait {
+            guard let accepted = try run.outbox(source.id) else { return false }
+            return accepted.receipt != nil && accepted.sourcePurged == true
+        }
+        let removed = try await run.store.loadTranscript(id: source.id)
+        XCTAssertNil(removed)
+        try await run.assertOneServerRecording(source.id, minimumAttempts: 2)
+    }
+
     func testLostCommittedResponseRetriesIdenticalBodyWithoutDuplicateImportOrCharge() async throws {
         let fixture = try HTTPFixture.configuration()
         let run = try HTTPFixture(configuration: fixture, attach: { self.add($0) })
@@ -319,7 +354,13 @@ private final class HTTPFixture {
         service = PichiCloudPublicationService(account: account, meetings: store, profiles: profiles,
             recordingCipher: { try cipherFor($0) },
             localEncryptionRequested: { [settings] _ in settings.meetingEncryptLocalRecordings },
-            deleteAcceptedRecording: { id, owner, expectedSHA in
+            deleteAcceptedRecording: { [weak self] id, owner, expectedSHA in
+                guard let self else { throw CancellationError() }
+                // Read the encrypted envelope from disk, rather than trusting the
+                // facade's in-memory accepted status, at the deletion boundary.
+                let durable = try self.outbox(id)
+                XCTAssertNotNil(durable?.receipt, "Local deletion was requested before receipt persistence")
+                guard durable?.receipt != nil else { throw Failure.invalidLedger }
                 let current = PrivateProfileStorage.current
                 guard owner.matches(current), PrivateProfileStorage.isReadable(current),
                       profiles.isPrivateDataVisible, !profiles.isTransitioning else { throw AccountError.staleOperation }
