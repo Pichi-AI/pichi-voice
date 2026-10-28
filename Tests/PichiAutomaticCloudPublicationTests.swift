@@ -408,7 +408,7 @@ extension PichiPublicationOutboxTests {
         return checks
     }
 
-    static func checkConnectivityRestorationRace(root: URL) async throws -> Int {
+    static func checkConnectivityRestorationRace(root: URL, restorationFinishesFirst: Bool = false) async throws -> Int {
         let previous = PrivateProfileStorage.current
         defer { PrivateProfileStorage.select(previous) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -476,6 +476,7 @@ extension PichiPublicationOutboxTests {
             return nil
         }
         try await wait { try record()?.state == .retryScheduled }
+        let original = try record()!
         await service.shutdown()
         meetings = PrivateProfileMeetingStore()
         service = makeService(); try await service.install()
@@ -489,20 +490,45 @@ extension PichiPublicationOutboxTests {
         check(!account.isCurrent(context), "Concurrent connectivity validation temporarily closes network admission without replacing the local owner")
         check(try record()?.state == .sending && record()?.attemptCount == 2,
               "The retry is durably sending before its account validation collides with restoration")
+        if restorationFinishesFirst {
+            await transport.releaseValidationCall(1)
+            await restoring.value
+            check(account.isCurrent(context) && !account.isAwaitingLegacyServerValidation,
+                  "Connectivity validation finishes before the held request reports its typed stale result")
+            await service.notifySceneActive(true)
+            check(try record()?.state == .sending,
+                  "The foreground activation has already observed sending before local retirement starts")
+            check(await transport.postCount() == 0, "The early foreground wake sends no POST while request validation is still held")
+            await transport.failHeldValidationAsStale(0)
+        }
         await transport.releaseValidationCall(0)
-        try await wait { try record()?.state == .paused }
-        check(try record()?.pauseReason == .uncertainDelivery && record()?.receipt == nil,
-              "A joined transfer interrupted by transient account admission retains a retryable durable source")
-        check(await transport.postCount() == 0, "Temporarily unavailable account admission sends no protected POST")
-        await transport.releaseValidationCall(1)
-        await restoring.value
-        check(account.isCurrent(context) && !account.isAwaitingLegacyServerValidation,
-              "Validation restores the same current account without weakening its admission guard")
-        await service.notifySceneActive(true)
+        if restorationFinishesFirst {
+            try await wait { try record()?.state != .sending }
+            let retired = try record()!
+            check((retired.state == .paused && retired.pauseReason == .uncertainDelivery)
+                || retired.state == .queued || retired.state == .accepted,
+                  "A typed stale result remains retryable after validation has already finished")
+        } else {
+            try await wait { try record()?.state == .paused }
+            check(try record()?.pauseReason == .uncertainDelivery && record()?.receipt == nil,
+                  "A joined transfer interrupted by transient account admission retains a retryable durable source")
+            check(await transport.postCount() == 0, "Temporarily unavailable account admission sends no protected POST")
+        }
+        if !restorationFinishesFirst {
+            await transport.releaseValidationCall(1)
+            await restoring.value
+            check(account.isCurrent(context) && !account.isAwaitingLegacyServerValidation,
+                  "Validation restores the same current account without weakening its admission guard")
+            await service.notifySceneActive(true)
+        }
         try await wait { try record()?.receipt != nil }
         check(try record()?.state == .accepted && record()?.attemptCount == 3,
               "A foreground wake resumes the same durable source and receives its matching receipt")
         check(await transport.postCount() == 1, "The interrupted authorization creates exactly one eventual import POST")
+        let accepted = try record()!
+        check(accepted.operationID == original.operationID && accepted.transcriptBytes == original.transcriptBytes
+            && accepted.sourceSHA256 == original.sourceSHA256 && accepted.localSourceSHA256 == original.localSourceSHA256,
+              "Both retirement orderings preserve the original operation, frozen bytes and deletion fingerprint")
         check(try await meetings.loadTranscript(id: session.id) != nil, "Receipt recovery preserves the encrypted local source with retention off")
         await service.shutdown(); await account.shutdown()
         return checks
@@ -578,6 +604,7 @@ private actor AutomaticFixtureOIDC: AccountTransporting {
 private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     private var heldValidations: [CheckedContinuation<Void, Never>?] = []
     private var validationsToHold = 0
+    private var staleHeldValidations = Set<Int>()
     let configuration: LegacyAccountConfiguration
     private var userID = "123", offline = false, loseNext = false, holdNext = false, holding = false
     private var accountThrottled = false
@@ -594,7 +621,9 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
         validationGets += 1
         if validationsToHold > 0 {
             validationsToHold -= 1
+            let index = heldValidations.count
             await withCheckedContinuation { heldValidations.append($0) }
+            if staleHeldValidations.remove(index) != nil { throw AccountError.staleOperation }
         }
         if offline { throw LegacyAccountConnectivityFailure.unavailable }
         if accountThrottled { throw LegacyAccountConnectivityFailure.rateLimited(retryAfter: accountRetryAfter) }
@@ -614,6 +643,7 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     func holdValidationCalls(_ count: Int) { validationsToHold = count; heldValidations = [] }
     func heldValidationCount() -> Int { heldValidations.count }
     func releaseValidationCall(_ index: Int) { heldValidations[index]?.resume(); heldValidations[index] = nil }
+    func failHeldValidationAsStale(_ index: Int) { staleHeldValidations.insert(index) }
     func setOffline(_ value: Bool) { offline = value }
     func validationGetCount() -> Int { validationGets }
     func setAccountThrottled(_ value: Bool, retryAfter: String? = nil) {

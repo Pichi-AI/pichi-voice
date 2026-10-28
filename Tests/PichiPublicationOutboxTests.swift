@@ -9,6 +9,11 @@ struct PichiPublicationOutboxTests {
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).resolvingSymlinksInPath()
         try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         defer { try? manager.removeItem(at: root) }
+        if CommandLine.arguments.contains("--connectivity-race-reverse-only") {
+            let checks = try await Self.checkConnectivityRestorationRace(root: root.appendingPathComponent("reverse-race"), restorationFinishesFirst: true)
+            print("Pichi reversed restoration race: \(checks) synthetic integration checks passed; no live transport")
+            return
+        }
         if CommandLine.arguments.contains("--connectivity-race-only") {
             let checks = try await Self.checkConnectivityRestorationRace(root: root.appendingPathComponent("connectivity-race"))
             print("Pichi connectivity restoration race: \(checks) synthetic integration checks passed; no live transport")
@@ -373,5 +378,7 @@ struct PichiPublicationOutboxTests {
         print("Pichi automatic encrypted delivery: \(automaticChecks) synthetic integration checks passed; no live transport")
         let restorationChecks = try await Self.checkConnectivityRestorationRace(root: root.appendingPathComponent("connectivity-race"))
         print("Pichi connectivity restoration race: \(restorationChecks) synthetic integration checks passed; no live transport")
+        let reverseChecks = try await Self.checkConnectivityRestorationRace(root: root.appendingPathComponent("reverse-race"), restorationFinishesFirst: true)
+        print("Pichi reversed restoration race: \(reverseChecks) synthetic integration checks passed; no live transport")
     }
 }

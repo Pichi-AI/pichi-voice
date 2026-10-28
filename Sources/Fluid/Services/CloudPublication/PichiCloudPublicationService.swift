@@ -1100,7 +1100,8 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 await self.cleanupAccepted(accepted, profile: profile, context: context, store: store)
             }
         } catch {
-            if Task.isCancelled || error is CancellationError || (try? self.check(profile, context: context)) == nil {
+            let retryAfterValidation = !Task.isCancelled && (error as? AccountError) == .staleOperation
+            if Task.isCancelled || error is CancellationError || retryAfterValidation || (try? self.check(profile, context: context)) == nil {
                 // The HTTP task has joined. This task is owned and joined by its
                 // enclosing command/worker, but must not inherit caller cancellation:
                 // the retained store's one-time crash recovery cannot repair this run.
@@ -1125,6 +1126,14 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     }
                 }
                 await cleanup.value
+                // A foreground wake may already have read the old sending state.
+                // Re-activate only after retirement joins, with this caller still
+                // uncancelled and the same account current. Account restoration
+                // itself is never awaited from an owned publication transfer.
+                if retryAfterValidation, !Task.isCancelled, !self.userPaused,
+                   (try? self.check(profile, context: context)) != nil {
+                    try? await self.activateBody(resumeUserPauses: false)
+                }
                 return
             }
             do {
