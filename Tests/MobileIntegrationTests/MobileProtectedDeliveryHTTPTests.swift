@@ -36,6 +36,37 @@ final class MobileProtectedDeliveryHTTPTests: XCTestCase {
         try await run.assertQAServerRecording(source.id)
     }
 
+    /// Synthetic speech and participant labels exercise the real QA judge. This is
+    /// assessment acceptance, not microphone, ASR or acoustic identity acceptance.
+    func testDirectQAMedicalConversationAssessmentRetainedAfterLocalRemoval() async throws {
+        let fixture = try HTTPFixture.configuration(mode: .qa, requiresAssessment: true)
+        let run = try HTTPFixture(configuration: fixture, scenario: .medicalConversation, attach: { self.add($0) })
+        addTeardownBlock { await run.cleanup(preserveFailure: (self.testRun?.failureCount ?? 1) > 0) }
+        try await run.start()
+        try await run.assertQAFirstAssessmentPreset()
+        try await run.service.setDeleteLocalAfterAcceptance(false)
+        let source = try await run.record()
+        XCTAssertEqual(source.speakers.count, 2)
+        XCTAssertTrue(source.speakers.allSatisfy { !$0.isLocalUser },
+            "Synthetic role labels cannot claim an acoustic account-owner match")
+        try await run.wait { try run.outbox(source.id)?.receipt != nil }
+        let accepted = try XCTUnwrap(run.outbox(source.id))
+        XCTAssertEqual(accepted.owner, source.profileOwnership)
+        XCTAssertEqual(accepted.localSourceSHA256, try PichiProtectedPublicationSource.localFingerprint(for: source))
+        XCTAssertNil(accepted.managerSpeakerHint, "The physician speaks first; order cannot identify the owner")
+        try run.assertCiphertext(source.id)
+        let assessment = try await run.waitForQAAssessment(source.id)
+        try await run.assertQAServerRecording(source.id)
+
+        try await run.service.setDeleteLocalAfterAcceptance(true)
+        try await run.wait { try run.outbox(source.id)?.sourcePurged == true }
+        let removed = try await run.store.loadTranscript(id: source.id)
+        XCTAssertNil(removed)
+        XCTAssertEqual(try run.outbox(source.id)?.receipt?.recordingID, accepted.receipt?.recordingID)
+        try await run.assertQAServerRecording(source.id)
+        try await run.assertCompletedQAAssessment(source.id, expected: assessment)
+    }
+
     func testEncryptedCaptureRealHTTPSReceiptHistoryAndCurrentDeletePolicy() async throws {
         let fixture = try HTTPFixture.configuration()
         let run = try HTTPFixture(configuration: fixture, attach: { self.add($0) })
@@ -232,6 +263,32 @@ final class MobileProtectedDeliveryHTTPTests: XCTestCase {
 @MainActor
 private final class HTTPFixture {
     enum Mode: Equatable { case localStand, qa }
+    enum Scenario: Equatable {
+        case receiptSmoke, medicalConversation
+        var frames: Int { self == .receiptSmoke ? 24_000 : 16_000 * 96 }
+        @MainActor var texts: [String] {
+            switch self {
+            case .receiptSmoke: return [HTTPFixture.text]
+            case .medicalConversation:
+                // Entirely invented training exchange. Velora-X is fictitious;
+                // no statement supplies real clinical efficacy or prescribing advice.
+                return [
+                    "Я врач в этом учебном разговоре. У меня пять минут. Что вы хотели обсудить?",
+                    "Я медицинский представитель в учебной встрече. Спасибо за время. Можно сначала уточнить ваши вопросы, затем обсудить вымышленный продукт Велора-Икс и согласовать следующий шаг?",
+                    "Да. Мне важно понимать, какие материалы доступны и где границы информации. Я не хочу слушать обещания без доказательств.",
+                    "Правильно ли я понял: вам нужны проверяемые материалы и ясное описание ограничений, а не рекламные обещания? Какие вопросы стоит разобрать в первую очередь?",
+                    "В первую очередь ограничения. Есть ли у вас данные о реальной эффективности и безопасности?",
+                    "У Велора-Икс нет реальных клинических данных: это вымышленное название для тренировки. Поэтому я не могу обещать эффективность, безопасность или рекомендовать назначение. В реальной работе я предоставил бы утверждённую инструкцию и проверяемые источники.",
+                    "Тогда зачем мне тратить время? Не присылайте общую рекламу. Мне нужен конкретный ответ на мой вопрос.",
+                    "Понимаю ваше возражение. Я не стану заменять ответ рекламой. Зафиксирую ваш вопрос и подготовлю структурированный перечень нужных источников с указанием отсутствующих данных. Подойдёт ли такой формат для следующего обсуждения?",
+                    "Да, если явно отделите подтверждённые сведения от неизвестного. И не добавляйте сведения о пациентах.",
+                    "Согласен. Итак, ваш приоритет - ограничения и проверяемость. Я подготовлю только учебный список источников и открытых вопросов без данных пациентов. Можем сверить его на следующей учебной встрече во вторник?",
+                    "Во вторник подходит. Начните с ограничений и вопросов, на которые ещё нет ответа.",
+                    "Договорились: во вторник обсудим ограничения, затем открытые вопросы. Спасибо за обратную связь. Сегодня никаких лечебных рекомендаций и решений о назначении мы не делаем."
+                ]
+            }
+        }
+    }
     struct Configuration: Decodable {
         let origin: URL
         let email: String
@@ -240,9 +297,13 @@ private final class HTTPFixture {
         let workspaceID: String
         let controlToken: String
         let expectedAccountID: String?
+        let expectedAssessmentCriterionIDs: [String]?
+        let expectedAssessmentPresetID: String?
+        let expectedAssessmentCommunicationCriterionIDs: [String]?
         var mode = Mode.localStand
         private enum CodingKeys: String, CodingKey {
             case origin, email, password, organizationID, workspaceID, controlToken, expectedAccountID
+            case expectedAssessmentCriterionIDs, expectedAssessmentPresetID, expectedAssessmentCommunicationCriterionIDs
         }
     }
     struct Ledger: Decodable {
@@ -268,6 +329,36 @@ private final class HTTPFixture {
         let assessmentPolicyVersion: Int?
     }
     private struct QAHistory: Decodable { let recordings: [QARecord] }
+    struct QAAssessment: Decodable, Equatable {
+        struct Evaluation: Decodable, Equatable {
+            let criterion_id: Int
+            let score: Double?
+            let reasoning: String
+            private enum CodingKeys: String, CodingKey { case criterion_id, score, reasoning }
+            init(from decoder: Decoder) throws {
+                let values = try decoder.container(keyedBy: CodingKeys.self)
+                criterion_id = try values.decode(Int.self, forKey: .criterion_id)
+                guard values.contains(.score) else { throw Failure.invalidAssessment }
+                score = try values.decodeIfPresent(Double.self, forKey: .score)
+                reasoning = try values.decode(String.self, forKey: .reasoning)
+            }
+        }
+        let noCriteria: Bool?
+        let evaluations: [Evaluation]
+    }
+    private struct QAAssessmentDetail: Decodable {
+        let transcriptionStatus: String
+        let processingStage: String?
+        let criteriaIds: [Int]
+        let assessmentPolicyCriteriaIds: [Int]
+        let evaluationResults: QAAssessment?
+    }
+    private struct QAPreset: Decodable {
+        let id: Int
+        let organizationId: Int
+        let criteriaIds: [Int]
+    }
+
     private struct Ownership: Codable {
         let purpose: String
         let runID: UUID
@@ -275,6 +366,7 @@ private final class HTTPFixture {
     }
     static let text = "Synthetic HTTPS protected transcript [PERSON] Ёё 4829."
     let configuration: Configuration
+    let scenario: Scenario
     let root: URL
     let runID: UUID
     let previousProfile = PrivateProfileStorage.current
@@ -300,15 +392,19 @@ private final class HTTPFixture {
     private(set) var service: PichiCloudPublicationService!
     private var suite: String { "MobileProtectedDeliveryHTTPTests." + runID.uuidString }
 
-    static func configuration(mode: Mode = .localStand) throws -> Configuration {
+    static func configuration(mode: Mode = .localStand, requiresAssessment: Bool = false) throws -> Configuration {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Synthetic HTTPS acceptance requires a task-owned simulator")
         #else
         let environment = ProcessInfo.processInfo.environment
-        let flag = mode == .qa ? "PICHI_NATIVE_QA_ACCEPTANCE" : "PICHI_NATIVE_HTTP_ACCEPTANCE"
+        let flag = requiresAssessment ? "PICHI_NATIVE_QA_ASSESSMENT_ACCEPTANCE"
+            : (mode == .qa ? "PICHI_NATIVE_QA_ACCEPTANCE" : "PICHI_NATIVE_HTTP_ACCEPTANCE")
         let pathVariable = mode == .qa ? "PICHI_QA_FIXTURE_PATH" : "PICHI_HTTP_FIXTURE_PATH"
         guard environment[flag] == "1" else {
             throw XCTSkip("Opt in with " + flag + "=1")
+        }
+        guard !requiresAssessment || (mode == .qa && environment["PICHI_NATIVE_QA_ACCEPTANCE"] == "1") else {
+            throw Failure.invalidConfiguration
         }
         guard let path = environment[pathVariable], path.hasPrefix("/") else {
             throw Failure.invalidConfiguration
@@ -339,13 +435,23 @@ private final class HTTPFixture {
                 throw Failure.invalidConfiguration
             }
         }
+        if requiresAssessment {
+            guard let ids = value.expectedAssessmentCriterionIDs, !ids.isEmpty,
+                  Set(ids).count == ids.count, ids.allSatisfy({ PichiLegacyPublicationRequest.databaseID($0) != nil }),
+                  value.expectedAssessmentPresetID.flatMap(PichiLegacyPublicationRequest.databaseID) != nil,
+                  let communication = value.expectedAssessmentCommunicationCriterionIDs, !communication.isEmpty,
+                  Set(communication).count == communication.count, Set(communication).isSubset(of: Set(ids)) else {
+                throw Failure.invalidConfiguration
+            }
+        }
         return value
         #endif
     }
 
-    init(configuration: Configuration, relaunchRoot: URL? = nil, restoring: Bool = false,
+    init(configuration: Configuration, scenario: Scenario = .receiptSmoke, relaunchRoot: URL? = nil, restoring: Bool = false,
          attach: @escaping @MainActor (XCTAttachment) -> Void) throws {
         self.configuration = configuration
+        self.scenario = scenario
         self.attach = attach
         guard configuration.mode != .qa || (relaunchRoot == nil && !restoring) else { throw Failure.invalidConfiguration }
         let manager = FileManager.default
@@ -375,7 +481,7 @@ private final class HTTPFixture {
         settings.fluidMeetEnabled = true
         settings.selectedSpeechModel = .whisperSmall
         settings.meetingSaveAudio = true
-        settings.meetingSpeakerLabelsEnabled = false
+        settings.meetingSpeakerLabelsEnabled = scenario == .medicalConversation
         settings.meetingPIIRedactionRequested = true
         settings.meetingPIIRedactionEnabled = true
         settings.meetingEncryptLocalRecordings = true
@@ -392,8 +498,8 @@ private final class HTTPFixture {
         PrivateProfileStorage.select(try PrivateProfileStorage.proposed(context: nil, generation: UUID(),
             legacyRootDirectory: root.appendingPathComponent("private-data", isDirectory: true)))
         store = PrivateProfileMeetingStore()
-        capture = HTTPCapture()
-        recognizer = HTTPRecognizer()
+        capture = HTTPCapture(frames: scenario.frames)
+        recognizer = HTTPRecognizer(scenario: scenario)
         arbiter = HTTPArbiter()
         coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: recognizer,
             audioArbiter: arbiter, settings: settings, redactorProvider: { HTTPRedactor() }, processingLogger: { _ in })
@@ -476,8 +582,8 @@ private final class HTTPFixture {
         // once and preserve the encrypted request through later preference changes.
         let title = configuration.mode == .qa ? "pichi-native-qa-" + runID.uuidString.lowercased() : "Synthetic HTTPS Ёё"
         var request = MeetingCaptureConfiguration(mode: .inRoom, title: title,
-            languageCode: "en", microphone: .init(captureDeviceID: "synthetic-http-pcm", displayName: "Synthetic PCM"),
-            audioStorageMode: .retainedFiles, speakerLabelsEnabled: false, piiRedactionEnabled: true,
+            languageCode: scenario == .medicalConversation ? "ru" : "en", microphone: .init(captureDeviceID: "synthetic-http-pcm", displayName: "Synthetic PCM"),
+            audioStorageMode: .retainedFiles, speakerLabelsEnabled: scenario == .medicalConversation, piiRedactionEnabled: true,
             transcriptionBackendID: MeetingBackendID.legacyCompatibility.rawValue)
         request.timestampDefaultTitle = false
         let admitted = try await coordinator.startRecording(configuration: request)
@@ -486,7 +592,7 @@ private final class HTTPFixture {
         XCTAssertEqual(admitted.audioStorageMode, .memoryOnly)
         XCTAssertTrue(admitted.isLocalContentConcealed)
         let summary = try await capture.summary()
-        XCTAssertEqual(summary.frames, 24_000)
+        XCTAssertEqual(summary.frames, scenario.frames)
         XCTAssertGreaterThan(summary.peak, 0.02)
         try await recognizer.recognize(summary, session: try XCTUnwrap(coordinator.activeSession))
         return admitted
@@ -499,7 +605,7 @@ private final class HTTPFixture {
         XCTAssertTrue(result.requiresEncryptedPersistence == true)
         XCTAssertEqual(result.audioStorageMode, .memoryOnly)
         XCTAssertTrue(result.transcriptIsComplete == true)
-        XCTAssertEqual(result.transcriptSegments.map(\.text), [Self.text])
+        XCTAssertEqual(result.transcriptSegments.map(\.text), scenario.texts)
         XCTAssertTrue(coordinator.isQuiescent)
         XCTAssertFalse(arbiter.hasLease)
         return result
@@ -540,6 +646,9 @@ private final class HTTPFixture {
             XCTAssertNil(content.range(of: Data(Self.text.utf8)), "Synthetic transcript appeared in plaintext: " + file.lastPathComponent)
             XCTAssertNil(content.range(of: Data("Synthetic HTTPS protected transcript".utf8)),
                 "An escaped JSON representation must not leave plaintext speech on disk")
+            for text in scenario.texts {
+                XCTAssertNil(content.range(of: Data(text.utf8)), "Synthetic speech appeared in plaintext")
+            }
             XCTAssertFalse(["caf", "wav", "m4a", "pcm"].contains(file.pathExtension.lowercased()))
         }
     }
@@ -589,9 +698,138 @@ private final class HTTPFixture {
         let evidence = XCTAttachment(string: "Direct QA synthetic source: " + id.uuidString.lowercased()
             + "\nrecordingID=" + receipt.recordingID + "\nHistory and detail source/owner/hash bindings verified."
             + "\nlocalSourcePurged=" + String(record.sourcePurged == true)
-            + "\nAnalysis completion and AI quality are outside this smoke test.")
+            + (scenario == .receiptSmoke
+                ? "\nAnalysis completion and AI quality are outside this smoke test."
+                : "\nThe separate assessment assertions require completed real QA evaluations."))
         evidence.name = "direct-qa-synthetic-source-" + id.uuidString.lowercased()
             + (record.sourcePurged == true ? "-after-local-removal" : "-before-local-removal")
+        evidence.lifetime = .keepAlways
+        attach(evidence)
+    }
+
+    /// The ordinary training preset route uses the cookie-owning production
+    /// transport, with fresh identity/ACL validation just like History above.
+    func assertQAFirstAssessmentPreset() async throws {
+        let context = try qaContext()
+        let fresh = try await legacy.account()
+        guard fresh.stableIdentity == context.identity, fresh.account.id == configuration.expectedAccountID,
+              fresh.activeOrganizationID == configuration.organizationID,
+              fresh.contains(organizationID: configuration.organizationID, workspaceID: configuration.workspaceID),
+              account.isCurrent(context) else { throw Failure.authentication }
+        let request = try PichiLegacyPublicationRequest.endpoint(origin: configuration.origin, path: "/api/criteria-presets")
+        let response = try await legacy.perform(request)
+        guard response.status == 200, response.body.count <= PichiLegacyPublicationRequest.maximumResponseBytes,
+              account.isCurrent(context) else { throw Failure.invalidAssessment }
+        let presets = try JSONDecoder().decode([QAPreset].self, from: response.body)
+        guard let first = presets.first(where: { !$0.criteriaIds.isEmpty }),
+              String(first.organizationId) == configuration.organizationID,
+              String(first.id) == configuration.expectedAssessmentPresetID,
+              Set(first.criteriaIds.map(String.init)) == Set(configuration.expectedAssessmentCriterionIDs ?? []),
+              Set(first.criteriaIds).count == first.criteriaIds.count else { throw Failure.invalidAssessment }
+    }
+
+    /// Receipt acceptance alone and the server's no-criteria fallback cannot pass.
+    /// Wait at most four minutes plus one bounded in-flight production request.
+    func waitForQAAssessment(_ id: UUID) async throws -> QAAssessment {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(240))
+        var lastState = "not-polled"
+        do {
+            while ContinuousClock.now < deadline {
+                try Task.checkCancellation()
+                do { try await service.reconcile(id) }
+                catch AccountError.busy {
+                    // The publication service may already own its scheduled receipt poll.
+                    try await Task.sleep(for: .seconds(2))
+                    continue
+                }
+                let detail = try await qaAssessmentDetail(id)
+                let state = try outbox(id)?.receipt?.analysisState
+                // Persist only controlled status names, never model responses or HTTP bodies.
+                lastState = state?.rawValue ?? "receipt-missing"
+                if state == .failed || detail.transcriptionStatus == "failed" { throw Failure.invalidAssessment }
+                if state == .succeeded {
+                    let result = try validateCompletedAssessment(detail, id: id)
+                    attachAssessmentStatus(id, state: "succeeded", result: result)
+                    return result
+                }
+                try await Task.sleep(for: .seconds(2))
+            }
+            throw Failure.timeout
+        } catch {
+            waitFailed = true
+            preserveWaitEvidence(line: #line)
+            attachAssessmentStatus(id, state: lastState, result: nil)
+            // Keep credentials, raw response data and remote error text out of XCTest.
+            throw Failure.invalidAssessment
+        }
+    }
+
+    func assertCompletedQAAssessment(_ id: UUID, expected: QAAssessment) async throws {
+        try await service.reconcile(id)
+        let detail = try await qaAssessmentDetail(id)
+        let retained = try validateCompletedAssessment(detail, id: id)
+        guard retained == expected else {
+            // Do not dump model reasoning or an entire assessment into failure output.
+            throw Failure.invalidAssessment
+        }
+        attachAssessmentStatus(id, state: "retained-after-local-removal", result: retained)
+    }
+
+    private func qaAssessmentDetail(_ id: UUID) async throws -> QAAssessmentDetail {
+        let record = try XCTUnwrap(outbox(id)), receipt = try XCTUnwrap(record.receipt)
+        let canonical = try XCTUnwrap(record.canonicalSourceSHA256)
+        let context = try qaContext()
+        var request = try PichiLegacyPublicationRequest.status(origin: configuration.origin, receipt: receipt)
+        request.timeoutInterval = 15
+        let response = try await account.performAuthorizedLegacyRequest(for: context, request: request)
+        _ = try PichiLegacyPublicationRequest.accountContextReceipt(from:
+            .init(status: response.status, body: response.body, retryAfter: response.retryAfter), context: context,
+            sessionID: id, canonicalSourceSHA256: canonical, managerSpeakerID: record.managerSpeakerHint, expected: receipt)
+        let source = try JSONDecoder().decode(QARecord.self, from: response.body)
+        try validateQARecord(source, sourceID: id, serverID: try XCTUnwrap(Int(receipt.recordingID)))
+        return try JSONDecoder().decode(QAAssessmentDetail.self, from: response.body)
+    }
+
+    private func validateCompletedAssessment(_ detail: QAAssessmentDetail, id: UUID) throws -> QAAssessment {
+        let record = try XCTUnwrap(outbox(id)), receipt = try XCTUnwrap(record.receipt)
+        let expected = Set(try XCTUnwrap(configuration.expectedAssessmentCriterionIDs))
+        guard !expected.isEmpty, receipt.analysisState == .succeeded,
+              detail.transcriptionStatus == "completed", detail.processingStage != "analyzing",
+              Set(detail.criteriaIds.map(String.init)) == expected,
+              Set(detail.assessmentPolicyCriteriaIds.map(String.init)) == expected,
+              Set(receipt.accountContextPolicyCriteriaIDs ?? []) == expected,
+              let result = detail.evaluationResults, result.noCriteria != true,
+              result.evaluations.count == expected.count,
+              Set(result.evaluations.map { String($0.criterion_id) }) == expected else { throw Failure.invalidAssessment }
+        for evaluation in result.evaluations {
+            let reasoning = evaluation.reasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !reasoning.isEmpty else { throw Failure.invalidAssessment }
+            if let score = evaluation.score {
+                guard score.isFinite, (0...10).contains(score) else { throw Failure.invalidAssessment }
+            } else {
+                // Null is allowed only with an explicit applicability/evidence explanation.
+                let lower = reasoning.lowercased()
+                guard ["недостат", "не примен", "не удалось", "невозможно", "неопредел", "нет данных",
+                       "нельзя", "cannot", "insufficient", "uncertain", "not applicable", "not enough"]
+                    .contains(where: { lower.contains($0) }) else { throw Failure.invalidAssessment }
+            }
+        }
+        let communication = Set(try XCTUnwrap(configuration.expectedAssessmentCommunicationCriterionIDs))
+        guard result.evaluations.contains(where: { communication.contains(String($0.criterion_id)) && $0.score != nil }) else {
+            throw Failure.invalidAssessment
+        }
+        return result
+    }
+
+    private func attachAssessmentStatus(_ id: UUID, state: String, result: QAAssessment?) {
+        let status = "Synthetic QA assessment source=" + id.uuidString.lowercased()
+            + "\nstate=" + state + "\nexpectedPresetID=" + (configuration.expectedAssessmentPresetID ?? "missing")
+            + "\nexpectedCriteria=" + (configuration.expectedAssessmentCriterionIDs ?? []).sorted().joined(separator: ",")
+            + "\nevaluationCount=" + String(result?.evaluations.count ?? 0)
+            + "\nnumericScoreCount=" + String(result?.evaluations.filter { $0.score != nil }.count ?? 0)
+            + "\nlocalSourcePurged=" + String((try? outbox(id)?.sourcePurged) == true)
+        let evidence = XCTAttachment(string: status)
+        evidence.name = "direct-qa-assessment-" + id.uuidString.lowercased() + "-" + state
         evidence.lifetime = .keepAlways
         attach(evidence)
     }
@@ -765,7 +1003,7 @@ private final class HTTPFixture {
         }
     }
 
-    nonisolated enum Failure: Error { case invalidConfiguration, authentication, invalidLedger, timeout, invalidPCM }
+    nonisolated enum Failure: Error { case invalidConfiguration, authentication, invalidLedger, timeout, invalidPCM, invalidAssessment }
 }
 
 private final class HTTPControlRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
@@ -830,6 +1068,8 @@ private struct HTTPRedactor: TranscriptTextRedacting {
 
 private actor HTTPCapture: MeetingCaptureControlling {
     struct Summary: Sendable { let frames: Int; let peak: Float; let pcm: Data; let sha256: Data }
+    private let frames: Int
+    init(frames: Int = 24_000) { self.frames = frames }
     private var track: MeetingAudioTrack?
     private var startedAt = Date()
     private var captured: Summary?
@@ -842,14 +1082,29 @@ private actor HTTPCapture: MeetingCaptureControlling {
         }
         let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
             channels: 1, interleaved: false))
-        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 24_000))
-        pcm.frameLength = 24_000
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)))
+        pcm.frameLength = AVAudioFrameCount(frames)
         let samples = try XCTUnwrap(pcm.floatChannelData?[0])
-        for frame in 0..<24_000 { samples[frame] = 0.1 * sin(Float(frame) * 0.1) }
-        let bytes = Data(bytes: samples, count: 24_000 * MemoryLayout<Float>.size)
-        captured = .init(frames: 24_000, peak: 0.1, pcm: bytes, sha256: Data(SHA256.hash(data: bytes)))
-        let sample = try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm, presentationTime: .zero)
-        liveAudioHandler?(.microphone, sample)
+        for frame in 0..<frames { samples[frame] = 0.1 * sin(Float(frame) * 0.1) }
+        let bytes = Data(bytes: samples, count: frames * MemoryLayout<Float>.size)
+        captured = .init(frames: frames, peak: 0.1, pcm: bytes, sha256: Data(SHA256.hash(data: bytes)))
+        if frames == 24_000 {
+            let sample = try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm, presentationTime: .zero)
+            liveAudioHandler?(.microphone, sample)
+        } else {
+            // Respect the production PCM callback bound while presenting invented
+            // 96-second capture timing. This sine wave is not speech or an ASR test.
+            let window = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 24_000))
+            let destination = try XCTUnwrap(window.floatChannelData?[0])
+            for offset in stride(from: 0, to: frames, by: 24_000) {
+                let count = min(24_000, frames - offset)
+                window.frameLength = AVAudioFrameCount(count)
+                destination.update(from: samples.advanced(by: offset), count: count)
+                let sample = try MeetingCapturePCMConverter.sampleBuffer(buffer: window,
+                    presentationTime: .init(value: Int64(offset), timescale: 16_000))
+                liveAudioHandler?(.microphone, sample)
+            }
+        }
         let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic-http-pcm",
             sourceDisplayName: "Synthetic PCM", format: nil, timebase: session.timebase, health: .waiting, chunks: [])
         self.track = track; startedAt = session.startedAt
@@ -857,12 +1112,14 @@ private actor HTTPCapture: MeetingCaptureControlling {
     }
     func summary() throws -> Summary { try XCTUnwrap(captured) }
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
-        .init(tracks: [try XCTUnwrap(track)], stoppedAt: startedAt.addingTimeInterval(1.5))
+        .init(tracks: [try XCTUnwrap(track)], stoppedAt: startedAt.addingTimeInterval(Double(frames) / 16_000))
     }
     func shutdownForTermination() async { track = nil; captured = nil }
 }
 
 @MainActor private final class HTTPRecognizer: MeetingProcessingControlling {
+    private let scenario: HTTPFixture.Scenario
+    init(scenario: HTTPFixture.Scenario = .receiptSmoke) { self.scenario = scenario }
     private var checkpoint: (@MainActor (MeetingPCMTranscriptBatch) async throws -> Void)?
     func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {
         try XCTUnwrap(MeetingTranscriptionBackendRegistry.makeDefault().descriptor(for: backendID))
@@ -872,9 +1129,25 @@ private actor HTTPCapture: MeetingCaptureControlling {
         self.checkpoint = checkpoint
     }
     func recognize(_ pcm: HTTPCapture.Summary, session: MeetingSession) async throws {
-        guard pcm.frames == 24_000, pcm.peak > 0, pcm.pcm.count == pcm.frames * MemoryLayout<Float>.size,
+        guard pcm.frames == scenario.frames, pcm.peak > 0, pcm.pcm.count == pcm.frames * MemoryLayout<Float>.size,
               Data(SHA256.hash(data: pcm.pcm)) == pcm.sha256 else { throw HTTPFixture.Failure.invalidPCM }
         let track = try XCTUnwrap(session.audioTracks.first)
+        if scenario == .medicalConversation {
+            // Labels describe invented roles, never a verified acoustic owner.
+            // The physician deliberately speaks first. Both speakers remain non-owner.
+            let speakers: [MeetingSessionSpeaker] = ["Врач (учебный)", "Медицинский представитель (учебный)"].map {
+                .init(id: UUID(), displayName: $0, diarizationClusterID: nil, trackKind: .microphone,
+                    isLocalUser: false, identityCandidates: [], usesCustomDisplayName: true)
+            }
+            let segments = scenario.texts.enumerated().map { index, text in
+                MeetingTranscriptSegment(id: UUID(), start: .init(value: Int64(index * 8 * 16_000), timescale: 16_000),
+                    end: .init(value: Int64((index + 1) * 8 * 16_000), timescale: 16_000),
+                    sourceTrackID: track.id, speakerID: speakers[index % 2].id, text: text,
+                    revision: 0, status: .final, overlap: .none, completeness: .complete)
+            }
+            try await XCTUnwrap(checkpoint)(.init(segments: segments, speakers: speakers))
+            return
+        }
         let segment = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 16_000),
             end: .init(value: 24_000, timescale: 16_000), sourceTrackID: track.id, speakerID: nil,
             text: HTTPFixture.text, revision: 0, status: .final, overlap: .none, completeness: .complete)
