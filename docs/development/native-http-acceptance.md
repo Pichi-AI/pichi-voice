@@ -1,6 +1,6 @@
-# Native protected delivery over local HTTPS
+# Native protected delivery over HTTPS
 
-`MobileProtectedDeliveryHTTPTests` is an opt-in, serial simulator acceptance suite. It uses the production `MeetingSessionCoordinator`, `PrivateProfileMeetingStore`, `LegacyAccountHTTPTransport`, `AccountSessionService` and `PichiCloudPublicationService`. An injected PCM source and recognizer supply invented speech. The local backend uses deterministic analysis for transport testing. A passing run does not establish real ASR, real AI analysis, UI concealment, physical microphone behavior, Keychain security or device Data Protection.
+`MobileProtectedDeliveryHTTPTests` is an opt-in, serial simulator acceptance suite with separate local-stand and direct-QA modes. It uses the production `MeetingSessionCoordinator`, `PrivateProfileMeetingStore`, `LegacyAccountHTTPTransport`, `AccountSessionService` and `PichiCloudPublicationService`. An injected PCM source and recognizer supply invented speech. The local backend uses deterministic analysis for transport testing. A passing run does not establish real ASR, real AI analysis, UI concealment, physical microphone behavior, Keychain security or device Data Protection.
 
 ## Runtime gates
 
@@ -64,3 +64,28 @@ Controls exist only on the task-private TLS proxy. Requests use `X-Codex-Control
 `GET /__e2e/ledger?sessionID=<UUID>` reports request body SHA256 values and outcomes, real SQL source/recording/import counts, SQL `chargedRecordingCount`, the actual account balance delta `chargeCount` and the declared `analysisProvider`. `dropped_after_commit` identifies the lost-response boundary. A proxy-generated success or a client callback cannot satisfy these assertions. The tests attach the ledger to the `.xcresult`; retain it with the tested revision and stand revision.
 
 Each normal fixture resets controls and the billing baseline before sign-in. Teardown joins fixture publication, capture, coordinator and account work, invalidates its control session, restores the previous in-process profile, resets task-private proxy controls and removes only its own verified root and defaults suite. The queue phase intentionally preserves its root until resume. A failed test preserves synthetic forensic data and attaches the root path; the task owner must collect the needed evidence and then remove that verified owned root and its `MobileProtectedDeliveryHTTPTests.<runID>` defaults suite. Control reset or root removal failures fail the test explicitly. Simulator and backend cleanup remain with their recorded task owners.
+
+## Direct QA online smoke
+
+Run only `PichiVoiceMobileIntegrationTests/MobileProtectedDeliveryHTTPTests/testDirectQASyntheticCaptureReceiptHistoryAndLocalRemoval` for direct QA. The parent task owns its execution and resulting server writes. This source preparation does not mean QA acceptance has run or passed.
+
+| Test-host variable | Required value |
+| --- | --- |
+| `PICHI_NATIVE_QA_ACCEPTANCE` | `1` |
+| `PICHI_QA_FIXTURE_PATH` | Absolute path to the task-private `0600` QA configuration |
+| `PICHI_TEST_REVISION` | Exact combined native commit |
+
+The QA configuration uses the same JSON fields as the local fixture, plus a required `expectedAccountID` containing the verified dedicated account's stable numeric ID as a string. Set `origin` to exactly `https://ai-call-studio.qa.aspirity.com`, `organizationID` to `112` and `workspaceID` to `155`. The dedicated QA account's email and password come only from the user's private configuration. The unused `controlToken` field may be an empty string. Never put actual credentials in Git, shell output, logs or test attachments. The parent task removes the temporary configuration after the run.
+
+QA requires its separate opt-in flag. The local flag and local configuration path cannot enable it. Local cases continue to require exactly `https://localhost:18443` and synthetic `.invalid` credentials; passing a QA configuration to a local case fails before a request. The QA case uses normal system certificate validation on the fixed QA hostname with proxy configuration disabled. It installs no CA or TLS exception and never calls `/__e2e/control` or `/__e2e/ledger`. Use a task-owned simulator; the local stand and its CA are unnecessary for this case.
+
+Before enabling publication, the fixture checks the logged-in email, stable account ID, organization and selected workspace against the private configuration. Unexpected identity or missing editable-workspace permission fails closed. The QA session store keeps its cookie and account envelope in memory. No QA cookie or password is written into the fixture root, defaults, failure evidence or attachments. Joined shutdown clears the memory store without performing remote logout or revoking other sessions.
+
+The case creates one fresh invented recording titled `pichi-native-qa-<runID>`, obtains a receipt from the encrypted durable outbox, and confirms the same source through the frontend's authenticated routes:
+
+- `GET /api/recordings/<receipt.recordingID>` uses the account service's authorized production request path. The existing production receipt codec verifies the owner, source session UUID and canonical source hash.
+- `GET /api/workspaces/155/recordings?page=1&limit=30&userId=<dedicated-account-id>` uses the same cookie-owning transport after fresh identity and workspace validation. It examines only the matching newly created recording and checks the title marker, source UUID, owner, workspace and account-context policy.
+
+It then turns current local deletion ON, waits for source removal after the durable receipt, and verifies that the same server record remains in History and detail. Attachments contain only identifiers for the synthetic source and verification outcomes. The case does not attach raw server responses or other recordings. It performs no server deletion, role change, account seeding, deployment, billing mutation or fault injection. Normal import billing and analysis may occur on the dedicated account as part of the authorized upload. The synthetic server record intentionally remains for review, identified by its unique title and source UUID; remote cleanup requires separate authorization.
+
+This smoke checks online ingestion, receipt persistence, ordinary server visibility and local cleanup. It does not prove lost-response deduplication, offline relaunch, SQL charge counts, completed analysis or AI quality on QA. Keep the local fault tests and their SQL ledger evidence separate. Retain the native revision, verified QA deployment revision and safe synthetic-source evidence with the parent task's acceptance result.

@@ -5,11 +5,37 @@ import Foundation
 import XCTest
 @testable import PichiVoiceMobile
 
-/// Opt-in tests for the isolated Docker stand. Recognition is synthetic; account,
+/// Separately gated tests for the isolated Docker stand and direct QA. Recognition is synthetic; account,
 /// capture admission, encrypted persistence, delivery, TLS and receipts are production.
 /// No URLProtocol, certificate delegate, microphone, model or shared defaults is used.
 @MainActor
 final class MobileProtectedDeliveryHTTPTests: XCTestCase {
+    func testDirectQASyntheticCaptureReceiptHistoryAndLocalRemoval() async throws {
+        let fixture = try HTTPFixture.configuration(mode: .qa)
+        let run = try HTTPFixture(configuration: fixture, attach: { self.add($0) })
+        addTeardownBlock { await run.cleanup(preserveFailure: (self.testRun?.failureCount ?? 1) > 0) }
+        try await run.start()
+        try await run.service.setDeleteLocalAfterAcceptance(false)
+        let source = try await run.record()
+        XCTAssertTrue(source.title.hasPrefix("pichi-native-qa-"))
+        try await run.wait { try run.outbox(source.id)?.receipt != nil }
+        let durable = try XCTUnwrap(run.outbox(source.id))
+        let receipt = try XCTUnwrap(durable.receipt)
+        XCTAssertFalse(durable.sourcePurged == true)
+        let retained = try await run.store.loadTranscript(id: source.id)
+        XCTAssertNotNil(retained)
+        try run.assertCiphertext(source.id)
+        try await run.assertQAServerRecording(source.id)
+
+        try await run.service.setDeleteLocalAfterAcceptance(true)
+        try await run.wait { try run.outbox(source.id)?.sourcePurged == true }
+        let removed = try await run.store.loadTranscript(id: source.id)
+        XCTAssertNil(removed)
+        XCTAssertEqual(try run.outbox(source.id)?.receipt?.recordingID, receipt.recordingID)
+        // Local removal must retain the same source in ordinary server History/detail.
+        try await run.assertQAServerRecording(source.id)
+    }
+
     func testEncryptedCaptureRealHTTPSReceiptHistoryAndCurrentDeletePolicy() async throws {
         let fixture = try HTTPFixture.configuration()
         let run = try HTTPFixture(configuration: fixture, attach: { self.add($0) })
@@ -205,6 +231,7 @@ final class MobileProtectedDeliveryHTTPTests: XCTestCase {
 
 @MainActor
 private final class HTTPFixture {
+    enum Mode: Equatable { case localStand, qa }
     struct Configuration: Decodable {
         let origin: URL
         let email: String
@@ -212,6 +239,11 @@ private final class HTTPFixture {
         let organizationID: String
         let workspaceID: String
         let controlToken: String
+        let expectedAccountID: String?
+        var mode = Mode.localStand
+        private enum CodingKeys: String, CodingKey {
+            case origin, email, password, organizationID, workspaceID, controlToken, expectedAccountID
+        }
     }
     struct Ledger: Decodable {
         struct Attempt: Decodable { let bodySHA256: String; let status: Int?; let outcome: String }
@@ -224,6 +256,18 @@ private final class HTTPFixture {
         let chargedRecordingCount: Int
         let analysisProvider: String
     }
+    private struct QARecord: Decodable {
+        let id: Int
+        let workspaceId: Int
+        let userId: Int?
+        let uploadedById: Int?
+        let title: String
+        let source: String?
+        let importSourceId: String?
+        let assessmentMode: String?
+        let assessmentPolicyVersion: Int?
+    }
+    private struct QAHistory: Decodable { let recordings: [QARecord] }
     private struct Ownership: Codable {
         let purpose: String
         let runID: UUID
@@ -246,21 +290,24 @@ private final class HTTPFixture {
     private var arbiter: HTTPArbiter!
     private var cipher: MeetingRecordingCipher?
     private var legacy: LegacyAccountHTTPTransport!
+    private var qaCredentials: HTTPMemorySession?
     private(set) var account: AccountSessionService!
     private(set) var store: PrivateProfileMeetingStore!
     private(set) var coordinator: MeetingSessionCoordinator!
     private(set) var service: PichiCloudPublicationService!
     private var suite: String { "MobileProtectedDeliveryHTTPTests." + runID.uuidString }
 
-    static func configuration() throws -> Configuration {
+    static func configuration(mode: Mode = .localStand) throws -> Configuration {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Synthetic HTTPS acceptance requires a task-owned simulator")
         #else
         let environment = ProcessInfo.processInfo.environment
-        guard environment["PICHI_NATIVE_HTTP_ACCEPTANCE"] == "1" else {
-            throw XCTSkip("Opt in with PICHI_NATIVE_HTTP_ACCEPTANCE=1")
+        let flag = mode == .qa ? "PICHI_NATIVE_QA_ACCEPTANCE" : "PICHI_NATIVE_HTTP_ACCEPTANCE"
+        let pathVariable = mode == .qa ? "PICHI_QA_FIXTURE_PATH" : "PICHI_HTTP_FIXTURE_PATH"
+        guard environment[flag] == "1" else {
+            throw XCTSkip("Opt in with " + flag + "=1")
         }
-        guard let path = environment["PICHI_HTTP_FIXTURE_PATH"], path.hasPrefix("/") else {
+        guard let path = environment[pathVariable], path.hasPrefix("/") else {
             throw Failure.invalidConfiguration
         }
         let url = URL(fileURLWithPath: path)
@@ -268,13 +315,27 @@ private final class HTTPFixture {
         guard permissions?.intValue == 0o600, url.resolvingSymlinksInPath() == url else {
             throw Failure.invalidConfiguration
         }
-        let value = try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: url))
-        guard value.origin.scheme == "https", value.origin.host == "localhost", value.origin.port == 18443,
+        var value: Configuration
+        do { value = try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: url)) }
+        catch { throw Failure.invalidConfiguration }
+        value.mode = mode
+        guard value.origin.scheme == "https",
               value.origin.path.isEmpty, value.origin.user == nil, value.origin.password == nil,
               value.origin.query == nil, value.origin.fragment == nil,
-              value.email.hasSuffix(".invalid"), !value.password.isEmpty, !value.controlToken.isEmpty,
+              !value.email.isEmpty, !value.password.isEmpty,
               Int(value.organizationID).map({ $0 > 0 }) == true,
               Int(value.workspaceID).map({ $0 > 0 }) == true else { throw Failure.invalidConfiguration }
+        switch mode {
+        case .localStand:
+            guard value.origin.absoluteString == "https://localhost:18443",
+                  value.email.hasSuffix(".invalid"), !value.controlToken.isEmpty else { throw Failure.invalidConfiguration }
+        case .qa:
+            guard value.origin.absoluteString == "https://ai-call-studio.qa.aspirity.com",
+                  value.organizationID == "112", value.workspaceID == "155",
+                  value.expectedAccountID.flatMap(PichiLegacyPublicationRequest.databaseID) != nil else {
+                throw Failure.invalidConfiguration
+            }
+        }
         return value
         #endif
     }
@@ -283,6 +344,7 @@ private final class HTTPFixture {
          attach: @escaping @MainActor (XCTAttachment) -> Void) throws {
         self.configuration = configuration
         self.attach = attach
+        guard configuration.mode != .qa || (relaunchRoot == nil && !restoring) else { throw Failure.invalidConfiguration }
         let manager = FileManager.default
         let root = relaunchRoot ?? manager.temporaryDirectory.appendingPathComponent("pichi-http-" + UUID().uuidString)
         let marker = root.appendingPathComponent("test-owner.json")
@@ -319,7 +381,7 @@ private final class HTTPFixture {
     func start(restoring: Bool = false) async throws {
         guard !running else { throw Failure.invalidConfiguration }
         running = true
-        if !restoring {
+        if !restoring && configuration.mode == .localStand {
             try await control(["offline": false, "releaseHeldResponses": true, "resetLedger": true,
                 "dropNextSuccessfulImportResponse": false, "holdNextImportResponse": false,
                 "offlineAfterDroppedResponse": false])
@@ -345,12 +407,22 @@ private final class HTTPFixture {
         })
         let destination = LegacyAccountConfiguration(apiBaseURL: configuration.origin,
             bundleIdentifier: "ai.synthetic.http-acceptance")
-        legacy = try LegacyAccountHTTPTransport(configuration: destination)
+        let network = URLSessionConfiguration.ephemeral
+        if configuration.mode == .qa { network.connectionProxyDictionary = [:] }
+        legacy = try LegacyAccountHTTPTransport(configuration: destination, sessionConfiguration: network)
+        let sessionStorage: any LegacyAccountSessionStoring
+        if configuration.mode == .qa {
+            let memory = HTTPMemorySession()
+            qaCredentials = memory
+            sessionStorage = memory
+        } else {
+            sessionStorage = HTTPStoredSession(url: root.appendingPathComponent("synthetic-session.private.json"))
+        }
         account = AccountSessionService(configuration: nil, browser: HTTPBrowser(), transport: HTTPNoOIDC(),
             credentials: HTTPNoGrant(), lifecycle: profiles,
             restoration: AccountRestorationPolicy(defaults: defaults, scope: runID.uuidString),
             legacyConfiguration: destination, legacyTransport: legacy,
-            legacyCredentials: HTTPStoredSession(url: root.appendingPathComponent("synthetic-session.private.json")))
+            legacyCredentials: sessionStorage)
         service = PichiCloudPublicationService(account: account, meetings: store, profiles: profiles,
             recordingCipher: { try cipherFor($0) },
             localEncryptionRequested: { [settings] _ in settings.meetingEncryptLocalRecordings },
@@ -375,9 +447,21 @@ private final class HTTPFixture {
         else {
             await account.signIn(email: configuration.email, password: configuration.password)
             guard account.presentationError == nil else { throw Failure.authentication }
+            if configuration.mode == .qa {
+                guard account.account?.account.id == configuration.expectedAccountID,
+                      account.account?.account.email?.lowercased() == configuration.email.lowercased(),
+                      account.account?.activeOrganizationID == configuration.organizationID else { throw Failure.authentication }
+            }
             try await account.selectWorkspace(organizationID: configuration.organizationID, workspaceID: configuration.workspaceID)
         }
-        guard account.context?.workspaceID == configuration.workspaceID else { throw Failure.authentication }
+        guard account.context?.workspaceID == configuration.workspaceID,
+              account.context?.organizationID == configuration.organizationID else { throw Failure.authentication }
+        if configuration.mode == .qa {
+            guard account.account?.account.id == configuration.expectedAccountID,
+                  account.account?.account.email?.lowercased() == configuration.email.lowercased(),
+                  account.context?.identity.internalUserID == configuration.expectedAccountID,
+                  account.context?.identity.legacyOrigin == configuration.origin.absoluteString else { throw Failure.authentication }
+        }
         profile = PrivateProfileStorage.current
         cipher = try cipherFor(try XCTUnwrap(profile))
         try await service.activateCurrentProfile()
@@ -387,7 +471,8 @@ private final class HTTPFixture {
     func beginRecording() async throws -> MeetingSession {
         // Deliberately request retained audio. Production admission must override it
         // once and preserve the encrypted request through later preference changes.
-        var request = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic HTTPS Ёё",
+        let title = configuration.mode == .qa ? "pichi-native-qa-" + runID.uuidString.lowercased() : "Synthetic HTTPS Ёё"
+        var request = MeetingCaptureConfiguration(mode: .inRoom, title: title,
             languageCode: "en", microphone: .init(captureDeviceID: "synthetic-http-pcm", displayName: "Synthetic PCM"),
             audioStorageMode: .retainedFiles, speakerLabelsEnabled: false, piiRedactionEnabled: true,
             transcriptionBackendID: MeetingBackendID.legacyCompatibility.rawValue)
@@ -455,11 +540,84 @@ private final class HTTPFixture {
         }
     }
 
+    func assertQAServerRecording(_ id: UUID) async throws {
+        guard configuration.mode == .qa, let record = try outbox(id), let receipt = record.receipt,
+              let canonical = record.canonicalSourceSHA256,
+              let serverID = PichiLegacyPublicationRequest.databaseID(receipt.recordingID) else {
+            throw Failure.invalidLedger
+        }
+        let context = try qaContext()
+        let detailRequest = try PichiLegacyPublicationRequest.endpoint(origin: configuration.origin,
+            path: "/api/recordings/" + String(serverID))
+        let detail = try await account.performAuthorizedLegacyRequest(for: context, request: detailRequest)
+        // Reuse the production source, receipt, owner and canonical hash validation.
+        _ = try PichiLegacyPublicationRequest.accountContextReceipt(from:
+            .init(status: detail.status, body: detail.body, retryAfter: detail.retryAfter), context: context,
+            sessionID: id, canonicalSourceSHA256: canonical, managerSpeakerID: record.managerSpeakerHint, expected: receipt)
+        let detailRecord = try JSONDecoder().decode(QARecord.self, from: detail.body)
+        try validateQARecord(detailRecord, sourceID: id, serverID: serverID)
+
+        // The ordinary frontend History route has a query and is intentionally outside
+        // AccountSessionService's publication-only request allowlist. Reuse the same
+        // cookie-owning production transport after fresh identity/ACL validation.
+        let fresh = try await legacy.account()
+        guard fresh.stableIdentity == context.identity, fresh.account.id == configuration.expectedAccountID,
+              fresh.account.email?.lowercased() == configuration.email.lowercased(),
+              fresh.activeOrganizationID == configuration.organizationID,
+              fresh.contains(organizationID: configuration.organizationID, workspaceID: configuration.workspaceID),
+              account.isCurrent(context) else { throw Failure.authentication }
+        var historyURL = try XCTUnwrap(URLComponents(url: configuration.origin, resolvingAgainstBaseURL: false))
+        historyURL.path = "/api/workspaces/" + configuration.workspaceID + "/recordings"
+        historyURL.queryItems = [.init(name: "page", value: "1"), .init(name: "limit", value: "30"),
+            .init(name: "userId", value: configuration.expectedAccountID)]
+        var historyRequest = URLRequest(url: try XCTUnwrap(historyURL.url))
+        historyRequest.httpMethod = "GET"
+        historyRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        let response = try await legacy.perform(historyRequest)
+        guard response.status == 200, account.isCurrent(context) else { throw Failure.invalidLedger }
+        let history = try JSONDecoder().decode(QAHistory.self, from: response.body)
+        let matches = history.recordings.filter { $0.id == serverID }
+        guard matches.count == 1, let match = matches.first else { throw Failure.invalidLedger }
+        try validateQARecord(match, sourceID: id, serverID: serverID)
+        _ = try qaContext()
+        // Only identifiers for this invented source are evidence. Never attach raw
+        // responses, account snapshots, login configuration, passwords or cookies.
+        let evidence = XCTAttachment(string: "Direct QA synthetic source: " + id.uuidString.lowercased()
+            + "\nrecordingID=" + receipt.recordingID + "\nHistory and detail source/owner/hash bindings verified."
+            + "\nlocalSourcePurged=" + String(record.sourcePurged == true)
+            + "\nAnalysis completion and AI quality are outside this smoke test.")
+        evidence.name = "direct-qa-synthetic-source-" + id.uuidString.lowercased()
+            + (record.sourcePurged == true ? "-after-local-removal" : "-before-local-removal")
+        evidence.lifetime = .keepAlways
+        attach(evidence)
+    }
+
+    private func qaContext() throws -> AccountContext {
+        guard configuration.mode == .qa, let context = account.context,
+              account.state == .signedIn, account.isCurrent(context),
+              context.identity.internalUserID == configuration.expectedAccountID,
+              context.identity.legacyOrigin == configuration.origin.absoluteString,
+              context.organizationID == configuration.organizationID,
+              context.workspaceID == configuration.workspaceID else { throw Failure.authentication }
+        return context
+    }
+
+    private func validateQARecord(_ value: QARecord, sourceID: UUID, serverID: Int) throws {
+        guard value.id == serverID, String(value.workspaceId) == configuration.workspaceID,
+              value.userId.map(String.init) == configuration.expectedAccountID,
+              value.uploadedById.map(String.init) == configuration.expectedAccountID,
+              value.title == "pichi-native-qa-" + runID.uuidString.lowercased(), value.source == "transcript",
+              value.importSourceId == sourceID.uuidString.lowercased(), value.assessmentMode == "account_context",
+              value.assessmentPolicyVersion == 1 else { throw Failure.invalidLedger }
+    }
+
     func control(_ values: [String: Bool]) async throws {
+        guard configuration.mode == .localStand else { throw Failure.invalidConfiguration }
         _ = try await request(path: "/__e2e/control", body: JSONSerialization.data(withJSONObject: values))
     }
 
     func ledger(_ id: UUID) async throws -> Ledger {
+        guard configuration.mode == .localStand else { throw Failure.invalidConfiguration }
         let bytes = try await request(path: "/__e2e/ledger?sessionID=" + id.uuidString.lowercased())
         let value = try JSONDecoder().decode(Ledger.self, from: bytes)
         guard value.sessionID.lowercased() == id.uuidString.lowercased() else { throw Failure.invalidLedger }
@@ -517,7 +675,7 @@ private final class HTTPFixture {
     func cleanup(preserveFailure: Bool) async {
         await stop()
         var mustPreserve = preserveFailure
-        if !preserveForRelaunch {
+        if !preserveForRelaunch && configuration.mode == .localStand {
             // Only the task-private stand is controlled. Reset even on failed assertions.
             do {
                 try await control(["offline": false, "releaseHeldResponses": true,
@@ -529,6 +687,12 @@ private final class HTTPFixture {
             }
         }
         controlSession.invalidateAndCancel()
+        await qaCredentials?.clear()
+        qaCredentials = nil
+        if configuration.mode == .qa {
+            // Retained failure evidence must never contain a persisted QA session.
+            XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("synthetic-session.private.json").path))
+        }
         PrivateProfileStorage.select(previousProfile)
         if mustPreserve {
             let evidence = XCTAttachment(string: "Synthetic HTTPS failure evidence retained at: " + root.path)
@@ -573,6 +737,14 @@ private actor HTTPStoredSession: LegacyAccountSessionStoring {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
     func clear() throws { if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) } }
+}
+
+/// QA credentials remain in memory even if a test fails and keeps synthetic evidence.
+private actor HTTPMemorySession: LegacyAccountSessionStoring {
+    private var value: LegacyAccountStoredSession?
+    func load() -> LegacyAccountStoredSession? { value }
+    func save(_ session: LegacyAccountStoredSession) { value = session }
+    func clear() { value = nil }
 }
 
 @MainActor private final class HTTPBrowser: AccountBrowserAuthenticating {
