@@ -288,6 +288,39 @@ extension PichiPublicationOutboxTests {
         try ciphertext.write(to: compactFile)
         try await service.resume()
 
+        await transport.setAccountThrottled(true, retryAfter: "0")
+        let repeatedlyThrottled = try await createSource()
+        for attempt in 1...6 {
+            try await wait { try record(repeatedlyThrottled.id)?.state == .retryScheduled
+                && record(repeatedlyThrottled.id)?.attemptCount == attempt }
+            check(try record(repeatedlyThrottled.id)?.pauseReason == nil,
+                  "Account validation throttling remains retryable instead of requiring authentication")
+            if attempt < 6 { await service.notifySceneActive(true) }
+        }
+        let retainedThrottledSource = try await meetings.loadTranscript(id: repeatedlyThrottled.id)
+        check(try record(repeatedlyThrottled.id)?.receipt == nil && retainedThrottledSource != nil,
+              "Repeated temporary validation cannot erase the encrypted pending source")
+        await transport.setAccountThrottled(false)
+        await service.notifySceneActive(true)
+        try await wait { try record(repeatedlyThrottled.id)?.sourcePurged == true }
+        check(try record(repeatedlyThrottled.id)?.receipt != nil,
+              "A successful foreground validation resumes the same source and receipt cleanup")
+        await transport.setAccountThrottled(true, retryAfter: "2")
+        let serverPaced = try await createSource()
+        try await wait { try record(serverPaced.id)?.state == .retryScheduled }
+        let serverFloor = try record(serverPaced.id)?.serverRetryNotBefore
+        check(serverFloor != nil && (serverFloor?.timeIntervalSinceNow ?? 0) > 0,
+              "Validation Retry-After is retained as a durable lower bound")
+        await transport.setAccountThrottled(false)
+        let postsBeforePacedWake = await transport.postCount()
+        await service.notifySceneActive(true)
+        check(await transport.postCount() == postsBeforePacedWake,
+              "A foreground wake cannot bypass the server's Retry-After lower bound")
+        try await Task.sleep(for: .seconds(2.1))
+        await service.notifySceneActive(true)
+        try await wait { try record(serverPaced.id)?.sourcePurged == true }
+        check(try record(serverPaced.id)?.receipt != nil, "Server-paced validation recovers after its lower bound")
+
         await transport.holdNextResponse()
         let editedSource = try await createSource()
         try await wait { await transport.isHolding() }
@@ -343,7 +376,7 @@ extension PichiPublicationOutboxTests {
         check(await transport.postCount() == postsBeforeReenable,
               "Re-enabling cleanup compacts the existing durable receipt without another POST")
         let knownAutomaticIDs: Set<UUID> = [source.id, editedSource.id, lateEdited.id, acceptedBeforeOff.id,
-            acceptedWithRetentionOff.id, admittedBeforeRetentionOff.id]
+            acceptedWithRetentionOff.id, admittedBeforeRetentionOff.id, repeatedlyThrottled.id, serverPaced.id]
         var coherentProjection = true
         for _ in 0..<130 {
             _ = try await service.status(for: UUID())
@@ -421,6 +454,8 @@ private actor AutomaticFixtureOIDC: AccountTransporting {
 private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     let configuration: LegacyAccountConfiguration
     private var userID = "123", offline = false, loseNext = false, holdNext = false, holding = false
+    private var accountThrottled = false
+    private var accountRetryAfter: String?
     private var gate: CheckedContinuation<Void, Never>?
     private var rows: [String: [String: Any]] = [:]
     private var bodies: [String: [Data]] = [:]
@@ -430,6 +465,7 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     }
     func account() async throws -> AccountSnapshot {
         if offline { throw LegacyAccountConnectivityFailure.unavailable }
+        if accountThrottled { throw LegacyAccountConnectivityFailure.rateLimited(retryAfter: accountRetryAfter) }
         return .init(schemaVersion: 1, account: .init(id: userID, displayName: "Synthetic", email: nil),
             identity: .init(issuer: "", subject: "", legacyOrigin: configuration.apiBaseURL.absoluteString),
             organizations: [.init(id: "17", name: "Synthetic", workspaces: [.init(id: "9", name: "Synthetic", capabilities: ["recordings:import"])])],
@@ -440,6 +476,9 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     func clearSession() async {}
     func shutdown() async {}
     func setOffline(_ value: Bool) { offline = value }
+    func setAccountThrottled(_ value: Bool, retryAfter: String? = nil) {
+        accountThrottled = value; accountRetryAfter = retryAfter
+    }
     func loseNextResponse() { loseNext = true }
     func holdNextResponse() { holdNext = true }
     func isHolding() -> Bool { holding }

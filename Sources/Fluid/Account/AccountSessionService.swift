@@ -454,7 +454,10 @@ import Foundation
     }
     private func sanitized(_ error: Error) -> AccountError {
         if error is CancellationError { return .cancelled }
-        if error is LegacyAccountConnectivityFailure { return .networkUnavailable }
+        if let temporary = error as? LegacyAccountConnectivityFailure {
+            if case .rateLimited = temporary { return .rateLimited }
+            return .networkUnavailable
+        }
         return error as? AccountError ?? .networkUnavailable
     }
 }

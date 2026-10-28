@@ -27,7 +27,11 @@ extension LegacyAccountTransporting {
     nonisolated func refreshSession() async throws { throw AccountError.invalidState }
 }
 
-nonisolated enum LegacyAccountConnectivityFailure: Error, Sendable { case unavailable }
+nonisolated enum LegacyAccountConnectivityFailure: Error, Sendable {
+    case unavailable
+    /// Server pacing during validation is not revocation of the cached local owner.
+    case rateLimited(retryAfter: String?)
+}
 
 private nonisolated final class LegacyAccountRedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -179,7 +183,9 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
             switch response.status {
             case 400, 401: throw AccountError.reauthenticationRequired
             case 403: throw AccountError.permissionDenied
-            case 429: throw AccountError.rateLimited
+            case 429:
+                if path == "/api/auth/login" { throw AccountError.rateLimited }
+                throw LegacyAccountConnectivityFailure.rateLimited(retryAfter: response.retryAfter)
             default: throw AccountError.networkUnavailable
             }
         }

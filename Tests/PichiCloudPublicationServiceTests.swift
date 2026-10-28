@@ -29,7 +29,10 @@ extension PichiPublicationOutboxTests {
             transport: identity, credentials: FacadeSyntheticCredentials(), lifecycle: profiles)
         let http = FacadeFixtureHTTP()
         let meetings = PrivateProfileMeetingStore.shared
+        var localEncryption = false
         let service = PichiCloudPublicationService(account: account, meetings: meetings, profiles: profiles, http: http,
+            recordingCipher: { try MeetingRecordingCipher(profileID: $0.id, key: Data(repeating: 0x67, count: 32)) },
+            localEncryptionRequested: { _ in localEncryption },
             deleteAcceptedRecording: { id, owner, digest in
                 try await meetings.delete(id: id, expectedOwnership: owner, validating: { source in
                     try Task.checkCancellation()
@@ -42,15 +45,17 @@ extension PichiPublicationOutboxTests {
         do { try await service.install(); check(false, "A second observer cannot be installed") }
         catch let error as AccountError { check(error == .busy, "Observer/participant composition is singular") }
         let participantID = UUID()
-        func capture(text: String = "Synthetic protected contact [PERSON].", empty: Bool = false,
+        func capture(text: String = "Synthetic protected contact [PERSON].", empty: Bool = false, encrypted: Bool = false,
                      beforeSave: (() async throws -> Void)? = nil) async throws -> MeetingSession {
             let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
                 machTimebaseDenominator: 1, firstPresentationTime: nil)
-            var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic queued source Ёё",
-                languageCode: "ru", microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic")),
+            let captureConfiguration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic queued source Ёё",
+                languageCode: "ru", microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"),
+                audioStorageMode: .memoryOnly, piiRedactionEnabled: true, requiresEncryptedPersistence: encrypted)
+            var session = MeetingSession(configuration: captureConfiguration,
                 startedAt: Date(timeIntervalSince1970: 1_700_000_000), timebase: timebase)
-            session.state = .recording; session.audioStorageMode = .memoryOnly; session.piiRedactionEnabled = true
-            session.profileOwnership = try await meetings.captureOwnership(for: session.id)
+            session.state = .recording
+            session.profileOwnership = try await meetings.captureOwnership(for: session.id, configuration: captureConfiguration)
             let track = UUID()
             session.audioTracks = [.init(id: track, kind: .microphone, sourceIdentifier: "synthetic",
                 sourceDisplayName: "Synthetic", format: nil, timebase: timebase, health: .waiting, chunks: [])]
@@ -70,7 +75,11 @@ extension PichiPublicationOutboxTests {
         }
         func durable(_ profile: PrivateProfileSnapshot, id: UUID, settled: Bool) throws -> PichiPublicationOutboxRecord {
             let file = profile.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1/" + (settled ? "settled/" : "pending/") + id.uuidString.lowercased() + ".json")
-            return try JSONDecoder().decode(PichiPublicationOutboxRecord.self, from: Data(contentsOf: file))
+            let bytes = try Data(contentsOf: file)
+            let cipher = try MeetingRecordingCipher(profileID: profile.id, key: Data(repeating: 0x67, count: 32))
+            let plaintext = MeetingRecordingCipher.isEncryptedEnvelope(bytes)
+                ? try cipher.open(bytes, sessionID: id, artifactKind: .publicationOutbox, maximumPlaintextBytes: 1_048_576) : bytes
+            return try JSONDecoder().decode(PichiPublicationOutboxRecord.self, from: plaintext)
         }
         let guestSource = try await capture()
         check(!manager.fileExists(atPath: root.appendingPathComponent("CloudPublication").path), "Guest callbacks do not create account publication storage")
@@ -412,6 +421,37 @@ extension PichiPublicationOutboxTests {
               "A newer manual local edit survives current-policy reconciliation")
         check(await http.count() == requestsBeforeOIDCCleanup,
               "Manual OIDC receipt cleanup issues no new POST, GET or PATCH")
+        try await service.setDeleteLocalAfterAcceptance(false)
+        localEncryption = true
+        let localPolicy = try await service.prepareCapturePersistencePolicy()
+        check(localPolicy.requiresEncryptedPersistence && !localPolicy.requiresPIIRedaction,
+              "OIDC local encryption is independent of publication consent")
+        let requestsBeforeEncryptedOff = await http.count()
+        let encryptedWithoutConsent = try await capture(encrypted: true)
+        let disabledEncrypted = try durable(PrivateProfileStorage.current, id: encryptedWithoutConsent.id, settled: true)
+        check(!disabledEncrypted.automaticConsent && disabledEncrypted.requiresEncryptedPersistence == true,
+              "An encrypted OIDC capture freezes explicit OFF consent in the existing outbox")
+        let encryptedOffStatus = try await service.status(for: encryptedWithoutConsent.id)
+        let encryptedOffRequests = await http.count()
+        check(encryptedOffStatus == .localOnly && encryptedOffRequests == requestsBeforeEncryptedOff,
+              "Local encryption alone cannot upload an OIDC source")
+        try await service.setCloudSyncEnabled(true)
+        await service.pause()
+        let encryptedWithConsent = try await capture(encrypted: true)
+        let enabledEncrypted = try durable(PrivateProfileStorage.current, id: encryptedWithConsent.id, settled: false)
+        check(enabledEncrypted.automaticConsent && enabledEncrypted.automaticAccountContext != true
+            && enabledEncrypted.requiresEncryptedPersistence == true,
+              "Encrypted OIDC admission retains OIDC consent without adding legacy account-context fields")
+        let encryptedQueueFile = PrivateProfileStorage.current.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1/pending/"
+            + encryptedWithConsent.id.uuidString.lowercased() + ".json")
+        check(MeetingRecordingCipher.isEncryptedEnvelope(try Data(contentsOf: encryptedQueueFile)),
+              "The cipher is installed before the encrypted OIDC outbox is reserved")
+        try await service.resume()
+        try await wait { if case .accepted = try await service.status(for: encryptedWithConsent.id) { return true }; return false }
+        check(try await meetings.loadTranscript(id: encryptedWithConsent.id)?.isLocalContentConcealed == true,
+              "A real OIDC receipt does not expose or remove the encrypted local source while retention is OFF")
+        check(try await service.status(for: encryptedWithoutConsent.id) == .localOnly,
+              "Later OIDC consent cannot adopt a previously declined encrypted capture")
         await account.logout(); await service.shutdown(); await account.shutdown()
         check(await http.wasShutdown(), "Service shutdown joins and releases its HTTP owner")
         return checks

@@ -152,12 +152,13 @@ private nonisolated final class LegacyHTTPFixtureProtocol: URLProtocol, @uncheck
         var meStatus = 200
         var recordingStatus = 200
         var optionsStatus = 200
+        var retryAfter: String?
     }
     private static let state = State()
-    static func configure(status: Int = 200, body: String = "{}", cookie: String = "auth_token=synthetic-cookie; Path=/; HttpOnly; Secure", permission: String = "edit", offline: Bool = false, userID: Int = 41, meStatus: Int = 200, recordingStatus: Int = 200, optionsStatus: Int = 200) {
+    static func configure(status: Int = 200, body: String = "{}", cookie: String = "auth_token=synthetic-cookie; Path=/; HttpOnly; Secure", permission: String = "edit", offline: Bool = false, userID: Int = 41, meStatus: Int = 200, recordingStatus: Int = 200, optionsStatus: Int = 200, retryAfter: String? = nil) {
         state.lock.lock(); defer { state.lock.unlock() }
         state.requests = []; state.loginStatus = status; state.loginBody = body; state.cookie = cookie; state.permission = permission
-        state.offline = offline; state.userID = userID; state.meStatus = meStatus; state.recordingStatus = recordingStatus; state.optionsStatus = optionsStatus
+        state.offline = offline; state.userID = userID; state.meStatus = meStatus; state.recordingStatus = recordingStatus; state.optionsStatus = optionsStatus; state.retryAfter = retryAfter
     }
     static var requests: [URLRequest] { state.lock.lock(); defer { state.lock.unlock() }; return state.requests }
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -167,9 +168,11 @@ private nonisolated final class LegacyHTTPFixtureProtocol: URLProtocol, @uncheck
         Self.state.requests.append(request)
         let status = Self.state.loginStatus, loginBody = Self.state.loginBody, cookie = Self.state.cookie, permission = Self.state.permission
         let offline = Self.state.offline, userID = Self.state.userID, meStatus = Self.state.meStatus, recordingStatus = Self.state.recordingStatus, optionsStatus = Self.state.optionsStatus
+        let retryAfter = Self.state.retryAfter
         Self.state.lock.unlock()
         if offline { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
         var responseStatus = 200, headers = ["Content-Type": "application/json"], body = "{}"
+        if let retryAfter { headers["Retry-After"] = retryAfter }
         switch request.url!.path {
         case "/api/auth/login": responseStatus = status; body = loginBody; if status == 200 { headers["Set-Cookie"] = cookie }
         case "/api/auth/me": responseStatus = meStatus; body = "{\"user\":{\"id\":\(userID),\"fullName\":\"Synthetic\",\"organizationId\":7}}"
@@ -327,6 +330,20 @@ extension AccountLegacySessionChecks {
         expect(recovered.state == .signedIn && !recovered.isAwaitingLegacyServerValidation && recovered.context == offlineOwner, "connectivity validation preserves admitted capture generation")
         _ = try await recovered.performAuthorizedLegacyRequest(for: offlineOwner, request: request)
         expect(LegacyHTTPFixtureProtocol.requests.contains { $0.url?.path == "/api/recordings/transcript" }, "fresh me and ACL allow remote upload after recovery")
+
+        LegacyHTTPFixtureProtocol.configure(meStatus: 429, retryAfter: "120")
+        do {
+            _ = try await recovered.performAuthorizedLegacyRequest(for: offlineOwner, request: request)
+            preconditionFailure("Temporary account validation was not throttled")
+        } catch LegacyAccountConnectivityFailure.rateLimited(let header) {
+            expect(header == "120", "Account-validation throttling retains Retry-After for publication scheduling")
+        }
+        expect(recovered.context == offlineOwner && recovered.isAwaitingLegacyServerValidation,
+               "Validation throttling preserves the owner and requires fresh remote admission")
+        LegacyHTTPFixtureProtocol.configure()
+        await recovered.restoreAfterConnectivity()
+        expect(recovered.context == offlineOwner && !recovered.isAwaitingLegacyServerValidation,
+               "Foreground validation recovers after throttling without another login")
 
         LegacyHTTPFixtureProtocol.configure(offline: true)
         do { _ = try await recovered.performAuthorizedLegacyRequest(for: offlineOwner, request: request) } catch {}
