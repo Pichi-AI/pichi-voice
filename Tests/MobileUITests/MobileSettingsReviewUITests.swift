@@ -86,6 +86,46 @@ final class MobileSettingsReviewUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    /// Opt-in: downloads the small Whisper Tiny model to exercise installed-model rows, the full-row
+    /// action target and the Delete confirmation, then deletes it again. The selected model is unchanged.
+    func testModelRowsDownloadAndConfirmDeletion() throws {
+        guard ProcessInfo.processInfo.environment["PICHI_SETTINGS_MODEL_ACTIONS"] == "1" else {
+            throw XCTSkip("Set TEST_RUNNER_PICHI_SETTINGS_MODEL_ACTIONS=1 to download and delete Whisper Tiny")
+        }
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light", "-MobileSetupVersion", "1"]
+        app.launch()
+        openSettings(title: "Настройки")
+        let models = app.buttons["settings.models"]
+        reveal(models)
+        models.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["settings.models.detail"].firstMatch.waitForExistence(timeout: 5))
+        let download = app.buttons["model.download.whisper-tiny"]
+        let delete = app.buttons["model.delete.whisper-tiny"]
+        // The model's rows can be below the fold on a phone; find its section before deciding.
+        reveal(app.buttons["model.details.whisper-tiny"])
+        for _ in 0..<3 where !delete.exists && !download.exists { app.collectionViews.firstMatch.swipeUp() }
+        if !delete.exists {
+            reveal(download)
+            // An action is the whole native row, not only its text line.
+            XCTAssertGreaterThanOrEqual(download.frame.height + 0.001, 44)
+            download.tap()
+            XCTAssertTrue(delete.waitForExistence(timeout: 240), "Whisper Tiny must finish downloading")
+        }
+        reveal(delete)
+        XCTAssertGreaterThanOrEqual(delete.frame.height + 0.001, 44)
+        settle()
+        capture("ru-light-model-installed")
+        delete.tap()
+        // iOS exposes a dialog action as a button nested in a button with the same identifier.
+        let confirm = app.buttons["model.delete.confirm"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "Deleting a model asks first")
+        capture("ru-light-model-delete-confirmation")
+        confirm.tap()
+        XCTAssertTrue(download.waitForExistence(timeout: 30))
+        settle()
+        capture("ru-light-model-deleted")
+    }
+
     /// Navigation rows only. In-place controls such as pickers and actions stay on the root.
     private func destinationIdentifiers() -> [String] {
         let inPlace: Set<String> = ["settings.replaySetup", "settings.interfaceLanguage", "settings.appearance"]
