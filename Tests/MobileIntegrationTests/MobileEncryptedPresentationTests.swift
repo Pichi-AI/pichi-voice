@@ -18,7 +18,7 @@ final class MobileEncryptedPresentationTests: XCTestCase {
         let previousProfile = PrivateProfileStorage.current
         let profile = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root)
         PrivateProfileStorage.select(profile)
-        defer {
+        addTeardownBlock { @MainActor in
             PrivateProfileStorage.select(previousProfile)
             defaults.removePersistentDomain(forName: name)
             try? FileManager.default.removeItem(at: root)
@@ -33,6 +33,12 @@ final class MobileEncryptedPresentationTests: XCTestCase {
             apiAudience: "synthetic", bundleIdentifier: "ai.example.voice"),
             browser: ColdHistoryBrowser(), transport: ColdHistoryTransport(), credentials: credentials)
         let services = AppServices(store: store, settings: SettingsStore(defaults: defaults), accountSession: account)
+        let captureID = UUID()
+        addTeardownBlock { @MainActor in
+            await credentials.release()
+            services.privateProfiles.clearCaptureStopHandler(id: captureID)
+            await services.shutdownForTermination()
+        }
         // Mirror production cold startup without using the global store or Keychain.
         PrivateProfileStorage.closeAdmission()
         let sourceRevision = services.privateProfiles.sourceRevision
@@ -72,15 +78,12 @@ final class MobileEncryptedPresentationTests: XCTestCase {
         XCTAssertEqual(history.sessions.map(\.id), [saved.id], "The first admitted load reads saved meetings without user refresh")
         XCTAssertEqual(lifetime.tasks, 1)
         // Busy logout conceals private pixels while retaining an admitted capture owner.
-        let captureID = UUID()
         XCTAssertTrue(services.privateProfiles.installCaptureStopHandler(id: captureID, stop: {}))
         do { try await services.privateProfiles.transition(from: nil, to: nil, generation: UUID()) }
         catch AccountError.busy {}
         XCTAssertFalse(services.privateProfiles.isPrivateDataVisible)
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertEqual(lifetime.unmounts, 0, "Later concealment must retain the mounted capture controller")
-        services.privateProfiles.clearCaptureStopHandler(id: captureID)
-        await services.shutdownForTermination()
         #endif
     }
 
@@ -133,12 +136,14 @@ final class MobileEncryptedPresentationTests: XCTestCase {
 private actor ColdHistoryCredentials: AccountCredentialStoring {
     let started: XCTestExpectation
     private var gate: CheckedContinuation<Void, Never>?
+    private var released = false
     init(started: XCTestExpectation) { self.started = started }
     func load() async -> AccountGrant? {
+        guard !released else { return nil }
         await withCheckedContinuation { gate = $0; started.fulfill() }
         return nil
     }
-    func release() { gate?.resume(); gate = nil }
+    func release() { released = true; gate?.resume(); gate = nil }
     func save(_ grant: AccountGrant) { preconditionFailure("No grant belongs to the guest regression") }
     func clear() {}
 }

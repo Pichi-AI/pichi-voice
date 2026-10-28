@@ -51,7 +51,8 @@ final class MobileNavigationUITests: XCTestCase {
         if !productionDownload { XCUIDevice.shared.orientation = .portrait }
         app = XCUIApplication()
         if !productionDownload { app.launchArguments += ["-PichiInterfaceLanguage", "en"] }
-        if name.contains("testSpeakerColorsNativeSmoke") || name.contains("testParticipantInlineNameAndOwnerTransferSmoke") {
+        if name.contains("testSpeakerColorsNativeSmoke") || name.contains("testParticipantInlineNameAndOwnerTransferSmoke")
+            || name.contains("testColdGuestHistoryLoadsWithoutManualRefresh") {
             app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
             app.launchArguments += ["-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
                 "-MeetingPIIRedactionEnabled", "NO", "-MeetingPIIRedactionRequested", "NO",
@@ -784,6 +785,24 @@ final class MobileNavigationUITests: XCTestCase {
         openNavigation("meetings", title: "Meetings")
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
         capture("02-current-meeting")
+    }
+
+    func testColdGuestHistoryLoadsWithoutManualRefresh() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Synthetic saved-history launch regression requires an owned simulator")
+        #else
+        let rowID = "history.session.DDD86147-F0B9-4B13-88B5-099B1E0D8BA5"
+        for appearance in ["light", "dark"] {
+            app.terminate()
+            app.launchArguments += ["-ThemePreference", appearance]
+            app.launch()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
+            openNavigation("history", title: "History")
+            XCTAssertTrue(app.buttons[rowID].waitForExistence(timeout: 5),
+                          "A cold guest launch must load the staged saved meeting without a pull-to-refresh")
+            capture("cold-guest-history-\(appearance)")
+        }
+        #endif
     }
 
     func testFastManualReturnToCaptionBottomRestoresFollowing() throws {
