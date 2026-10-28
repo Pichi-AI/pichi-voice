@@ -373,7 +373,25 @@ extension PichiPublicationOutboxTests {
         try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: consentFile.path)
         await http.release(); _ = await heldSend.result
         check(try await service.status(for: failedAdmission.id) != .queued, "Repairing settings cannot retroactively admit the failed capture")
+        try await service.setCloudSyncEnabled(true)
+        let legacyReceiptWithoutFingerprint = try await capture(text: "Synthetic older managed source.")
+        let newerManualSource = try await capture(text: "Synthetic mutable source.")
+        try await wait {
+            if case .accepted = try await service.status(for: legacyReceiptWithoutFingerprint.id),
+               case .accepted = try await service.status(for: newerManualSource.id) { return true }
+            return false
+        }
         try await service.setCloudSyncEnabled(false)
+        let currentProfile = PrivateProfileStorage.current
+        let olderReceiptFile = currentProfile.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1/settled/"
+            + legacyReceiptWithoutFingerprint.id.uuidString.lowercased() + ".json")
+        var olderReceipt = try JSONSerialization.jsonObject(with: Data(contentsOf: olderReceiptFile)) as! [String: Any]
+        olderReceipt.removeValue(forKey: "localSourceSHA256")
+        try JSONSerialization.data(withJSONObject: olderReceipt, options: [.sortedKeys]).write(to: olderReceiptFile, options: [.atomic])
+        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: olderReceiptFile.path)
+        var editedManual = newerManualSource
+        editedManual.transcriptSegments[0].text = "Newer synthetic local edit after receipt."
+        try await meetings.save(editedManual)
         let retainedOIDCReceipt = try durable(PrivateProfileStorage.current, id: first.id, settled: true).receipt
         let requestsBeforeOIDCCleanup = await http.count()
         check(try await meetings.loadTranscript(id: first.id) != nil,
@@ -384,6 +402,14 @@ extension PichiPublicationOutboxTests {
         check(compactedOIDC.sourcePurged == true && compactedOIDC.transcriptBytes == nil
             && compactedOIDC.receipt == retainedOIDCReceipt && compactedOIDC.automaticAccountContext != true,
               "Current cleanup ON reconciles a fingerprint-backed manual OIDC receipt")
+        try await wait {
+            if case .acceptedNeedsReview(_, .sourceConflict) = try await service.status(for: newerManualSource.id) { return true }
+            return false
+        }
+        check(try await meetings.loadTranscript(id: legacyReceiptWithoutFingerprint.id) != nil,
+              "A historical managed receipt without a local fingerprint cannot authorize deletion")
+        check(try await meetings.loadTranscript(id: newerManualSource.id)?.transcriptSegments[0].text == editedManual.transcriptSegments[0].text,
+              "A newer manual local edit survives current-policy reconciliation")
         check(await http.count() == requestsBeforeOIDCCleanup,
               "Manual OIDC receipt cleanup issues no new POST, GET or PATCH")
         await account.logout(); await service.shutdown(); await account.shutdown()
