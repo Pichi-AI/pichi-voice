@@ -125,16 +125,21 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
 
     private func expose(_ element: XCUIElement, in app: XCUIApplication, step: String) {
         for index in 0..<7 where !element.isHittable {
-            // Navigation and sheets can retain a non-hittable list underneath the
-            // current form. Scroll only the visible native container.
-            let candidates = app.collectionViews.allElementsBoundByIndex
+            // A SwiftUI Form container can report non-hittable while its visible
+            // rows are tappable. Gesture in the observed active form's content,
+            // above the floating tabs, instead of using its center hit test.
+            let identified = [app.collectionViews["settings.privacy.detail"],
+                app.collectionViews["automatic.review.privacy"]]
+            let candidates = identified + app.collectionViews.allElementsBoundByIndex
                 + app.scrollViews.allElementsBoundByIndex + app.tables.allElementsBoundByIndex
-            guard let scroll = candidates.first(where: { $0.exists && $0.isHittable }) else {
-                XCTFail("The visible settings form must provide a hittable scroll container")
+            guard let scroll = candidates.first(where: { $0.exists && $0.frame.width > 0 && $0.frame.height > 0 }) else {
+                XCTFail("The visible settings form must provide a native scroll container")
                 return
             }
-            if element.exists && element.frame.midY < app.windows.firstMatch.frame.midY { scroll.swipeDown() }
-            else { scroll.swipeUp() }
+            let down = element.exists && element.frame.midY < app.windows.firstMatch.frame.midY
+            let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: down ? 0.3 : 0.7))
+            let end = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: down ? 0.7 : 0.3))
+            start.press(forDuration: 0.05, thenDragTo: end)
             capture(step + "-scroll-\(index)")
         }
         XCTAssertTrue(element.exists && element.isHittable)
@@ -142,9 +147,21 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
     private func tap(_ row: XCUIElement, app: XCUIApplication, step: String) {
         expose(row, in: app, step: step)
         XCTAssertTrue(row.isHittable && row.isEnabled)
-        // An identified SwiftUI Toggle exposes a full-width native row. The switch
-        // occupies its trailing control, while a center tap can land on the caption.
-        row.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        let bounds = row.frame
+        // Reuse the existing navigation acceptance approach: identified SwiftUI
+        // rows expose a narrower native backing UISwitch inside their bounds.
+        let controls = app.switches.allElementsBoundByIndex.filter {
+            let frame = $0.frame
+            return frame.width > 0 && frame.width < bounds.width / 2
+                && bounds.contains(CGPoint(x: frame.midX, y: frame.midY))
+        }
+        XCTAssertLessThanOrEqual(controls.count, 1)
+        if let control = controls.first {
+            XCTAssertTrue(control.isHittable)
+            control.tap()
+        } else {
+            row.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        }
     }
     private func openPrivacy(_ app: XCUIApplication, step: String) {
         let button = app.buttons["automatic.review.openPrivacy"]
