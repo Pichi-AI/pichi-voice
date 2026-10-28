@@ -167,6 +167,11 @@ actor LegacyAccountHTTPTransport: LegacyAccountTransporting {
         }
         let response = try await perform(request)
         guard (200...299).contains(response.status) else {
+            // A maintenance/gateway response is not evidence that the saved local
+            // owner or cookie was revoked. Cached admission remains local-only.
+            if response.status == 408 || (500...599).contains(response.status) {
+                throw LegacyAccountConnectivityFailure.unavailable
+            }
             struct Failure: Decodable { let message: String?; let requireCaptcha: Bool? }
             let error = try? JSONDecoder().decode(Failure.self, from: response.body)
             if error?.requireCaptcha == true { throw AccountError.captchaRequired }

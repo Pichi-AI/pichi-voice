@@ -66,6 +66,7 @@ actor PichiPublicationOutboxStore {
     private let configuration: AccountPublicationConfiguration
     private var cipher: MeetingRecordingCipher?
     private var recovered = false
+    private var localRemovalScanAfter: String?
 
     init(profile: PrivateProfileSnapshot, destination: AccountPublicationConfiguration, cipher: MeetingRecordingCipher? = nil) {
         self.profile = profile
@@ -214,6 +215,62 @@ actor PichiPublicationOutboxStore {
         try self.withDirectories { try self.readPending($0).sorted { $0.sessionID.uuidString < $1.sessionID.uuidString } }
     }
 
+    /// A disabled current setting retains accepted sources without occupying the pending
+    /// upload quota. The receipt stays authoritative and can never return to POST.
+    func deferLocalRemovalWhileDisabled() throws {
+        try withDirectories { directories in
+            for var record in try readPending(directories) where record.state == .acceptedCleanupPending {
+                record.state = .accepted
+                try commit(record, directories)
+            }
+        }
+    }
+
+    /// Bounded batches revisit managed settled receipts when current retention consent
+    /// changes. Only IDs are enumerated; at most 32 payloads are decoded per worker turn.
+    func acceptedLocalRemovalCandidates() throws -> [PichiPublicationOutboxRecord] {
+        try withDirectories { directories in
+            let duplicate = dup(directories.settled)
+            guard duplicate >= 0, let stream = fdopendir(duplicate) else {
+                if duplicate >= 0 { Darwin.close(duplicate) }
+                throw PichiPublicationOutboxFailure.unavailable
+            }
+            defer { closedir(stream) }
+            rewinddir(stream)
+            var names: [String] = []
+            errno = 0
+            while let entry = readdir(stream) {
+                let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                    $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
+                }
+                if name == "." || name == ".." { continue }
+                guard names.count < 32_768, name.hasSuffix(".json"),
+                      let id = UUID(uuidString: String(name.dropLast(5))), self.name(id) == name else {
+                    throw PichiPublicationOutboxFailure.corruptRecord
+                }
+                names.append(name); errno = 0
+            }
+            guard errno == 0 else { throw PichiPublicationOutboxFailure.unavailable }
+            names.sort()
+            let after = localRemovalScanAfter
+            var selected = Array(names.lazy.filter { name in after.map { name > $0 } ?? true }.prefix(32))
+            if selected.isEmpty { selected = Array(names.prefix(32)) }
+            localRemovalScanAfter = selected.last == names.last ? nil : selected.last
+            var records: [PichiPublicationOutboxRecord] = []
+            for name in selected {
+                try Task.checkCancellation()
+                guard let id = UUID(uuidString: String(name.dropLast(5))),
+                      let record = try read(id, directory: directories.settled) else {
+                    throw PichiPublicationOutboxFailure.corruptRecord
+                }
+                if record.state == .accepted, record.automaticAccountContext == true,
+                   record.receipt != nil, record.sourcePurged != true,
+                   record.receiptPauseReason != .sourceConflict { records.append(record) }
+            }
+            return records
+        }
+    }
+
     /// The first eligible save wins even when later saved edits differ. No existing bytes,
     /// digest, boundary, destination or original assessment are ever replaced.
     func installSource(id: MeetingSessionID, source: PichiProtectedPublicationSource) throws -> PichiPublicationOutboxRecord {
@@ -297,7 +354,7 @@ actor PichiPublicationOutboxStore {
 
     /// Receipt acceptance is committed to settled storage before removing pending state.
     /// A crash between these writes leaves a verified settled record authoritative.
-    func accept(id: MeetingSessionID, receipt: PichiPublicationReceipt) throws -> PichiPublicationOutboxRecord {
+    func accept(id: MeetingSessionID, receipt: PichiPublicationReceipt, queueLocalRemoval: Bool = true) throws -> PichiPublicationOutboxRecord {
         try self.withDirectories { directories in
             var record = try self.required(id, directories)
             guard record.transcriptBytes != nil, record.state != .withheld, record.state != .conflict else {
@@ -305,7 +362,7 @@ actor PichiPublicationOutboxStore {
             }
             try self.checkReceipt(receipt, replacing: record.receipt)
             record.receipt = receipt
-            record.state = record.automaticAccountContext == true && record.deleteLocalAfterAcceptance == true
+            record.state = queueLocalRemoval && record.automaticAccountContext == true && record.deleteLocalAfterAcceptance == true
                 ? .acceptedCleanupPending : .accepted
             record.pauseReason = nil; record.nextAttemptAt = nil; record.retryNotBefore = nil
             try self.commit(record, directories)
@@ -329,14 +386,16 @@ actor PichiPublicationOutboxStore {
 
     /// Called only after the existing coordinator has removed its owned local source.
     /// The settled tombstone retains idempotency/status binding, never transcript content.
-    func completeLocalRemoval(id: MeetingSessionID) throws -> PichiPublicationOutboxRecord {
+    func completeLocalRemoval(id: MeetingSessionID, currentPolicyAllowsRemoval: Bool = false) throws -> PichiPublicationOutboxRecord {
         try withDirectories { directories in
             var record = try required(id, directories)
             if record.state == .accepted, record.sourcePurged == true { return record }
-            guard record.state == .acceptedCleanupPending, record.receipt != nil,
-                  record.automaticAccountContext == true, record.deleteLocalAfterAcceptance == true else {
+            guard [.accepted, .acceptedCleanupPending].contains(record.state), record.receipt != nil,
+                  record.automaticAccountContext == true,
+                  currentPolicyAllowsRemoval || record.deleteLocalAfterAcceptance == true else {
                 throw PichiPublicationOutboxFailure.invalidTransition
             }
+            record.deleteLocalAfterAcceptance = true
             record.transcriptBytes = nil; record.sourcePurged = true; record.state = .accepted
             try commit(record, directories)
             return record
@@ -745,7 +804,7 @@ actor PichiPublicationOutboxStore {
             && lhs.legacySelection == rhs.legacySelection && lhs.legacyBodySHA256 == rhs.legacyBodySHA256
             && lhs.automaticAccountContext == rhs.automaticAccountContext
             && lhs.requiresEncryptedPersistence == rhs.requiresEncryptedPersistence
-            && lhs.deleteLocalAfterAcceptance == rhs.deleteLocalAfterAcceptance
+            && (lhs.deleteLocalAfterAcceptance == rhs.deleteLocalAfterAcceptance || rhs.sourcePurged == true)
             && lhs.managerSpeakerHint == rhs.managerSpeakerHint
     }
 

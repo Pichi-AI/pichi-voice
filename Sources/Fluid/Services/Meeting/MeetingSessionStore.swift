@@ -5,6 +5,7 @@ import Foundation
 nonisolated protocol MeetingSessionStoring: Sendable {
     /// Freeze local ownership under the existing capture admission, before the first manifest.
     func prepareAutomaticCapture() async throws -> Bool
+    func prepareCapturePersistencePolicy() async throws -> MeetingCapturePersistencePolicy
     func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership?
     func captureOwnership(for id: MeetingSessionID, configuration: MeetingCaptureConfiguration) async throws -> MeetingProfileOwnership?
     func cancelCaptureAdmission(for id: MeetingSessionID) async
@@ -28,6 +29,10 @@ nonisolated protocol MeetingSessionStoring: Sendable {
 // Test/custom stores retain their existing behavior unless they provide the lighter reads.
 nonisolated extension MeetingSessionStoring {
     func prepareAutomaticCapture() async throws -> Bool { false }
+    func prepareCapturePersistencePolicy() async throws -> MeetingCapturePersistencePolicy {
+        let protectedPublication = try await self.prepareAutomaticCapture()
+        return .init(requiresEncryptedPersistence: protectedPublication, requiresPIIRedaction: protectedPublication)
+    }
     func loadHistory() async throws -> [MeetingSession] { try await self.loadAll() }
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
     func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership? { nil }
@@ -387,7 +392,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         }
         if encrypted {
             guard let cipher = self.encryptionCipher else { throw MeetingRecordingCipher.Failure.unavailableKey }
-            guard session.audioStorageMode == .memoryOnly, session.piiRedactionEnabled == true,
+            guard session.audioStorageMode == .memoryOnly,
                   session.profileOwnership?.profileID == cipher.profileID else {
                 throw MeetingRecordingCipher.Failure.invalidConfiguration
             }
@@ -439,7 +444,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         guard session.id == id else { throw MeetingRecordingCipher.Failure.invalidConfiguration }
         if isEnvelope {
             guard session.requiresEncryptedPersistence == true,
-                  session.audioStorageMode == .memoryOnly, session.piiRedactionEnabled == true,
+                  session.audioStorageMode == .memoryOnly,
                   session.profileOwnership?.profileID == self.encryptionCipher?.profileID else {
                 throw MeetingRecordingCipher.Failure.invalidConfiguration
             }

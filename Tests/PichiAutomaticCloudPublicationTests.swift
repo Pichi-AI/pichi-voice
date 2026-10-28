@@ -28,16 +28,96 @@ extension PichiPublicationOutboxTests {
         var meetings = PrivateProfileMeetingStore()
         let cleanup = AutomaticCleanupOwner(store: meetings)
         let keyOwner = AutomaticCipherOwner()
+        var localEncryption = false
         func makeService(_ store: PrivateProfileMeetingStore) -> PichiCloudPublicationService {
             .init(account: account, meetings: store, profiles: profiles,
-                recordingCipher: { try keyOwner.load($0) },
+                recordingCipher: { try await keyOwner.load($0) },
+                localEncryptionRequested: { _ in localEncryption },
                 deleteAcceptedRecording: { try await cleanup.delete($0, owner: $1, expectedSourceSHA256: $2) })
         }
         var service = makeService(meetings)
         try await service.install()
-        await account.signIn(email: "a@synthetic.example", password: "synthetic-only")
+        try await service.restoreEncryptedLocalStorage()
+        check(keyOwner.loads == 0, "Cold startup with no ciphertext does not manufacture a local key")
+        let guest = PrivateProfileStorage.current
+        let ordinary = try await service.prepareCapturePersistencePolicy()
+        check(ordinary == .init() && keyOwner.loads == 0, "Default guest recording does not create a local key or grant delivery")
+        localEncryption = true
+        keyOwner.holdNextLoad = true
+        let startingGuest = Task { try await service.prepareCapturePersistencePolicy() }
+        try await wait { keyOwner.isHolding }
+        localEncryption = false
+        keyOwner.releaseLoad()
+        let guestPolicy = try await startingGuest.value
+        check(guestPolicy.requiresEncryptedPersistence,
+              "Changing the checkbox during key preflight cannot downgrade the admitted security snapshot")
+        localEncryption = true
+        check(guestPolicy.requiresEncryptedPersistence && !guestPolicy.requiresPIIRedaction,
+              "Guest-local encryption is independent of account consent and PII cleanup")
+        var guestConfiguration = MeetingCaptureConfiguration(mode: .inRoom, title: "Guest confidential Ёё",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"))
+        guestConfiguration.audioStorageMode = .memoryOnly; guestConfiguration.requiresEncryptedPersistence = true
+        var guestSource = MeetingSession(configuration: guestConfiguration,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        guestSource.profileOwnership = try await meetings.captureOwnership(for: guestSource.id, configuration: guestConfiguration)
+        try await meetings.create(guestSource)
+        let guestFile = guest.rootDirectory.appendingPathComponent("Meetings/" + guestSource.id.uuidString + "/session.json")
+        let guestBytes = try Data(contentsOf: guestFile)
+        check(MeetingRecordingCipher.isEncryptedEnvelope(guestBytes)
+            && guestBytes.range(of: Data("Guest confidential".utf8)) == nil, "Guest transcript/title reaches disk only as authenticated ciphertext")
+        check(try await meetings.loadTranscript(id: guestSource.id)?.isLocalContentConcealed == true,
+              "Trusted local reads retain a per-record concealed-content marker")
+        check(!manager.fileExists(atPath: guest.rootDirectory.appendingPathComponent("CloudPublication").path),
+              "Guest encryption creates no account queue, receipt or upload consent")
+        await service.shutdown(); meetings = PrivateProfileMeetingStore(); cleanup.store = meetings
+        service = makeService(meetings); try await service.install()
+        do { _ = try await meetings.loadTranscript(id: guestSource.id); check(false, "A missing guest key cannot decode stored ciphertext") }
+        catch MeetingRecordingCipher.Failure.unavailableKey { check(true, "Relaunch never treats existing ciphertext as plaintext without its key") }
+        keyOwner.holdNextLoad = true
+        let racingGuest = Task { try await service.prepareCapturePersistencePolicy() }
+        try await wait { keyOwner.isHolding }
+        let otherGuest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(),
+            legacyRootDirectory: root.appendingPathComponent("other-generation"))
+        PrivateProfileStorage.select(otherGuest)
+        keyOwner.releaseLoad()
+        do { _ = try await racingGuest.value; check(false, "A changed profile cannot commit the earlier key admission") }
+        catch AccountError.staleOperation { check(true, "Profile/generation replacement cancels encryption preflight without plaintext fallback") }
+        check(!manager.fileExists(atPath: otherGuest.rootDirectory.appendingPathComponent("Meetings").path),
+              "The stale preflight writes no manifest into the replacement profile")
+        PrivateProfileStorage.select(guest)
+        keyOwner.locked = true
+        do { try await service.restoreEncryptedLocalStorage(); check(false, "Locked guest keys cannot restore ciphertext after relaunch") }
+        catch is ProtectedDataAccessError { check(true, "Locked guest key failure never falls back to plaintext") }
+        keyOwner.locked = false; keyOwner.missing = true
+        do { try await service.restoreEncryptedLocalStorage(); check(false, "A missing retained guest key cannot be replaced") }
+        catch MeetingRecordingCipher.Failure.unavailableKey {
+            check((try Data(contentsOf: guestFile)) == guestBytes, "Key loss preserves ciphertext without a replacement key or plaintext write")
+        }
+        keyOwner.missing = false; try await service.restoreEncryptedLocalStorage()
+        check(try await meetings.loadTranscript(id: guestSource.id)?.title == guestSource.title,
+              "An unlocked cold guest restores its original key before any new capture is prepared")
+        localEncryption = false
+        let disabledGuest = try await service.prepareCapturePersistencePolicy()
+        let retainedGuestBytes = try Data(contentsOf: guestFile)
+        check(disabledGuest == .init() && retainedGuestBytes == guestBytes,
+              "Changing future encryption policy does not rewrite or decrypt existing history")
+        await service.shutdown(); meetings = PrivateProfileMeetingStore(); cleanup.store = meetings
+        service = makeService(meetings); try await service.install()
+        localEncryption = true; keyOwner.holdNextLoad = true
+        let guestBeforeLogin = Task { try await service.prepareCapturePersistencePolicy() }
+        try await wait { keyOwner.isHolding }
+        let signingIn = Task { await account.signIn(email: "a@synthetic.example", password: "synthetic-only") }
+        try await wait { profiles.isTransitioning }
+        keyOwner.releaseLoad()
+        do { _ = try await guestBeforeLogin.value; check(false, "Login cannot complete an older guest key admission") }
+        catch is CancellationError { check(true, "The real profile transition cancels and joins its pending guest encryption preflight") }
+        catch AccountError.staleOperation { check(true, "The committed owner fence rejects the older guest preflight") }
+        await signingIn.value
+        localEncryption = false; keyOwner.loads = 0
         check(try await service.prepareAutomaticCapture() == false && keyOwner.loads == 0,
               "Signed-in accounts without a selected workspace keep ordinary local recording available")
+        check(try await meetings.loadTranscript(id: guestSource.id) == nil,
+              "A new login cannot adopt or expose an earlier guest's encrypted source")
         do { try await service.refresh(); check(false, "An unselected publication workspace remains an explicit configuration error") }
         catch AccountError.workspaceUnavailable { check(true, "Workspace configuration failure is typed without constructing storage") }
         let unselectedRoot = PrivateProfileStorage.current.rootDirectory
@@ -47,6 +127,8 @@ extension PichiPublicationOutboxTests {
         await account.retireLegacySession()
         check(profiles.isPrivateDataVisible && PrivateProfileStorage.current.isGuest && account.presentationError == nil,
               "A no-workspace account retires through the existing profile lifecycle without a hidden cleanup failure")
+        check(try await service.prepareCapturePersistencePolicy() == .init(),
+              "A committed logout reopens ordinary guest capture instead of retaining the old closing latch")
         await account.signIn(email: "a@synthetic.example", password: "synthetic-only")
         try await account.selectWorkspace(organizationID: "17", workspaceID: "9")
         check(try await service.prepareAutomaticCapture() == false, "Automatic capture is off before explicit future consent")
@@ -231,7 +313,37 @@ extension PichiPublicationOutboxTests {
         let postedAfterOff = await transport.postCount()
         check(!service.snapshot.cloudSyncEnabled && postedAfterOff == postedBeforeOff,
               "Disabled publication still completes previously authorized local cleanup without another network upload")
-        let knownAutomaticIDs: Set<UUID> = [source.id, editedSource.id, lateEdited.id, acceptedBeforeOff.id]
+        try await service.setDeleteLocalAfterAcceptance(false)
+        try await service.setCloudSyncEnabled(true)
+        let acceptedWithRetentionOff = try await createSource()
+        try await wait { try record(acceptedWithRetentionOff.id)?.state == .accepted }
+        check(try await meetings.loadTranscript(id: acceptedWithRetentionOff.id) != nil,
+              "A server receipt preserves local data while the current deletion checkbox is OFF")
+        let postsBeforeRetentionOn = await transport.postCount()
+        try await service.setCloudSyncEnabled(false)
+        try await service.setDeleteLocalAfterAcceptance(true)
+        try await wait { try record(acceptedWithRetentionOff.id)?.sourcePurged == true }
+        check(await transport.postCount() == postsBeforeRetentionOn && !service.snapshot.cloudSyncEnabled,
+              "Enabling current cleanup reconciles an older managed receipt even with new uploads disabled")
+        try await service.setCloudSyncEnabled(true)
+        await transport.holdNextResponse()
+        let admittedBeforeRetentionOff = try await createSource()
+        try await wait { await transport.isHolding() }
+        let turnOff = Task { try await service.setDeleteLocalAfterAcceptance(false) }
+        try await wait { !service.snapshot.deleteLocalAfterAcceptance }
+        await transport.releaseResponse()
+        try await turnOff.value
+        await service.notifySceneActive(true)
+        try await wait { try record(admittedBeforeRetentionOff.id)?.state == .accepted }
+        check(try await meetings.loadTranscript(id: admittedBeforeRetentionOff.id) != nil,
+              "OFF joins in-flight work and prevents a frozen ON admission from deleting on its later receipt")
+        let postsBeforeReenable = await transport.postCount()
+        try await service.setDeleteLocalAfterAcceptance(true)
+        try await wait { try record(admittedBeforeRetentionOff.id)?.sourcePurged == true }
+        check(await transport.postCount() == postsBeforeReenable,
+              "Re-enabling cleanup compacts the existing durable receipt without another POST")
+        let knownAutomaticIDs: Set<UUID> = [source.id, editedSource.id, lateEdited.id, acceptedBeforeOff.id,
+            acceptedWithRetentionOff.id, admittedBeforeRetentionOff.id]
         var coherentProjection = true
         for _ in 0..<130 {
             _ = try await service.status(for: UUID())
@@ -251,9 +363,19 @@ extension PichiPublicationOutboxTests {
 
 private enum AutomaticFixtureFailure: Error { case timeout, busy }
 @MainActor private final class AutomaticCipherOwner {
-    var locked = false; var loads = 0
-    func load(_ profile: PrivateProfileSnapshot) throws -> MeetingRecordingCipher {
+    var locked = false; var missing = false; var loads = 0; var holdNextLoad = false
+    private(set) var isHolding = false
+    private var loadGate: CheckedContinuation<Void, Never>?
+    func releaseLoad() { loadGate?.resume(); loadGate = nil }
+    func load(_ profile: PrivateProfileSnapshot) async throws -> MeetingRecordingCipher {
+        if holdNextLoad {
+            holdNextLoad = false; isHolding = true
+            await withCheckedContinuation { loadGate = $0 }
+            isHolding = false
+        }
+        try Task.checkCancellation()
         if locked { throw ProtectedDataAccessError.temporarilyUnavailable }
+        if missing { throw MeetingRecordingCipher.Failure.unavailableKey }
         loads += 1
         return try MeetingRecordingCipher(profileID: profile.id, key: Data(repeating: 0xA7, count: 32))
     }
@@ -262,6 +384,7 @@ private enum AutomaticFixtureFailure: Error { case timeout, busy }
     var store: PrivateProfileMeetingStore; var busy = true; var calls = 0; var failAfterDeleteOnce = false; var locked = false; var editBeforeValidationOnce = false
     init(store: PrivateProfileMeetingStore) { self.store = store }
     func delete(_ id: UUID, owner: MeetingProfileOwnership, expectedSourceSHA256: String) async throws {
+        try Task.checkCancellation()
         calls += 1
         if busy { throw AutomaticFixtureFailure.busy }
         if locked { throw ProtectedDataAccessError.temporarilyUnavailable }

@@ -6,6 +6,7 @@ extension SettingsStore {
         static let fillerWordDefaultsMigrationV1 = "FillerWordDefaultsMigrationV1"
         static let holdSpaceToMute = "HoldSpaceToMute"
         static let meetingSaveAudio = "MeetingSaveAudio"
+        static let meetingEncryptLocalRecordings = "MeetingEncryptLocalRecordings"
         static let meetingLocationEnabled = "MeetingLocationEnabled"
         static let meetingSpeakerLabelsEnabled = "MeetingSpeakerLabelsEnabled"
         static let meetingSpeakerProcessingMode = "MeetingSpeakerProcessingMode"

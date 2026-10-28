@@ -533,7 +533,7 @@ extension AccountSessionService {
                 let failure = sanitized(error)
                 if [.reauthenticationRequired, .invalidAccount, .permissionDenied].contains(failure) {
                     await invalidateLegacyRestoration(for: expected, failure: failure)
-                } else if error is LegacyAccountConnectivityFailure { isAwaitingLegacyServerValidation = true }
+                } else if error is LegacyAccountConnectivityFailure || failure == .rateLimited { isAwaitingLegacyServerValidation = true }
             }
             throw error
         }
@@ -601,7 +601,7 @@ extension AccountSessionService {
                     let fresh = try await self.freshLegacySnapshot()
                     try self.validateLegacySelection(fresh, saved: saved)
                     snapshot = fresh; awaitingServer = false
-                } catch is LegacyAccountConnectivityFailure {
+                } catch where error is LegacyAccountConnectivityFailure || (error as? AccountError) == .rateLimited {
                     // Cached identity is solely a local recovery admission. Remote requests
                     // still require fresh identity and editable-workspace evidence.
                 }
@@ -736,7 +736,7 @@ extension AccountSessionService {
                 self.isAwaitingLegacyServerValidation = false; self.presentationError = nil
             } catch is ProtectedDataAccessError {
                 await self.handleTemporaryLegacyFailure(generation: captured)
-            } catch is LegacyAccountConnectivityFailure {
+            } catch where error is LegacyAccountConnectivityFailure || (error as? AccountError) == .rateLimited {
                 // Still offline. Keep only the already admitted local profile.
             } catch is CancellationError {
                 // Cancellation of one connectivity check does not erase local capture.
@@ -854,7 +854,7 @@ extension AccountSessionService {
                 throw error
             }
             let failure = sanitized(error)
-            if error is LegacyAccountConnectivityFailure, isCurrent(expected) { isAwaitingLegacyServerValidation = true }
+            if (error is LegacyAccountConnectivityFailure || failure == .rateLimited), isCurrent(expected) { isAwaitingLegacyServerValidation = true }
             if isCurrent(expected), [.reauthenticationRequired, .invalidAccount, .permissionDenied].contains(failure) {
                 await invalidateLegacyRestoration(for: expected, failure: failure)
             }

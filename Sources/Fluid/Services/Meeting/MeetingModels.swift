@@ -303,6 +303,13 @@ nonisolated struct MeetingPlatformProfile: Codable, Equatable, Sendable {
     }
 }
 
+/// The existing storage preflight freezes local encryption separately from publication privacy.
+/// This contains no inference or transport selection.
+nonisolated struct MeetingCapturePersistencePolicy: Equatable, Sendable {
+    var requiresEncryptedPersistence = false
+    var requiresPIIRedaction = false
+}
+
 nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     static let defaultChunkDuration: TimeInterval = 60
 
@@ -1171,8 +1178,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var speakerLabelsEnabled: Bool? = nil
     var speakerProcessingMode: MeetingSpeakerProcessingMode? = nil
     var piiRedactionEnabled: Bool? = nil
-    /// New protected-delivery captures persist local transcript data as ciphertext.
+    /// New protected captures persist local transcript data as ciphertext.
     var requiresEncryptedPersistence: Bool? = nil
+    /// Local display/export controls consume this immutable per-record policy. Trusted
+    /// processing and publication owners retain their existing store read operations.
+    var isLocalContentConcealed: Bool { requiresEncryptedPersistence == true }
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil

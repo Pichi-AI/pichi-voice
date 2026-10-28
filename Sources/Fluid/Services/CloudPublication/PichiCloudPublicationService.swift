@@ -42,6 +42,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private let profiles: PrivateProfileService
     private let http: (any PichiPublicationHTTPPerforming)?
     private let recordingCipherProvider: (@MainActor @Sendable (PrivateProfileSnapshot) async throws -> MeetingRecordingCipher)?
+    private let localEncryptionRequested: @MainActor @Sendable (PrivateProfileSnapshot) -> Bool
     private let deleteAcceptedRecording: (@MainActor @Sendable (MeetingSessionID, MeetingProfileOwnership, String) async throws -> Void)?
     private var recordingCipher: MeetingRecordingCipher?
     private var workerDelay: Task<Void, Never>?
@@ -62,8 +63,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private var cleaning = Set<MeetingSessionID>()
     private var worker: (id: UUID, task: Task<Void, Never>)?
     private var shutdownTask: Task<Void, Never>?
-    private var cloudToggle: (id: UUID, task: Task<Void, Error>)?
+    private var policyCommand: (id: UUID, task: Task<Void, Error>)?
     private var offLatch: (profileID: String, failed: Bool)?
+    private var deletionOffLatch: String?
     private var itemOrder: [MeetingSessionID] = []
     // Only already observed receipts are polled, with a finite per-observation budget.
     private var analysisPolls: [MeetingSessionID: (attempts: Int, notBefore: Date)] = [:]
@@ -72,9 +74,11 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     init(account: AccountSessionService, meetings: PrivateProfileMeetingStore = .shared,
          profiles: PrivateProfileService? = nil, http: (any PichiPublicationHTTPPerforming)? = nil,
          recordingCipher: (@MainActor @Sendable (PrivateProfileSnapshot) async throws -> MeetingRecordingCipher)? = nil,
+         localEncryptionRequested: @escaping @MainActor @Sendable (PrivateProfileSnapshot) -> Bool = { _ in false },
          deleteAcceptedRecording: (@MainActor @Sendable (MeetingSessionID, MeetingProfileOwnership, String) async throws -> Void)? = nil) {
         self.account = account; self.meetings = meetings; self.profiles = profiles ?? .shared; self.http = http
         self.recordingCipherProvider = recordingCipher; self.deleteAcceptedRecording = deleteAcceptedRecording
+        self.localEncryptionRequested = localEncryptionRequested
     }
 
     /// Composition calls once and retains this service. No restore/login/readiness or
@@ -89,25 +93,79 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     /// Parent capture composition freezes memory-only audio and the existing Privacy
     /// operation only after this encrypted future-capture queue has passed preflight.
     func prepareAutomaticCapture() async throws -> Bool {
-        return try await command {
-            guard self.account.isLegacySession, let selectedContext = self.account.context,
-                  selectedContext.organizationID != nil, selectedContext.workspaceID != nil else { return false }
-            let (profile, context, store, consent) = try self.currentScope()
-            guard try await consent.automaticPublicationEnabled(for: context) else { return false }
-            try await self.ensureRecordingCipher(profile: profile, context: context, store: store)
-            try await store.preflightAutomaticCapture()
-            try self.check(profile, context: context)
-            return true
+        try await prepareCapturePersistencePolicy().requiresEncryptedPersistence
+    }
+
+    /// Cold guest startup has no account transition callback. Restore only existing
+    /// ciphertext before recovery/history; this cannot create a key for an empty store.
+    func restoreEncryptedLocalStorage() async throws {
+        try await command {
+            let profile = PrivateProfileStorage.current
+            try self.checkLocalEncryptionScope(profile)
+            let existing = try await self.meetings.hasEncryptedPersistenceData(in: profile)
+            try self.checkLocalEncryptionScope(profile)
+            guard existing else { return }
+            try await self.ensureLocalRecordingCipher(profile: profile)
+        }
+    }
+
+    /// Local ciphertext does not grant network consent. Automatic protected delivery
+    /// retains its stronger existing privacy requirements, independently of this choice.
+    func prepareCapturePersistencePolicy() async throws -> MeetingCapturePersistencePolicy {
+        try await command {
+            let visible = PrivateProfileStorage.current
+            try self.checkLocalEncryptionScope(visible)
+            let localEncryption = self.localEncryptionRequested(visible)
+            var automatic = false
+            if self.account.isLegacySession, let selected = self.account.context,
+               selected.organizationID != nil, selected.workspaceID != nil {
+                let (profile, context, store, consent) = try self.currentScope()
+                automatic = try await consent.automaticPublicationEnabled(for: context)
+                if automatic {
+                    try await self.ensureRecordingCipher(profile: profile, context: context, store: store)
+                    try await store.preflightAutomaticCapture()
+                    try self.check(profile, context: context)
+                }
+            }
+            if localEncryption && !automatic { try await self.ensureLocalRecordingCipher(profile: visible) }
+            try self.checkLocalEncryptionScope(visible)
+            return .init(requiresEncryptedPersistence: localEncryption || automatic,
+                requiresPIIRedaction: automatic)
         }
     }
 
     func setDeleteLocalAfterAcceptance(_ enabled: Bool) async throws {
-        try await command {
-            let (profile, context, _, consent) = try self.currentScope()
+        guard !shutDown, policyCommand == nil else { throw AccountError.busy }
+        let (profile, context, store, consent) = try currentScope()
+        let id = UUID()
+        if !enabled {
+            // Immediate revocation before the first await; return only after any
+            // already-running cleanup has cancelled/joined and OFF is durable.
+            deletionOffLatch = profile.id
+            snapshot.deleteLocalAfterAcceptance = false
+        }
+        let task = Task { @MainActor in
+            if !enabled { await self.joinOwnedWork(excludingToggle: id) }
+            try self.check(profile, context: context)
             try await consent.setDeleteLocalAfterAcceptance(enabled, for: context)
             try self.check(profile, context: context)
+            if enabled { self.deletionOffLatch = nil }
+            else { try await store.deferLocalRemovalWhileDisabled() }
+            try self.check(profile, context: context)
             try await self.refreshBody()
+            try await self.activateBody(resumeUserPauses: false)
         }
+        policyCommand = (id, task)
+        defer { if policyCommand?.id == id { policyCommand = nil } }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
+    private func currentLocalRemovalConsent(profile: PrivateProfileSnapshot, context: AccountContext) async throws -> Bool {
+        try check(profile, context: context)
+        guard deletionOffLatch != profile.id, let consent else { return false }
+        let enabled = try await consent.deleteLocalAfterAcceptance(for: context)
+        try check(profile, context: context)
+        return enabled && deletionOffLatch != profile.id
     }
 
     /// Availability wakes the same bounded worker. Only real authenticated HTTP and
@@ -135,23 +193,41 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         if active { await notifyServerAvailabilityChanged() }
     }
 
-    private func ensureRecordingCipher(profile: PrivateProfileSnapshot, context: AccountContext,
-                                       store: PichiPublicationOutboxStore) async throws {
-        guard account.isLegacySession else { return }
+    private func checkLocalEncryptionScope(_ profile: PrivateProfileSnapshot) throws {
+        try Task.checkCancellation()
+        guard !shutDown, PrivateProfileStorage.isReadable(profile),
+              PrivateProfileStorage.acceptsNewWork else { throw AccountError.staleOperation }
+        if closing {
+            guard profile.generation != closedGeneration else { throw AccountError.staleOperation }
+            closing = false
+        }
+    }
+
+    private func ensureLocalRecordingCipher(profile: PrivateProfileSnapshot) async throws {
+        try checkLocalEncryptionScope(profile)
         if let cipher = recordingCipher, cipher.profileID == profile.id {
-            try await store.installCipher(cipher)
             try await meetings.installEncryptionCipher(cipher, for: profile)
-            try check(profile, context: context)
+            try checkLocalEncryptionScope(profile)
             return
         }
         guard let recordingCipherProvider else { throw PichiPublicationOutboxFailure.unavailable }
         let cipher = try await recordingCipherProvider(profile)
-        try check(profile, context: context)
+        try checkLocalEncryptionScope(profile)
         guard cipher.profileID == profile.id else { throw PichiPublicationOutboxFailure.invalidScope }
-        try await store.installCipher(cipher)
         try await meetings.installEncryptionCipher(cipher, for: profile)
-        try check(profile, context: context)
+        try checkLocalEncryptionScope(profile)
         recordingCipher = cipher
+    }
+
+    private func ensureRecordingCipher(profile: PrivateProfileSnapshot, context: AccountContext,
+                                       store: PichiPublicationOutboxStore) async throws {
+        guard account.isLegacySession else { return }
+        try await ensureLocalRecordingCipher(profile: profile)
+        guard let cipher = recordingCipher, cipher.profileID == profile.id else {
+            throw PichiPublicationOutboxFailure.unavailable
+        }
+        try await store.installCipher(cipher)
+        try check(profile, context: context)
     }
 
     private func waitForProtectedData() {
@@ -199,7 +275,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     /// One coherent UI operation. OFF does not complete or publish a disabled snapshot
     /// until all owned transfers have joined and both scoped settings are durable.
     func setCloudSyncEnabled(_ enabled: Bool) async throws {
-        guard !self.shutDown, self.cloudToggle == nil else { throw AccountError.busy }
+        guard !self.shutDown, self.policyCommand == nil else { throw AccountError.busy }
         let (profile, context, store, consent) = try self.currentScope()
         let id = UUID()
         let recoveringStorage = self.offLatch?.profileID == profile.id && self.offLatch?.failed == true
@@ -245,8 +321,8 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 throw error
             }
         }
-        self.cloudToggle = (id, task)
-        defer { if self.cloudToggle?.id == id { self.cloudToggle = nil } }
+        self.policyCommand = (id, task)
+        defer { if self.policyCommand?.id == id { self.policyCommand = nil } }
         try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
     }
 
@@ -282,6 +358,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             if enabled || hasExisting { try await ensureRecordingCipher(profile: profile, context: context, store: store) }
         }
         let deleteLocal = try await consent.deleteLocalAfterAcceptance(for: context)
+            && deletionOffLatch != profile.id
         let records = try await store.pendingRecords()
         try self.check(profile, context: context)
         var items = self.snapshot.items
@@ -378,18 +455,24 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         try self.check(profile, context: context)
         if paused || !enabled || self.offLatch?.profileID == profile.id {
             self.userPaused = true
-            // Pausing new network delivery does not revoke an already accepted
-            // capture's frozen local-retention policy. This branch performs no HTTP.
+            // Local receipt cleanup follows the current setting and remains available
+            // while new uploads are paused. This branch performs no HTTP.
             if account.isLegacySession, recordingCipherProvider != nil {
                 let hasExisting = recordingCipher != nil ? true : try PichiPublicationOutboxStore.hasEncryptedPersistenceData(in: profile)
                 if hasExisting {
                     try await ensureRecordingCipher(profile: profile, context: context, store: store)
-                    for record in try await store.pendingRecords() where record.state == .acceptedCleanupPending {
-                        await cleanupAccepted(record, profile: profile, context: context, store: store)
-                    }
+                    if try await currentLocalRemovalConsent(profile: profile, context: context) {
+                        for record in try await store.pendingRecords() where record.state == .acceptedCleanupPending {
+                            await cleanupAccepted(record, profile: profile, context: context, store: store)
+                        }
+                        for record in try await store.acceptedLocalRemovalCandidates() {
+                            await cleanupAccepted(record, profile: profile, context: context, store: store)
+                        }
+                    } else { try await store.deferLocalRemovalWhileDisabled() }
                 }
             }
             try await self.refreshBody()
+            if snapshot.deleteLocalAfterAcceptance { startWorker(profile: profile, context: context, store: store) }
             return
         }
         guard self.http != nil || self.account.isLegacySession else { throw PichiPublicationNetworkFailure.unavailable }
@@ -411,7 +494,11 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             }
         }
         self.userPaused = false
+        if !(try await currentLocalRemovalConsent(profile: profile, context: context)) {
+            try await store.deferLocalRemovalWhileDisabled()
+        }
         try await self.refresh()
+        self.workerDelay?.cancel()
         self.startWorker(profile: profile, context: context, store: store)
     }
 
@@ -626,13 +713,14 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
 
     private func cleanupAccepted(_ record: PichiPublicationOutboxRecord, profile: PrivateProfileSnapshot,
                                  context: AccountContext, store: PichiPublicationOutboxStore) async {
-        guard record.state == .acceptedCleanupPending, record.receipt != nil,
+        guard [.accepted, .acceptedCleanupPending].contains(record.state), record.receipt != nil,
+              record.automaticAccountContext == true, record.sourcePurged != true,
               record.receiptPauseReason != .sourceConflict,
               let expectedDigest = record.localSourceSHA256,
               let deleteAcceptedRecording, cleaning.insert(record.sessionID).inserted else { return }
         defer { cleaning.remove(record.sessionID) }
         do {
-            try check(profile, context: context)
+            guard try await currentLocalRemovalConsent(profile: profile, context: context) else { return }
             // A user can edit the local source while HTTP is in flight. Never erase
             // that newer work because an older frozen snapshot was accepted.
             if let current = try await meetings.loadTranscript(id: record.sessionID) {
@@ -651,9 +739,10 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             // Composition must revalidate this digest under the coordinator/store's
             // deletion ownership after flushing writers. The preflight check alone
             // cannot prevent an edit completing between this await and acquisition.
+            guard try await currentLocalRemovalConsent(profile: profile, context: context) else { return }
             try await deleteAcceptedRecording(record.sessionID, record.owner, expectedDigest)
             try check(profile, context: context)
-            let compacted = try await store.completeLocalRemoval(id: record.sessionID)
+            let compacted = try await store.completeLocalRemoval(id: record.sessionID, currentPolicyAllowsRemoval: true)
             try check(profile, context: context)
             project(record.sessionID, Self.status(compacted), profile: profile, automatic: compacted.automaticAccountContext == true)
         } catch is CancellationError { return }
@@ -703,10 +792,13 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     /// validation fails. Unlike the ordinary observer callback this error is not swallowed.
     func prepareRequiredCapture(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async throws {
         try await command {
+            guard admission.requiresEncryptedPersistence else { throw PichiPublicationOutboxFailure.invalidScope }
+            try await self.ensureLocalRecordingCipher(profile: admission.profile)
+            // Guest ciphertext stays guest-owned. Signing in later cannot adopt or publish it.
+            // Local-only encryption also works without a publication workspace.
+            guard self.account.isLegacySession, let selected = self.account.context,
+                  selected.organizationID != nil, selected.workspaceID != nil else { return }
             let (profile, context, store, consent) = try self.currentScope(expected: admission.profile)
-            guard self.account.isLegacySession, admission.requiresEncryptedPersistence else {
-                throw PichiPublicationOutboxFailure.invalidScope
-            }
             try await self.ensureRecordingCipher(profile: profile, context: context, store: store)
             let enabled = try await consent.automaticPublicationEnabled(for: context)
                 && self.offLatch?.profileID != profile.id
@@ -888,29 +980,33 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     }
 
     private func startWorker(profile: PrivateProfileSnapshot, context: AccountContext, store: PichiPublicationOutboxStore) {
-        guard self.worker == nil, !self.userPaused, !self.shutDown else { return }
+        guard self.worker == nil, (!self.userPaused || snapshot.deleteLocalAfterAcceptance), !self.shutDown else { return }
         let id = UUID()
         let task = Task { @MainActor in
             defer { if self.worker?.id == id { self.worker = nil } }
-            while !Task.isCancelled && !self.userPaused {
+            while !Task.isCancelled && (!self.userPaused || self.snapshot.deleteLocalAfterAcceptance) {
                 do {
                     try self.check(profile, context: context)
                     let records = try await store.pendingRecords()
                     try self.check(profile, context: context)
                     for record in records {
                         try self.check(profile, context: context)
-                        guard !self.userPaused else { break }
                         if record.state == .acceptedCleanupPending {
                             await self.cleanupAccepted(record, profile: profile, context: context, store: store)
-                        } else if record.state == .waitingForSource {
+                        } else if !self.userPaused && record.state == .waitingForSource {
                             await self.prepareSource(id: record.sessionID, admission: .init(profile: profile), store: store)
                             if let ready = try await store.record(id: record.sessionID), ready.state == .queued,
                                (!self.account.isLegacySession || ready.legacySelection != nil || ready.automaticAccountContext == true) {
                                 await self.deliver(id: ready.sessionID, profile: profile, context: context, store: store)
                             }
-                        } else if (record.state == .queued || (record.state == .retryScheduled && (record.nextAttemptAt ?? .distantFuture) <= Date()))
+                        } else if !self.userPaused && (record.state == .queued || (record.state == .retryScheduled && (record.nextAttemptAt ?? .distantFuture) <= Date()))
                             && (!self.account.isLegacySession || record.legacySelection != nil || record.automaticAccountContext == true) {
                             await self.deliver(id: record.sessionID, profile: profile, context: context, store: store)
+                        }
+                    }
+                    if self.snapshot.deleteLocalAfterAcceptance {
+                        for record in try await store.acceptedLocalRemovalCandidates() {
+                            await self.cleanupAccepted(record, profile: profile, context: context, store: store)
                         }
                     }
                     var polls = 0
@@ -973,7 +1069,8 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 }
             }
             try self.check(profile, context: context)
-            var accepted = try await store.accept(id: id, receipt: receipt)
+            let removeLocally = try await currentLocalRemovalConsent(profile: profile, context: context)
+            var accepted = try await store.accept(id: id, receipt: receipt, queueLocalRemoval: removeLocally)
             if receipt.billingState?.needsReview == true { accepted = try await store.pauseReceipt(id: id, reason: .accountReview) }
             try self.check(profile, context: context)
             self.project(id, Self.status(accepted), profile: profile, automatic: accepted.automaticAccountContext == true)
@@ -1053,7 +1150,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     }
 
     private func joinOwnedWork(excludingToggle: UUID? = nil) async {
-        let toggle = self.cloudToggle?.id == excludingToggle ? nil : self.cloudToggle
+        let toggle = self.policyCommand?.id == excludingToggle ? nil : self.policyCommand
         toggle?.task.cancel()
         self.workerDelay?.cancel()
         self.worker?.task.cancel()

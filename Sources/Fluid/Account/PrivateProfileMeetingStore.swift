@@ -28,12 +28,17 @@ nonisolated protocol PrivateProfileRecordingObserver: Sendable {
     func captureAdmitted(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
     func prepareRequiredCapture(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async throws
     func prepareAutomaticCapture() async throws -> Bool
+    func prepareCapturePersistencePolicy() async throws -> MeetingCapturePersistencePolicy
     func sourceDidPersist(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
     func captureAdmissionCancelled(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async
 }
 
 extension PrivateProfileRecordingObserver {
     nonisolated func prepareAutomaticCapture() async throws -> Bool { false }
+    nonisolated func prepareCapturePersistencePolicy() async throws -> MeetingCapturePersistencePolicy {
+        let required = try await prepareAutomaticCapture()
+        return .init(requiresEncryptedPersistence: required, requiresPIIRedaction: required)
+    }
     nonisolated func prepareRequiredCapture(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async throws {
         throw CocoaError(.featureUnsupported)
     }
@@ -57,11 +62,17 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     /// Resolves the existing observer's secure-mode resource preflight before the
     /// platform builds its immutable capture configuration. No second policy owner.
     func prepareAutomaticCapture() async throws -> Bool {
+        try await prepareCapturePersistencePolicy().requiresEncryptedPersistence
+    }
+
+    func prepareCapturePersistencePolicy() async throws -> MeetingCapturePersistencePolicy {
         let profile = try readableProfile()
-        let required = try await recordingObserver?.prepareAutomaticCapture() ?? false
+        let policy = try await recordingObserver?.prepareCapturePersistencePolicy() ?? .init()
         try checkReadable(profile)
-        guard !required || encryptedProfiles.contains(profile.id) else { throw MeetingRecordingCipher.Failure.unavailableKey }
-        return required
+        guard !policy.requiresEncryptedPersistence || encryptedProfiles.contains(profile.id) else {
+            throw MeetingRecordingCipher.Failure.unavailableKey
+        }
+        return policy
     }
 
     func admission() throws -> MeetingPrivateProfileAdmission {
@@ -83,9 +94,8 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
         var captured = try admission()
         captured.requiresEncryptedPersistence = configuration?.requiresEncryptedPersistence == true
         if captured.requiresEncryptedPersistence {
-            guard !captured.profile.isGuest, encryptedProfiles.contains(captured.profile.id),
-                  configuration?.audioStorageMode == .memoryOnly,
-                  configuration?.piiRedactionEnabled == true, recordingObserver != nil else {
+            guard encryptedProfiles.contains(captured.profile.id),
+                  configuration?.audioStorageMode == .memoryOnly, recordingObserver != nil else {
                 throw MeetingRecordingCipher.Failure.invalidConfiguration
             }
         }

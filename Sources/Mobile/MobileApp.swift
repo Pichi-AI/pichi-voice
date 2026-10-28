@@ -185,7 +185,7 @@ final class AppServices: ObservableObject {
         let recordingKeys = isProductionComposition
             ? MeetingRecordingKeychainStore(namespace: (Bundle.main.bundleIdentifier ?? AppBrand.keychainService) + ".recording-encryption.v1") : nil
         let resolveRecordingCipher: @MainActor @Sendable (PrivateProfileSnapshot, Bool) async throws -> MeetingRecordingCipher? = { profile, create in
-            guard !profile.isGuest, let publicationStore else { return nil }
+            guard let publicationStore else { return nil }
             guard PrivateProfileStorage.isReadable(profile) else { throw AccountError.staleOperation }
             let cipher: MeetingRecordingCipher?
             if let recordingCipher { cipher = try await recordingCipher(profile) }
@@ -193,7 +193,7 @@ final class AppServices: ObservableObject {
                 if let existing = try await recordingKeys.load(profileID: profile.id) { cipher = existing }
                 else {
                     let sourceExists = try await publicationStore.hasEncryptedPersistenceData(in: profile)
-                    let outboxExists = try PichiPublicationOutboxStore.hasEncryptedPersistenceData(in: profile)
+                    let outboxExists = profile.isGuest ? false : try PichiPublicationOutboxStore.hasEncryptedPersistenceData(in: profile)
                     guard !sourceExists, !outboxExists else { throw MeetingRecordingCipher.Failure.unavailableKey }
                     cipher = create ? try await recordingKeys.loadOrCreate(profileID: profile.id) : nil
                 }
@@ -238,12 +238,16 @@ final class AppServices: ObservableObject {
                 recordingCipher: { profile in
                     guard let cipher = try await resolveRecordingCipher(profile, true) else { throw MeetingRecordingCipher.Failure.unavailableKey }
                     return cipher
+                }, localEncryptionRequested: { profile in
+                    guard PrivateProfileStorage.isReadable(profile) else { return false }
+                    return settings.meetingEncryptLocalRecordings
                 }, deleteAcceptedRecording: { [weak self] id, owner, expectedSourceSHA256 in
                     guard let self else { throw AccountError.staleOperation }
                     let profile = PrivateProfileStorage.current
                     guard owner.matches(profile), PrivateProfileStorage.isReadable(profile),
                           self.privateProfiles.isPrivateDataVisible, !self.privateProfiles.isTransitioning else { throw AccountError.staleOperation }
                     try await self.meetingSessionCoordinator.deleteSession(id: id, expectedOwnership: owner, validating: { source in
+                        try Task.checkCancellation()
                         guard try PichiProtectedPublicationSource.localFingerprint(for: source) == expectedSourceSHA256 else {
                             throw PichiPublicationOutboxFailure.receiptConflict
                         }
@@ -259,7 +263,11 @@ final class AppServices: ObservableObject {
         guard !isUIReady else { return }
         isUIReady = true
         await restoreAccountBeforePrivateUI()
-        guard PrivateProfileStorage.acceptsNewWork else { return }
+        await restoreInitialLocalStateIfReady()
+    }
+
+    private func restoreInitialLocalStateIfReady() async {
+        guard !hasRestoredInitialState, hasRestoredAccount, PrivateProfileStorage.acceptsNewWork else { return }
         await meetingSessionCoordinator.ensureRestored()
         await meetingSessionCoordinator.sweepExpiredAudio()
         hasRestoredInitialState = true
@@ -288,6 +296,14 @@ final class AppServices: ObservableObject {
                 guard !Task.isCancelled else { return }
                 let current = PrivateProfileStorage.current
                 if current.isReadable { PrivateProfileStorage.select(current) }
+                do { try await cloudPublication?.restoreEncryptedLocalStorage() }
+                catch {
+                    // Keep private UI/recovery closed instead of silently skipping
+                    // encrypted guest manifests while their key is unavailable.
+                    PrivateProfileStorage.closeAdmission()
+                    DebugLogger.shared.warning("Local recording encryption key unavailable", source: "MobileAppServices")
+                    return
+                }
                 await cloudPublicationActivation?.activateAfterAccountCommand()
                 guard !Task.isCancelled else { return }
                 hasRestoredAccount = true
@@ -299,6 +315,11 @@ final class AppServices: ObservableObject {
         let profile = PrivateProfileStorage.current
         guard !Task.isCancelled, PrivateProfileStorage.acceptsNewWork,
               PrivateProfileStorage.isReadable(profile) else { return }
+        do { try await cloudPublication?.restoreEncryptedLocalStorage() }
+        catch {
+            PrivateProfileStorage.closeAdmission()
+            return
+        }
         await meetingSessionCoordinator.ensureRestored()
         guard !Task.isCancelled, PrivateProfileStorage.acceptsNewWork,
               PrivateProfileStorage.isReadable(profile) else { return }
@@ -315,6 +336,12 @@ final class AppServices: ObservableObject {
     }
 
     func protectedDataDidBecomeAvailable() async {
+        if !hasRestoredAccount {
+            await accountRestorationTask?.value
+            accountRestorationTask = nil
+            await restoreAccountBeforePrivateUI()
+            await restoreInitialLocalStateIfReady()
+        }
         await cloudPublication?.notifyServerAvailabilityChanged()
     }
 

@@ -117,7 +117,8 @@ actor PichiPublicationConsentStore {
         return try read(scope: scope, directoryFD: fd)?.deleteLocalAfterAcceptance ?? false
     }
 
-    /// Future captures only. The outbox freezes this choice before a source exists.
+    /// Current cleanup preference. Existing managed receipts are reconciled by the facade;
+    /// this setting never grants upload consent or admits historical local recordings.
     func setDeleteLocalAfterAcceptance(_ enabled: Bool, for context: AccountContext) throws {
         let scope = try self.scope(for: context)
         guard let fd = try openDirectory() else { throw PichiPublicationConsentFailure.unavailable }

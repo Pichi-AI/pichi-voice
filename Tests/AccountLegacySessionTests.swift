@@ -294,6 +294,24 @@ extension AccountLegacySessionChecks {
         await first.shutdown()
         expect(await store.session != nil, "shutdown preserves restart credential")
 
+        for status in [408, 429, 502, 503] {
+            LegacyHTTPFixtureProtocol.configure(meStatus: status)
+            let temporary = try make(store)
+            await temporary.restore()
+            expect(temporary.state == .signedIn && temporary.isAwaitingLegacyServerValidation,
+                   "Temporary server status \(status) preserves cached local admission")
+            let sameOwner = temporary.context
+            await temporary.restoreAfterConnectivity()
+            expect(temporary.context == sameOwner && temporary.state == .signedIn && temporary.isAwaitingLegacyServerValidation,
+                   "Repeated temporary validation cannot retire the admitted owner")
+            expect(await store.session != nil, "Maintenance never clears the durable restart cookie")
+            LegacyHTTPFixtureProtocol.configure()
+            await temporary.restoreAfterConnectivity()
+            expect(temporary.context == sameOwner && !temporary.isAwaitingLegacyServerValidation,
+                   "Fresh identity/ACL recovery preserves the same generation after maintenance")
+            await temporary.shutdown()
+        }
+
         LegacyHTTPFixtureProtocol.configure(offline: true)
         let recoveredLifecycle = LegacyLifecycle(), recovered = try make(store, lifecycle: recoveredLifecycle)
         await recovered.restore()

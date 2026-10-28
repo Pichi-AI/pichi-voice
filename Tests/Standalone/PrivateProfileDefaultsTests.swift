@@ -84,6 +84,7 @@ private nonisolated final class SyntheticProviderProtocol: URLProtocol, @uncheck
             "MobileMeetingBehaviorVersion": 1, "SelectedSpeechModel": "guest-model",
             "SelectedProviderID": "guest-provider", "MeetingPIIRedactionEnabled": true,
             "MeetingPIIRedactionRequested": true,
+            "MeetingEncryptLocalRecordings": true,
         ]
         for (key, value) in privateSetupValues { defaults.set(value, forKey: key) }
         expect(guestDefaults.string(forKey: "PrivatePrompt") == "guest-prompt", "guest delegates legacy defaults")

@@ -524,11 +524,14 @@ final class MeetingSessionCoordinator: ObservableObject {
         // The existing storage/admission owner resolves security policy for every
         // recording entry point before backend checks or microphone permission work.
         var configuration = configuration
-        if try await self.store.prepareAutomaticCapture() {
+        let persistencePolicy = try await self.store.prepareCapturePersistencePolicy()
+        if persistencePolicy.requiresPIIRedaction {
             guard configuration.piiRedactionEnabled == true else {
                 throw NSError(domain: "ProtectedRecording", code: 1, userInfo: [NSLocalizedDescriptionKey:
                     PichiLocalization.text("cloud.automatic.requiresPrivacy", defaultValue: "Turn on Data cleanup before recording with automatic protected delivery.")])
             }
+        }
+        if persistencePolicy.requiresEncryptedPersistence {
             configuration.audioStorageMode = .memoryOnly
             configuration.requiresEncryptedPersistence = true
         }
@@ -1179,6 +1182,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.isDeleting = true
         defer { self.isDeleting = false }
         await self.flushQueuedPersistence()
+        try Task.checkCancellation()
         // Re-check: the flush await gives a racing operation a window to start.
         guard !self.hasBlockingActivityTask else { throw MeetingCoordinatorError.activityInProgress }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.maintenanceInProgress }
