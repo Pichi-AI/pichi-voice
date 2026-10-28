@@ -419,10 +419,13 @@ extension PichiPublicationOutboxTests {
             precondition(condition, message); checks += 1
             FileHandle.standardError.write(Data("Connectivity race checkpoint: \(message)\n".utf8))
         }
-        func wait(_ condition: @MainActor () async throws -> Bool) async throws {
+        func wait(line: UInt = #line, _ condition: @MainActor () async throws -> Bool) async throws {
             let deadline = ContinuousClock.now.advanced(by: .seconds(12))
             while !(try await condition()) {
-                guard ContinuousClock.now < deadline else { throw AutomaticFixtureFailure.timeout }
+                guard ContinuousClock.now < deadline else {
+                    FileHandle.standardError.write(Data("Connectivity race timeout at line \(line) for \(failure.rawValue), early=\(restorationFinishesFirst), control=\(control)\n".utf8))
+                    throw AutomaticFixtureFailure.timeout
+                }
                 try await Task.sleep(for: .milliseconds(10))
             }
         }
@@ -482,13 +485,25 @@ extension PichiPublicationOutboxTests {
         meetings = PrivateProfileMeetingStore()
         service = makeService(); try await service.install()
         await transport.setOffline(false)
-        await transport.holdValidationCalls(2)
+        await transport.holdValidationCalls(failure.isHTTPResponse ? 1 : 2)
         if failure.isHTTPResponse { await transport.holdNextResponse(); await transport.failNextHTTP(failure == .http429 ? 429 : 503) }
         try await service.activateCurrentProfile()
         try await wait { await transport.heldValidationCount() == 1 }
         if failure.isHTTPResponse {
             await transport.releaseValidationCall(0)
             try await wait { await transport.isHolding() }
+            // Successful request validation correctly clears the offline flag. A
+            // separate unavailable protected request supplies a real restoration
+            // reason while the first POST response remains held.
+            await transport.setOffline(true)
+            let probe = URLRequest(url: configuration.apiBaseURL.appendingPathComponent("api/recordings/1"))
+            do {
+                _ = try await account.performAuthorizedLegacyRequest(for: account.context!, request: probe)
+                check(false, "The concurrent offline request cannot reach the server")
+            } catch is LegacyAccountConnectivityFailure {}
+            await transport.setOffline(false)
+            check(account.isAwaitingLegacyServerValidation, "A second offline request requests validation without replacing the first request owner")
+            await transport.addValidationHold()
         }
         let postsBeforeReplay = failure.isHTTPResponse ? 1 : 0
         let context = account.context!
@@ -713,6 +728,7 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     func restoreSession(_ cookie: LegacyAccountCookie) async throws {}
     func holdValidationCalls(_ count: Int) { validationsToHold = count; heldValidations = [] }
     func heldValidationCount() -> Int { heldValidations.count }
+    func addValidationHold() { validationsToHold += 1 }
     private func markValidationCancelled(_ index: Int) { cancelledValidations.insert(index) }
     func validationWasCancelled(_ index: Int) -> Bool { cancelledValidations.contains(index) }
     func releaseValidationCall(_ index: Int) { heldValidations[index]?.resume(); heldValidations[index] = nil }

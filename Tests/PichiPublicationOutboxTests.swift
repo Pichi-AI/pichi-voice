@@ -9,6 +9,11 @@ struct PichiPublicationOutboxTests {
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).resolvingSymlinksInPath()
         try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         defer { try? manager.removeItem(at: root) }
+        if CommandLine.arguments.contains("--connectivity-race-http-only") {
+            let checks = try await Self.checkConnectivityRestorationRace(root: root.appendingPathComponent("http-race"), failure: .http429)
+            print("Pichi raw HTTP restoration race: \(checks) synthetic integration checks passed; no live transport")
+            return
+        }
         if CommandLine.arguments.contains("--connectivity-race-matrix-only") {
             let checks = try await Self.checkConnectivityRetirementMatrix(root: root.appendingPathComponent("retirement-matrix"))
             print("Pichi connectivity retirement matrix: \(checks) synthetic integration checks passed; no live transport")
