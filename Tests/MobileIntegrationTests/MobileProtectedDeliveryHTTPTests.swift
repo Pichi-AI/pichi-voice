@@ -291,6 +291,8 @@ private final class HTTPFixture {
     private var cipher: MeetingRecordingCipher?
     private var legacy: LegacyAccountHTTPTransport!
     private var qaCredentials: HTTPMemorySession?
+    private var capturedIDs = Set<UUID>()
+    private var waitFailed = false
     private(set) var account: AccountSessionService!
     private(set) var store: PrivateProfileMeetingStore!
     private(set) var coordinator: MeetingSessionCoordinator!
@@ -478,6 +480,7 @@ private final class HTTPFixture {
             transcriptionBackendID: MeetingBackendID.legacyCompatibility.rawValue)
         request.timestampDefaultTitle = false
         let admitted = try await coordinator.startRecording(configuration: request)
+        capturedIDs.insert(admitted.id)
         XCTAssertTrue(admitted.requiresEncryptedPersistence == true)
         XCTAssertEqual(admitted.audioStorageMode, .memoryOnly)
         XCTAssertTrue(admitted.isLocalContentConcealed)
@@ -655,12 +658,52 @@ private final class HTTPFixture {
         return bytes
     }
 
-    func wait(_ condition: @MainActor () async throws -> Bool) async throws {
+    func wait(file: StaticString = #filePath, line: UInt = #line,
+              _ condition: @MainActor () async throws -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(90))
         while !(try await condition()) {
-            guard ContinuousClock.now < deadline else { throw Failure.timeout }
+            guard ContinuousClock.now < deadline else {
+                waitFailed = true
+                preserveWaitEvidence(line: line)
+                XCTFail("Synthetic HTTPS condition timed out at its calling step", file: file, line: line)
+                throw Failure.timeout
+            }
             try await Task.sleep(for: .milliseconds(100))
         }
+    }
+
+    private func preserveWaitEvidence(line: UInt) {
+        let current = PrivateProfileStorage.current
+        var records: [[String: Any]] = []
+        for id in capturedIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            if let value = try? outbox(id) {
+                records.append(["id": id.uuidString, "state": value.state.rawValue,
+                    "attemptCount": value.attemptCount, "automaticConsent": value.automaticConsent,
+                    "automaticAccountContext": value.automaticAccountContext == true,
+                    "pause": value.pauseReason?.rawValue ?? "none", "hasSourceHash": value.sourceSHA256 != nil,
+                    "hasTranscriptBytes": value.transcriptBytes != nil, "hasReceipt": value.receipt != nil])
+            } else { records.append(["id": id.uuidString, "recordMissing": true]) }
+        }
+        // Only queue metadata for invented sources, never account envelopes or HTTP bodies.
+        let diagnostic: [String: Any] = ["callingLine": line, "availability": service.snapshot.availability.rawValue,
+            "cloudSync": service.snapshot.cloudSyncEnabled, "deleteLocal": service.snapshot.deleteLocalAfterAcceptance,
+            "accountState": String(describing: account.state), "awaitingValidation": account.isAwaitingLegacyServerValidation,
+            "accountCurrent": account.context.map { account.isCurrent($0) } ?? false,
+            "currentProfile": current.id, "currentGeneration": current.generation.uuidString,
+            "expectedProfile": profile?.id ?? "none", "expectedGeneration": profile?.generation.uuidString ?? "none",
+            "profileReadable": profile.map { PrivateProfileStorage.isReadable($0) } ?? false, "records": records]
+        do {
+            let bytes = try JSONSerialization.data(withJSONObject: diagnostic, options: [.prettyPrinted, .sortedKeys])
+            let evidence = XCTAttachment(data: bytes, uniformTypeIdentifier: "public.json")
+            evidence.name = "synthetic-https-wait-diagnostic"; evidence.lifetime = .keepAlways; attach(evidence)
+            if let path = ProcessInfo.processInfo.environment["PICHI_KIOSK_EVIDENCE_DIR"] {
+                let destination = URL(fileURLWithPath: path, isDirectory: true)
+                    .appendingPathComponent("http-wait-" + runID.uuidString, isDirectory: true)
+                try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+                try bytes.write(to: destination.appendingPathComponent("diagnostic.json"), options: .atomic)
+                try FileManager.default.copyItem(at: root, to: destination.appendingPathComponent(root.lastPathComponent, isDirectory: true))
+            }
+        } catch { XCTFail("Synthetic timeout evidence preservation failed") }
     }
 
     func stop() async {
@@ -674,7 +717,7 @@ private final class HTTPFixture {
 
     func cleanup(preserveFailure: Bool) async {
         await stop()
-        var mustPreserve = preserveFailure
+        var mustPreserve = preserveFailure || waitFailed
         if !preserveForRelaunch && configuration.mode == .localStand {
             // Only the task-private stand is controlled. Reset even on failed assertions.
             do {
