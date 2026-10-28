@@ -720,13 +720,12 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
         return texts
     }
 
-    /// The store persists ISO8601 dates at whole-second precision. Compare the complete
-    /// track value after that same codec round trip, retaining every timing and chunk field.
+    /// Use the shared store codec while retaining every date, timing and chunk field exactly.
     fileprivate static func tracksUsingStoreDatePrecision(_ tracks: [MeetingAudioTrack]) throws -> [MeetingAudioTrack] {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = MeetingSessionDateCodec.encodingStrategy
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
         return try decoder.decode([MeetingAudioTrack].self, from: encoder.encode(tracks))
     }
 
@@ -1478,7 +1477,7 @@ final class MeetingSystemAudioContinuityFailureEvidenceTests: XCTestCase {
         } catch {}
     }
 
-    func testCompletedTrackComparisonUsesStoreDatePrecisionWithoutIgnoringTrackChanges() async throws {
+    func testCompletedTrackComparisonPreservesExactDatesWithoutIgnoringTrackChanges() async throws {
         let fixture = try await self.fixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory.deletingLastPathComponent().deletingLastPathComponent()) }
         var completed = fixture.session
@@ -1491,7 +1490,7 @@ final class MeetingSystemAudioContinuityFailureEvidenceTests: XCTestCase {
         try await fixture.store.save(completed)
         let saved = try await fixture.store.load(id: completed.id)
         let persisted = try XCTUnwrap(saved)
-        XCTAssertNotEqual(persisted.audioTracks, completed.audioTracks, "Raw equality must expose the known ISO8601 date precision change.")
+        XCTAssertEqual(persisted.audioTracks, completed.audioTracks, "New manifests preserve fractional track dates exactly.")
         let expected = try MeetingSystemAudioContinuityHardwareTests.tracksUsingStoreDatePrecision(completed.audioTracks)
         XCTAssertEqual(persisted.audioTracks, expected)
 
@@ -1499,8 +1498,8 @@ final class MeetingSystemAudioContinuityFailureEvidenceTests: XCTestCase {
         changedChunk[0].chunks[0].byteCount += 1
         XCTAssertNotEqual(changedChunk, expected, "A persisted chunk change must still fail comparison.")
         var changedDate = persisted.audioTracks
-        changedDate[0].health.lastSampleAt = try XCTUnwrap(changedDate[0].health.lastSampleAt).addingTimeInterval(1)
-        XCTAssertNotEqual(changedDate, expected, "A whole-second date change must still fail comparison.")
+        changedDate[0].health.lastSampleAt = try XCTUnwrap(changedDate[0].health.lastSampleAt).addingTimeInterval(0.125)
+        XCTAssertNotEqual(changedDate, expected, "A subsecond date change must still fail comparison.")
     }
 
     func testLateFirstPhaseRetainsFinalizedCaptureAndAcceptedProtocolEvidence() async throws {
