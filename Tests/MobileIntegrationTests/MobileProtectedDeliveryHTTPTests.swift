@@ -737,8 +737,13 @@ private final class HTTPFixture {
             // Retained failure evidence must never contain a persisted QA session.
             XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("synthetic-session.private.json").path))
         }
+        // Teardown can enqueue lazy diagnostics with the fixture's old owner.
+        // Join both logging queues and close its descriptor before root removal.
+        await DebugLogger.shared.joinForProfileTransition()
+        await FileLogger.shared.suspendForProfileTransition()
         PrivateProfileStorage.select(previousProfile)
         if !previousAdmission { PrivateProfileStorage.closeAdmission() }
+        await FileLogger.shared.activateProfile(previousProfile)
         if mustPreserve {
             let evidence = XCTAttachment(string: "Synthetic HTTPS failure evidence retained at: " + root.path)
             evidence.name = "synthetic-https-retained-failure-root"

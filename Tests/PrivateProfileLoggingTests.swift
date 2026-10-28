@@ -41,7 +41,20 @@ import Foundation
         try require(current.contains("synthetic-account-only"), "new-profile-log")
         try require(!current.contains("synthetic-preserved-guest") && !current.contains("synthetic-retired-profile-denied"), "no-guest-copy-or-retarget")
         try require(try String(contentsOf: oldURL, encoding: .utf8) == first, "legacy-guest-file-preserved")
+        let retiringLog = logger.currentLogFileURL()
+        let retirementGate = DispatchSemaphore(value: 0)
+        DebugLogger.shared.logLazy { retirementGate.wait(); return "synthetic-fixture-teardown" }
+        retirementGate.signal()
+        await DebugLogger.shared.joinForProfileTransition()
         await logger.suspendForProfileTransition()
+        try require(try String(contentsOf: retiringLog, encoding: .utf8).contains("synthetic-fixture-teardown"),
+                    "fixture-teardown-diagnostics-joined-before-removal")
+        PrivateProfileStorage.select(guest)
+        await logger.activateProfile(guest)
+        try manager.removeItem(at: account.rootDirectory)
+        logger.append(line: "synthetic-late-retired-fixture", profile: account)
+        await logger.suspendForProfileTransition()
+        try require(!manager.fileExists(atPath: account.rootDirectory.path), "retired-log-cannot-recreate-removed-fixture")
         print("Private profile logging: \(checks) synthetic queue/admission/descriptor/profile-preservation checks passed")
     }
 }
