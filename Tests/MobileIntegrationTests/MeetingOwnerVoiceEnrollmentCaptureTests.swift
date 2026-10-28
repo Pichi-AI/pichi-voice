@@ -11,6 +11,8 @@ import XCTest
 final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
     @MainActor
     func testEnrollmentJoinsIdleRetirementBeforeMicrophoneAndCancellationHandback() async throws {
+        let restoreProfile = admitSyntheticEnrollmentProfile()
+        defer { restoreProfile() }
         let residency = MeetingModelResidencyCoordinator()
         let idleOwner = MeetingIdlePreparedResourceOwner(residency: residency)
         let resource = EnrollmentIdleRetirementProbe()
@@ -45,6 +47,8 @@ final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
 
     @MainActor
     func testEnrollmentAdmissionRejectsQueuedIdleAndReleasesTokenBeforeAudio() async {
+        let restoreProfile = admitSyntheticEnrollmentProfile()
+        defer { restoreProfile() }
         let residency = MeetingModelResidencyCoordinator()
         let audio = EnrollmentAudioLeaseProbe(residency: residency)
         var captureConstructions = 0
@@ -80,6 +84,8 @@ final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
 
     @MainActor
     func testEnrollmentAdmissionFailureNeverConstructsCaptureAndReleasesAudio() async {
+        let restoreProfile = admitSyntheticEnrollmentProfile()
+        defer { restoreProfile() }
         let residency = MeetingModelResidencyCoordinator()
         residency.beginTermination()
         let audio = EnrollmentAudioLeaseProbe(residency: residency)
@@ -97,8 +103,8 @@ final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
 
     @MainActor
     func testBusyConcealRetainsEnrollmentUntilRootStopJoins() async throws {
-        let original = PrivateProfileStorage.current
-        defer { PrivateProfileStorage.select(original) }
+        let restoreProfile = admitSyntheticEnrollmentProfile()
+        defer { restoreProfile() }
         let residency = MeetingModelResidencyCoordinator()
         let idleOwner = MeetingIdlePreparedResourceOwner(residency: residency)
         let resource = EnrollmentIdleRetirementProbe()
@@ -129,6 +135,22 @@ final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
         XCTAssertEqual(model.phase, .idle)
         XCTAssertFalse(model.hasProfile)
         XCTAssertNil(model.error)
+    }
+
+    /// Enrollment admission belongs to this fixture, independent of whether the
+    /// inert hosted application has completed its normal account restoration.
+    @MainActor
+    private func admitSyntheticEnrollmentProfile() -> @MainActor () -> Void {
+        let original = PrivateProfileStorage.current
+        let originalAdmission = PrivateProfileStorage.acceptsNewWork
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SyntheticEnrollmentProfile." + UUID().uuidString, isDirectory: true)
+        PrivateProfileStorage.select(.init(id: "guest", context: nil, generation: UUID(),
+            rootDirectory: root, legacyRootDirectory: root, isReadable: true))
+        return {
+            PrivateProfileStorage.select(original)
+            if !originalAdmission { PrivateProfileStorage.closeAdmission() }
+        }
     }
 
     @MainActor
