@@ -458,11 +458,12 @@ struct PichiVoiceMobileApp: App {
     init() { FirstMeetingTip.configure() }
 
     #if DEBUG && targetEnvironment(simulator)
-    /// HTTP fixtures own an injected service composition and the shared profile scope.
+    /// Hosted fixtures own their service composition and the shared profile scope.
     /// Keep the hosted app inert so its UI cannot restore another account concurrently.
-    private var isHTTPAcceptanceHost: Bool {
+    private var isHostedFixtureHost: Bool {
         let environment = ProcessInfo.processInfo.environment
-        return environment["PICHI_NATIVE_HTTP_ACCEPTANCE"] == "1"
+        return environment["PICHI_MOBILE_HOSTED_FIXTURE"] == "1"
+            || environment["PICHI_NATIVE_HTTP_ACCEPTANCE"] == "1"
             || environment["PICHI_NATIVE_QA_ACCEPTANCE"] == "1"
     }
     #endif
@@ -471,7 +472,7 @@ struct PichiVoiceMobileApp: App {
         WindowGroup {
             AdaptiveAppTheme(accent: settings.accentColor) {
                 #if DEBUG && targetEnvironment(simulator)
-                if isHTTPAcceptanceHost { Color.clear.accessibilityHidden(true) }
+                if isHostedFixtureHost { Color.clear.accessibilityHidden(true) }
                 else if MobileAutomaticSettingsReview.isRequested { MobileAutomaticSettingsReview() }
                 else { ordinaryRoot }
                 #else
@@ -479,7 +480,7 @@ struct PichiVoiceMobileApp: App {
                 #endif
             }.task {
                 #if DEBUG && targetEnvironment(simulator)
-                if isHTTPAcceptanceHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
                 #endif
                 #if DEBUG
                 // Hosted unit probes own their injected model operations. The ordinary
@@ -507,19 +508,19 @@ struct PichiVoiceMobileApp: App {
             // captured scene cannot overwrite a newer foreground event after restore.
             .onChange(of: scenePhase, initial: true) { _, phase in
                 #if DEBUG && targetEnvironment(simulator)
-                if isHTTPAcceptanceHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
                 #endif
                 Task { await services.setSceneActive(phase == .active) }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
                 #if DEBUG && targetEnvironment(simulator)
-                if isHTTPAcceptanceHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
                 #endif
                 Task { await services.protectedDataDidBecomeAvailable() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                 #if DEBUG && targetEnvironment(simulator)
-                if isHTTPAcceptanceHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
                 #endif
                 Task { await services.didReceiveMemoryWarning() }
             }
