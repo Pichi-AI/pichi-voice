@@ -278,6 +278,7 @@ private final class HTTPFixture {
     let root: URL
     let runID: UUID
     let previousProfile = PrivateProfileStorage.current
+    private let previousAdmission = PrivateProfileStorage.acceptsNewWork
     let defaults: UserDefaults
     let settings: SettingsStore
     var preserveForRelaunch = false
@@ -737,6 +738,7 @@ private final class HTTPFixture {
             XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("synthetic-session.private.json").path))
         }
         PrivateProfileStorage.select(previousProfile)
+        if !previousAdmission { PrivateProfileStorage.closeAdmission() }
         if mustPreserve {
             let evidence = XCTAttachment(string: "Synthetic HTTPS failure evidence retained at: " + root.path)
             evidence.name = "synthetic-https-retained-failure-root"
