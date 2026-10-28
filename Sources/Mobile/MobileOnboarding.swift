@@ -470,35 +470,70 @@ struct MobileRequiredResourcesStatus: View {
     }
 }
 
+/// An onboarding card shows the explanation beside the toggle. As form rows, Settings shows the
+/// toggle alone and the same paragraphs in its section footer.
 struct MobileAudioPrivacyControls: View {
+    var asFormRows = false
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+
+    static var memoryOnlyExplanation: String {
+        PichiLocalization.text("When disabled, audio is never written to files, including temporary files. Only the transcript is saved.")
+    }
+    static var retainedAudioExplanation: String {
+        PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio.")
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Toggle(PichiLocalization.text("Save audio recordings"), isOn: $settings.meetingSaveAudio)
-                .accessibilityIdentifier("privacy.saveAudio")
-            Text(PichiLocalization.text("When disabled, audio is never written to files, including temporary files. Only the transcript is saved."))
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-            if settings.meetingSaveAudio {
-                Text(PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."))
+        if asFormRows { toggle }
+        else {
+            VStack(alignment: .leading, spacing: 12) {
+                toggle
+                Text(Self.memoryOnlyExplanation)
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                if settings.meetingSaveAudio {
+                    Text(Self.retainedAudioExplanation)
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
+
+    private var toggle: some View {
+        Toggle(PichiLocalization.text("Save audio recordings"), isOn: $settings.meetingSaveAudio)
+            .accessibilityIdentifier("privacy.saveAudio")
+    }
 }
 
+/// As form rows, every status and action is its own native row, and `explanation` is the footer.
 struct MobilePrivacyActivationControls: View {
     @ObservedObject var activation: MobilePrivacyActivation
+    var asFormRows = false
     @Environment(\.theme) private var theme
+
+    static var explanation: String {
+        PichiLocalization.text("Locally hides Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets. Detection can miss data. Review before sharing.")
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle(PichiLocalization.text("Redact sensitive data"), isOn: Binding(
-                get: { activation.isRequested }, set: { activation.setEnabled($0) }))
-                .accessibilityIdentifier("privacy.pii")
-            switch activation.state {
-            case .enabling:
+        if asFormRows { controls }
+        else {
+            VStack(alignment: .leading, spacing: 10) {
+                controls
+                Text(Self.explanation).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            }
+        }
+    }
+
+    @ViewBuilder private var controls: some View {
+        Toggle(PichiLocalization.text("Redact sensitive data"), isOn: Binding(
+            get: { activation.isRequested }, set: { activation.setEnabled($0) }))
+            .accessibilityIdentifier("privacy.pii")
+        switch activation.state {
+        case .enabling:
+            VStack(alignment: .leading, spacing: asFormRows ? 8 : 10) {
                 Text(PichiLocalization.text(activation.downloadProgress == 1
                     ? "Loading data cleanup model…" : "Enabling data cleanup…"))
                     .font(theme.typography.caption)
@@ -506,20 +541,20 @@ struct MobilePrivacyActivationControls: View {
                     if let progress = activation.downloadProgress, progress < 1 { ProgressView(value: progress) }
                     else { ProgressView() }
                 }.accessibilityIdentifier("privacy.pii.progress")
-                Button(PichiLocalization.text("Cancel")) { activation.setEnabled(false) }
-                    .accessibilityIdentifier("privacy.pii.cancel")
-            case .active:
-                Label(PichiLocalization.text("Data cleanup is active"), systemImage: "checkmark.shield")
-                    .font(theme.typography.caption).accessibilityIdentifier("privacy.pii.active")
-            case .failed(let message):
+            }
+            Button(PichiLocalization.text("Cancel")) { activation.setEnabled(false) }
+                .accessibilityIdentifier("privacy.pii.cancel")
+        case .active:
+            Label(PichiLocalization.text("Data cleanup is active"), systemImage: "checkmark.shield")
+                .font(theme.typography.caption).accessibilityIdentifier("privacy.pii.active")
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: asFormRows ? 4 : 10) {
                 Text(PichiLocalization.text("Data cleanup is not active")).font(theme.typography.bodyStrong)
                 Text(message).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
-                Button(PichiLocalization.text("Try again")) { activation.setEnabled(true) }
-                    .accessibilityIdentifier("privacy.pii.retry")
-            case .off: EmptyView()
             }
-            Text(PichiLocalization.text("Locally hides Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets. Detection can miss data. Review before sharing."))
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            Button(PichiLocalization.text("Try again")) { activation.setEnabled(true) }
+                .accessibilityIdentifier("privacy.pii.retry")
+        case .off: EmptyView()
         }
     }
 }

@@ -13,6 +13,8 @@ final class MobileSetupUITests: XCTestCase {
         }
         #endif
         continueAfterFailure = false
+        // A previous test can leave the device rotated; Settings rows below the fold are not rendered.
+        XCUIDevice.shared.orientation = .portrait
     }
 
     /// Presentation acceptance of the ordinary guest distribution, without
@@ -198,7 +200,9 @@ final class MobileSetupUITests: XCTestCase {
         if sidebar.waitForExistence(timeout: 5) { sidebar.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap() }
         else { app.tabBars.buttons["Настройки"].tap() }
         let replay = app.buttons["settings.replaySetup"]
-        XCTAssertTrue(replay.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 10))
+        // Replay is the last row of the Settings root, below the fold on a phone.
+        reveal("settings.replaySetup", in: app)
         XCTAssertTrue(replay.isEnabled, "Replay is available while no meeting is active")
         capture("replay-00-settings")
         replay.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
@@ -355,7 +359,8 @@ final class MobileSetupUITests: XCTestCase {
         let sidebar = app.buttons["navigation.settings"]
         if sidebar.waitForExistence(timeout: 2) { sidebar.tap() }
         else { app.tabBars.buttons["Настройки"].tap() }
-        XCTAssertTrue(app.buttons["settings.privacy"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 10))
+        reveal("settings.privacy", in: app)
         app.buttons["settings.privacy"].tap()
     }
 
@@ -363,7 +368,8 @@ final class MobileSetupUITests: XCTestCase {
         let sidebar = app.buttons["navigation.settings"]
         if sidebar.waitForExistence(timeout: 2) { sidebar.tap() }
         else { app.tabBars.buttons["Настройки"].tap() }
-        XCTAssertTrue(app.buttons["settings.recording"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 10))
+        reveal("settings.recording", in: app)
         capture("location-settings-open-root")
         app.buttons["settings.recording"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["settings.recording.detail"].firstMatch.waitForExistence(timeout: 10))
@@ -400,7 +406,7 @@ final class MobileSetupUITests: XCTestCase {
         let button = app.buttons[identifier]
         for step in 0..<6 where !button.isHittable {
             app.swipeUp()
-            capture("dictionary-scroll-\(identifier)-\(step)")
+            capture("reveal-\(identifier)-\(step)")
         }
         XCTAssertTrue(button.isHittable)
     }

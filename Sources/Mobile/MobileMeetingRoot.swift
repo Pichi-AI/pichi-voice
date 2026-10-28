@@ -175,7 +175,7 @@ struct MobileMeetingRoot: View {
             Button(PichiLocalization.text("OK"), role: .cancel) { error = nil }
         } message: { Text(error ?? "") }
         .sheet(isPresented: $privatePresentation.showRecordingSettings) {
-            NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities, isPresentedAsSheet: true, required: required) }
+            NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities, isPresentedAsSheet: true) }
         }
         .sheet(item: $privatePresentation.edit) { draft in
             MeetingEditSheet(draft: draft, cancel: { edit = nil }) { kind, updated in

@@ -242,7 +242,8 @@ final class MobileKioskUITests: XCTestCase {
         XCTAssertEqual(app.tabBars.count, 0, file: file, line: line)
         for identifier in ["navigation.settings", "navigation.history", "navigation.meetings",
                            "settings.root", "settings.kiosk", "settings.general", "settings.recording",
-                           "settings.models", "settings.privacy", "settings.replaySetup", "privacy.saveAudio",
+                           "settings.participants", "settings.models", "settings.privacy", "settings.replaySetup",
+                           "settings.interfaceLanguage", "settings.appearance", "privacy.saveAudio",
                            "meeting.start", "transcript.more", "meeting.presentation", "meeting.share"] {
             XCTAssertFalse(element(identifier).exists, "Restricted UI exposed \(identifier)", file: file, line: line)
         }

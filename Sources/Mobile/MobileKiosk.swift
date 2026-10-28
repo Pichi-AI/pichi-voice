@@ -327,9 +327,10 @@ struct MobileKioskSettings: View {
         Form {
             Section {
                 Text(PichiLocalization.text("Configure recording, transcription and storage first. Restricted access keeps these settings and allows only recording and your voice setup."))
-                Text(PichiLocalization.text("To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access."))
+            } footer: {
+                MobileSettingsFooter(PichiLocalization.text("To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access."))
             }
-            Section(PichiLocalization.text("Administrator password")) {
+            Section {
                 SecureField(PichiLocalization.text(access.hasPassword ? "Current password" : "Password"), text: $password,
                             prompt: Text(PichiLocalization.text(access.hasPassword ? "Current password" : "Password"))
                                 .foregroundStyle(theme.palette.secondaryText))
@@ -346,12 +347,17 @@ struct MobileKioskSettings: View {
                         .focused($focusedField, equals: .confirmation)
                         .submitLabel(.done).onSubmit { focusedField = nil }
                 }
-                Text(PichiLocalization.text("Use a password with 6 to 128 characters."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 if let error {
                     Text(error).foregroundStyle(theme.palette.primaryText)
                         .accessibilityIdentifier("kiosk.passwordError")
                 }
+            } header: {
+                Text(PichiLocalization.text("Administrator password"))
+            } footer: {
+                MobileSettingsFooter(PichiLocalization.text("Use a password with 6 to 128 characters."))
+            }
+            .disabled(access.isBusy)
+            Section {
                 Button(PichiLocalization.text("Enable restricted mode")) {
                     guard canEnable else { return }
                     Task { @MainActor in
@@ -362,12 +368,14 @@ struct MobileKioskSettings: View {
                         catch { self.error = error.localizedDescription }
                     }
                 }.disabled(!canEnable || access.isBusy).accessibilityIdentifier("kiosk.enable")
-            }.disabled(access.isBusy)
-            Section {
-                Text(PichiLocalization.text("The password is required to restore full access. Restricted access stays enabled after restarting the app."))
-                Text(PichiLocalization.text("To keep the device in this app, also enable Guided Access in iPad or iPhone settings."))
+            } footer: {
+                MobileSettingsFooter(
+                    PichiLocalization.text("The password is required to restore full access. Restricted access stays enabled after restarting the app."),
+                    PichiLocalization.text("To keep the device in this app, also enable Guided Access in iPad or iPhone settings."))
             }
+            .disabled(access.isBusy)
         }
+        .mobileSettingsPage()
         .navigationTitle(PichiLocalization.text("Restricted mode"))
         .accessibilityIdentifier("kiosk.settings")
         .toolbar {

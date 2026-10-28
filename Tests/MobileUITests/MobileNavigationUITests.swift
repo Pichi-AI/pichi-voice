@@ -726,21 +726,32 @@ final class MobileNavigationUITests: XCTestCase {
                           "The floating tab bar must not cover the storage caption")
         }
         openNavigation("settings", title: "Settings")
-        XCTAssertTrue(app.otherElements["settings.root"].exists || app.buttons["settings.privacy"].exists)
-        let storageFooter = app.staticTexts["Audio recordings and transcripts are stored on this device."].firstMatch
-        if app.tabBars.firstMatch.exists && storageFooter.exists {
+        XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 5))
+        // The root's last footer explains Replay onboarding and ends the scrollable list.
+        let lastFooter = app.staticTexts["Your meetings, models and voice profile are kept."].firstMatch
+        if app.tabBars.firstMatch.exists {
             let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
-            for step in 0..<3 where !app.windows.firstMatch.frame.contains(storageFooter.frame)
-                || !storageFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty {
+            for step in 0..<4 where !lastFooter.exists || !app.windows.firstMatch.frame.contains(lastFooter.frame)
+                || !lastFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty {
                 XCTAssertTrue(scroll.isHittable)
                 scroll.swipeUp()
                 capture("03-settings-footer-scroll-\(step)")
             }
-            XCTAssertTrue(storageFooter.isHittable)
-            XCTAssertTrue(app.windows.firstMatch.frame.contains(storageFooter.frame),
-                          "The complete storage footer must remain inside the visible application window")
-            XCTAssertTrue(storageFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty,
-                          "Normal scrolling must expose the complete storage footer above the floating tab bar")
+            XCTAssertTrue(lastFooter.isHittable)
+            XCTAssertTrue(app.windows.firstMatch.frame.contains(lastFooter.frame),
+                          "The complete last footer must remain inside the visible application window")
+            XCTAssertTrue(lastFooter.frame.intersection(app.tabBars.firstMatch.frame).isEmpty,
+                          "Normal scrolling must expose the complete last footer above the floating tab bar")
+            // A landscape phone shows only part of the root: return to the top, then move the list
+            // in short drags until the Privacy row is clear of both bars. A swipe overshoots it.
+            let privacy = app.buttons["settings.privacy"]
+            for _ in 0..<6 { scroll.swipeDown() }
+            let navigationBar = app.navigationBars.firstMatch.frame, tabBar = app.tabBars.firstMatch.frame
+            for _ in 0..<8 where !(privacy.exists && privacy.isHittable && privacy.frame.intersection(tabBar).isEmpty
+                                   && privacy.frame.intersection(navigationBar).isEmpty) {
+                scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+                    .press(forDuration: 0.05, thenDragTo: scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+            }
         }
         app.buttons["settings.privacy"].tap()
         XCTAssertTrue(app.switches["privacy.saveAudio"].waitForExistence(timeout: 5))
@@ -805,9 +816,9 @@ final class MobileNavigationUITests: XCTestCase {
             app.launch()
             waitForOrientation(portrait: true)
             openNavigation("settings", title: settingsTitle)
-            let recording = app.buttons["settings.recording"]
-            XCTAssertTrue(recording.waitForExistence(timeout: 5))
-            recording.tap()
+            let participants = app.buttons["settings.participants"]
+            XCTAssertTrue(participants.waitForExistence(timeout: 5))
+            participants.tap()
             let start = app.buttons["ownerVoice.start"]
             let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.scrollViews.firstMatch
             for step in 0..<8 where !start.isHittable {
@@ -846,7 +857,7 @@ final class MobileNavigationUITests: XCTestCase {
             waitForOrientation(portrait: true)
             capture("streaming-settings-\(language)-ready")
             openNavigation("settings", title: settingsTitle)
-            app.buttons["settings.recording"].tap()
+            app.buttons["settings.participants"].tap()
             let status = app.descendants(matching: .any)["recording.requiredResources"].firstMatch
             XCTAssertTrue(status.waitForExistence(timeout: 10))
             for identifier in ["recording.diarization", "recording.streamingDiarization"] {
@@ -864,7 +875,7 @@ final class MobileNavigationUITests: XCTestCase {
     }
 
     func testSectionNavigationSwitchesImmediatelyFromSettingsDetails() throws {
-        let destinations = ["general", "recording", "models", "privacy"]
+        let destinations = ["recording", "participants", "models", "privacy"]
         for detail in destinations {
             openNavigation("settings", title: "Settings")
             XCTAssertTrue(app.buttons["settings.\(detail)"].waitForExistence(timeout: 5))
@@ -916,7 +927,7 @@ final class MobileNavigationUITests: XCTestCase {
     }
 
     func testReselectingSettingsReturnsToRoot() throws {
-        for detail in ["general", "recording", "models", "privacy"] {
+        for detail in ["recording", "participants", "models", "privacy"] {
             openNavigation("settings", title: "Settings")
             let row = app.buttons["settings.\(detail)"]
             XCTAssertTrue(row.waitForExistence(timeout: 5))

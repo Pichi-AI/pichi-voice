@@ -59680,6 +59680,91 @@
           }
         }
       }
+    },
+    "Microphone, language and meeting location": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone, language and meeting location"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон, язык и место встречи"
+          }
+        }
+      }
+    },
+    "Speaker labels and your voice": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker labels and your voice"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Метки говорящих и ваш голос"
+          }
+        }
+      }
+    },
+    "Audio storage, cleanup and encryption": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio storage, cleanup and encryption"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранение аудио, очистка и шифрование"
+          }
+        }
+      }
+    },
+    "Recording only, full access with a password": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording only, full access with a password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Только запись, полный доступ по паролю"
+          }
+        }
+      }
+    },
+    "The model will be removed from this device. Meetings and transcripts stay.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model will be removed from this device. Meetings and transcripts stay."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель будет удалена с этого устройства. Встречи и расшифровки сохранятся."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
