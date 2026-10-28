@@ -349,12 +349,19 @@ class StandaloneRunnerTests(unittest.TestCase):
 
         def unavailable_inspection(group):
             # The slow/unavailable inspector is reached only after KILL and
-            # direct-child reap, never while a TERM-ignoring worker can write.
+            # direct-child reap. The shell and its worker exit independently:
+            # wait for the killed worker's FIFO descriptor to close as well.
             self.assertTrue(escalation.is_set())
-            with self.assertRaises(OSError) as failure:
-                descriptor = os.open(self.root / "worker-release", os.O_WRONLY | os.O_NONBLOCK)
+            deadline = time.monotonic() + RUNNER.KILL_WAIT_SECONDS
+            while True:
+                try:
+                    descriptor = os.open(self.root / "worker-release", os.O_WRONLY | os.O_NONBLOCK)
+                except OSError as failure:
+                    self.assertEqual(failure.errno, errno.ENXIO)
+                    break
                 os.close(descriptor)
-            self.assertEqual(failure.exception.errno, errno.ENXIO)
+                self.assertLess(time.monotonic(), deadline, "Killed worker still holds its FIFO reader")
+                time.sleep(0.01)
             inspected_after_join.append(group)
             raise subprocess.TimeoutExpired(["ps"], 2)
 
