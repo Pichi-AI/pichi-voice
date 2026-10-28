@@ -204,6 +204,18 @@ The organization currently uses GitHub Free. GitHub does not provide protected b
 
 Merge reviewed task branches, fetch the updated `main`, and start new work from it. Archive managed worktrees through Codex after checking that needed work is pushed. Remove manually created worktrees with `git worktree remove <path>` after confirming that their work is saved. Do not remove another active session's worktree.
 
+## Hosted mobile HTTP acceptance
+
+In Debug simulator builds, `PICHI_NATIVE_HTTP_ACCEPTANCE=1` or
+`PICHI_NATIVE_QA_ACCEPTANCE=1` selects an inert app host. The opt-in HTTP fixtures
+own their injected account, profile, recording coordinator and publication service.
+The host skips its ordinary private UI and app lifecycle service events, preventing
+an unrelated production account restoration from competing for the shared profile
+scope. Release builds and ordinary app launches retain their existing behavior.
+
+These checks exercise service composition, encrypted persistence and actual HTTP
+delivery. They do not establish acceptance of the app UI, microphone or real ASR.
+
 ## See also
 
 - [Agent instructions](../../AGENTS.md)
