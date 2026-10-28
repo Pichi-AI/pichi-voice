@@ -453,9 +453,13 @@ struct MobileMeetingRoot: View {
                 recording(session)
             case .processing(_, let stage): processing(session, stage: stage)
             case .completed:
-                if canPresent(session) { transcript(session) } else { concealedPrivateData }
+                if canPresent(session) { transcript(session) }
+                else if canAccessOwner(session), session.isLocalContentConcealed { concealedRecording(session) }
+                else { concealedPrivateData }
             case .interrupted, .failed:
-                if canPresent(session) { recovery(session) } else { concealedPrivateData }
+                if canPresent(session) { recovery(session) }
+                else if canAccessOwner(session), session.isLocalContentConcealed { concealedRecording(session) }
+                else { concealedPrivateData }
             case .idle:
                 if privateProfile.isPrivateDataVisible { start } else { concealedPrivateData }
             }
@@ -469,7 +473,22 @@ struct MobileMeetingRoot: View {
             .accessibilityIdentifier("meeting.profile.hidden")
     }
 
+    private func concealedRecording(_ session: MeetingSession) -> some View {
+        VStack(alignment: .leading, spacing: theme.metrics.spacing.lg) {
+            MeetingLocalContentConcealmentView()
+            if let cloudPublication {
+                MobileCloudRecordingStatus(service: cloudPublication, interaction: cloudInteraction, recordingID: session.id)
+            }
+            Spacer()
+        }.padding(24).frame(maxWidth: 840, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity)
+    }
+
     private func canPresent(_ session: MeetingSession) -> Bool {
+        canAccessOwner(session) && !session.isLocalContentConcealed
+    }
+
+    private func canAccessOwner(_ session: MeetingSession) -> Bool {
         let profile = PrivateProfileStorage.current
         guard privateProfile.isPrivateDataVisible, PrivateProfileStorage.isReadable(profile) else { return false }
         return session.profileOwnership?.matches(profile) ?? profile.isGuest
@@ -571,6 +590,9 @@ struct MobileMeetingRoot: View {
                     : "Speaker labels are added after recording."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
+            } else if canAccessOwner(session), session.isLocalContentConcealed {
+                MeetingLocalContentConcealmentView()
+                Spacer()
             } else {
                 concealedPrivateData
             }
@@ -668,9 +690,9 @@ struct MobileMeetingRoot: View {
 
     private var history: some View {
         let matches = sessions.filter { session in
-            search.isEmpty || session.displayTitle.localizedCaseInsensitiveContains(search)
+            !session.isLocalContentConcealed && (search.isEmpty || session.displayTitle.localizedCaseInsensitiveContains(search)
                 || session.readableSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
-                || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
+                || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true)
         }
         return List(matches) { session in
             Button { historyPath = [session.id] } label: {
@@ -698,7 +720,7 @@ struct MobileMeetingRoot: View {
         .searchable(text: $privatePresentation.search, prompt: PichiLocalization.text("Search meetings"))
         .refreshable { await refreshHistory() }.accessibilityIdentifier("history.list")
         .navigationDestination(for: MeetingSessionID.self) { id in
-            if let session = sessions.first(where: { $0.id == id }) {
+            if let session = sessions.first(where: { $0.id == id }), canPresent(session) {
                 Group {
                     if session.state == .failed || session.state == .interrupted { recovery(session) } else { transcript(session) }
                 }
@@ -1034,7 +1056,9 @@ struct MobileMeetingRoot: View {
         if let captureError = failure as? MeetingCaptureError, case .microphonePermissionDenied = captureError {
             showMicrophoneSettings = true
         }
-        error = PichiLocalization.text(failure.localizedDescription)
+        error = coordinator.currentSession?.isLocalContentConcealed == true
+            ? PichiLocalization.text("recording.protection.operationFailed")
+            : PichiLocalization.text(failure.localizedDescription)
         showError = true
     }
     private func acceptCommittedSession(_ session: MeetingSession) {
@@ -1080,7 +1104,7 @@ struct MobileMeetingRoot: View {
         runPrivate { admission in
             let redactor = settings.meetingPIIRedactionRequested ? try settings.transcriptPrivacyRedactor(wrapping: privacy) : nil
             guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
-            guard privatePresentation.publications.canPublish(admission) else { return }
+            guard privatePresentation.publications.canPublish(admission), canPresent(fresh) else { return }
             let output: MeetingSession
             if let redactor {
                 try await redactor.prepareForMeeting()
@@ -1098,8 +1122,8 @@ struct MobileMeetingRoot: View {
     private func exportAudio(_ session: MeetingSession) {
         guard canPresent(session) else { return }
         runPrivate { admission in
-            guard let fresh = try await store.load(id: session.id), fresh.retention.audioDeletedAt == nil,
-                  fresh.hasFinalizedAudio
+            guard let fresh = try await store.load(id: session.id), canPresent(fresh),
+                  fresh.retention.audioDeletedAt == nil, fresh.hasFinalizedAudio
             else { throw CocoaError(.fileNoSuchFile) }
             guard privatePresentation.publications.canPublish(admission) else { return }
             guard let directory = try await store.existingSessionDirectory(for: fresh.id) else { throw CocoaError(.fileNoSuchFile) }
@@ -1114,7 +1138,7 @@ struct MobileMeetingRoot: View {
         guard canPresent(session) else { return }
         runPrivate { admission in
             guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
-            guard privatePresentation.publications.canPublish(admission) else { return }
+            guard privatePresentation.publications.canPublish(admission), canPresent(fresh) else { return }
             let data = try await MeetingTranscriptExporter.protectedTranscriptJSONForSharing(for: fresh)
             guard privatePresentation.publications.canPublish(admission) else { return }
             let payload = try MeetingSharePayload.transcript(data: data, title: fresh.displayTitle, fileExtension: "json")

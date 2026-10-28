@@ -8,6 +8,7 @@ import SwiftUI
 struct MobileAutomaticSettingsReview: View {
     static var isRequested: Bool { ProcessInfo.processInfo.environment["PICHI_UI_AUTOMATIC_SETTINGS_REVIEW"] == "1" }
     @StateObject private var state = AutomaticSettingsReviewState()
+    @State private var showsDataCleanup = false
     var body: some View {
         NavigationStack {
             if let fixture = state.fixture {
@@ -15,9 +16,31 @@ struct MobileAutomaticSettingsReview: View {
                     MobileAccountSettings(session: fixture.account, interaction: fixture.accountUI,
                         cloudPublication: fixture.cloud, cloudInteraction: fixture.cloudUI)
                 }.accessibilityElement(children: .contain).accessibilityIdentifier("automatic.review.ready")
-                    .toolbar { ToolbarItem(placement: .confirmationAction) {
-                        Button(PichiLocalization.text("Close")) { state.close() }.accessibilityIdentifier("automatic.review.close")
-                    } }
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button { showsDataCleanup = true } label: { Image(systemName: "lock.shield") }
+                                .accessibilityLabel(PichiLocalization.text("Data cleanup"))
+                                .accessibilityIdentifier("automatic.review.openPrivacy")
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(PichiLocalization.text("Close")) { state.close() }.accessibilityIdentifier("automatic.review.close")
+                        }
+                    }
+                    .sheet(isPresented: $showsDataCleanup) {
+                        NavigationStack {
+                            Form {
+                                Section(PichiLocalization.text("recording.protection.section")) {
+                                    MobileRecordingDataControls(session: fixture.account, service: fixture.cloud,
+                                        interaction: fixture.cloudUI, settings: fixture.settings, profiles: fixture.profiles)
+                                }
+                            }.navigationTitle(PichiLocalization.text("Data cleanup"))
+                                .accessibilityIdentifier("automatic.review.privacy")
+                                .toolbar { ToolbarItem(placement: .confirmationAction) {
+                                    Button(PichiLocalization.text("Close")) { showsDataCleanup = false }
+                                        .accessibilityIdentifier("automatic.review.closePrivacy")
+                                } }
+                        }
+                    }
             } else if state.closed {
                 Text(PichiLocalization.text("Done")).accessibilityIdentifier("automatic.review.closed")
             } else if state.failed {
@@ -36,6 +59,8 @@ struct MobileAutomaticSettingsReview: View {
         let accountUI: MobileAccountInteraction
         let cloud: PichiCloudPublicationService
         let cloudUI: MobileCloudInteraction
+        let settings: SettingsStore
+        let profiles: PrivateProfileService
     }
     @Published private(set) var fixture: Fixture?
     @Published private(set) var closed = false
@@ -43,6 +68,7 @@ struct MobileAutomaticSettingsReview: View {
     private var setup: Task<Void, Never>?
     private var cleanup: Task<Void, Never>?
     private var failurePending = false
+    private var settingsSuite: String?
     private var root: URL?
     private var previous: PrivateProfileSnapshot?
     private var wasAdmitted = false
@@ -81,8 +107,12 @@ struct MobileAutomaticSettingsReview: View {
                       !cloud.snapshot.cloudSyncEnabled else { throw AccountError.invalidAccount }
                 let cloudUI = MobileCloudInteraction(session: account, profiles: profiles)
                 self.cloudUI = cloudUI
+                let suite = "AutomaticSettingsReview." + UUID().uuidString
+                guard let defaults = UserDefaults(suiteName: suite) else { throw AccountError.invalidConfiguration }
+                settingsSuite = suite
+                let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
                 fixture = Fixture(account: account, accountUI: MobileAccountInteraction(session: account,
-                    requireTransitionAdmission: { [profiles] in try profiles.requireTransitionAdmission() }), cloud: cloud, cloudUI: cloudUI)
+                    requireTransitionAdmission: { [profiles] in try profiles.requireTransitionAdmission() }), cloud: cloud, cloudUI: cloudUI, settings: settings, profiles: profiles)
             } catch {
                 failurePending = true
                 close() // Cleanup joins this setup task after it returns, without a self-await.
@@ -103,6 +133,8 @@ struct MobileAutomaticSettingsReview: View {
             catch { failurePending = true }
             await cloud?.shutdown(); await account?.shutdown(); await meetings.finishProfileTransition()
             cloudUI = nil; cloud = nil; account = nil
+            if let settingsSuite { UserDefaults.standard.removePersistentDomain(forName: settingsSuite) }
+            settingsSuite = nil
             if let previous { PrivateProfileStorage.select(previous); if !wasAdmitted { PrivateProfileStorage.closeAdmission() } }
             do { if let root { try FileManager.default.removeItem(at: root) }; root = nil; previous = nil; closed = !failurePending; failed = failurePending }
             catch { failed = true }

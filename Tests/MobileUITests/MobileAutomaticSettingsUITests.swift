@@ -12,6 +12,37 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
         #endif
     }
 
+    /// Run before authenticated HTTP cases on a fresh task-owned simulator.
+    func testGuestDataCleanupCanEncryptButCannotDeleteAfterSync() throws {
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        XCUIDevice.shared.orientation = .portrait
+        app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "light",
+            "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
+        app.launch()
+        let settings = app.buttons["navigation.settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 15))
+        settings.tap()
+        let privacy = app.buttons["settings.privacy"]
+        XCTAssertTrue(privacy.waitForExistence(timeout: 5))
+        privacy.tap()
+        let encryption = app.switches["privacy.encryptLocalRecordings"]
+        expose(encryption, in: app, step: "guest-encryption-visible")
+        XCTAssertTrue(encryption.isEnabled)
+        XCTAssertEqual(encryption.value as? String, "0")
+        tap(encryption, app: app, step: "guest-encryption-before-enable")
+        waitForValue(encryption, "1")
+        capture("guest-encryption-enabled")
+        tap(encryption, app: app, step: "guest-encryption-before-restore")
+        waitForValue(encryption, "0")
+        let deletion = app.switches["cloud.automatic.deleteLocal"]
+        expose(deletion, in: app, step: "guest-retention-visible")
+        XCTAssertFalse(deletion.isEnabled)
+        XCTAssertEqual(deletion.value as? String, "0")
+        capture("guest-retention-disabled")
+    }
+
     func testAutomaticDeliverySettingsInBothLanguagesAndThemes() throws {
         let app = XCUIApplication()
         defer { app.terminate() }
@@ -26,26 +57,52 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
             XCTAssertTrue(app.buttons["account.workspace.17.9"].waitForExistence(timeout: 5))
             capture(prefix + "-account")
             let automatic = app.switches["cloud.sync.toggle"]
-            let deletion = app.switches["cloud.automatic.deleteLocal"]
             expose(automatic, in: app, step: prefix + "-automatic")
-            expose(deletion, in: app, step: prefix + "-retention")
             XCTAssertEqual(automatic.value as? String, "0")
+            openPrivacy(app, step: prefix + "-privacy")
+            let encryption = app.switches["privacy.encryptLocalRecordings"]
+            let deletion = app.switches["cloud.automatic.deleteLocal"]
+            expose(encryption, in: app, step: prefix + "-encryption")
+            XCTAssertEqual(encryption.value as? String, "0")
+            XCTAssertTrue(encryption.isEnabled)
+            expose(deletion, in: app, step: prefix + "-retention")
             XCTAssertEqual(deletion.value as? String, "0")
-            XCTAssertFalse(deletion.isEnabled)
-            capture(prefix + "-off")
-            tap(automatic, app: app, step: prefix + "-automatic-visible")
-            waitForValue(automatic, "1")
-            XCTAssertTrue(deletion.isEnabled)
-            capture(prefix + "-automatic-on")
+            XCTAssertTrue(deletion.isEnabled, "A connected workspace can configure retention without enabling uploads")
+            tap(encryption, app: app, step: prefix + "-local-encryption-visible")
+            waitForValue(encryption, "1")
             tap(deletion, app: app, step: prefix + "-retention-visible")
             waitForValue(deletion, "1")
-            XCTAssertFalse(app.descendants(matching: .any)["cloud.sync.error"].firstMatch.exists)
-            capture(prefix + "-retention-on")
+            capture(prefix + "-local-policies-on")
+            closePrivacy(app)
+            expose(automatic, in: app, step: prefix + "-automatic-still-off")
+            XCTAssertEqual(automatic.value as? String, "0", "Privacy choices must not silently grant upload consent")
             tap(automatic, app: app, step: prefix + "-automatic-visible")
+            waitForValue(automatic, "1")
+            openPrivacy(app, step: prefix + "-protected-sync")
+            expose(encryption, in: app, step: prefix + "-forced-encryption")
+            waitForValue(encryption, "1", enabled: false)
+            XCTAssertTrue(app.descendants(matching: .any)["privacy.encryption.requiredForSync"].firstMatch.exists)
+            expose(deletion, in: app, step: prefix + "-synced-retention")
+            XCTAssertEqual(deletion.value as? String, "1")
+            XCTAssertTrue(deletion.isEnabled)
+            capture(prefix + "-automatic-requires-encryption")
+            closePrivacy(app)
+            tap(automatic, app: app, step: prefix + "-automatic-pause-visible")
             waitForValue(automatic, "0")
-            XCTAssertEqual(deletion.value as? String, "1", "OFF pauses delivery without silently changing the future retention preference")
-            XCTAssertFalse(deletion.isEnabled)
-            capture(prefix + "-paused")
+            openPrivacy(app, step: prefix + "-independent-policies")
+            expose(encryption, in: app, step: prefix + "-encryption-still-on")
+            XCTAssertEqual(encryption.value as? String, "1")
+            XCTAssertTrue(encryption.isEnabled)
+            tap(encryption, app: app, step: prefix + "-encryption-off-visible")
+            waitForValue(encryption, "0")
+            expose(deletion, in: app, step: prefix + "-retention-still-on")
+            XCTAssertEqual(deletion.value as? String, "1")
+            XCTAssertTrue(deletion.isEnabled)
+            tap(deletion, app: app, step: prefix + "-retention-off-visible")
+            waitForValue(deletion, "0")
+            XCTAssertFalse(app.descendants(matching: .any)["privacy.retention.error"].firstMatch.exists)
+            capture(prefix + "-policies-restored-off")
+            closePrivacy(app)
             let close = app.buttons["automatic.review.close"]
             XCTAssertTrue(close.isHittable)
             close.tap()
@@ -73,8 +130,19 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
         // occupies its trailing control, while a center tap can land on the caption.
         row.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
     }
-    private func waitForValue(_ element: XCUIElement, _ value: String) {
-        let expected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@ AND enabled == true", value), object: element)
+    private func openPrivacy(_ app: XCUIApplication, step: String) {
+        let button = app.buttons["automatic.review.openPrivacy"]
+        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        button.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["automatic.review.privacy"].firstMatch.waitForExistence(timeout: 5))
+        capture(step)
+    }
+    private func closePrivacy(_ app: XCUIApplication) {
+        app.buttons["automatic.review.closePrivacy"].tap()
+        XCTAssertTrue(app.buttons["automatic.review.openPrivacy"].waitForExistence(timeout: 5))
+    }
+    private func waitForValue(_ element: XCUIElement, _ value: String, enabled: Bool = true) {
+        let expected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@ AND enabled == %@", value, NSNumber(value: enabled)), object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 5), .completed)
     }
     private func capture(_ step: String) {

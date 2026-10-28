@@ -700,12 +700,7 @@ struct MobileCloudSyncSettings: View {
                 Text(MobileCloudCopy.text(service.isLegacySession ? "automatic.consent" : "consent"))
                     .font(theme.typography.bodySmall).fixedSize(horizontal: false, vertical: true)
                 if service.isLegacySession {
-                    Toggle(MobileCloudCopy.text("automatic.deleteLocal"), isOn: Binding(
-                        get: { service.snapshot.deleteLocalAfterAcceptance },
-                        set: { enabled in command(.retention(enabled)) { try await service.setDeleteLocalAfterAcceptance(enabled) } }))
-                        .disabled(isBusy || unavailable || !service.snapshot.cloudSyncEnabled)
-                        .accessibilityIdentifier("cloud.automatic.deleteLocal")
-                    Text(MobileCloudCopy.text("automatic.retention"))
+                    Text(PichiLocalization.text("recording.deletion.settingsLocation"))
                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(MobileCloudCopy.text("automatic.runtime"))
@@ -757,6 +752,143 @@ struct MobileCloudSyncSettings: View {
     }
     private func command(_ action: MobileCloudInteraction.Action, operation: @escaping @MainActor () async throws -> Void) {
         interaction.run(action) { _ in try await operation() }
+    }
+}
+
+/// Privacy controls use the same profile-bound settings and publication commands as Account.
+/// Encryption is a future-capture choice; publication consent remains an explicit Account action.
+struct MobileRecordingDataControls: View {
+    @ObservedObject var session: AccountSessionService
+    var service: PichiCloudPublicationService?
+    var interaction: MobileCloudInteraction?
+    var settings: SettingsStore = .shared
+    @ObservedObject var profiles: PrivateProfileService = .shared
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        if let service {
+            MobileCloudRetentionControls(service: service, session: session, interaction: interaction,
+                settings: settings, profiles: profiles)
+        } else {
+            MobileRecordingEncryptionControl(requiresEncryptionForSync: false, isGuest: session.context == nil,
+                settings: settings, profiles: profiles)
+            Toggle(PichiLocalization.text("recording.deletion.title"), isOn: .constant(false))
+                .disabled(true).accessibilityIdentifier("cloud.automatic.deleteLocal")
+            Text(PichiLocalization.text("recording.deletion.accountRequired"))
+                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct MobileRecordingEncryptionControl: View {
+    let requiresEncryptionForSync: Bool
+    let isGuest: Bool
+    @StateObject private var settings: SettingsStore
+    @ObservedObject var profiles: PrivateProfileService
+    private let profile: PrivateProfileSnapshot
+    private let projectionRevision: UUID
+    @Environment(\.theme) private var theme
+
+    init(requiresEncryptionForSync: Bool, isGuest: Bool, settings: SettingsStore,
+         profiles: PrivateProfileService) {
+        self.requiresEncryptionForSync = requiresEncryptionForSync; self.isGuest = isGuest
+        self._settings = StateObject(wrappedValue: settings.boundToCurrentPrivateProfile())
+        self.profiles = profiles; self.profile = PrivateProfileStorage.current
+        self.projectionRevision = profiles.projectionRevision
+    }
+
+    var body: some View {
+        Toggle(PichiLocalization.text("recording.protection.title"), isOn: Binding(
+            get: { requiresEncryptionForSync || settings.meetingEncryptLocalRecordings },
+            set: { enabled in
+                guard !requiresEncryptionForSync, profiles.isPrivateDataVisible, !profiles.isTransitioning,
+                      profiles.projectionRevision == projectionRevision,
+                      PrivateProfileStorage.acceptsNewWork,
+                      PrivateProfileStorage.current == profile, PrivateProfileStorage.isReadable(profile) else { return }
+                settings.meetingEncryptLocalRecordings = enabled
+            }))
+            .disabled(requiresEncryptionForSync || !profiles.isPrivateDataVisible || profiles.isTransitioning
+                || !PrivateProfileStorage.acceptsNewWork)
+            .accessibilityIdentifier("privacy.encryptLocalRecordings")
+        Text(PichiLocalization.text("recording.protection.description"))
+            .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+        if requiresEncryptionForSync {
+            Text(PichiLocalization.text("recording.protection.requiredForSync"))
+                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("privacy.encryption.requiredForSync")
+        }
+        if isGuest {
+            Text(PichiLocalization.text("recording.protection.guest"))
+                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct MobileCloudRetentionControls: View {
+    @ObservedObject var service: PichiCloudPublicationService
+    @ObservedObject var session: AccountSessionService
+    @ObservedObject var profiles: PrivateProfileService
+    let settings: SettingsStore
+    @StateObject private var interaction: MobileCloudInteraction
+    @Environment(\.theme) private var theme
+
+    init(service: PichiCloudPublicationService, session: AccountSessionService,
+         interaction supplied: MobileCloudInteraction?, settings: SettingsStore,
+         profiles: PrivateProfileService) {
+        self.service = service; self.session = session; self.settings = settings; self.profiles = profiles
+        self._interaction = StateObject(wrappedValue: supplied ?? MobileCloudInteraction(session: session))
+    }
+
+    var body: some View {
+        MobileRecordingEncryptionControl(
+            requiresEncryptionForSync: service.isLegacySession && service.snapshot.cloudSyncEnabled,
+            isGuest: session.context == nil, settings: settings, profiles: profiles)
+        Toggle(PichiLocalization.text("recording.deletion.title"), isOn: Binding(
+            get: { service.snapshot.deleteLocalAfterAcceptance },
+            set: { enabled in
+                guard !unavailable else { return }
+                interaction.run(.retention(enabled)) { _ in
+                    try await service.setDeleteLocalAfterAcceptance(enabled)
+                }
+            }))
+            .disabled(unavailable || interaction.action != nil || service.snapshot.availability == .pausing)
+            .accessibilityIdentifier("cloud.automatic.deleteLocal")
+        Text(PichiLocalization.text("recording.deletion.description"))
+            .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+        if unavailable {
+            Text(PichiLocalization.text("recording.deletion.accountRequired"))
+                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        } else if !service.snapshot.cloudSyncEnabled {
+            Text(PichiLocalization.text("recording.deletion.syncDisabled"))
+                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if interaction.action != nil {
+            ProgressView().accessibilityIdentifier("privacy.retention.progress")
+        }
+        if interaction.failed {
+            Text(MobileCloudCopy.text("commandFailed"))
+                .font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("privacy.retention.error")
+        }
+    }
+
+    private var unavailable: Bool {
+        guard profiles.isPrivateDataVisible, !profiles.isTransitioning,
+              PrivateProfileStorage.acceptsNewWork,
+              let context = session.context, context.organizationID != nil, context.workspaceID != nil,
+              session.isCurrent(context) else { return true }
+        switch service.snapshot.availability {
+        case .unconfigured, .signedOut, .profileUnavailable, .protectedDataUnavailable, .storageUnavailable: return true
+        default: return false
+        }
     }
 }
 

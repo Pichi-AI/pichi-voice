@@ -34,15 +34,18 @@ struct MeetingRecordingCanvas: View {
                 )
             }
 
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                MeetingDocumentTitle(title: self.session.displayTitle)
-                    .lineLimit(2)
-                    .help(self.session.displayTitle)
-                Text(self.sourceSummary)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-                    .lineLimit(1)
-                    .help(self.sourceSummary)
+            if !self.session.isLocalContentConcealed {
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                    MeetingDocumentTitle(title: self.session.displayTitle)
+                        .lineLimit(2)
+                        .help(self.session.displayTitle)
+                    Text(self.sourceSummary)
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .lineLimit(1)
+                        .help(self.sourceSummary)
+                }
+
             }
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
@@ -53,14 +56,19 @@ struct MeetingRecordingCanvas: View {
                 Divider()
             }
 
-            if let warning = self.session.microphoneEchoWarning {
-                MeetingAudioTranscriptNotice(
-                    text: "Some audio may have an echo.",
-                    detail: warning,
-                    isSubtle: true
-                )
+            if self.session.isLocalContentConcealed {
+                MeetingLocalContentConcealmentView()
+                    .frame(maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                if let warning = self.session.microphoneEchoWarning {
+                    MeetingAudioTranscriptNotice(
+                        text: "Some audio may have an echo.",
+                        detail: warning,
+                        isSubtle: true
+                    )
+                }
+                MeetingLiveTranscriptCard(snapshot: self.liveTranscript, pendingSpeech: self.pendingSpeech)
             }
-            MeetingLiveTranscriptCard(snapshot: self.liveTranscript, pendingSpeech: self.pendingSpeech)
 
             Divider()
             FluidGlassControlGroup {
@@ -226,7 +234,9 @@ struct MeetingProcessingCanvas: View {
             }
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                MeetingDocumentTitle(title: self.session.displayTitle)
+                if !self.session.isLocalContentConcealed {
+                    MeetingDocumentTitle(title: self.session.displayTitle)
+                }
                 Text("You can close this window. Processing continues on this Mac.")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)

@@ -120,6 +120,9 @@ final class MeetingFloatingCaptionsController: ObservableObject {
         guard SettingsStore.shared.fluidMeetEnabled else { self.hide(); return }
         guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         let coordinator = AppServices.shared.meetingSessionCoordinator
+        guard coordinator.activeSession?.isLocalContentConcealed != true else {
+            self.concealPrivatePresentation(); return
+        }
         guard MeetingOverlayVisibility.isVisible(for: coordinator.state) else { self.hide(); return }
         let panel = self.panelOrCreate(coordinator: coordinator)
         self.subscribeIfNeeded(coordinator: coordinator)
@@ -253,7 +256,10 @@ struct MeetingFloatingCaptionsContent: View {
         VStack(alignment: .leading, spacing: 10) {
             self.header
 
-            if self.coordinator.liveTranscript.utterances.isEmpty
+            if self.coordinator.activeSession?.isLocalContentConcealed == true {
+                MeetingLocalContentConcealmentView()
+                    .frame(maxHeight: .infinity, alignment: .topLeading)
+            } else if self.coordinator.liveTranscript.utterances.isEmpty
                 && self.coordinator.liveTranscript.partials.values.allSatisfy({ $0.text.isEmpty })
                 && self.coordinator.pendingSpeech.tokens.isEmpty {
                 Text("Listening…")

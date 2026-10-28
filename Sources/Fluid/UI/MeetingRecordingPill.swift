@@ -83,6 +83,7 @@ final class MeetingRecordingPillController: ObservableObject {
     /// Grows the pill into the captions box; a no-op when already expanded or not recording.
     func expand() {
         guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
+        guard AppServices.shared.meetingSessionCoordinator.activeSession?.isLocalContentConcealed != true else { return }
         guard self.reducer.presentation == .pill else { return }
         self.reducer.apply(.toggleRequested)
         self.setPresentation(self.reducer.presentation ?? .captions)
@@ -122,6 +123,11 @@ final class MeetingRecordingPillController: ObservableObject {
     /// Exactly one of them is on screen while recording.
     private func show(coordinator: MeetingSessionCoordinator, resetFrameToPresentation: Bool) {
         guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
+        // Keep Stop and the level meter, but an encrypted recording never opens captions.
+        if coordinator.activeSession?.isLocalContentConcealed == true {
+            self.presentation = .pill
+            MeetingFloatingCaptionsController.shared.deactivate()
+        }
         // Resolve the first frame before showing the cached panel. A drag belongs to this
         // meeting only; an old panel frame or saved position must not pick the next screen.
         if resetFrameToPresentation {
@@ -401,7 +407,8 @@ struct MeetingRecordingPillContent: View {
         .onTapGesture { self.pill.expand() }
         .background(self.compactSurface)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel("Show live captions")
+        .accessibilityLabel(self.coordinator.activeSession?.isLocalContentConcealed == true
+            ? PichiLocalization.text("recording.protection.concealed.title") : PichiLocalization.text("Show live captions"))
         .accessibilityAction(named: "Show Captions") {
             self.pill.expand()
         }

@@ -710,10 +710,10 @@ struct MeetingTranscriptionView: View {
 
     static func summarySessionSelection(active: MeetingSession?, selectedID: MeetingSessionID?,
                                         history: [MeetingSession], resumed: MeetingSession?) -> MeetingSession? {
-        if let active { return active }
+        if let active, !active.isLocalContentConcealed { return active }
         guard let selectedID else { return nil }
-        return history.first(where: { $0.id == selectedID })
-            ?? (resumed?.id == selectedID ? resumed : nil)
+        return history.first(where: { $0.id == selectedID && !$0.isLocalContentConcealed })
+            ?? (resumed?.id == selectedID && resumed?.isLocalContentConcealed == false ? resumed : nil)
     }
 
     private var selectedHistorySession: MeetingSession? {
@@ -724,7 +724,7 @@ struct MeetingTranscriptionView: View {
 
     private func reattachActiveSummary() {
         guard self.privateState.capture() != nil else { return }
-        guard let session = self.appServices.activeMeetingSummarySession else { return }
+        guard let session = self.appServices.activeMeetingSummarySession, !session.isLocalContentConcealed else { return }
         self.privateState.resumedSummarySession = session
         self.privateState.selectedHistorySessionID = session.id
         self.isMeetingHistoryVisible = false
@@ -1226,6 +1226,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func recordAgain(_ session: MeetingSession) {
+        guard !session.isLocalContentConcealed else { return }
         guard let stamp = self.privateState.capture() else { return }
         guard self.summaryActivity.selectionLock == nil else { return }
         guard let configuration = self.recordAgainConfiguration(from: session) else { return }
@@ -1289,6 +1290,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func revealCapturedAudio(_ session: MeetingSession) {
+        guard !session.isLocalContentConcealed else { return }
         self.privateState.run { stamp in
             do {
                 // Reload fresh: the passed-in session may predate a since-completed audio deletion.
@@ -1298,7 +1300,8 @@ struct MeetingTranscriptionView: View {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
                     return
                 }
-                guard freshSession.retention.audioDeletedAt == nil,
+                guard !freshSession.isLocalContentConcealed,
+                      freshSession.retention.audioDeletedAt == nil,
                       freshSession.hasFinalizedAudio
                 else {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: audio for this recording has been deleted.")
@@ -1326,6 +1329,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func exportAudio(_ session: MeetingSession) {
+        guard !session.isLocalContentConcealed else { return }
         guard let projection = self.privateState.capture() else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -1346,7 +1350,8 @@ struct MeetingTranscriptionView: View {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
                     return
                 }
-                guard freshSession.retention.audioDeletedAt == nil,
+                guard !freshSession.isLocalContentConcealed,
+                      freshSession.retention.audioDeletedAt == nil,
                       freshSession.hasFinalizedAudio
                 else {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: audio for this recording has been deleted.")
@@ -1530,7 +1535,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func copyTranscript(_ session: MeetingSession, includeEchoes: Bool) {
-        guard self.privateState.capture() != nil else { return }
+        guard !session.isLocalContentConcealed, self.privateState.capture() != nil else { return }
         let text = MeetingTranscriptExporter.text(for: session, includeEchoes: includeEchoes)
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
@@ -1538,6 +1543,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func exportTranscript(_ session: MeetingSession, format: MeetingTranscriptExportFormat, includeEchoes: Bool) {
+        guard !session.isLocalContentConcealed else { return }
         guard let projection = self.privateState.capture() else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(Self.sanitizedExportName(session.displayTitle)).\(format.fileExtension)"
@@ -1722,100 +1728,117 @@ struct MeetingTranscriptionCanvas: View {
         .background(self.theme.palette.windowBackground)
     }
 
+    private var concealedSettledSession: MeetingSession? {
+        switch state {
+        case .result(let session) where session.isLocalContentConcealed: return session
+        case .failed(let session, _) where session?.isLocalContentConcealed == true: return session
+        default: return nil
+        }
+    }
+
     @ViewBuilder
     private var canvasContent: some View {
         Group {
-            switch self.state {
-            case let .setup(isStarting, recentSession):
-                MeetingSetupCanvas(
-                    draft: self.$setupDraft,
-                    applications: self.applications,
-                    readiness: self.readiness,
-                    isStarting: isStarting,
-                    errorMessage: self.errorMessage,
-                    recentSession: recentSession,
-                    onStart: self.onStart,
-                    onRepairSetup: self.onRepairSetup,
-                    onEditSetup: self.onEditSetup ?? self.onRepairSetup
-                )
-            case let .recording(session, trackHealth, liveTranscript):
-                MeetingRecordingCanvas(
-                    session: session,
-                    trackHealth: trackHealth,
-                    liveTranscript: liveTranscript,
-                    pendingSpeech: self.pendingSpeech,
-                    isStopping: false,
-                    onStop: self.onStop
-                )
-            case let .stopping(session, trackHealth, liveTranscript):
-                MeetingRecordingCanvas(
-                    session: session,
-                    trackHealth: trackHealth,
-                    liveTranscript: liveTranscript,
-                    pendingSpeech: self.pendingSpeech,
-                    isStopping: true,
-                    onStop: self.onStop
-                )
-            case let .processing(session, stage):
-                MeetingProcessingCanvas(session: session, stage: stage)
-            case let .result(session):
-                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+            if let session = concealedSettledSession {
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.lg) {
+                    MeetingLocalContentConcealmentView()
                     DesktopCloudRecordingStatusView(sessionID: session.id,
-                        publication: AppServices.shared.cloudPublication,
-                        account: AppServices.shared.accountSession, profiles: .shared)
-                    if let errorMessage, !errorMessage.isEmpty {
-                        Label(PichiLocalization.text(errorMessage), systemImage: "exclamationmark.triangle.fill")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.warning)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: 760, alignment: .leading)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .accessibilityIdentifier("meeting-result-action-error")
-                    }
-                    if PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(session.processingAttempts.last?.diarizationModel) {
-                        Label("Automatic speaker separation was unavailable. Source tracks and transcript timing are preserved.", systemImage: "person.crop.circle.badge.questionmark")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.theme.palette.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("meeting-speaker-separation-unavailable")
-                    }
-                    MeetingResultCanvas(
+                        publication: AppServices.shared.cloudPublication, account: AppServices.shared.accountSession,
+                        profiles: .shared, showsActions: false)
+                }
+            } else {
+                switch self.state {
+                case let .setup(isStarting, recentSession):
+                    MeetingSetupCanvas(
+                        draft: self.$setupDraft,
+                        applications: self.applications,
+                        readiness: self.readiness,
+                        isStarting: isStarting,
+                        errorMessage: self.errorMessage,
+                        recentSession: recentSession?.isLocalContentConcealed == false ? recentSession : nil,
+                        onStart: self.onStart,
+                        onRepairSetup: self.onRepairSetup,
+                        onEditSetup: self.onEditSetup ?? self.onRepairSetup
+                    )
+                case let .recording(session, trackHealth, liveTranscript):
+                    MeetingRecordingCanvas(
                         session: session,
-                        isQuiescent: self.isQuiescent,
-                        canUndo: self.canUndoCorrection(session.id),
-                        onCopyTranscript: self.onCopyTranscript,
-                        onExportTranscript: self.onExportTranscript,
-                        onReassignSegment: { segmentID, speakerID in
-                            self.onReassignSegment(session.id, segmentID, speakerID)
-                        },
-                        onEditTranscriptSegment: { segmentID, text, revision in
-                            await self.onEditTranscriptSegment(session.id, segmentID, text, revision)
-                        },
-                        onNameUnknownSegment: { segmentID, name in
-                            self.onNameUnknownSegment(session.id, segmentID, name)
-                        },
-                        onUndo: { await self.onUndoCorrection(session.id) },
-                        onRenameSession: { title in self.onRenameSession(session.id, title) },
-                        onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
-                        onClose: self.onCloseSelection,
-                        summaryASRService: self.summaryASRService,
-                        onOpenIntegrations: self.onOpenIntegrations,
-                        onSetLocalUserSpeaker: self.onSetLocalUserSpeaker.map { callback in
-                            { speakerID in callback(session.id, speakerID) }
+                        trackHealth: trackHealth,
+                        liveTranscript: liveTranscript,
+                        pendingSpeech: self.pendingSpeech,
+                        isStopping: false,
+                        onStop: self.onStop
+                    )
+                case let .stopping(session, trackHealth, liveTranscript):
+                    MeetingRecordingCanvas(
+                        session: session,
+                        trackHealth: trackHealth,
+                        liveTranscript: liveTranscript,
+                        pendingSpeech: self.pendingSpeech,
+                        isStopping: true,
+                        onStop: self.onStop
+                    )
+                case let .processing(session, stage):
+                    MeetingProcessingCanvas(session: session, stage: stage)
+                case let .result(session):
+                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+                        DesktopCloudRecordingStatusView(sessionID: session.id,
+                            publication: AppServices.shared.cloudPublication,
+                            account: AppServices.shared.accountSession, profiles: .shared)
+                        if let errorMessage, !errorMessage.isEmpty {
+                            Label(PichiLocalization.text(errorMessage), systemImage: "exclamationmark.triangle.fill")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.theme.palette.warning)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: 760, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .accessibilityIdentifier("meeting-result-action-error")
                         }
+                        if PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(session.processingAttempts.last?.diarizationModel) {
+                            Label("Automatic speaker separation was unavailable. Source tracks and transcript timing are preserved.", systemImage: "person.crop.circle.badge.questionmark")
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.theme.palette.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("meeting-speaker-separation-unavailable")
+                        }
+                        MeetingResultCanvas(
+                            session: session,
+                            isQuiescent: self.isQuiescent,
+                            canUndo: self.canUndoCorrection(session.id),
+                            onCopyTranscript: self.onCopyTranscript,
+                            onExportTranscript: self.onExportTranscript,
+                            onReassignSegment: { segmentID, speakerID in
+                                self.onReassignSegment(session.id, segmentID, speakerID)
+                            },
+                            onEditTranscriptSegment: { segmentID, text, revision in
+                                await self.onEditTranscriptSegment(session.id, segmentID, text, revision)
+                            },
+                            onNameUnknownSegment: { segmentID, name in
+                                self.onNameUnknownSegment(session.id, segmentID, name)
+                            },
+                            onUndo: { await self.onUndoCorrection(session.id) },
+                            onRenameSession: { title in self.onRenameSession(session.id, title) },
+                            onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
+                            onClose: self.onCloseSelection,
+                            summaryASRService: self.summaryASRService,
+                            onOpenIntegrations: self.onOpenIntegrations,
+                            onSetLocalUserSpeaker: self.onSetLocalUserSpeaker.map { callback in
+                                { speakerID in callback(session.id, speakerID) }
+                            }
+                        )
+                    }
+                case let .failed(session, message):
+                    MeetingFailureCanvas(
+                        session: session,
+                        message: self.errorMessage ?? message,
+                        isRetrying: self.isRetrying,
+                        onRetrySession: self.onRetrySession,
+                        onRestartSession: self.onRestartSession,
+                        onRevealAudio: self.onRevealAudio,
+                        onRecordAgain: self.onRecordAgain,
+                        onClose: self.onCloseSelection
                     )
                 }
-            case let .failed(session, message):
-                MeetingFailureCanvas(
-                    session: session,
-                    message: self.errorMessage ?? message,
-                    isRetrying: self.isRetrying,
-                    onRetrySession: self.onRetrySession,
-                    onRestartSession: self.onRestartSession,
-                    onRevealAudio: self.onRevealAudio,
-                    onRecordAgain: self.onRecordAgain,
-                    onClose: self.onCloseSelection
-                )
             }
         }
     }
@@ -1932,8 +1955,9 @@ private struct MeetingHistoryInspector: View {
 
     private var filteredSessions: [MeetingSession] {
         let query = self.privateState.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return self.sessions }
-        return self.sessions.filter { session in
+        let visible = self.sessions.filter { !$0.isLocalContentConcealed }
+        guard !query.isEmpty else { return visible }
+        return visible.filter { session in
             session.displayTitle.localizedCaseInsensitiveContains(query) ||
                 session.capturedApplication?.displayName.localizedCaseInsensitiveContains(query) == true ||
                 session.readableSpeakers.contains(where: { $0.displayName.localizedCaseInsensitiveContains(query) })

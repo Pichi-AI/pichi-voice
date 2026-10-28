@@ -59442,6 +59442,227 @@
           }
         }
       }
+    },
+    "recording.protection.section": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protected recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Защита записей"
+          }
+        }
+      }
+    },
+    "recording.protection.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encrypt data on this device"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Шифровать данные на устройстве"
+          }
+        }
+      }
+    },
+    "recording.protection.description": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New recordings are encrypted and cannot be viewed, copied or exported on this device. Audio is processed in memory and is not saved to disk. Existing ordinary history is unchanged. Turning this off does not unlock recordings that are already encrypted."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новые записи хранятся зашифрованно и недоступны для просмотра, копирования и экспорта на этом устройстве. Аудио обрабатывается в памяти и не сохраняется на диск. Существующая обычная история не изменяется. Отключение настройки не открывает уже зашифрованные записи."
+          }
+        }
+      }
+    },
+    "recording.protection.requiredForSync": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic sending requires encryption. Turn off automatic sending in Account before changing this setting. Already encrypted recordings stay protected."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для автоматической отправки требуется шифрование. Чтобы изменить эту настройку, сначала выключите автоматическую отправку в разделе «Аккаунт». Уже зашифрованные записи останутся защищёнными."
+          }
+        }
+      }
+    },
+    "recording.protection.guest": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Guest recordings are not moved into an account automatically. Connect your account before recording if new recordings need to be sent."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Гостевые записи не переносятся в аккаунт автоматически. Если новые записи нужно отправлять, подключите аккаунт до начала записи."
+          }
+        }
+      }
+    },
+    "recording.protection.concealed.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encrypted recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зашифрованная запись"
+          }
+        }
+      }
+    },
+    "recording.protection.concealed.detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The contents of this recording cannot be viewed on this device. Automatic sending continues for recordings made in a connected account with sync enabled, including after the connection returns."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Содержимое записи недоступно для просмотра на этом устройстве. Автоматическая отправка продолжается для записей подключённого аккаунта с включённой синхронизацией, в том числе после восстановления связи."
+          }
+        }
+      }
+    },
+    "recording.deletion.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete recordings after sync"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалять записи после синхронизации"
+          }
+        }
+      }
+    },
+    "recording.deletion.description": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The local copy is deleted only after the server confirms that it has saved the recording. Without a connection, the recording stays on this device until a later sending attempt."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная копия удаляется только после подтверждения сервера, что запись сохранена. Без связи запись остаётся на устройстве до следующей попытки отправки."
+          }
+        }
+      }
+    },
+    "recording.deletion.accountRequired": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect an account and choose a workspace to enable deletion after sync."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключите аккаунт и выберите пространство, чтобы включить удаление после синхронизации."
+          }
+        }
+      }
+    },
+    "recording.deletion.syncDisabled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic sending is off. Enable it in Account so new recordings can be sent when a connection is available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматическая отправка выключена. Включите её в разделе «Аккаунт», чтобы новые записи отправлялись при доступной связи."
+          }
+        }
+      }
+    },
+    "recording.deletion.settingsLocation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deletion after sync and local encryption are configured in Data cleanup."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаление после синхронизации и шифрование на устройстве настраиваются в разделе «Очистка данных»."
+          }
+        }
+      }
+    },
+    "recording.protection.operationFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The protected recording operation could not be completed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось завершить операцию с защищённой записью."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -23,6 +23,12 @@ final class MeetingHistorySnapshot: ObservableObject, PrivateProfileTransitionPa
     /// Corrections do not require decoding every other meeting before updating UI.
     func applyCommitted(_ session: MeetingSession) {
         guard PrivateProfileStorage.isReadable(self.profile) else { return }
+        guard !session.isLocalContentConcealed else {
+            self.sessions.removeAll { $0.id == session.id }
+            self.errorMessage = nil; self.hasLoaded = true
+            if self.refreshTask != nil { self.refreshRequested = true }
+            return
+        }
         if let index = self.sessions.firstIndex(where: { $0.id == session.id }) {
             self.sessions[index] = session
         } else {
@@ -51,7 +57,7 @@ final class MeetingHistorySnapshot: ObservableObject, PrivateProfileTransitionPa
                     let sessions = try await self.load()
                     guard !Task.isCancelled, PrivateProfileStorage.isReadable(self.profile) else { break }
                     guard !self.refreshRequested else { continue }
-                    self.sessions = sessions
+                    self.sessions = sessions.filter { !$0.isLocalContentConcealed }
                     self.errorMessage = nil
                     self.hasLoaded = true
                 } catch {

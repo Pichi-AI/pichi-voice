@@ -103,7 +103,8 @@ struct MobileSettingsRoot: View {
                     case .recording: MobileRecordingSettings(microphones: microphones, required: required)
                     case .models: MobileVoiceEngineSettings(asr: asr, reportError: reportError)
                     case .privacy:
-                        MobilePrivacySettings(activation: privacyActivation)
+                        MobilePrivacySettings(activation: privacyActivation, accountSession: accountSession,
+                            cloudPublication: cloudPublication, cloudInteraction: cloudInteraction)
                     case .kiosk:
                         MobileKioskSettings(access: .shared,
                             canEnable: canReplaySetup && !privateProfile.isTransitioning
@@ -310,6 +311,9 @@ private struct MobileVoiceEngineSettings: View {
 
 private struct MobilePrivacySettings: View {
     @ObservedObject var activation: MobilePrivacyActivation
+    @ObservedObject var accountSession: AccountSessionService
+    var cloudPublication: PichiCloudPublicationService?
+    var cloudInteraction: MobileCloudInteraction?
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
     @State private var dictionaryEdit: MobileSensitiveDictionaryEdit?
@@ -335,6 +339,10 @@ private struct MobilePrivacySettings: View {
             }
             Section(PichiLocalization.text("Data cleanup")) {
                 MobilePrivacyActivationControls(activation: activation)
+            }
+            Section(PichiLocalization.text("recording.protection.section")) {
+                MobileRecordingDataControls(session: accountSession, service: cloudPublication,
+                    interaction: cloudInteraction)
             }
             MobileSensitiveDictionarySettings { entry in dictionaryEdit = .init(entry: entry) }
             Section {

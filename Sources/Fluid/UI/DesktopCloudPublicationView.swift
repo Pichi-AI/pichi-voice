@@ -117,6 +117,7 @@ struct DesktopCloudRecordingStatusView: View {
     @ObservedObject var publication: PichiCloudPublicationService
     @ObservedObject var account: AccountSessionService
     @ObservedObject var profiles: PrivateProfileService
+    var showsActions = true
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -130,7 +131,7 @@ struct DesktopCloudRecordingStatusView: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 DesktopCloudRecordingPanel(sessionID: self.sessionID, publication: self.publication,
-                                           account: self.account, profiles: self.profiles)
+                                           account: self.account, profiles: self.profiles, showsActions: showsActions)
                     .id(self.profiles.sourceRevision.uuidString + self.sessionID.uuidString)
             }
         }
@@ -139,13 +140,15 @@ struct DesktopCloudRecordingStatusView: View {
 
 private struct DesktopCloudRecordingPanel: View {
     let sessionID: MeetingSessionID
+    let showsActions: Bool
     @ObservedObject var publication: PichiCloudPublicationService
     @ObservedObject var account: AccountSessionService
     @StateObject private var state: DesktopCloudPublicationPresentation
     @Environment(\.theme) private var theme
 
     init(sessionID: MeetingSessionID, publication: PichiCloudPublicationService,
-         account: AccountSessionService, profiles: PrivateProfileService) {
+         account: AccountSessionService, profiles: PrivateProfileService, showsActions: Bool) {
+        self.showsActions = showsActions
         self.sessionID = sessionID
         self.publication = publication
         self.account = account
@@ -175,14 +178,14 @@ private struct DesktopCloudRecordingPanel: View {
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                 }
-                if let action = DesktopCloudPublicationPolicy.action(for: status) {
+                if showsActions, let action = DesktopCloudPublicationPolicy.action(for: status) {
                     Button(DesktopCloudPublicationCopy.action(action)) { self.perform(action) }
                         .buttonStyle(.bordered)
                         .disabled(!self.state.isCurrent || self.state.isWorking ||
                                   !DesktopCloudPublicationPolicy.canUseNetwork(self.publication.snapshot, accountState: self.account.state))
                         .accessibilityIdentifier("cloud.recording.action")
                 }
-                if let receipt = DesktopCloudPublicationCopy.receipt(status),
+                if showsActions, let receipt = DesktopCloudPublicationCopy.receipt(status),
                    DesktopCloudPublicationPolicy.needsAssessment(receipt) {
                     Button(PichiLocalization.text("cloud.assessment.open", defaultValue: "Choose participant and criteria")) {
                         self.state.beginAssessment(for: self.sessionID, status: status)
@@ -197,7 +200,7 @@ private struct DesktopCloudRecordingPanel: View {
                      ?? PichiLocalization.text("cloud.status.loading", defaultValue: "Checking cloud status"))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
-                if self.state.failure != nil {
+                if showsActions, self.state.failure != nil {
                     Button(DesktopCloudPublicationCopy.action(.reconcile)) {
                         self.state.retryStatusObservation(self.sessionID)
                     }
