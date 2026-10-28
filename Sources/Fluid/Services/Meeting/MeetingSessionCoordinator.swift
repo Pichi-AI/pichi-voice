@@ -1191,6 +1191,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             try await self.store.delete(id: id, expectedOwnership: expectedOwnership, validating: validating)
         } else if let expectedOwnership { try await self.store.delete(id: id, expectedOwnership: expectedOwnership) }
         else { try await self.store.delete(id: id) }
+        // Receipt-driven removal can target older history without changing the
+        // current recording state. Reuse the existing retention refresh signal.
+        self.retentionSweepRevision &+= 1
         self.correctionUndoStacks[id] = nil
         if self.activeSession?.id == id {
             self.activeSession = nil

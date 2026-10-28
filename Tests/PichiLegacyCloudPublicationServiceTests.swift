@@ -27,7 +27,15 @@ extension PichiPublicationOutboxTests {
             credentials: LegacyFacadeCredentials(), lifecycle: profiles, legacyConfiguration: configuration, legacyTransport: transport)
         let meetings = PrivateProfileMeetingStore()
         let service = PichiCloudPublicationService(account: account, meetings: meetings, profiles: profiles,
-            recordingCipher: { try MeetingRecordingCipher(profileID: $0.id, key: Data(repeating: 0x73, count: 32)) })
+            recordingCipher: { try MeetingRecordingCipher(profileID: $0.id, key: Data(repeating: 0x73, count: 32)) },
+            deleteAcceptedRecording: { id, owner, digest in
+                try await meetings.delete(id: id, expectedOwnership: owner, validating: { source in
+                    try Task.checkCancellation()
+                    guard try PichiProtectedPublicationSource.localFingerprint(for: source) == digest else {
+                        throw PichiPublicationOutboxFailure.receiptConflict
+                    }
+                })
+            })
         try await service.install()
         await account.signIn(email: "a@synthetic.example", password: "synthetic-password")
         try await account.selectWorkspace(organizationID: "17", workspaceID: "9")
@@ -93,6 +101,16 @@ extension PichiPublicationOutboxTests {
         } else { check(false, "Terminal assessment receipt remains accepted") }
         try await service.retry(source.id)
         check(await transport.postCount() == 2, "Retry of an accepted source remains status reconciliation")
+        try await service.setCloudSyncEnabled(false)
+        let receiptBeforeManualCleanup = try await service.status(for: source.id)
+        check(try await meetings.loadTranscript(id: source.id) != nil,
+              "Accepted manual legacy data is retained while current cleanup is OFF")
+        try await service.setDeleteLocalAfterAcceptance(true)
+        try await wait { try await meetings.loadTranscript(id: source.id) == nil }
+        check(try await service.status(for: source.id) == receiptBeforeManualCleanup,
+              "Manual legacy cleanup keeps the original accepted receipt")
+        check(await transport.postCount() == 2,
+              "Enabling cleanup for a manual legacy receipt never repeats its POST")
         await account.logout()
         await account.signIn(email: "b@synthetic.example", password: "synthetic-password")
         try await account.selectWorkspace(organizationID: "17", workspaceID: "9")

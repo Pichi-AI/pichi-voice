@@ -263,8 +263,9 @@ actor PichiPublicationOutboxStore {
                       let record = try read(id, directory: directories.settled) else {
                     throw PichiPublicationOutboxFailure.corruptRecord
                 }
-                if record.state == .accepted, record.automaticAccountContext == true,
+                if record.state == .accepted, record.automaticConsent,
                    record.receipt != nil, record.sourcePurged != true,
+                   Self.validDigest(record.localSourceSHA256),
                    record.receiptPauseReason != .sourceConflict { records.append(record) }
             }
             return records
@@ -391,7 +392,7 @@ actor PichiPublicationOutboxStore {
             var record = try required(id, directories)
             if record.state == .accepted, record.sourcePurged == true { return record }
             guard [.accepted, .acceptedCleanupPending].contains(record.state), record.receipt != nil,
-                  record.automaticAccountContext == true,
+                  record.automaticConsent, Self.validDigest(record.localSourceSHA256),
                   currentPolicyAllowsRemoval || record.deleteLocalAfterAcceptance == true else {
                 throw PichiPublicationOutboxFailure.invalidTransition
             }
@@ -562,6 +563,7 @@ actor PichiPublicationOutboxStore {
             throw PichiPublicationOutboxFailure.corruptRecord
         }
         if let localDigest = record.localSourceSHA256, !Self.validDigest(localDigest) { throw PichiPublicationOutboxFailure.corruptRecord }
+        if let canonical = record.canonicalSourceSHA256, !Self.validDigest(canonical) { throw PichiPublicationOutboxFailure.corruptRecord }
         let automatic = record.automaticAccountContext == true
         if automatic, record.transcriptBytes != nil, !Self.validDigest(record.localSourceSHA256) { throw PichiPublicationOutboxFailure.corruptRecord }
         let purged = record.sourcePurged == true
@@ -572,10 +574,23 @@ actor PichiPublicationOutboxStore {
             }
         }
         if purged {
-            guard automatic, record.deleteLocalAfterAcceptance == true, record.state == .accepted,
-                  record.transcriptBytes == nil, record.receipt?.accountContextPolicyCriteriaIDs != nil,
-                  Self.validDigest(record.sourceSHA256), Self.validDigest(record.canonicalSourceSHA256),
-                  Self.validDigest(record.legacyBodySHA256) else { throw PichiPublicationOutboxFailure.corruptRecord }
+            guard record.automaticConsent, record.deleteLocalAfterAcceptance == true, record.state == .accepted,
+                  record.transcriptBytes == nil, record.receipt != nil,
+                  Self.validDigest(record.sourceSHA256), Self.validDigest(record.localSourceSHA256) else {
+                throw PichiPublicationOutboxFailure.corruptRecord
+            }
+            switch configuration {
+            case .oidc:
+                guard !automatic, record.legacySelection == nil, record.legacyBodySHA256 == nil else {
+                    throw PichiPublicationOutboxFailure.corruptRecord
+                }
+            case .legacy:
+                guard Self.validDigest(record.legacyBodySHA256),
+                      (automatic ? record.receipt?.accountContextPolicyCriteriaIDs != nil && Self.validDigest(record.canonicalSourceSHA256)
+                        : record.legacySelection != nil) else {
+                    throw PichiPublicationOutboxFailure.corruptRecord
+                }
+            }
         } else if (record.transcriptBytes == nil) != (record.sourceSHA256 == nil) {
             throw PichiPublicationOutboxFailure.corruptRecord
         }

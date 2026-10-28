@@ -29,7 +29,15 @@ extension PichiPublicationOutboxTests {
             transport: identity, credentials: FacadeSyntheticCredentials(), lifecycle: profiles)
         let http = FacadeFixtureHTTP()
         let meetings = PrivateProfileMeetingStore.shared
-        let service = PichiCloudPublicationService(account: account, meetings: meetings, profiles: profiles, http: http)
+        let service = PichiCloudPublicationService(account: account, meetings: meetings, profiles: profiles, http: http,
+            deleteAcceptedRecording: { id, owner, digest in
+                try await meetings.delete(id: id, expectedOwnership: owner, validating: { source in
+                    try Task.checkCancellation()
+                    guard try PichiProtectedPublicationSource.localFingerprint(for: source) == digest else {
+                        throw PichiPublicationOutboxFailure.receiptConflict
+                    }
+                })
+            })
         try await service.install()
         do { try await service.install(); check(false, "A second observer cannot be installed") }
         catch let error as AccountError { check(error == .busy, "Observer/participant composition is singular") }
@@ -365,6 +373,19 @@ extension PichiPublicationOutboxTests {
         try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: consentFile.path)
         await http.release(); _ = await heldSend.result
         check(try await service.status(for: failedAdmission.id) != .queued, "Repairing settings cannot retroactively admit the failed capture")
+        try await service.setCloudSyncEnabled(false)
+        let retainedOIDCReceipt = try durable(PrivateProfileStorage.current, id: first.id, settled: true).receipt
+        let requestsBeforeOIDCCleanup = await http.count()
+        check(try await meetings.loadTranscript(id: first.id) != nil,
+              "Current cleanup OFF retains an accepted manual OIDC recording")
+        try await service.setDeleteLocalAfterAcceptance(true)
+        try await wait { try await meetings.loadTranscript(id: first.id) == nil }
+        let compactedOIDC = try durable(PrivateProfileStorage.current, id: first.id, settled: true)
+        check(compactedOIDC.sourcePurged == true && compactedOIDC.transcriptBytes == nil
+            && compactedOIDC.receipt == retainedOIDCReceipt && compactedOIDC.automaticAccountContext != true,
+              "Current cleanup ON reconciles a fingerprint-backed manual OIDC receipt")
+        check(await http.count() == requestsBeforeOIDCCleanup,
+              "Manual OIDC receipt cleanup issues no new POST, GET or PATCH")
         await account.logout(); await service.shutdown(); await account.shutdown()
         check(await http.wasShutdown(), "Service shutdown joins and releases its HTTP owner")
         return checks

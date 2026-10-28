@@ -714,7 +714,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
     private func cleanupAccepted(_ record: PichiPublicationOutboxRecord, profile: PrivateProfileSnapshot,
                                  context: AccountContext, store: PichiPublicationOutboxStore) async {
         guard [.accepted, .acceptedCleanupPending].contains(record.state), record.receipt != nil,
-              record.automaticAccountContext == true, record.sourcePurged != true,
+              record.automaticConsent, record.sourcePurged != true,
               record.receiptPauseReason != .sourceConflict,
               let expectedDigest = record.localSourceSHA256,
               let deleteAcceptedRecording, cleaning.insert(record.sessionID).inserted else { return }
