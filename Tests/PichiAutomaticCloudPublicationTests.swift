@@ -408,7 +408,8 @@ extension PichiPublicationOutboxTests {
         return checks
     }
 
-    static func checkConnectivityRestorationRace(root: URL, restorationFinishesFirst: Bool = false) async throws -> Int {
+    static func checkConnectivityRestorationRace(root: URL, restorationFinishesFirst: Bool = false,
+        failure: ConnectivityRaceFailure = .stale, control: ConnectivityRaceControl = .none) async throws -> Int {
         let previous = PrivateProfileStorage.current
         defer { PrivateProfileStorage.select(previous) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -494,33 +495,68 @@ extension PichiPublicationOutboxTests {
             await transport.releaseValidationCall(1)
             await restoring.value
             check(account.isCurrent(context) && !account.isAwaitingLegacyServerValidation,
-                  "Connectivity validation finishes before the held request reports its typed stale result")
+                  "Connectivity validation finishes before the held request reports its failure")
             await service.notifySceneActive(true)
             check(try record()?.state == .sending,
                   "The foreground activation has already observed sending before local retirement starts")
             check(await transport.postCount() == 0, "The early foreground wake sends no POST while request validation is still held")
-            await transport.failHeldValidationAsStale(0)
         }
+        let controlling: Task<Void, Error>?
+        switch control {
+        case .none: controlling = nil
+        case .pause:
+            controlling = Task { await service.pause() }
+            try await wait { await transport.validationWasCancelled(0) }
+        case .off:
+            controlling = Task { try await service.setCloudSyncEnabled(false) }
+            try await wait { service.snapshot.availability == .pausing }
+        }
+        await transport.failHeldValidation(0, as: failure)
+        let failedAt = Date()
         await transport.releaseValidationCall(0)
-        if restorationFinishesFirst {
-            try await wait { try record()?.state != .sending }
-            let retired = try record()!
+        try await wait { try record()?.state != .sending }
+        try await controlling?.value
+        let retired = try record()!
+        if failure == .stale {
             check((retired.state == .paused && retired.pauseReason == .uncertainDelivery)
                 || retired.state == .queued || retired.state == .accepted,
-                  "A typed stale result remains retryable after validation has already finished")
+                  "A stale outcome remains retryable in either validation ordering")
         } else {
-            try await wait { try record()?.state == .paused }
-            check(try record()?.pauseReason == .uncertainDelivery && record()?.receipt == nil,
-                  "A joined transfer interrupted by transient account admission retains a retryable durable source")
-            check(await transport.postCount() == 0, "Temporarily unavailable account admission sends no protected POST")
+            check(retired.state == .retryScheduled || (control != .none && retired.pauseReason == .userRequested),
+                  "A known connectivity or remote failure retains its retry classification during validation")
+            check(retired.retryNotBefore != nil && retired.receipt == nil,
+                  "Known failure retirement persists its lower bound without claiming acceptance")
+        }
+        if failure.hasServerDeadline {
+            check(retired.serverRetryNotBefore != nil
+                && retired.serverRetryNotBefore!.timeIntervalSince(failedAt) >= 3
+                && retired.serverRetryNotBefore! <= Date().addingTimeInterval(3),
+                  "The decoded remote Retry-After survives account validation and cancellation exactly once")
         }
         if !restorationFinishesFirst {
+            check(await transport.postCount() == 0, "Temporarily unavailable account admission sends no protected POST")
             await transport.releaseValidationCall(1)
             await restoring.value
             check(account.isCurrent(context) && !account.isAwaitingLegacyServerValidation,
                   "Validation restores the same current account without weakening its admission guard")
-            await service.notifySceneActive(true)
         }
+        if control != .none {
+            await service.notifySceneActive(true)
+            let userPausedRecord = try record()
+            check(await transport.postCount() == 0 && userPausedRecord?.pauseReason == .userRequested,
+                  "A racing user pause or OFF stays paused across the post-retirement wake")
+            if control == .off { try await service.setCloudSyncEnabled(true) }
+            else { try await service.resume() }
+        }
+        if failure.hasServerDeadline {
+            for _ in 0..<3 { await service.notifySceneActive(true) }
+            let pacedRecord = try record()
+            check(await transport.postCount() == 0 && pacedRecord?.attemptCount == 2,
+                  "Repeated foreground wakes cannot import before the durable server deadline")
+            let due = try record()!.serverRetryNotBefore!
+            try await Task.sleep(for: .seconds(max(0, due.timeIntervalSinceNow) + 0.05))
+        }
+        await service.notifySceneActive(true)
         try await wait { try record()?.receipt != nil }
         check(try record()?.state == .accepted && record()?.attemptCount == 3,
               "A foreground wake resumes the same durable source and receives its matching receipt")
@@ -542,6 +578,12 @@ private actor AutomaticStoredSession: LegacyAccountSessionStoring {
     func save(_ value: LegacyAccountStoredSession) { saved = value }
     func clear() { saved = nil }
 }
+
+enum ConnectivityRaceFailure: String, CaseIterable, Sendable {
+    case stale, network, remote429, remote503
+    var hasServerDeadline: Bool { self == .remote429 || self == .remote503 }
+}
+enum ConnectivityRaceControl: Sendable { case none, pause, off }
 
 private enum AutomaticFixtureFailure: Error { case timeout, busy }
 @MainActor private final class AutomaticCipherOwner {
@@ -604,7 +646,8 @@ private actor AutomaticFixtureOIDC: AccountTransporting {
 private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     private var heldValidations: [CheckedContinuation<Void, Never>?] = []
     private var validationsToHold = 0
-    private var staleHeldValidations = Set<Int>()
+    private var heldValidationFailures: [Int: ConnectivityRaceFailure] = [:]
+    private var cancelledValidations = Set<Int>()
     let configuration: LegacyAccountConfiguration
     private var userID = "123", offline = false, loseNext = false, holdNext = false, holding = false
     private var accountThrottled = false
@@ -622,8 +665,19 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
         if validationsToHold > 0 {
             validationsToHold -= 1
             let index = heldValidations.count
-            await withCheckedContinuation { heldValidations.append($0) }
-            if staleHeldValidations.remove(index) != nil { throw AccountError.staleOperation }
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { heldValidations.append($0) }
+            } onCancel: {
+                Task { await self.markValidationCancelled(index) }
+            }
+            switch heldValidationFailures.removeValue(forKey: index) {
+            case .stale: throw AccountError.staleOperation
+            case .network: throw LegacyAccountConnectivityFailure.unavailable
+            case .remote429: throw LegacyAccountConnectivityFailure.rateLimited(retryAfter: "3")
+            case .remote503:
+                throw PichiPublicationRemoteFailure(action: .boundedRetry, httpStatus: 503, code: .internalError, retryAfter: .seconds(3))
+            case nil: break
+            }
         }
         if offline { throw LegacyAccountConnectivityFailure.unavailable }
         if accountThrottled { throw LegacyAccountConnectivityFailure.rateLimited(retryAfter: accountRetryAfter) }
@@ -642,8 +696,10 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     func restoreSession(_ cookie: LegacyAccountCookie) async throws {}
     func holdValidationCalls(_ count: Int) { validationsToHold = count; heldValidations = [] }
     func heldValidationCount() -> Int { heldValidations.count }
+    private func markValidationCancelled(_ index: Int) { cancelledValidations.insert(index) }
+    func validationWasCancelled(_ index: Int) -> Bool { cancelledValidations.contains(index) }
     func releaseValidationCall(_ index: Int) { heldValidations[index]?.resume(); heldValidations[index] = nil }
-    func failHeldValidationAsStale(_ index: Int) { staleHeldValidations.insert(index) }
+    func failHeldValidation(_ index: Int, as failure: ConnectivityRaceFailure) { heldValidationFailures[index] = failure }
     func setOffline(_ value: Bool) { offline = value }
     func validationGetCount() -> Int { validationGets }
     func setAccountThrottled(_ value: Bool, retryAfter: String? = nil) {

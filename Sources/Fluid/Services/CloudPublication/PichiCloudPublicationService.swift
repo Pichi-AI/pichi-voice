@@ -1100,75 +1100,67 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 await self.cleanupAccepted(accepted, profile: profile, context: context, store: store)
             }
         } catch {
-            let retryAfterValidation = !Task.isCancelled && (error as? AccountError) == .staleOperation
-            if Task.isCancelled || error is CancellationError || retryAfterValidation || (try? self.check(profile, context: context)) == nil {
-                // The HTTP task has joined. This task is owned and joined by its
-                // enclosing command/worker, but must not inherit caller cancellation:
-                // the retained store's one-time crash recovery cannot repair this run.
-                let cleanup = Task { @MainActor in
-                    // Connectivity restoration can temporarily close account network
-                    // admission while the same local owner remains readable. Retiring
-                    // a joined attempt is local state repair, never HTTP admission.
-                    guard !self.shutDown, !self.closing, self.scope == profile,
-                          PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
-                          PrivateProfileStorage.current.context == context else { return }
-                    do {
-                        guard try await store.record(id: id)?.state == .sending else { return }
-                        let paused = try await store.pause(id: id, reason: .uncertainDelivery)
-                        self.project(id, Self.status(paused), profile: profile, automatic: paused.automaticAccountContext == true)
-                    } catch {
-                        if self.scope == profile, !self.closing, PrivateProfileStorage.isReadable(profile) {
-                            self.snapshot = .init(availability: .storageUnavailable,
-                                cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items,
-                deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
-                automaticRecordingIDs: self.snapshot.automaticRecordingIDs)
+            let cancelled = Task.isCancelled || error is CancellationError
+            // HTTP has joined. Persist its known failure even while the unchanged
+            // local owner's network admission is temporarily closed by validation.
+            // This child is joined by the command/worker and does not inherit its
+            // cancellation, so a completed attempt cannot remain sending in this run.
+            let retirement = Task { @MainActor in
+                guard !self.shutDown, !self.closing, self.scope == profile,
+                      PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+                      PrivateProfileStorage.current.context == context else { return }
+                do {
+                    guard let failed = try await store.record(id: id), failed.state == .sending else { return }
+                    let count = failed.attemptCount
+                    func retry(_ retryAfter: PichiPublicationRetryAfter?) -> PichiPublicationRetryDecision {
+                        if failed.automaticAccountContext == true {
+                            return PichiPublicationRetryPolicy.automaticContextDecision(afterAttempt: count, retryAfter: retryAfter)
                         }
+                        return PichiPublicationRetryPolicy.decision(afterAttempt: count, retryAfter: retryAfter)
+                    }
+                    let updated: PichiPublicationOutboxRecord
+                    // A decoded server outcome and its lower bound survive a racing
+                    // cancellation too. Cancellation itself grants no retry or wake.
+                    if let remote = error as? PichiPublicationRemoteFailure {
+                        if remote.action == .boundedRetry {
+                            updated = try await store.scheduleRetry(id: id, decision: retry(remote.retryAfter), retryAfter: remote.retryAfter, now: Date())
+                        } else { updated = try await store.pause(id: id, reason: Self.pauseReason(remote.action)) }
+                    } else if cancelled || (error as? AccountError) == .staleOperation {
+                        updated = try await store.pause(id: id, reason: .uncertainDelivery)
+                    } else if error is ProtectedDataAccessError {
+                        updated = try await store.scheduleRetry(id: id,
+                            decision: PichiPublicationRetryPolicy.automaticContextDecision(afterAttempt: count, retryAfter: nil), now: Date())
+                        self.waitForProtectedData()
+                    } else if error is PichiCloudPublicationControlFailure {
+                        updated = try await store.pause(id: id, reason: .userRequested)
+                    } else if let account = error as? AccountError {
+                        if account == .rateLimited || account == .networkUnavailable {
+                            updated = try await store.scheduleRetry(id: id, decision: retry(nil), now: Date())
+                        } else {
+                            updated = try await store.pause(id: id, reason: account == .permissionDenied ? .permissionReview : .authenticationRequired)
+                        }
+                    } else if (error as? PichiPublicationNetworkFailure) == .unavailable {
+                        updated = try await store.scheduleRetry(id: id, decision: retry(nil), now: Date())
+                    } else { updated = try await store.pause(id: id, reason: .receiptReview) }
+                    self.project(id, Self.status(updated), profile: profile, automatic: updated.automaticAccountContext == true)
+                } catch {
+                    self.storageFailed(profile: profile, because: error)
+                    if self.scope == profile, !self.closing, PrivateProfileStorage.isReadable(profile) {
+                        self.snapshot = .init(availability: .storageUnavailable,
+                            cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items,
+                            deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
+                            automaticRecordingIDs: self.snapshot.automaticRecordingIDs)
                     }
                 }
-                await cleanup.value
-                // A foreground wake may already have read the old sending state.
-                // Re-activate only after retirement joins, with this caller still
-                // uncancelled and the same account current. Account restoration
-                // itself is never awaited from an owned publication transfer.
-                if retryAfterValidation, !Task.isCancelled, !self.userPaused,
-                   (try? self.check(profile, context: context)) != nil {
-                    try? await self.activateBody(resumeUserPauses: false)
-                }
-                return
             }
-            do {
-                let failed = try await store.record(id: id)
-                let count = failed?.attemptCount ?? 1
-                func retry(_ attempt: Int, _ retryAfter: PichiPublicationRetryAfter?) -> PichiPublicationRetryDecision {
-                    if failed?.automaticAccountContext == true {
-                        return PichiPublicationRetryPolicy.automaticContextDecision(afterAttempt: attempt, retryAfter: retryAfter)
-                    }
-                    return PichiPublicationRetryPolicy.decision(afterAttempt: attempt, retryAfter: retryAfter)
-                }
-                let updated: PichiPublicationOutboxRecord
-                if error is ProtectedDataAccessError {
-                    let count = try await store.record(id: id)?.attemptCount ?? 1
-                    updated = try await store.scheduleRetry(id: id,
-                        decision: PichiPublicationRetryPolicy.automaticContextDecision(afterAttempt: count, retryAfter: nil), now: Date())
-                    self.waitForProtectedData()
-                } else if let remote = error as? PichiPublicationRemoteFailure {
-                    if remote.action == .boundedRetry {
-                        updated = try await store.scheduleRetry(id: id, decision: retry(count, remote.retryAfter), retryAfter: remote.retryAfter, now: Date())
-                    } else { updated = try await store.pause(id: id, reason: Self.pauseReason(remote.action)) }
-                } else if error is PichiCloudPublicationControlFailure {
-                    updated = try await store.pause(id: id, reason: .userRequested)
-                } else if let account = error as? AccountError {
-                    if account == .rateLimited || account == .networkUnavailable {
-                        updated = try await store.scheduleRetry(id: id, decision: retry(count, nil), now: Date())
-                    } else {
-                        updated = try await store.pause(id: id, reason: account == .permissionDenied ? .permissionReview : .authenticationRequired)
-                    }
-                } else if (error as? PichiPublicationNetworkFailure) == .unavailable {
-                    updated = try await store.scheduleRetry(id: id, decision: retry(count, nil), now: Date())
-                } else { updated = try await store.pause(id: id, reason: .receiptReview) }
-                try self.check(profile, context: context)
-                self.project(id, Self.status(updated), profile: profile, automatic: updated.automaticAccountContext == true)
-            } catch { self.storageFailed(profile: profile, because: error) }
+            await retirement.value
+            // An earlier foreground activation may have observed sending. Close that
+            // ordering gap for every error after retirement, without waiting for
+            // account restoration here or weakening the ordinary admission checks.
+            if !cancelled, !Task.isCancelled, !self.userPaused,
+               (try? self.check(profile, context: context)) != nil {
+                try? await self.activateBody(resumeUserPauses: false)
+            }
         }
     }
 
