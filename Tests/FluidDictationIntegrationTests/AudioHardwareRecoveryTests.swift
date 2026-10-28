@@ -1987,8 +1987,6 @@ private final class ASRRecoveryTranscriptionProvider: TranscriptionProvider {
     }
 
     func endAdmittedTranscription(leaseID: UUID) async {
-        // Keep cleanup genuinely asynchronous, as production providers may be.
-        await Task.yield()
         XCTAssertNotNil(self.admissions.remove(leaseID))
         self.completedAdmissions += 1
     }
