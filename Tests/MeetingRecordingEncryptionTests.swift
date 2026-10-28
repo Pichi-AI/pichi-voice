@@ -78,6 +78,142 @@ extension MeetingSessionStoreCheckpointTests {
         do { try await restarted.installEncryptionCipher(wrongKey); check(false, "A loaded store cannot silently rotate its key") }
         catch { check(true, "A loaded store cannot silently rotate its key") }
 
+        // The real HTTP probe failed with a 1.5s segment after whole-second ISO
+        // persistence reduced the capture duration to 1s. Exercise both boundary phases.
+        for fraction in [0.125_123_4, 0.875_987_6] {
+            var precise = session; precise.id = UUID()
+            precise.startedAt = Date(timeIntervalSince1970: 1_700_000_000 + fraction)
+            precise.endedAt = precise.startedAt.addingTimeInterval(1.5)
+            precise.state = .completed; precise.transcriptIsComplete = true
+            let preciseTrack = UUID()
+            precise.audioTracks = [.init(id: preciseTrack, kind: .microphone, sourceIdentifier: "synthetic",
+                sourceDisplayName: "Synthetic", format: nil, timebase: timebase, health: .waiting, chunks: [])]
+            precise.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 16_000),
+                end: .init(value: 24_000, timescale: 16_000), sourceTrackID: preciseTrack, speakerID: nil,
+                text: "Synthetic fractional capture [PERSON].", revision: 0, status: .final,
+                overlap: .none, completeness: .complete, attributionState: .unassigned)]
+            let originalSource = try PichiProtectedPublicationSource.prepare(for: precise)
+            let oldEncoder = JSONEncoder(); oldEncoder.dateEncodingStrategy = .iso8601
+            let oldDecoder = JSONDecoder(); oldDecoder.dateDecodingStrategy = .iso8601
+            let truncated = try oldDecoder.decode(MeetingSession.self, from: oldEncoder.encode(precise))
+            check(truncated.duration == (fraction < 0.5 ? 1 : 2),
+                  "Whole-second persistence deterministically changes the 1.5s capture at either phase")
+            if fraction < 0.5 {
+                do { _ = try PichiProtectedPublicationSource.prepare(for: truncated); check(false, "Truncated duration must reproduce invalid publication") }
+                catch PichiPublicationWithholdingReason.invalidTranscript {
+                    check(true, "The old codec deterministically withholds the valid 1.5s segment")
+                }
+            } else {
+                _ = try PichiProtectedPublicationSource.prepare(for: truncated)
+                check(true, "The other old-codec phase passes only because duration incorrectly grows to 2s")
+            }
+            try await store.create(precise)
+            let saved = try await restarted.load(id: precise.id)!
+            check(saved.startedAt == precise.startedAt && saved.endedAt == precise.endedAt && saved.duration == 1.5,
+                  "Persisted capture retains its exact fractional timestamps and duration")
+            let savedSource = try PichiProtectedPublicationSource.prepare(for: saved)
+            _ = try PichiProtectedPublicationPayload.validate(savedSource.transcriptBytes)
+            check(savedSource.transcriptBytes == originalSource.transcriptBytes
+                && savedSource.sourceSHA256 == originalSource.sourceSHA256
+                && savedSource.localSourceSHA256 == originalSource.localSourceSHA256,
+                  "A valid protected source remains valid and identical after encrypted persistence")
+            let history = try await restarted.loadHistory()
+            check(history.first(where: { $0.id == precise.id })?.endedAt == precise.endedAt,
+                  "Lightweight encrypted history retains exact fractional dates")
+            let preciseFile = storeRoot.appendingPathComponent(precise.id.uuidString).appendingPathComponent("session.json")
+            let preciseJSON = try cipher.open(Data(contentsOf: preciseFile), sessionID: precise.id,
+                artifactKind: .sessionManifest, maximumPlaintextBytes: MeetingRecordingCipher.maximumManifestBytes)
+            reject({ _ = try oldDecoder.decode(MeetingSession.self, from: preciseJSON) },
+                   "An older ISO-only binary cannot read newly saved precise dates; downgrade needs its backup")
+
+            let plaintextStore = MeetingSessionStore(rootDirectory: root.appendingPathComponent("precise-plaintext"))
+            var plaintext = precise; plaintext.id = UUID(); plaintext.requiresEncryptedPersistence = nil
+            try await plaintextStore.create(plaintext)
+            let plainSaved = try await plaintextStore.load(id: plaintext.id)
+            check(plainSaved?.startedAt == plaintext.startedAt && plainSaved?.endedAt == plaintext.endedAt,
+                  "The same exact local codec protects ordinary capture timing")
+
+            var invalid = precise; invalid.id = UUID()
+            invalid.transcriptSegments[0].end = .init(value: 32_000, timescale: 16_000)
+            try await store.create(invalid)
+            let invalidSaved = try await store.load(id: invalid.id)!
+            do { _ = try PichiProtectedPublicationSource.prepare(for: invalidSaved); check(false, "An out-of-bounds source must remain withheld") }
+            catch PichiPublicationWithholdingReason.invalidTranscript {
+                check(true, "Precise storage does not widen hard-invalid transcript coverage")
+            }
+        }
+
+        var oldSession = session; oldSession.id = UUID()
+        oldSession.startedAt = Date(timeIntervalSince1970: 1_700_000_000.125)
+        oldSession.endedAt = oldSession.startedAt.addingTimeInterval(5)
+        oldSession.state = .completed; oldSession.transcriptIsComplete = true
+        let legacyTrack = UUID()
+        oldSession.audioTracks = [.init(id: legacyTrack, kind: .microphone, sourceIdentifier: "synthetic",
+            sourceDisplayName: "Synthetic", format: nil, timebase: timebase, health: .waiting, chunks: [])]
+        oldSession.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 1),
+            end: .init(value: 5, timescale: 1), sourceTrackID: legacyTrack, speakerID: nil,
+            text: "Synthetic legacy protected source.", revision: 0, status: .final,
+            overlap: .none, completeness: .complete, attributionState: .unassigned)]
+        let legacyEncoder = JSONEncoder(); legacyEncoder.dateEncodingStrategy = .iso8601
+        let legacyDecoder = JSONDecoder(); legacyDecoder.dateDecodingStrategy = .iso8601
+        let legacyJSON = try legacyEncoder.encode(oldSession)
+        let legacyDecoded = try legacyDecoder.decode(MeetingSession.self, from: legacyJSON)
+        let acceptedLegacySource = try PichiProtectedPublicationSource.prepare(for: legacyDecoded)
+        let acceptedLegacyFingerprint = acceptedLegacySource.localSourceSHA256
+        try await store.create(oldSession)
+        let legacyFile = storeRoot.appendingPathComponent(oldSession.id.uuidString).appendingPathComponent("session.json")
+        let legacyEnvelope = try cipher.seal(legacyJSON, sessionID: oldSession.id, artifactKind: .sessionManifest,
+            maximumPlaintextBytes: MeetingRecordingCipher.maximumManifestBytes)
+        try legacyEnvelope.write(to: legacyFile)
+        let readLegacy = try await restarted.load(id: oldSession.id)!
+        let bytesAfterLegacyRead = try Data(contentsOf: legacyFile)
+        check(readLegacy == legacyDecoded && bytesAfterLegacyRead == legacyEnvelope,
+              "Legacy ISO ciphertext reads without rewriting historical bytes")
+        check(try PichiProtectedPublicationSource.localFingerprint(for: readLegacy) == acceptedLegacyFingerprint,
+              "Reading an old accepted source retains its frozen local fingerprint")
+        check(try PichiProtectedPublicationSource.prepare(for: readLegacy) == acceptedLegacySource,
+              "Legacy source wire bytes and fingerprint remain compatible with its accepted receipt")
+        try await restarted.save(readLegacy)
+        let resavedLegacy = try await store.load(id: oldSession.id)!
+        check(try PichiProtectedPublicationSource.localFingerprint(for: resavedLegacy) == acceptedLegacyFingerprint,
+              "An ordinary precise-codec save retains the accepted fingerprint of legacy-decoded dates")
+        var changedLegacy = resavedLegacy; changedLegacy.title += " later edit"
+        check(try PichiProtectedPublicationSource.localFingerprint(for: changedLegacy) != acceptedLegacyFingerprint,
+              "The unchanged deletion fingerprint still refuses later user edits")
+        let indexFile = storeRoot.appendingPathComponent("index.json")
+        var legacyIndex = try JSONSerialization.jsonObject(with: Data(contentsOf: indexFile)) as! [String: Any]
+        legacyIndex["updatedAt"] = "2023-11-14T22:13:20Z"
+        let legacyIndexBytes = try JSONSerialization.data(withJSONObject: legacyIndex)
+        try legacyIndexBytes.write(to: indexFile)
+        let legacyIndexedStore = MeetingSessionStore(rootDirectory: storeRoot, encryptionCipher: cipher)
+        check(try await legacyIndexedStore.hasEncryptedPersistenceData(),
+              "Legacy ISO index dates still support missing-key encryption preflight")
+        check(try await legacyIndexedStore.loadHistory().contains(where: { $0.id == oldSession.id })
+            && Data(contentsOf: indexFile) == legacyIndexBytes,
+              "Reading a legacy ISO index preserves its bytes without a history migration")
+        for badValue: Any in [true, "NaN", "not-a-date", NSNull()] {
+            var invalidObject = try JSONSerialization.jsonObject(with: legacyJSON) as! [String: Any]
+            invalidObject["startedAt"] = badValue
+            let damagedJSON = try JSONSerialization.data(withJSONObject: invalidObject)
+            try cipher.seal(damagedJSON, sessionID: oldSession.id, artifactKind: .sessionManifest,
+                maximumPlaintextBytes: MeetingRecordingCipher.maximumManifestBytes).write(to: legacyFile)
+            do { _ = try await restarted.load(id: oldSession.id); check(false, "Malformed dates must fail closed") }
+            catch { check(true, "Malformed stored dates cannot enter a source") }
+        }
+        let overflowJSON = Data(String(decoding: legacyJSON, as: UTF8.self)
+            .replacingOccurrences(of: "\"startedAt\":\"2023-11-14T22:13:20Z\"", with: "\"startedAt\":1e400").utf8)
+        check(overflowJSON != legacyJSON, "The malformed numeric fixture actually replaces the legacy date")
+        try cipher.seal(overflowJSON, sessionID: oldSession.id, artifactKind: .sessionManifest,
+            maximumPlaintextBytes: MeetingRecordingCipher.maximumManifestBytes).write(to: legacyFile)
+        do { _ = try await restarted.load(id: oldSession.id); check(false, "Overflowing numeric dates must fail closed") }
+        catch { check(true, "Nonfinite numeric stored dates cannot enter a source") }
+        try legacyEnvelope.write(to: legacyFile)
+        for nonfinite in [Double.nan, Double.infinity, -Double.infinity] {
+            var bad = session; bad.id = UUID(); bad.startedAt = Date(timeIntervalSinceReferenceDate: nonfinite)
+            do { try await store.create(bad); check(false, "Nonfinite dates cannot be persisted") }
+            catch { check(true, "Nonfinite capture dates fail closed before publication") }
+        }
+
         var downgrade = session; downgrade.requiresEncryptedPersistence = nil
         do { try await restarted.save(downgrade); check(false, "Saving a known encrypted session cannot downgrade protection") }
         catch { check(true, "Saving a known encrypted session cannot downgrade protection") }

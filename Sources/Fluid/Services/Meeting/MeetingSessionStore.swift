@@ -98,14 +98,32 @@ actor MeetingSessionStore: MeetingSessionStoring {
         }
 
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        // Keep Date's exact reference-time Double. Whole-second ISO encoding can
+        // shorten a saved capture below its final segment and invalidate publication.
+        // This local codec is independent of the portable export/wire date format.
+        encoder.dateEncodingStrategy = .deferredToDate
         // This canonical manifest is also the strict capture checkpoint. Formatting every
         // growing transcript adds sorting, whitespace and temporary allocations to each audio
         // window's critical path; readers only depend on its schema, never JSON key order.
         self.encoder = encoder
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let value = try decoder.singleValueContainer()
+            if let referenceSeconds = try? value.decode(Double.self) {
+                guard referenceSeconds.isFinite else {
+                    throw DecodingError.dataCorruptedError(in: value, debugDescription: "Nonfinite meeting date")
+                }
+                return Date(timeIntervalSinceReferenceDate: referenceSeconds)
+            }
+            // Existing manifests/indexes stay unchanged on read. They are rewritten
+            // with precise dates only on their ordinary next save.
+            let text = try value.decode(String.self)
+            guard let date = ISO8601DateFormatter().date(from: text) else {
+                throw DecodingError.dataCorruptedError(in: value, debugDescription: "Invalid legacy meeting date")
+            }
+            return date
+        }
         self.decoder = decoder
     }
 
