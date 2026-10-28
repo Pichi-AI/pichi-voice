@@ -18,7 +18,8 @@ final class MobileNavigationUITests: XCTestCase {
         }
         if name.contains("testFragmentParticipantCorrectionScopesUndoAndReopen")
             || name.contains("testParticipantInlineNameAndOwnerTransferSmoke")
-            || name.contains("testTranscriptScrollKeepsNavigationControlsReadable") {
+            || name.contains("testTranscriptScrollKeepsNavigationControlsReadable")
+            || name.contains("testColdGuestHistoryLoadsWithoutManualRefresh") {
             #if !targetEnvironment(simulator)
             throw XCTSkip("Participant correction fixtures are simulator-only")
             #endif
@@ -792,9 +793,10 @@ final class MobileNavigationUITests: XCTestCase {
         throw XCTSkip("Synthetic saved-history launch regression requires an owned simulator")
         #else
         let rowID = "history.session.DDD86147-F0B9-4B13-88B5-099B1E0D8BA5"
+        let launchArguments = app.launchArguments
         for appearance in ["light", "dark"] {
             app.terminate()
-            app.launchArguments += ["-ThemePreference", appearance]
+            app.launchArguments = launchArguments + ["-ThemePreference", appearance]
             app.launch()
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
             openNavigation("history", title: "History")
