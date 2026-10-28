@@ -297,7 +297,7 @@ extension AccountLegacySessionChecks {
         await first.shutdown()
         expect(await store.session != nil, "shutdown preserves restart credential")
 
-        for status in [408, 429, 502, 503] {
+        for status in [408, 429, 500, 502, 503] {
             LegacyHTTPFixtureProtocol.configure(meStatus: status)
             let temporary = try make(store)
             await temporary.restore()
@@ -354,11 +354,11 @@ extension AccountLegacySessionChecks {
         expect(await store.session == nil, "identity mismatch clears durable cookie")
         await recovered.shutdown()
 
-        for failure in [401, 403, 500] {
+        for failure in [401, 403] {
             LegacyHTTPFixtureProtocol.configure(meStatus: failure)
             let rejectedStore = LegacyMemorySessionStore(saved), rejected = try make(rejectedStore)
             await rejected.restore()
-            expect(rejected.context == nil && rejected.state == .reauthenticationRequired && !rejected.isAwaitingLegacyServerValidation, "server rejection is never offline admission")
+            expect(rejected.context == nil && rejected.state == .reauthenticationRequired && !rejected.isAwaitingLegacyServerValidation, "An authentication or permission rejection is never offline admission")
             expect(await rejectedStore.session == nil, "rejected restart clears cookie")
             await rejected.shutdown()
         }
