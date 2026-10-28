@@ -259,7 +259,9 @@ extension PichiPublicationOutboxTests {
                   "Purged source reconciles genuine no-criteria summary through its semantic fingerprint")
         } else { check(false, "Purged accepted source remains visible as receipt only") }
         check(await transport.postCount() == postsBeforeRestart, "Cleanup and later analysis status never repeat upload or billing")
-        await service.pause()
+        await service.pause(); await service.shutdown()
+        // The paused service still owns local receipt cleanup. Join it before corrupting
+        // durable snapshots for isolated cold-recovery and key-authentication probes.
         try acceptedPendingBytes.write(to: queueFile)
         try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: queueFile.path)
         let orphan = profile.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1/.write-" + UUID().uuidString + ".tmp")
@@ -285,6 +287,7 @@ extension PichiPublicationOutboxTests {
         do { _ = try await box().record(id: source.id); check(false, "Encrypted record cannot downgrade to plaintext") }
         catch let failure as PichiPublicationOutboxFailure { check(failure == .invalidStorage, "A known encrypted-mode record rejects plaintext fallback") }
         try ciphertext.write(to: compactFile)
+        service = makeService(meetings); try await service.install()
         try await service.resume()
 
         await transport.setAccountThrottled(true, retryAfter: "0")
