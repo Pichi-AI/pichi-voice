@@ -407,6 +407,114 @@ extension PichiPublicationOutboxTests {
         await service.shutdown(); await account.shutdown()
         return checks
     }
+
+    static func checkConnectivityRestorationRace(root: URL) async throws -> Int {
+        let previous = PrivateProfileStorage.current
+        defer { PrivateProfileStorage.select(previous) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        PrivateProfileStorage.select(try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root))
+        var checks = 0
+        func check(_ condition: Bool, _ message: String) {
+            precondition(condition, message); checks += 1
+            FileHandle.standardError.write(Data("Connectivity race checkpoint: \(message)\n".utf8))
+        }
+        func wait(_ condition: @MainActor () async throws -> Bool) async throws {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+            while !(try await condition()) {
+                guard ContinuousClock.now < deadline else { throw AutomaticFixtureFailure.timeout }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        let configuration = LegacyAccountConfiguration(apiBaseURL: URL(string: "https://automatic.example")!, bundleIdentifier: "ai.synthetic.voice")
+        let transport = AutomaticFixtureTransport(configuration: configuration)
+        let saved = LegacyAccountStoredSession(schemaVersion: 1, configuration: configuration,
+            cookie: try await transport.sessionCookie()!, snapshot: try await transport.account(), verifiedAt: Date(),
+            organizationID: "17", workspaceID: "9")
+        let credentials = AutomaticStoredSession(saved)
+        let profiles = PrivateProfileService()
+        try profiles.configure(isBusy: { false }, prepare: {}, activate: { _ in })
+        let account = AccountSessionService(configuration: nil, browser: AutomaticFixtureBrowser(),
+            transport: AutomaticFixtureOIDC(), credentials: AutomaticFixtureCredentials(), lifecycle: profiles,
+            legacyConfiguration: configuration, legacyTransport: transport, legacyCredentials: credentials)
+        var meetings = PrivateProfileMeetingStore()
+        func makeService() -> PichiCloudPublicationService {
+            .init(account: account, meetings: meetings, profiles: profiles,
+                recordingCipher: { try MeetingRecordingCipher(profileID: $0.id, key: Data(repeating: 0xA7, count: 32)) })
+        }
+        var service = makeService()
+        try await service.install()
+        await transport.setOffline(true)
+        await account.restore()
+        check(account.isAwaitingLegacyServerValidation, "The restored account starts with cached local admission while offline")
+        try await service.setCloudSyncEnabled(true)
+        var configurationForCapture = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic connectivity race",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"))
+        configurationForCapture.audioStorageMode = .memoryOnly
+        configurationForCapture.requiresEncryptedPersistence = true
+        configurationForCapture.piiRedactionEnabled = true
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil)
+        var session = MeetingSession(configuration: configurationForCapture, startedAt: Date(timeIntervalSince1970: 1_700_000_000), timebase: timebase)
+        session.profileOwnership = try await meetings.captureOwnership(for: session.id, configuration: configurationForCapture)
+        let track = UUID()
+        session.audioTracks = [.init(id: track, kind: .microphone, sourceIdentifier: "synthetic", sourceDisplayName: "Synthetic",
+            format: nil, timebase: timebase, health: .waiting, chunks: [])]
+        try await meetings.create(session)
+        session.state = .completed; session.endedAt = session.startedAt.addingTimeInterval(1.5); session.transcriptIsComplete = true
+        session.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 16_000), end: .init(value: 24_000, timescale: 16_000),
+            sourceTrackID: track, speakerID: nil, text: "Synthetic restoration race [PERSON].", revision: 0,
+            status: .final, overlap: .none, completeness: .complete, attributionState: .unassigned)]
+        try await meetings.save(session)
+        let profile = PrivateProfileStorage.current
+        let cipher = try MeetingRecordingCipher(profileID: profile.id, key: Data(repeating: 0xA7, count: 32))
+        func record() throws -> PichiPublicationOutboxRecord? {
+            for leaf in ["settled", "pending"] {
+                let file = profile.rootDirectory.appendingPathComponent("CloudPublication/OutboxV1/" + leaf + "/" + session.id.uuidString.lowercased() + ".json")
+                guard FileManager.default.fileExists(atPath: file.path) else { continue }
+                let bytes = try cipher.open(Data(contentsOf: file), sessionID: session.id, artifactKind: .publicationOutbox, maximumPlaintextBytes: 1_048_576)
+                return try JSONDecoder().decode(PichiPublicationOutboxRecord.self, from: bytes)
+            }
+            return nil
+        }
+        try await wait { try record()?.state == .retryScheduled }
+        await service.shutdown()
+        meetings = PrivateProfileMeetingStore()
+        service = makeService(); try await service.install()
+        await transport.setOffline(false)
+        await transport.holdValidationCalls(2)
+        try await service.activateCurrentProfile()
+        try await wait { await transport.heldValidationCount() == 1 }
+        let context = account.context!
+        let restoring = Task { await account.restoreAfterConnectivity() }
+        try await wait { await transport.heldValidationCount() == 2 }
+        check(!account.isCurrent(context), "Concurrent connectivity validation temporarily closes network admission without replacing the local owner")
+        check(try record()?.state == .sending && record()?.attemptCount == 2,
+              "The retry is durably sending before its account validation collides with restoration")
+        await transport.releaseValidationCall(0)
+        try await wait { try record()?.state == .paused }
+        check(try record()?.pauseReason == .uncertainDelivery && record()?.receipt == nil,
+              "A joined transfer interrupted by transient account admission retains a retryable durable source")
+        check(await transport.postCount() == 0, "Temporarily unavailable account admission sends no protected POST")
+        await transport.releaseValidationCall(1)
+        await restoring.value
+        check(account.isCurrent(context) && !account.isAwaitingLegacyServerValidation,
+              "Validation restores the same current account without weakening its admission guard")
+        await service.notifySceneActive(true)
+        try await wait { try record()?.receipt != nil }
+        check(try record()?.state == .accepted && record()?.attemptCount == 3,
+              "A foreground wake resumes the same durable source and receives its matching receipt")
+        check(await transport.postCount() == 1, "The interrupted authorization creates exactly one eventual import POST")
+        check(try await meetings.loadTranscript(id: session.id) != nil, "Receipt recovery preserves the encrypted local source with retention off")
+        await service.shutdown(); await account.shutdown()
+        return checks
+    }
+}
+
+private actor AutomaticStoredSession: LegacyAccountSessionStoring {
+    var saved: LegacyAccountStoredSession?
+    init(_ saved: LegacyAccountStoredSession) { self.saved = saved }
+    func load() -> LegacyAccountStoredSession? { saved }
+    func save(_ value: LegacyAccountStoredSession) { saved = value }
+    func clear() { saved = nil }
 }
 
 private enum AutomaticFixtureFailure: Error { case timeout, busy }
@@ -468,6 +576,8 @@ private actor AutomaticFixtureOIDC: AccountTransporting {
     func revoke(refreshToken: String) async throws {}
 }
 private actor AutomaticFixtureTransport: LegacyAccountTransporting {
+    private var heldValidations: [CheckedContinuation<Void, Never>?] = []
+    private var validationsToHold = 0
     let configuration: LegacyAccountConfiguration
     private var userID = "123", offline = false, loseNext = false, holdNext = false, holding = false
     private var accountThrottled = false
@@ -482,6 +592,10 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     }
     func account() async throws -> AccountSnapshot {
         validationGets += 1
+        if validationsToHold > 0 {
+            validationsToHold -= 1
+            await withCheckedContinuation { heldValidations.append($0) }
+        }
         if offline { throw LegacyAccountConnectivityFailure.unavailable }
         if accountThrottled { throw LegacyAccountConnectivityFailure.rateLimited(retryAfter: accountRetryAfter) }
         return .init(schemaVersion: 1, account: .init(id: userID, displayName: "Synthetic", email: nil),
@@ -493,6 +607,13 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     func logout() async throws {}
     func clearSession() async {}
     func shutdown() async {}
+    func sessionCookie() async throws -> LegacyAccountCookie? {
+        .init(value: "synthetic-restoration-cookie", receivedAt: Date().addingTimeInterval(-60), expiresAt: Date().addingTimeInterval(3_600))
+    }
+    func restoreSession(_ cookie: LegacyAccountCookie) async throws {}
+    func holdValidationCalls(_ count: Int) { validationsToHold = count; heldValidations = [] }
+    func heldValidationCount() -> Int { heldValidations.count }
+    func releaseValidationCall(_ index: Int) { heldValidations[index]?.resume(); heldValidations[index] = nil }
     func setOffline(_ value: Bool) { offline = value }
     func validationGetCount() -> Int { validationGets }
     func setAccountThrottled(_ value: Bool, retryAfter: String? = nil) {

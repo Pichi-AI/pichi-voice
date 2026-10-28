@@ -1100,12 +1100,17 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 await self.cleanupAccepted(accepted, profile: profile, context: context, store: store)
             }
         } catch {
-            if Task.isCancelled || error is CancellationError {
+            if Task.isCancelled || error is CancellationError || (try? self.check(profile, context: context)) == nil {
                 // The HTTP task has joined. This task is owned and joined by its
                 // enclosing command/worker, but must not inherit caller cancellation:
                 // the retained store's one-time crash recovery cannot repair this run.
                 let cleanup = Task { @MainActor in
-                    guard (try? self.check(profile, context: context)) != nil else { return }
+                    // Connectivity restoration can temporarily close account network
+                    // admission while the same local owner remains readable. Retiring
+                    // a joined attempt is local state repair, never HTTP admission.
+                    guard !self.shutDown, !self.closing, self.scope == profile,
+                          PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+                          PrivateProfileStorage.current.context == context else { return }
                     do {
                         guard try await store.record(id: id)?.state == .sending else { return }
                         let paused = try await store.pause(id: id, reason: .uncertainDelivery)
@@ -1122,7 +1127,6 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                 await cleanup.value
                 return
             }
-            guard (try? self.check(profile, context: context)) != nil else { return }
             do {
                 let failed = try await store.record(id: id)
                 let count = failed?.attemptCount ?? 1

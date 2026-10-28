@@ -9,6 +9,11 @@ struct PichiPublicationOutboxTests {
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).resolvingSymlinksInPath()
         try manager.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         defer { try? manager.removeItem(at: root) }
+        if CommandLine.arguments.contains("--connectivity-race-only") {
+            let checks = try await Self.checkConnectivityRestorationRace(root: root.appendingPathComponent("connectivity-race"))
+            print("Pichi connectivity restoration race: \(checks) synthetic integration checks passed; no live transport")
+            return
+        }
         var checks = 0
         func check(_ value: Bool, _ message: String) { precondition(value, message); checks += 1 }
         func rejects(_ expected: PichiPublicationOutboxFailure, _ message: String,
@@ -366,5 +371,7 @@ struct PichiPublicationOutboxTests {
         print("Pichi legacy facade: \(legacyChecks) synthetic integration checks passed; no live transport")
         let automaticChecks = try await Self.checkAutomaticCloudPublication(root: root.appendingPathComponent("automatic-facade", isDirectory: true))
         print("Pichi automatic encrypted delivery: \(automaticChecks) synthetic integration checks passed; no live transport")
+        let restorationChecks = try await Self.checkConnectivityRestorationRace(root: root.appendingPathComponent("connectivity-race"))
+        print("Pichi connectivity restoration race: \(restorationChecks) synthetic integration checks passed; no live transport")
     }
 }
