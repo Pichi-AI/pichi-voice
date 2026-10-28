@@ -536,18 +536,7 @@ struct MeetingTranscriptionView: View {
         .clipped()
         .onAppear { self.reattachActiveSummary() }
         .onChange(of: self.appServices.activeMeetingSummarySession?.id) { _, _ in self.reattachActiveSummary() }
-        .task {
-            self.privateState.run { _ in
-                if CPUArchitecture.isAppleSilicon && !self.isRegisteredMeetingProviderSelected {
-                    MeetingDiarizationModelStore.shared.prepareInBackground()
-                }
-                async let sources: Void = self.refreshSources(requestPermissions: false)
-                if self.isMeetingHistoryVisible {
-                    await self.loadMeetingHistory()
-                }
-                await sources
-            }
-        }
+        .task { self.prepareMeetingPresentation() }
         .onChange(of: self.settings.selectedSpeechModel) { _, _ in
             guard self.privateState.capture() != nil else { return }
             if self.settings.meetingRecordingDefaults.languageCode == nil, self.coordinator.isQuiescent {
@@ -588,13 +577,7 @@ struct MeetingTranscriptionView: View {
             self.privateState.run { _ in await self.loadMeetingHistory() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            self.privateState.run { _ in
-                async let sources: Void = self.refreshSources(requestPermissions: false)
-                if self.isMeetingHistoryVisible {
-                    await self.loadMeetingHistory()
-                }
-                await sources
-            }
+            self.refreshMeetingPresentationOnActivation()
         }
         .sheet(isPresented: self.$privateState.isShowingMeetingSettings) {
             MeetingRecordingSettingsSheet(
@@ -643,6 +626,31 @@ struct MeetingTranscriptionView: View {
             }
         } message: {
             Text("The transcript stays; the audio files are deleted from this Mac.")
+        }
+    }
+
+    // Keep owned lifecycle tasks outside the large SwiftUI expression so each
+    // async-let scope is type-checked independently of the view's modifier chain.
+    private func prepareMeetingPresentation() {
+        self.privateState.run { _ in
+            if CPUArchitecture.isAppleSilicon && !self.isRegisteredMeetingProviderSelected {
+                MeetingDiarizationModelStore.shared.prepareInBackground()
+            }
+            async let sources: Void = self.refreshSources(requestPermissions: false)
+            if self.isMeetingHistoryVisible {
+                await self.loadMeetingHistory()
+            }
+            await sources
+        }
+    }
+
+    private func refreshMeetingPresentationOnActivation() {
+        self.privateState.run { _ in
+            async let sources: Void = self.refreshSources(requestPermissions: false)
+            if self.isMeetingHistoryVisible {
+                await self.loadMeetingHistory()
+            }
+            await sources
         }
     }
 
