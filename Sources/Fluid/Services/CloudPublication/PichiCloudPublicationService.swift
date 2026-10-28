@@ -299,6 +299,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     try await store.pauseAll(reason: .userRequested)
                     try self.check(profile, context: context)
                     try await self.refreshBody()
+                    if self.snapshot.deleteLocalAfterAcceptance {
+                        self.startWorker(profile: profile, context: context, store: store)
+                    }
                 }
             } catch is ProtectedDataAccessError {
                 if self.scope == profile, PrivateProfileStorage.isReadable(profile) {
@@ -431,6 +434,9 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
                     self.snapshot = .init(availability: .paused, cloudSyncEnabled: self.snapshot.cloudSyncEnabled, items: self.snapshot.items,
                 deleteLocalAfterAcceptance: self.snapshot.deleteLocalAfterAcceptance,
                 automaticRecordingIDs: self.snapshot.automaticRecordingIDs)
+                    if self.snapshot.deleteLocalAfterAcceptance {
+                        self.startWorker(profile: profile, context: context, store: store)
+                    }
                 }
             } catch {
                 self.storageFailed(profile: profile, because: error)
