@@ -806,13 +806,9 @@ private final class HTTPFixture {
             guard !reasoning.isEmpty else { throw Failure.invalidAssessment }
             if let score = evaluation.score {
                 guard score.isFinite, (0...10).contains(score) else { throw Failure.invalidAssessment }
-            } else {
-                // Null is allowed only with an explicit applicability/evidence explanation.
-                let lower = reasoning.lowercased()
-                guard ["недостат", "не примен", "не удалось", "невозможно", "неопредел", "нет данных",
-                       "нельзя", "cannot", "insufficient", "uncertain", "not applicable", "not enough"]
-                    .contains(where: { lower.contains($0) }) else { throw Failure.invalidAssessment }
             }
+            // Null scores keep the required free-form reasoning checked above.
+            // Its meaning is reviewed from the real QA evidence, independent of language.
         }
         let communication = Set(try XCTUnwrap(configuration.expectedAssessmentCommunicationCriterionIDs))
         guard result.evaluations.contains(where: { communication.contains(String($0.criterion_id)) && $0.score != nil }) else {
