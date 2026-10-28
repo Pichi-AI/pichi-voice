@@ -167,7 +167,10 @@ private enum PichiMeetingSummaryFailure {
 
 
 @MainActor
-final class PichiMeetingSummaryController: ObservableObject {
+final class PichiMeetingSummaryController: ObservableObject, PrivateProfileTransitionParticipant {
+    private let privateProfile = PrivateProfileStorage.current
+    private var profileRefreshOperation: Task<Void, Never>?
+    private var profileRefreshID: UUID?
     @Published private(set) var document: PichiMeetingSummaryDocument?
     @Published private(set) var generating = false
     @Published private(set) var checking = false
@@ -193,6 +196,7 @@ final class PichiMeetingSummaryController: ObservableObject {
     init(sessionID: UUID? = nil, generator: PichiMeetingSummaryGenerator = .init()) {
         self.sessionID = sessionID
         self.generator = generator
+        PrivateProfileService.shared.register(self)
     }
 
     /// Destination disclosure and the next action must use the same configuration.
@@ -202,6 +206,19 @@ final class PichiMeetingSummaryController: ObservableObject {
     }
 
     func refresh(session: MeetingSession?, configuration: PichiMeetingSummaryConfiguration?) async {
+        guard PrivateProfileStorage.isReadable(privateProfile) else { return }
+        let prior = profileRefreshOperation
+        prior?.cancel(); await prior?.value
+        let id = UUID()
+        let task = Task { await self.refreshBound(session: session, configuration: configuration) }
+        profileRefreshOperation = task
+        profileRefreshID = id
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        if profileRefreshID == id { profileRefreshOperation = nil; profileRefreshID = nil }
+    }
+
+    private func refreshBound(session: MeetingSession?, configuration: PichiMeetingSummaryConfiguration?) async {
+        guard PrivateProfileStorage.isReadable(privateProfile), !Task.isCancelled else { return }
         // Navigation and settings edits must not cancel or retarget an admitted attempt.
         guard !self.generating, self.sessionID == nil || session?.id == self.sessionID else { return }
         let generationID = UUID()
@@ -227,7 +244,8 @@ final class PichiMeetingSummaryController: ObservableObject {
         let baseIdentity = configuration.baseCacheIdentity
         let offline = historical
         let cached = await Task.detached(priority: .utility) { () -> PichiMeetingSummaryArtifact? in
-            guard let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
+            guard session.requiresEncryptedPersistence != true,
+                  let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("pichi-meeting-summary.json")),
                   let artifact = try? JSONDecoder().decode(PichiMeetingSummaryArtifact.self, from: data),
                   artifact.transcriptHash == hash,
@@ -247,6 +265,7 @@ final class PichiMeetingSummaryController: ObservableObject {
     }
 
     func summarize(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration, asr: ASRService) {
+        guard PrivateProfileStorage.isReadable(privateProfile) else { return }
         guard !self.generating, !self.checking,
               self.sessionID == nil || session.id == self.sessionID,
               let lock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
@@ -283,14 +302,16 @@ final class PichiMeetingSummaryController: ObservableObject {
                                                           generatedAt: Date(), document: output,
                                                           baseConfigurationIdentity: configuration.baseCacheIdentity,
                                                           modelArtifactID: result.configuration.modelArtifactID)
-                guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
-                    self.failure = .noSavedDirectory
-                    return
+                if session.requiresEncryptedPersistence != true {
+                    guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
+                        self.failure = .noSavedDirectory
+                        return
+                    }
+                    try Task.checkCancellation()
+                    try await Task.detached(priority: .utility) {
+                        try JSONEncoder().encode(artifact).write(to: directory.appendingPathComponent("pichi-meeting-summary.json"), options: .atomic)
+                    }.value
                 }
-                try Task.checkCancellation()
-                try await Task.detached(priority: .utility) {
-                    try JSONEncoder().encode(artifact).write(to: directory.appendingPathComponent("pichi-meeting-summary.json"), options: .atomic)
-                }.value
             } catch let error as PichiMeetingSummaryCleanupError {
                 if self.generationID == generationID { self.failure = .underlying(error) }
             } catch is CancellationError {
@@ -318,4 +339,16 @@ final class PichiMeetingSummaryController: ObservableObject {
 
     private func updateProgress(index: Int, total: Int) { self.progressState = .init(index: index, total: total) }
     func cancel() { self.operation?.cancel() }
+
+    func prepareForPrivateProfileTransition() async throws {
+        generationID = UUID()
+        profileRefreshID = nil
+        let refresh = profileRefreshOperation; refresh?.cancel()
+        let task = operation; task?.cancel()
+        await refresh?.value; await task?.value
+        profileRefreshOperation = nil; operation = nil
+        document = nil; documentSourceSession = nil; documentConfiguration = nil
+        activeSourceSession = nil; activeConfiguration = nil
+        failure = nil; progressState = nil; checking = false
+    }
 }

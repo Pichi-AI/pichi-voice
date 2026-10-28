@@ -779,6 +779,8 @@ enum DictionaryGlowResponse {
 
 /// Uses normal shortcut dictation, accepting output only for a capture begun in this editor.
 struct DictionaryWordPlayground: View {
+    private let profile = PrivateProfileStorage.current
+    private var isProfileVisible: Bool { PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork }
     let word: String
     let onPracticeMore: (() -> Void)?
     @Binding var busy: Bool
@@ -845,10 +847,11 @@ struct DictionaryWordPlayground: View {
             self.busy = false
             self.editorFocused = false
             await Task.yield()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self.isProfileVisible else { return }
             self.editorFocused = true
         }
         .onReceive(self.appServices.asr.$isRunning.dropFirst()) { running in
+            guard self.isProfileVisible else { self.test.cancel(); self.busy = false; return }
             if running {
                 self.test.begin(editorFocused: self.editorFocused, appActive: NSApp.isActive, dictionaryCapture: self.appServices.asr.isDictionaryTrainingCaptureActive)
             } else {
@@ -857,24 +860,32 @@ struct DictionaryWordPlayground: View {
             self.busy = self.test.phase != .idle
         }
         .onReceive(self.appServices.asr.dictionaryTestAudioPublisher) { samples in
+            guard self.isProfileVisible else { return }
             self.test.receiveAudio(samples)
         }
         .onReceive(self.appServices.asr.$finalText.dropFirst()) { text in
+            guard self.isProfileVisible else { return }
             // Start clears shared output; only the final, nonempty value belongs to a test result.
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             self.test.receive(text, word: self.word)
             self.busy = self.test.phase != .idle
         }
         .onReceive(self.appServices.asr.$showError.dropFirst()) { failed in
+            guard self.isProfileVisible else { return }
             if failed, let attempt = self.test.attemptID {
                 self.test.expire(attempt)
                 self.busy = false
             }
         }
         .task(id: self.test.phase == .processing ? self.test.attemptID : nil) {
-            guard self.test.phase == .processing, let attempt = self.test.attemptID else { return }
+            guard self.isProfileVisible, self.test.phase == .processing, let attempt = self.test.attemptID else { return }
             do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            guard self.isProfileVisible else { return }
             self.test.expire(attempt)
+            self.busy = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
+            self.test.cancel()
             self.busy = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in

@@ -3,6 +3,12 @@ import Darwin
 import Foundation
 
 nonisolated protocol MeetingSessionStoring: Sendable {
+    /// Freeze local ownership under the existing capture admission, before the first manifest.
+    func prepareAutomaticCapture() async throws -> Bool
+    func prepareCapturePersistencePolicy() async throws -> MeetingCapturePersistencePolicy
+    func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership?
+    func captureOwnership(for id: MeetingSessionID, configuration: MeetingCaptureConfiguration) async throws -> MeetingProfileOwnership?
+    func cancelCaptureAdmission(for id: MeetingSessionID) async
     func create(_ session: MeetingSession) async throws
     func save(_ session: MeetingSession) async throws
     func load(id: MeetingSessionID) async throws -> MeetingSession?
@@ -13,6 +19,8 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL?
     func delete(id: MeetingSessionID) async throws
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership, validating: @Sendable (MeetingSession) throws -> Void) async throws
     /// Removes the `tracks/` directory and any processing checkpoint, leaving the manifest and
     /// transcript untouched. Idempotent — missing paths are not an error.
     func deleteAudioFiles(for id: MeetingSessionID) async throws
@@ -20,8 +28,29 @@ nonisolated protocol MeetingSessionStoring: Sendable {
 
 // Test/custom stores retain their existing behavior unless they provide the lighter reads.
 nonisolated extension MeetingSessionStoring {
+    func prepareAutomaticCapture() async throws -> Bool { false }
+    func prepareCapturePersistencePolicy() async throws -> MeetingCapturePersistencePolicy {
+        let protectedPublication = try await self.prepareAutomaticCapture()
+        return .init(requiresEncryptedPersistence: protectedPublication, requiresPIIRedaction: protectedPublication)
+    }
     func loadHistory() async throws -> [MeetingSession] { try await self.loadAll() }
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
+    func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership? { nil }
+    func cancelCaptureAdmission(for id: MeetingSessionID) async {}
+    func captureOwnership(for id: MeetingSessionID, configuration: MeetingCaptureConfiguration) async throws -> MeetingProfileOwnership? {
+        guard configuration.requiresEncryptedPersistence != true else { throw CocoaError(.featureUnsupported) }
+        return try await self.captureOwnership(for: id)
+    }
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
+        guard let session = try await self.load(id: id) else { return }
+        guard session.profileOwnership == expectedOwnership else { throw CocoaError(.fileWriteNoPermission) }
+        try await self.delete(id: id)
+    }
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership, validating: @Sendable (MeetingSession) throws -> Void) async throws {
+        // A custom store must provide an atomic implementation, not a load/await/delete approximation.
+        throw CocoaError(.featureUnsupported)
+    }
+
 }
 
 private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
@@ -33,13 +62,13 @@ private final nonisolated class MeetingSessionFileSystem: @unchecked Sendable {
 }
 
 actor MeetingSessionStore: MeetingSessionStoring {
-    static let shared = MeetingSessionStore()
-
     private struct SessionIndex: Codable {
         static let currentSchemaVersion = 1
 
         var schemaVersion: Int
         var sessionIDs: [MeetingSessionID]
+        // UUID membership only. No transcript, title, account or speaker metadata.
+        var encryptedSessionIDs: [MeetingSessionID]? = nil
         var updatedAt: Date
     }
 
@@ -48,8 +77,12 @@ actor MeetingSessionStore: MeetingSessionStoring {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var tombstonedIDs: Set<MeetingSessionID> = []
+    private var encryptedSessionIDs: Set<MeetingSessionID> = []
+    private var encryptionCipher: MeetingRecordingCipher?
 
-    init(rootDirectory: URL? = nil, fileManager: FileManager = .default) {
+    init(rootDirectory: URL? = nil, fileManager: FileManager = .default,
+         encryptionCipher: MeetingRecordingCipher? = nil) {
+        self.encryptionCipher = encryptionCipher
         self.fileSystem = MeetingSessionFileSystem(manager: fileManager)
         if let rootDirectory {
             self.rootDirectory = rootDirectory
@@ -65,15 +98,98 @@ actor MeetingSessionStore: MeetingSessionStoring {
         }
 
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = MeetingSessionDateCodec.encodingStrategy
         // This canonical manifest is also the strict capture checkpoint. Formatting every
         // growing transcript adds sorting, whitespace and temporary allocations to each audio
         // window's critical path; readers only depend on its schema, never JSON key order.
         self.encoder = encoder
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
         self.decoder = decoder
+    }
+
+    /// Existing profile composition preflights the key before capture admission. Replacing a
+    /// live key would make pending records unreadable, so a different key is rejected.
+    func installEncryptionCipher(_ cipher: MeetingRecordingCipher) throws {
+        if let existing = self.encryptionCipher {
+            guard existing.hasSameKey(as: cipher) else { throw MeetingRecordingCipher.Failure.invalidConfiguration }
+        } else { self.encryptionCipher = cipher }
+    }
+
+    /// A missing Keychain item must not become a new key while recoverable ciphertext
+    /// remains. Probe only bounded metadata and eight-byte headers in confined session roots.
+    func hasEncryptedPersistenceData() throws -> Bool {
+        if !self.encryptedSessionIDs.isEmpty { return true }
+        guard self.fileSystem.manager.fileExists(atPath: self.rootDirectory.path) else { return false }
+        let indexURL = self.rootDirectory.appendingPathComponent("index.json")
+        if self.fileSystem.manager.fileExists(atPath: indexURL.path) {
+            let indexBytes = try self.readEncryptionProbeFile(indexURL, maximumBytes: 8 * 1_024 * 1_024)
+            let index = try self.decoder.decode(SessionIndex.self, from: indexBytes)
+            if index.encryptedSessionIDs?.isEmpty == false { return true }
+        }
+        let entries = try self.boundedEncryptionProbeEntries(in: self.rootDirectory, maximumCount: 20_000)
+        var inspected = entries.count
+        for name in entries where UUID(uuidString: name) != nil {
+            let directory = self.rootDirectory.appendingPathComponent(name, isDirectory: true)
+            let attributes = try self.fileSystem.manager.attributesOfItem(atPath: directory.path)
+            guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+                throw MeetingRecordingCipher.Failure.invalidEnvelope
+            }
+            let files = try self.boundedEncryptionProbeEntries(in: directory, maximumCount: 20_000 - inspected)
+            inspected += files.count
+            for file in files {
+                let url = directory.appendingPathComponent(file)
+                let properties = try self.fileSystem.manager.attributesOfItem(atPath: url.path)
+                if properties[.type] as? FileAttributeType == .typeDirectory { continue }
+                let prefix = try self.readEncryptionProbeFile(url,
+                    maximumBytes: MeetingRecordingCipher.envelopePrefixBytes, prefixOnly: true)
+                if MeetingRecordingCipher.isEncryptedEnvelope(prefix) { return true }
+            }
+        }
+        return false
+    }
+
+    private func boundedEncryptionProbeEntries(in directory: URL, maximumCount: Int) throws -> [String] {
+        let descriptor = Darwin.open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw MeetingRecordingCipher.Failure.invalidEnvelope }
+        guard let stream = fdopendir(descriptor) else {
+            Darwin.close(descriptor)
+            throw MeetingRecordingCipher.Failure.invalidEnvelope
+        }
+        defer { closedir(stream) }
+        var names: [String] = []
+        while true {
+            errno = 0
+            guard let entry = readdir(stream) else {
+                guard errno == 0 else { throw MeetingRecordingCipher.Failure.invalidEnvelope }
+                return names
+            }
+            let name = withUnsafePointer(to: &entry.pointee.d_name) { pointer in
+                pointer.withMemoryRebound(to: CChar.self, capacity: Int(NAME_MAX) + 1) { String(cString: $0) }
+            }
+            if name == "." || name == ".." { continue }
+            guard names.count < maximumCount else { throw MeetingRecordingCipher.Failure.limitExceeded }
+            names.append(name)
+        }
+    }
+
+    private func readEncryptionProbeFile(_ url: URL, maximumBytes: Int, prefixOnly: Bool = false) throws -> Data {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw MeetingRecordingCipher.Failure.invalidEnvelope }
+        defer { Darwin.close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              info.st_nlink == 1, info.st_uid == geteuid(), info.st_size >= 0,
+              prefixOnly || info.st_size <= maximumBytes else { throw MeetingRecordingCipher.Failure.invalidEnvelope }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+        var data = Data()
+        while data.count < maximumBytes {
+            let next = try handle.read(upToCount: min(64 * 1_024, maximumBytes - data.count)) ?? Data()
+            if next.isEmpty { break }
+            data.append(next)
+        }
+        return data
     }
 
     func create(_ session: MeetingSession) throws {
@@ -81,6 +197,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
             throw MeetingSessionStoreError.sessionDeleted
         }
         try session.validateForPersistence()
+        try self.validateEncryptionSelection(session)
         try self.prepareRootDirectory()
         let directory = self.sessionDirectoryURL(for: session.id)
         guard !self.fileSystem.manager.fileExists(atPath: directory.path) else {
@@ -89,7 +206,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         try self.createPrivateDirectory(directory)
         try self.createPrivateDirectory(directory.appendingPathComponent("tracks", isDirectory: true))
         try self.writeSession(session)
-        try self.addToIndex(session.id)
+        try self.addToIndex(session.id, encrypted: session.requiresEncryptedPersistence == true)
     }
 
     func save(_ session: MeetingSession) throws {
@@ -97,6 +214,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
             throw MeetingSessionStoreError.sessionDeleted
         }
         try session.validateForPersistence()
+        try self.validateEncryptionSelection(session)
         try self.prepareRootDirectory()
         let directory = self.sessionDirectoryURL(for: session.id)
         if !self.fileSystem.manager.fileExists(atPath: directory.path) {
@@ -104,7 +222,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
             try self.createPrivateDirectory(directory.appendingPathComponent("tracks", isDirectory: true))
         }
         try self.writeSession(session)
-        try self.addToIndex(session.id)
+        try self.addToIndex(session.id, encrypted: session.requiresEncryptedPersistence == true)
     }
 
     func load(id: MeetingSessionID) throws -> MeetingSession? {
@@ -233,6 +351,18 @@ actor MeetingSessionStore: MeetingSessionStoring {
         try self.removeFromIndex(id)
     }
 
+    /// Validation and removal execute in one actor turn with no suspension, so an
+    /// admitted save cannot overwrite the source between comparison and deletion.
+    func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership,
+                validating: @Sendable (MeetingSession) throws -> Void) async throws {
+        try Task.checkCancellation()
+        if let session = try self.load(id: id) {
+            guard session.profileOwnership == expectedOwnership else { throw CocoaError(.fileWriteNoPermission) }
+            try validating(session)
+        }
+        try self.delete(id: id)
+    }
+
     func deleteAudioFiles(for id: MeetingSessionID) throws {
         let directory = self.sessionDirectoryURL(for: id)
         let tracksURL = directory.appendingPathComponent("tracks", isDirectory: true)
@@ -246,15 +376,82 @@ actor MeetingSessionStore: MeetingSessionStoring {
         try MeetingRetainedProcessingCheckpoint.remove(in: directory)
     }
 
+    private func requiresEncryption(for id: MeetingSessionID) -> Bool {
+        if self.encryptedSessionIDs.contains(id) { return true }
+        if let index = try? self.readIndex(), index.encryptedSessionIDs?.contains(id) == true {
+            self.encryptedSessionIDs.insert(id)
+            return true
+        }
+        return false
+    }
+
+    private func validateEncryptionSelection(_ session: MeetingSession) throws {
+        let encrypted = session.requiresEncryptedPersistence == true
+        guard encrypted || !self.requiresEncryption(for: session.id) else {
+            throw MeetingRecordingCipher.Failure.invalidConfiguration
+        }
+        if encrypted {
+            guard let cipher = self.encryptionCipher else { throw MeetingRecordingCipher.Failure.unavailableKey }
+            guard session.audioStorageMode == .memoryOnly,
+                  session.profileOwnership?.profileID == cipher.profileID else {
+                throw MeetingRecordingCipher.Failure.invalidConfiguration
+            }
+        }
+    }
+
     private func writeSession(_ session: MeetingSession) throws {
-        let data = try self.encoder.encode(session)
+        try self.validateEncryptionSelection(session)
+        let encrypted = session.requiresEncryptedPersistence == true
+        var data = try self.encoder.encode(session)
+        if encrypted {
+            guard let cipher = self.encryptionCipher else { throw MeetingRecordingCipher.Failure.unavailableKey }
+            data = try cipher.seal(data, sessionID: session.id, artifactKind: .sessionManifest,
+                maximumPlaintextBytes: MeetingRecordingCipher.maximumManifestBytes)
+        }
+        // Ciphertext is complete before Foundation can create an atomic temporary file.
         try self.atomicPrivateWrite(data, to: self.sessionManifestURL(for: session.id))
+        if encrypted { self.encryptedSessionIDs.insert(session.id) }
     }
 
     private func decodeSession(at url: URL) throws -> MeetingSession {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        guard let id = UUID(uuidString: url.deletingLastPathComponent().lastPathComponent) else {
+            throw MeetingRecordingCipher.Failure.invalidConfiguration
+        }
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        let prefix = try file.read(upToCount: MeetingRecordingCipher.envelopePrefixBytes) ?? Data()
+        let isEnvelope = MeetingRecordingCipher.isEncryptedEnvelope(prefix)
+        let knownEncrypted = self.requiresEncryption(for: id)
+        let data: Data
+        if isEnvelope || knownEncrypted {
+            guard isEnvelope else { throw MeetingRecordingCipher.Failure.invalidEnvelope }
+            guard let cipher = self.encryptionCipher else { throw MeetingRecordingCipher.Failure.unavailableKey }
+            let maximum = MeetingRecordingCipher.maximumManifestBytes + MeetingRecordingCipher.envelopeOverhead
+            var envelope = prefix
+            while envelope.count <= maximum {
+                let next = try file.read(upToCount: min(64 * 1_024, maximum + 1 - envelope.count)) ?? Data()
+                if next.isEmpty { break }
+                envelope.append(next)
+            }
+            guard envelope.count <= maximum else { throw MeetingRecordingCipher.Failure.limitExceeded }
+            data = try cipher.open(envelope, sessionID: id, artifactKind: .sessionManifest,
+                maximumPlaintextBytes: MeetingRecordingCipher.maximumManifestBytes)
+        } else {
+            data = try Data(contentsOf: url, options: .mappedIfSafe)
+        }
         let session = try self.decoder.decode(MeetingSession.self, from: data)
         try session.validateForPersistence()
+        guard session.id == id else { throw MeetingRecordingCipher.Failure.invalidConfiguration }
+        if isEnvelope {
+            guard session.requiresEncryptedPersistence == true,
+                  session.audioStorageMode == .memoryOnly,
+                  session.profileOwnership?.profileID == self.encryptionCipher?.profileID else {
+                throw MeetingRecordingCipher.Failure.invalidConfiguration
+            }
+            self.encryptedSessionIDs.insert(id)
+        } else if session.requiresEncryptedPersistence == true {
+            throw MeetingRecordingCipher.Failure.invalidEnvelope
+        }
         return session
     }
 
@@ -593,6 +790,17 @@ actor MeetingSessionStore: MeetingSessionStoring {
             [.posixPermissions: NSNumber(value: Int16(0o600))],
             ofItemAtPath: destination.path
         )
+        if MeetingRecordingCipher.isEncryptedEnvelope(data)
+            || (self.encryptionCipher != nil && destination.lastPathComponent == "index.json") {
+            let file = try FileHandle(forWritingTo: destination)
+            defer { try? file.close() }
+            try file.synchronize()
+            let directory = Darwin.open(destination.deletingLastPathComponent().path,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard directory >= 0 else { throw CocoaError(.fileWriteUnknown) }
+            defer { Darwin.close(directory) }
+            guard fsync(directory) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        }
     }
 
     private func readIndex() throws -> SessionIndex {
@@ -608,7 +816,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         return try self.decoder.decode(SessionIndex.self, from: data)
     }
 
-    private func addToIndex(_ id: MeetingSessionID) throws {
+    private func addToIndex(_ id: MeetingSessionID, encrypted: Bool = false) throws {
         var index = (try? self.readIndex()) ?? SessionIndex(
             schemaVersion: SessionIndex.currentSchemaVersion,
             sessionIDs: [],
@@ -616,8 +824,14 @@ actor MeetingSessionStore: MeetingSessionStoring {
         )
         // Membership does not change during a recording. Keep the on-disk read so a removed or
         // damaged index is repaired, without another atomic replacement on every checkpoint.
-        guard !index.sessionIDs.contains(id) else { return }
-        index.sessionIDs.append(id)
+        let needsMembership = !index.sessionIDs.contains(id)
+        let needsEncryptionMarker = encrypted && index.encryptedSessionIDs?.contains(id) != true
+        guard needsMembership || needsEncryptionMarker else { return }
+        if needsMembership { index.sessionIDs.append(id) }
+        if needsEncryptionMarker {
+            index.encryptedSessionIDs = Array(Set((index.encryptedSessionIDs ?? []) + [id]))
+                .sorted { $0.uuidString < $1.uuidString }
+        }
         index.updatedAt = Date()
         let data = try self.encoder.encode(index)
         try self.atomicPrivateWrite(
@@ -633,6 +847,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
             updatedAt: Date()
         )
         index.sessionIDs.removeAll { $0 == id }
+        index.encryptedSessionIDs?.removeAll { $0 == id }
+        if index.encryptedSessionIDs?.isEmpty == true { index.encryptedSessionIDs = nil }
+        self.encryptedSessionIDs.remove(id)
         index.updatedAt = Date()
         let data = try self.encoder.encode(index)
         try self.atomicPrivateWrite(

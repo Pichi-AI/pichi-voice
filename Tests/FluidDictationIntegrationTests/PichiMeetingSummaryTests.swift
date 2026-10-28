@@ -1591,7 +1591,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         try XCTSkipIf(path.isEmpty, "Opt-in local verification of an explicitly authorized private saved session.")
         let modelID = ProcessInfo.processInfo.environment["PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"] ?? "qwen3.5:4b"
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
         let session = try decoder.decode(MeetingSession.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
         let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
         let result = try await PichiMeetingSummaryGenerator().generate(session: session, configuration: .init(

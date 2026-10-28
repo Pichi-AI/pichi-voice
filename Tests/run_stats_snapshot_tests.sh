@@ -18,8 +18,8 @@ assert 'Text(PichiLocalization.formattedStreakUnit(days: self.streak))' in hero
 assert 'PichiLocalization.formattedStreakUnit(days: self.content.currentStreak)' in share
 # Use real value types, never production disk/defaults history/audio stores.
 for source, marker, name in [
-    ('Sources/Fluid/Persistence/TranscriptionHistoryStore.swift', '\n@MainActor\nfinal class TranscriptionHistoryStore:', 'HistoryValue.swift'),
-    ('Sources/Fluid/Persistence/DictationAudioHistoryStore.swift', '\nfinal nonisolated class DictationAudioHistoryStore:', 'AudioValue.swift'),
+    ('Sources/Fluid/Persistence/TranscriptionHistoryStore.swift', '\n@MainActor final class DictationHistoryWriteAdmission {', 'HistoryValue.swift'),
+    ('Sources/Fluid/Persistence/DictationAudioHistoryStore.swift', '\nnonisolated final class DictationAudioSaveAdmission:', 'AudioValue.swift'),
     ('Sources/Fluid/Branding/BrandPackage.swift', 'nonisolated final class BrandPackageStore:', 'BrandPackageTypes.swift'),
 ]:
     text = Path(source).read_text()
@@ -42,7 +42,10 @@ partial.mkdir(exist_ok=True)
 (partial / 'Localizable.strings').write_bytes(plistlib.dumps({'Settings': 'Paramètres'}, fmt=plistlib.FMT_XML))
 PY
 xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings --output-directory "$task_test_dir/StatsCatalog.bundle"
+python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift"
 xcrun swiftc -O -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
+    "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileDefaults.swift \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Branding/AppBrand.swift "$task_test_dir/BrandPackageTypes.swift" \
     Tests/Support/StandaloneBrandPackageStore.swift Sources/Fluid/Branding/BrandDistribution.swift \

@@ -940,7 +940,11 @@ final class DirectAudioReliabilityTests: XCTestCase {
         let pipeline = try XCTUnwrap(source.components(separatedBy: "private func processStoppedTranscription(").last?.components(separatedBy: "private func processDictationPromptTest(").first)
         XCTAssertTrue(pipeline.contains("let shouldPersistOutputs = outputRoute.savesHistory"))
         XCTAssertTrue(pipeline.contains("let shouldDeliverOutputs = outputRoute.deliversText"))
-        XCTAssertTrue(pipeline.contains("if shouldPersistOutputs, !sendsExistingDraft, SettingsStore.shared.saveTranscriptionHistory"))
+        // History permission is frozen by the capture owner before the stop pipeline.
+        XCTAssertTrue(source.contains("savesHistory: self.settings.saveTranscriptionHistory && !DictationPromptTestCoordinator.shared.isActive"))
+        XCTAssertTrue(pipeline.contains("if shouldPersistOutputs, !sendsExistingDraft, let privateOutput, let admission = privateOutput.admission"))
+        XCTAssertTrue(pipeline.contains("privateOutput.history.addEntry("))
+        XCTAssertTrue(pipeline.contains("admission: admission"))
         XCTAssertTrue(pipeline.contains("let shouldCopyToClipboard = shouldDeliverOutputs"))
         XCTAssertTrue(pipeline.contains("let shouldTypeExternally = shouldDeliverOutputs"))
         XCTAssertTrue(pipeline.contains("if isFluidFrontmost, shouldDeliverOutputs"))
@@ -950,7 +954,7 @@ final class DirectAudioReliabilityTests: XCTestCase {
         XCTAssertTrue(pipeline.contains("if wasCommandMode {"))
         XCTAssertTrue(pipeline.contains("!cancelledAtASRStop, await self.routePromptTestResult"))
         XCTAssertTrue(pipeline.contains("!cancelledAtASRStop && route.deliversText && self.settings.spokenSendEnabled"))
-        XCTAssertTrue(pipeline.contains("guard self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else"))
+        XCTAssertTrue(pipeline.contains("guard privateOutput?.isVisible == true, self.cancelledOutputLifecycleID != expectedOverlayLifecycleID else"))
     }
 
     func testCancelHistoryWiringSharesHandlerAndKeepsDisposableCapturesPrivate() throws {

@@ -34,6 +34,9 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     var onInteraction: (() -> Void)?
     var onSuccess: (() -> Void)?
 
+    private let profile = PrivateProfileStorage.current
+    private var privateCapture: PrivateDirectDictationCapture?
+    private var isProfileVisible: Bool { PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork }
     private let asr: ASRService
     private let audioLearning: DictionaryAudioLearningService
     private var stopRequestedDuringStart = false
@@ -46,17 +49,18 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     private var pronunciationSettingsObserver: AnyCancellable?
 
     private var trainingRunIsCurrent: Bool {
-        DictionaryMatcherExperiment.sharedFeaturesEnabled && self.trainingGeneration == DictionaryMatcherExperiment.generation
+        !self.isProfileVisible ? self.trainingGeneration != nil :
+            DictionaryMatcherExperiment.sharedFeaturesEnabled && self.trainingGeneration == DictionaryMatcherExperiment.generation
     }
 
     init(
         candidate: AutomaticDictionaryCorrectionCandidate,
         asr: ASRService,
-        audioLearning: DictionaryAudioLearningService = .shared
+        audioLearning: DictionaryAudioLearningService? = nil
     ) {
         self.candidate = candidate
         self.asr = asr
-        self.audioLearning = audioLearning
+        self.audioLearning = audioLearning ?? .shared
 
         let replacement = CustomDictionaryTrainingMerge.normalizedReplacement(candidate.correctedText)
         let savedVariants = SettingsStore.shared.customDictionaryEntries
@@ -70,7 +74,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         self.pronunciationSettingsObserver = NotificationCenter.default.publisher(for: DictionaryMatcherExperiment.didChangeNotification)
             .sink { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    guard let self, self.trainingGeneration != nil, !self.trainingRunIsCurrent else { return }
+                    guard let self, self.isProfileVisible, self.trainingGeneration != nil, !self.trainingRunIsCurrent else { return }
                     self.disablePronunciationTraining()
                 }
             }
@@ -136,14 +140,14 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func beginTraining() {
-        guard DictionaryMatcherExperiment.sharedFeaturesEnabled, !self.isCancelled, self.screen == .choice else { return }
+        guard self.isProfileVisible, DictionaryMatcherExperiment.sharedFeaturesEnabled, !self.isCancelled, self.screen == .choice else { return }
         self.onInteraction?()
         self.screen = .training
         self.statusMessage = ""
         self.hasError = false
         let generation = DictionaryMatcherExperiment.generation
         Task {
-            guard DictionaryMatcherExperiment.sharedFeaturesEnabled, generation == DictionaryMatcherExperiment.generation, !self.isCancelled else { return }
+            guard self.isProfileVisible, DictionaryMatcherExperiment.sharedFeaturesEnabled, generation == DictionaryMatcherExperiment.generation, !self.isCancelled else { return }
             await DictionaryTrainingEndpointMonitor.shared.prepare()
         }
     }
@@ -156,6 +160,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func toggleCapture() {
+        guard self.isProfileVisible else { return }
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled else {
             self.disablePronunciationTraining()
             return
@@ -180,37 +185,38 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func addOnlyCorrection() {
-        guard !self.isCancelled, self.capturePhase == .idle else { return }
+        guard self.isProfileVisible, !self.isCancelled, self.capturePhase == .idle else { return }
         self.persist(triggers: [self.candidate.heardText])
     }
 
     func confirmWrongMatch() {
-        guard DictionaryMatcherExperiment.collectNegatives, !self.isCancelled, self.capturePhase == .idle,
+        guard self.isProfileVisible, DictionaryMatcherExperiment.collectNegatives, !self.isCancelled, self.capturePhase == .idle,
               let correction = self.candidate.negativeCorrection else { return }
         self.onInteraction?()
         self.capturePhase = .processing
         self.statusMessage = "Saving wrong match…"
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
+        let store = DictionaryNegativeExampleStore.shared
+        let pronunciationStore = PronunciationDictionaryStore.shared
         Task { @MainActor in
             defer { self.capturePhase = .idle }
-            guard DictionaryMatcherExperiment.collectNegatives, pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
-            let store = DictionaryNegativeExampleStore.shared
+            guard self.isProfileVisible, DictionaryMatcherExperiment.collectNegatives, pronunciationGeneration == DictionaryMatcherExperiment.generation else { return }
             let revision = await store.revision()
             let evidence = correction.evidence
             func entryIsCurrent() -> Bool {
                 SettingsStore.shared.customDictionaryEntries.contains { $0.id == evidence.entryID && $0.replacement == evidence.label }
             }
             do {
-                let profiles = await PronunciationDictionaryStore.shared.profiles(modelKey: evidence.modelKey)
-                guard !self.isCancelled, DictionaryMatcherExperiment.collectNegatives,
+                let profiles = await pronunciationStore.profiles(modelKey: evidence.modelKey)
+                guard self.isProfileVisible, !self.isCancelled, DictionaryMatcherExperiment.collectNegatives,
                       pronunciationGeneration == DictionaryMatcherExperiment.generation, entryIsCurrent(),
                       correction.expiresAt > Date(), profiles.contains(where: {
                           $0.dictionaryEntryID == evidence.entryID && DictionaryNegativeEvidenceResolver.profileKey($0) + ":shared-features-v1" == evidence.profileKey
                       }) else { throw PronunciationDictionaryStoreError.staleEvidence }
                 try await store.save(correction, expectedRevision: revision)
-                let latest = await PronunciationDictionaryStore.shared.profiles(modelKey: evidence.modelKey)
+                let latest = await pronunciationStore.profiles(modelKey: evidence.modelKey)
                 let latestRevision = await store.revision()
-                guard !self.isCancelled, DictionaryMatcherExperiment.collectNegatives,
+                guard self.isProfileVisible, !self.isCancelled, DictionaryMatcherExperiment.collectNegatives,
                       pronunciationGeneration == DictionaryMatcherExperiment.generation, entryIsCurrent(),
                       latestRevision == revision,
                       latest.contains(where: { $0.dictionaryEntryID == evidence.entryID && DictionaryNegativeEvidenceResolver.profileKey($0) + ":shared-features-v1" == evidence.profileKey })
@@ -220,7 +226,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
                 }
                 self.completeSave(title: "Wrong Match Saved")
             } catch {
-                guard !self.isCancelled else { return }
+                guard self.isProfileVisible, !self.isCancelled else { return }
                 self.hasError = true
                 self.statusMessage = "Couldn’t save this example. It may have expired or the word changed."
             }
@@ -228,19 +234,19 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     func addTrainedReplacement() {
-        guard self.canSave, !self.isCancelled else { return }
+        guard self.isProfileVisible, self.canSave, !self.isCancelled else { return }
         self.isAutomaticCaptureEnabled = false
         self.capturePhase = .processing
         let variants = self.variants
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
         Task { @MainActor in
-            guard DictionaryMatcherExperiment.sharedFeaturesEnabled, pronunciationGeneration == DictionaryMatcherExperiment.generation else {
+            guard self.isProfileVisible, DictionaryMatcherExperiment.sharedFeaturesEnabled, pronunciationGeneration == DictionaryMatcherExperiment.generation else {
                 self.capturePhase = .idle
                 return
             }
             let filtered = await VoiceTrainingAliasFilter.filter(variants)
             self.capturePhase = .idle
-            guard DictionaryMatcherExperiment.sharedFeaturesEnabled,
+            guard self.isProfileVisible, DictionaryMatcherExperiment.sharedFeaturesEnabled,
                   pronunciationGeneration == DictionaryMatcherExperiment.generation, !self.isCancelled else { return }
             guard !filtered.accepted.isEmpty else {
                 self.hasError = true
@@ -292,7 +298,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     private func startCapture() async {
-        guard self.trainingRunIsCurrent, !self.isCancelled, self.isAutomaticCaptureEnabled,
+        guard self.isProfileVisible, self.trainingRunIsCurrent, !self.isCancelled, self.isAutomaticCaptureEnabled,
               self.capturePhase == .idle,
               !self.asr.isRunning,
               self.sampleCount < CustomDictionaryTrainingMerge.maxSamples
@@ -301,6 +307,13 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
             return
         }
 
+        let settings = SettingsStore.shared
+        guard let capture = try? PrivateDirectDictationCapture(asr: self.asr,
+            savesHistory: settings.saveTranscriptionHistory,
+            savesAudio: settings.saveAudioWithTranscriptionHistory,
+            transcriptionModel: settings.selectedSpeechModel.displayName,
+            forDictionaryTraining: true) else { return }
+        self.privateCapture = capture
         let generation = self.trainingGeneration
         self.activeCaptureToken = nil
         self.stopRequestedDuringStart = false
@@ -310,7 +323,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
         self.hasError = false
         self.statusMessage = "Starting..."
 
-        await self.asr.start(forDictionaryTraining: true) { [weak self] in
+        await capture.start { [weak self] in
             guard let self else { return }
             self.activeCaptureToken = self.asr.dictionaryCaptureToken
             self.didStartAudioCapture = true
@@ -323,7 +336,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
                 self.statusMessage = "Listening..."
             }
         }
-        guard self.didStartAudioCapture, self.asr.isRunning, self.asr.dictionaryCaptureToken == self.activeCaptureToken else {
+        guard !capture.isFinished, self.didStartAudioCapture, self.asr.isRunning, self.asr.dictionaryCaptureToken == self.activeCaptureToken else {
             self.capturePhase = .idle
             self.stopRequestedDuringStart = false
             self.isAutomaticCaptureEnabled = false
@@ -388,19 +401,23 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
             return
         }
         let generation = self.trainingGeneration
-        let transcript = await self.asr.stop(forDictionaryTraining: true)
+        guard let capture = self.privateCapture else { return }
+        let transcript = await capture.stop()
         self.activeCaptureToken = nil
-        let shouldDiscard = self.discardCurrentCapture || self.isCancelled || !self.trainingRunIsCurrent || self.trainingGeneration != generation
+        let shouldDiscard = !capture.isVisible || self.discardCurrentCapture || self.isCancelled || !self.trainingRunIsCurrent || self.trainingGeneration != generation
         if shouldDiscard { self.isAutomaticCaptureEnabled = false }
         self.capturePhase = .idle
         self.discardCurrentCapture = false
+        if !shouldDiscard { self.addTrainingVariant(from: transcript) }
+        capture.acknowledgeVisibleResult()
+        await capture.complete()
+        if self.privateCapture?.output.id == capture.output.id { self.privateCapture = nil }
         guard !shouldDiscard else { return }
-        self.addTrainingVariant(from: transcript)
         await self.continueAutomaticCaptureIfNeeded()
     }
 
     private func continueAutomaticCaptureIfNeeded() async {
-        guard self.trainingRunIsCurrent, !self.isCancelled, self.isAutomaticCaptureEnabled,
+        guard self.isProfileVisible, self.trainingRunIsCurrent, !self.isCancelled, self.isAutomaticCaptureEnabled,
               !self.isReady,
               self.sampleCount < CustomDictionaryTrainingMerge.maxSamples
         else {
@@ -470,7 +487,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
     }
 
     private func persist(triggers: [String]) {
-        guard !self.isCancelled else { return }
+        guard self.isProfileVisible, !self.isCancelled else { return }
         self.onInteraction?()
         let currentEntries = SettingsStore.shared.customDictionaryEntries
         let updatedExisting = currentEntries.contains {

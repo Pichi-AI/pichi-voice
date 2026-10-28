@@ -296,7 +296,7 @@ extension MeetingSpeakerVoiceMatcherTests {
         probe.mark("materializing")
         let began = Date()
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
         let sessionData = try Data(contentsOf: directory.appendingPathComponent("session.json"))
         let session = try decoder.decode(MeetingSession.self, from: sessionData)
         let request = MeetingBackendRequest(

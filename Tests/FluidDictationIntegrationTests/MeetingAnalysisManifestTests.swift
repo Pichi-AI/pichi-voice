@@ -45,7 +45,7 @@ final class MeetingAnalysisManifestTests: XCTestCase {
         let sessionURL = directory.appendingPathComponent("session.json")
         let original = try Data(contentsOf: sessionURL)
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
         let session = try decoder.decode(MeetingSession.self, from: original)
         let request = MeetingBackendRequest(
             attemptID: UUID(),

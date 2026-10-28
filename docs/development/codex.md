@@ -74,7 +74,7 @@ A green portable check does not replace macOS validation. The initial setup does
 
 ## Reproducible macOS regression
 
-Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers all 57 current runners, including the read-only grounded meeting helper, native export, file-error localization, relative dates, contrast, owned native window appearance, nonactivating participant input contrast, command localization, Settings owned copy, Local API harness self-tests, diarization artifact comparison self-tests, owned hotkey initialization, nonblocking credential startup, meeting audio source admission and pinned upstream sync. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
+Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers all 91 current runners, including the read-only grounded meeting helper, native export, file-error localization, relative dates, contrast, owned native window appearance, nonactivating participant input contrast, command localization, Settings owned copy, Local API harness self-tests, diarization artifact comparison self-tests, owned hotkey initialization, nonblocking credential startup, meeting audio source admission and pinned upstream sync. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
 
 Full runs require an isolated worktree, macOS and full Xcode. The runner prevents simultaneous standalone runs in one worktree. `--list` lists the names without starting native probes and is portable. Narrow a repeat run with repeated `--only NAME` options:
 
@@ -203,6 +203,23 @@ Upstream community moderation and archive workflows are retained but guarded to 
 The organization currently uses GitHub Free. GitHub does not provide protected branches for a private organization repository on that plan. The PR and worktree rules are therefore process rules during private development. Enable main-branch protection with the Repository checks status when the repository becomes public, or if the organization moves to GitHub Team. See [protected branch availability](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
 
 Merge reviewed task branches, fetch the updated `main`, and start new work from it. Archive managed worktrees through Codex after checking that needed work is pushed. Remove manually created worktrees with `git worktree remove <path>` after confirming that their work is saved. Do not remove another active session's worktree.
+
+## Hosted mobile acceptance
+
+In Debug simulator builds, `PICHI_MOBILE_HOSTED_FIXTURE=1`,
+`PICHI_NATIVE_HTTP_ACCEPTANCE=1` or `PICHI_NATIVE_QA_ACCEPTANCE=1` selects an inert
+app host. Hosted fixtures own their injected service composition; the HTTP fixtures
+own their account, profile, recording coordinator and publication service.
+The host skips its ordinary private UI and app lifecycle service events, preventing
+an unrelated production account restoration from competing for the shared profile
+scope. Release builds and ordinary app launches retain their existing behavior.
+
+The generic hosted-fixture flag does not enable HTTP cases. Local and QA HTTP
+acceptance still require their existing opt-in flags and validated configuration.
+The UI-test app runs in a separate process without the hosted-fixture flag.
+
+HTTP checks exercise service composition, encrypted persistence and actual HTTP
+delivery. They do not establish acceptance of the app UI, microphone or real ASR.
 
 ## See also
 

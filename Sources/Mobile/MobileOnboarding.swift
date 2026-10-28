@@ -5,6 +5,9 @@ import SwiftUI
 /// the shared onboarding light, icon, hero, progress, cards and motion, text roles, local model
 /// metadata and progressive preparation semantics.
 struct MobileOnboarding: View {
+    @ObservedObject var accountSession: AccountSessionService = AppServices.shared.accountSession
+    var cloudPublication: PichiCloudPublicationService? = nil
+    @ObservedObject private var privateProfile = PrivateProfileService.shared
     @ObservedObject var asr: ASRService
     @ObservedObject var required: MobileRequiredResources
     @ObservedObject var privacy: MobilePrivacyActivation
@@ -23,6 +26,7 @@ struct MobileOnboarding: View {
     @State private var advancing = false
     @State private var error: String?
     @State private var operation: Task<Void, Never>?
+    @State private var accountActionIsActive = false
     @State private var pageShownAt = -TimeInterval.infinity
     @State private var highlightsHeight: CGFloat = 0
     private var step: Int { settings.mobileSetupStep }
@@ -70,6 +74,7 @@ struct MobileOnboarding: View {
         .tint(theme.palette.accent)
         .animation(reduceMotion ? FluidOnboardingMotion.crossfade : FluidOnboardingMotion.step, value: step)
         .onChange(of: step) { pageShownAt = ProcessInfo.processInfo.systemUptime }
+        .sensoryFeedback(.selection, trigger: step)
         .task { if selected == nil { selected = settings.mobileSetupSelectedModel ?? settings.selectedSpeechModel } }
         .onChange(of: selected) { _, model in settings.mobileSetupSelectedModel = model }
         .onDisappear { operation?.cancel(); asr.cancelModelDownload() }
@@ -85,37 +90,44 @@ struct MobileOnboarding: View {
                 .accessibilityIdentifier("onboarding.step.0")
         } else {
             GeometryReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        FluidOnboardingCompactAppIconMark()
-                            .padding(.bottom, 22)
-                        Text(PichiLocalization.text(titles[step]))
-                            .font(.fluidSystem(size: titleSize, weight: .semibold, role: .title))
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("onboarding.step.\(step)")
-                        if let subtitle {
-                            Text(PichiLocalization.text(subtitle))
-                                .font(.fluidSystem(size: subtitleSize, weight: .medium))
-                                .foregroundStyle(theme.palette.secondaryText)
+                ScrollViewReader { reader in
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            FluidOnboardingCompactAppIconMark()
+                                .padding(.bottom, 22)
+                            Text(PichiLocalization.text(titles[step]))
+                                .font(.fluidSystem(size: titleSize, weight: .semibold, role: .title))
                                 .multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true)
-                                .padding(.top, 14)
-                        }
-                        VStack(alignment: .leading, spacing: 16) {
-                            content
-                            if let error {
-                                Text(error).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
-                                    .accessibilityIdentifier("onboarding.error")
+                                .accessibilityIdentifier("onboarding.step.\(step)")
+                            if let subtitle {
+                                Text(PichiLocalization.text(subtitle))
+                                    .font(.fluidSystem(size: subtitleSize, weight: .medium))
+                                    .foregroundStyle(theme.palette.secondaryText)
+                                    .multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.top, 14)
                             }
+                            VStack(alignment: .leading, spacing: 16) {
+                                content
+                                if let error {
+                                    Text(error).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
+                                        .accessibilityIdentifier("onboarding.error")
+                                }
+                            }
+                            .padding(.top, 26)
                         }
-                        .padding(.top, 26)
+                        // The desktop column, centered like a desktop step, so cards, text and actions line up.
+                        .padding(.horizontal, 24).padding(.vertical, 28)
+                        .frame(maxWidth: Metrics.column + 48).frame(maxWidth: .infinity, minHeight: proxy.size.height)
                     }
-                    // The desktop column, centered like a desktop step, so cards, text and actions line up.
-                    .padding(.horizontal, 24).padding(.vertical, 28)
-                    .frame(maxWidth: Metrics.column + 48).frame(maxWidth: .infinity, minHeight: proxy.size.height)
+                    .scrollBounceBehavior(.basedOnSize)
+                    // Preparation shows its progress in the chosen card; keep that card in view.
+                    .onChange(of: advancing) { _, isAdvancing in
+                        guard isAdvancing, step == 1, let selected else { return }
+                        withAnimation(reduceMotion ? nil : FluidOnboardingMotion.step) { reader.scrollTo(selected.id, anchor: .center) }
+                    }
                 }
-                .scrollBounceBehavior(.basedOnSize)
             }
         }
     }
@@ -156,7 +168,7 @@ struct MobileOnboarding: View {
                 title: "Just speak.",
                 accentTitle: "We'll handle the rest.",
                 firstDetail: PichiLocalization.text("Record your meeting. Come back to every word."),
-                secondDetail: "Built for creators, thinkers, and builders.",
+                secondDetail: "Speech is transcribed on this device.",
                 actions: actions
             )
             .padding(24)
@@ -165,6 +177,10 @@ struct MobileOnboarding: View {
 
     private var welcomeHighlights: some View {
         VStack(spacing: 14) {
+            Text(PichiLocalization.text("cloud.onboarding.localRecognition"))
+                .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 14) {
                 highlight("Live meeting transcripts", systemImage: "waveform")
                 highlight("Automatic speaker labels", systemImage: "person.2")
@@ -223,9 +239,13 @@ struct MobileOnboarding: View {
                         .accessibilityIdentifier("onboarding.model.\(model.id)")
                         .accessibilityAddTraits(isSelected ? .isSelected : [])
                     MobileModelDetails(modelID: model.id)
+                    if advancing && isSelected {
+                        MobileASRPreparationStatus(asr: asr).padding(.top, 4)
+                    }
                 }
                 .fluidOnboardingStepCard(isSelected: isSelected)
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: isSelected)
+                .id(model.id)
             }
         case 2:
             VStack(alignment: .leading, spacing: 12) {
@@ -260,6 +280,10 @@ struct MobileOnboarding: View {
             Label(PichiLocalization.text("Your meeting setup is ready"), systemImage: "checkmark.circle.fill")
                 .font(theme.typography.sectionTitle).foregroundStyle(theme.palette.success)
                 .frame(maxWidth: .infinity)
+            if accountSession.isConfigured {
+                MobileAccountOnboarding(session: accountSession, continueAsGuest: next,
+                    actionChanged: { accountActionIsActive = $0 }, cloudPublication: cloudPublication)
+            }
             if advancing && asr.modelPreparationPhase == nil {
                 ProgressView(PichiLocalization.text("Checking setup…")).frame(maxWidth: .infinity)
             }
@@ -268,7 +292,8 @@ struct MobileOnboarding: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if advancing && (step == 1 || asr.modelPreparationPhase != nil) {
+            // The model page shows its preparation in the chosen card.
+            if advancing && step != 1 && asr.modelPreparationPhase != nil {
                 MobileASRPreparationStatus(asr: asr)
             }
             HStack(spacing: isCompact ? 8 : 12) { backAction; Spacer(minLength: 0); optionalActions; nextAction }
@@ -291,7 +316,9 @@ struct MobileOnboarding: View {
                 guard !isSettling else { return }
                 error = nil; settings.mobileSetupStep -= 1
             }
-            .disabled(advancing).accessibilityIdentifier("onboarding.back")
+            .disabled(advancing || accountSession.state == .signingIn || accountActionIsActive
+                || !privateProfile.isPrivateDataVisible)
+            .accessibilityIdentifier("onboarding.back")
         }
     }
 
@@ -315,7 +342,9 @@ struct MobileOnboarding: View {
         // The welcome page keeps the desktop's wide first step.
         pill(step == 6 ? "Get started" : error == nil ? "Next" : "Try again", prominent: true,
              minWidth: step == 0 ? Metrics.welcomeAction : nil) { next() }
-            .disabled(advancing || (step == 3 && privacy.isPreparing))
+            .disabled(advancing || (step == 3 && privacy.isPreparing)
+                || accountSession.state == .signingIn || accountActionIsActive
+                || !privateProfile.isPrivateDataVisible)
             .accessibilityIdentifier("onboarding.next")
     }
 
@@ -366,7 +395,10 @@ struct MobileOnboarding: View {
     }
 
     private func next() {
-        guard !advancing, !isSettling else { return }
+        guard !advancing, !isSettling, privateProfile.isPrivateDataVisible,
+              !privateProfile.isTransitioning else { return }
+        let profile = PrivateProfileStorage.current
+        let projectionRevision = privateProfile.projectionRevision
         let current = step
         error = nil
         guard let preparation = preparation(for: current) else { settings.mobileSetupStep = current + 1; return }
@@ -376,11 +408,22 @@ struct MobileOnboarding: View {
             do {
                 try await preparation()
                 try Task.checkCancellation()
-                guard settings.mobileSetupStep == current else { return }
-                if current == 6 { settings.mobileSetupCompleted = true }
+                guard settings.mobileSetupStep == current,
+                      privateProfile.isPrivateDataVisible, !privateProfile.isTransitioning,
+                      privateProfile.projectionRevision == projectionRevision,
+                      PrivateProfileStorage.current == profile else { return }
+                if current == 6 {
+                    if !settings.isReplayingMobileSetup { FirstMeetingTip.setupFinished = true }
+                    settings.mobileSetupCompleted = true
+                }
                 else { settings.mobileSetupStep = current + 1 }
             } catch is CancellationError { }
-            catch { self.error = error.localizedDescription }
+            catch {
+                guard privateProfile.isPrivateDataVisible,
+                      privateProfile.projectionRevision == projectionRevision,
+                      PrivateProfileStorage.current == profile else { return }
+                self.error = error.localizedDescription
+            }
         }
     }
 }
@@ -427,35 +470,70 @@ struct MobileRequiredResourcesStatus: View {
     }
 }
 
+/// An onboarding card shows the explanation beside the toggle. As form rows, Settings shows the
+/// toggle alone and the same paragraphs in its section footer.
 struct MobileAudioPrivacyControls: View {
+    var asFormRows = false
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+
+    static var memoryOnlyExplanation: String {
+        PichiLocalization.text("When disabled, audio is never written to files, including temporary files. Only the transcript is saved.")
+    }
+    static var retainedAudioExplanation: String {
+        PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio.")
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Toggle(PichiLocalization.text("Save audio recordings"), isOn: $settings.meetingSaveAudio)
-                .accessibilityIdentifier("privacy.saveAudio")
-            Text(PichiLocalization.text("When disabled, audio is never written to files, including temporary files. Only the transcript is saved."))
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-            if settings.meetingSaveAudio {
-                Text(PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."))
+        if asFormRows { toggle }
+        else {
+            VStack(alignment: .leading, spacing: 12) {
+                toggle
+                Text(Self.memoryOnlyExplanation)
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                if settings.meetingSaveAudio {
+                    Text(Self.retainedAudioExplanation)
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
+
+    private var toggle: some View {
+        Toggle(PichiLocalization.text("Save audio recordings"), isOn: $settings.meetingSaveAudio)
+            .accessibilityIdentifier("privacy.saveAudio")
+    }
 }
 
+/// As form rows, every status and action is its own native row, and `explanation` is the footer.
 struct MobilePrivacyActivationControls: View {
     @ObservedObject var activation: MobilePrivacyActivation
+    var asFormRows = false
     @Environment(\.theme) private var theme
+
+    static var explanation: String {
+        PichiLocalization.text("Locally hides Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets. Detection can miss data. Review before sharing.")
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle(PichiLocalization.text("Redact sensitive data"), isOn: Binding(
-                get: { activation.isRequested }, set: { activation.setEnabled($0) }))
-                .accessibilityIdentifier("privacy.pii")
-            switch activation.state {
-            case .enabling:
+        if asFormRows { controls }
+        else {
+            VStack(alignment: .leading, spacing: 10) {
+                controls
+                Text(Self.explanation).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            }
+        }
+    }
+
+    @ViewBuilder private var controls: some View {
+        Toggle(PichiLocalization.text("Redact sensitive data"), isOn: Binding(
+            get: { activation.isRequested }, set: { activation.setEnabled($0) }))
+            .accessibilityIdentifier("privacy.pii")
+        switch activation.state {
+        case .enabling:
+            VStack(alignment: .leading, spacing: asFormRows ? 8 : 10) {
                 Text(PichiLocalization.text(activation.downloadProgress == 1
                     ? "Loading data cleanup model…" : "Enabling data cleanup…"))
                     .font(theme.typography.caption)
@@ -463,20 +541,20 @@ struct MobilePrivacyActivationControls: View {
                     if let progress = activation.downloadProgress, progress < 1 { ProgressView(value: progress) }
                     else { ProgressView() }
                 }.accessibilityIdentifier("privacy.pii.progress")
-                Button(PichiLocalization.text("Cancel")) { activation.setEnabled(false) }
-                    .accessibilityIdentifier("privacy.pii.cancel")
-            case .active:
-                Label(PichiLocalization.text("Data cleanup is active"), systemImage: "checkmark.shield")
-                    .font(theme.typography.caption).accessibilityIdentifier("privacy.pii.active")
-            case .failed(let message):
+            }
+            Button(PichiLocalization.text("Cancel")) { activation.setEnabled(false) }
+                .accessibilityIdentifier("privacy.pii.cancel")
+        case .active:
+            Label(PichiLocalization.text("Data cleanup is active"), systemImage: "checkmark.shield")
+                .font(theme.typography.caption).accessibilityIdentifier("privacy.pii.active")
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: asFormRows ? 4 : 10) {
                 Text(PichiLocalization.text("Data cleanup is not active")).font(theme.typography.bodyStrong)
                 Text(message).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
-                Button(PichiLocalization.text("Try again")) { activation.setEnabled(true) }
-                    .accessibilityIdentifier("privacy.pii.retry")
-            case .off: EmptyView()
             }
-            Text(PichiLocalization.text("Locally hides Russian names, phone numbers, email, card and account numbers, passport details, SNILS, INN, dates of birth, addresses, logins and secrets. Detection can miss data. Review before sharing."))
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            Button(PichiLocalization.text("Try again")) { activation.setEnabled(true) }
+                .accessibilityIdentifier("privacy.pii.retry")
+        case .off: EmptyView()
         }
     }
 }

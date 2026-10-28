@@ -2,7 +2,7 @@ import Foundation
 
 /// Trusted distribution settings. Runtime theme files cannot enable telemetry
 /// or redirect an installed app's analytics to another destination.
-nonisolated struct AnalyticsConfig: Equatable {
+nonisolated struct AnalyticsConfig: Equatable, Sendable {
     let postHogApiKey: String
     let postHogHost: String
 

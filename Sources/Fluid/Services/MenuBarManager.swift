@@ -94,6 +94,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     override init() {
         super.init()
+        NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.concealPrivatePresentation() }
+            }
+            .store(in: &self.cancellables)
         NotificationCenter.default.publisher(for: AppBrand.appearanceChanged)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -169,10 +174,16 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             }
             .store(in: &self.cancellables)
 
-        NotificationCenter.default.addObserver(forName: .fluidPasteNotLanded, object: nil, queue: .main) { [weak self] note in
-            guard let transcript = note.userInfo?["transcript"] as? String else { return }
-            Task { @MainActor [weak self] in self?.showPasteNotLandedFailure(transcript: transcript) }
-        }
+        NotificationCenter.default.publisher(for: .fluidPasteNotLanded)
+            .sink { [weak self] note in
+                guard let transcript = note.userInfo?["transcript"] as? String,
+                      let profile = note.userInfo?["privateProfile"] as? PrivateProfileSnapshot else { return }
+                Task { @MainActor [weak self] in
+                    guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
+                    self?.showPasteNotLandedFailure(transcript: transcript, profile: profile)
+                }
+            }
+            .store(in: &self.cancellables)
 
         // Subscribe to recording state changes
         asrService.$isRunning
@@ -217,11 +228,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         // Subscribe to partial transcription updates for streaming preview
         asrService.$partialTranscription
+            .map { (profile: PrivateProfileStorage.current, text: $0) }
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] newText in
-                guard self != nil else { return }
+            .sink { [weak self, weak asrService] update in
+                guard let self, self.asrService === asrService,
+                      PrivateProfileStorage.isReadable(update.profile), PrivateProfileStorage.acceptsNewWork else { return }
                 if NotchOverlayManager.shared.shouldShowOrTrackLivePreviewText {
-                    NotchOverlayManager.shared.updateTranscriptionText(newText)
+                    NotchOverlayManager.shared.updateTranscriptionText(update.text)
                 }
             }
             .store(in: &self.cancellables)
@@ -258,12 +271,21 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             meetingCoordinator.$activeSession,
             meetingCoordinator.$latestCompletedSession
         )
+        .map { state, activeSession, latestCompletedSession in
+            (profile: PrivateProfileStorage.current, state: state,
+             activeSession: activeSession, latestCompletedSession: latestCompletedSession)
+        }
         .receive(on: DispatchQueue.main)
-        .sink { [weak self] state, activeSession, latestCompletedSession in
-            self?.applyMeetingPresentation(
-                state: state,
-                activeSession: activeSession,
-                latestCompletedSession: latestCompletedSession
+        .sink { [weak self, weak meetingCoordinator] update in
+            guard let self, self.meetingCoordinator === meetingCoordinator else { return }
+            guard PrivateProfileStorage.isReadable(update.profile), PrivateProfileStorage.acceptsNewWork else {
+                if !PrivateProfileStorage.acceptsNewWork { self.concealPrivatePresentation() }
+                return
+            }
+            self.applyMeetingPresentation(
+                state: update.state,
+                activeSession: update.activeSession,
+                latestCompletedSession: update.latestCompletedSession
             )
         }
         .store(in: &self.meetingCancellables)
@@ -274,7 +296,13 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         activeSession: MeetingSession?,
         latestCompletedSession: MeetingSession?
     ) {
+        guard PrivateProfileStorage.acceptsNewWork else { self.concealPrivatePresentation(); return }
         let previousActivity = self.meetingMenuPresentation.activity
+        let concealsActiveSource = activeSession?.isLocalContentConcealed == true
+        let activeSourceName = concealsActiveSource ? nil : activeSession?.capturedApplication?.displayName
+        let activeSourceOrRoom = concealsActiveSource ? nil : (activeSourceName ?? "In-room meeting")
+        let completedSourceName = latestCompletedSession?.isLocalContentConcealed == true
+            ? nil : latestCompletedSession?.capturedApplication?.displayName
         switch state {
         case .recording, .recordingDegraded:
             break
@@ -289,44 +317,44 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             self.meetingStartError = nil
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .preparing,
-                sourceName: activeSession?.capturedApplication?.displayName,
+                sourceName: activeSourceName,
                 startedAt: activeSession?.startedAt
             )
         case .recording, .recordingDegraded:
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .recording,
-                sourceName: activeSession?.capturedApplication?.displayName ?? "In-room meeting",
+                sourceName: activeSourceOrRoom,
                 startedAt: activeSession?.startedAt
             )
         case .stopping:
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .stopping,
-                sourceName: activeSession?.capturedApplication?.displayName ?? "In-room meeting",
+                sourceName: activeSourceOrRoom,
                 startedAt: activeSession?.startedAt
             )
         case .processing:
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .processing,
-                sourceName: activeSession?.capturedApplication?.displayName,
+                sourceName: activeSourceName,
                 startedAt: nil
             )
         case .completed:
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .completed,
-                sourceName: latestCompletedSession?.capturedApplication?.displayName,
+                sourceName: completedSourceName,
                 startedAt: nil
             )
         case .interrupted:
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .interrupted,
-                sourceName: activeSession?.capturedApplication?.displayName,
+                sourceName: activeSourceName,
                 startedAt: activeSession?.startedAt,
                 attentionStatus: Self.interruptionStatus(for: activeSession)
             )
         case let .failed(_, failure):
             self.meetingMenuPresentation = MeetingMenuPresentation(
                 activity: .failed,
-                sourceName: activeSession?.capturedApplication?.displayName,
+                sourceName: activeSourceName,
                 startedAt: activeSession?.startedAt,
                 attentionStatus: Self.failureStatus(for: activeSession, failure: failure)
             )
@@ -336,6 +364,32 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             self.announceMeetingActivity(self.meetingMenuPresentation)
         }
 
+        self.updateMenuBarIcon()
+        self.updateMenu()
+    }
+
+    private func concealPrivatePresentation() {
+        self.meetingStartError = nil
+        self.meetingStartRequested = false
+        self.meetingStatusMenuItem?.title = ""
+        self.meetingStatusMenuItem?.toolTip = nil
+        let activity: MeetingMenuActivity
+        switch self.meetingCoordinator?.state {
+        case .preparing: activity = .preparing
+        case .recording, .recordingDegraded: activity = .recording
+        case .stopping: activity = .stopping
+        case .processing: activity = .processing
+        default: activity = .inactive
+        }
+        self.meetingMenuPresentation = MeetingMenuPresentation(activity: activity)
+        if activity != .recording && activity != .stopping { self.meetingStopRequested = false }
+        self.cancelPendingProcessingCompletionOperations()
+        self.isProcessingActive = false
+        self.overlayVisible = false
+        self.hasDeferredStopMenuRefresh = false
+        self.hasDeferredStoppedRecordingState = false
+        NotchOverlayManager.shared.hideImmediately()
+        NotchContentState.shared.updateTranscription("")
         self.updateMenuBarIcon()
         self.updateMenu()
     }
@@ -516,12 +570,14 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     /// A verified non-landing paste re-presents the overlay in its failure
     /// state so the transcript can be copied.
-    func showPasteNotLandedFailure(transcript: String) {
-        guard !self.overlayVisible, !self.isProcessingActive, self.asrService?.isRunning != true else { return }
+    func showPasteNotLandedFailure(transcript: String, profile: PrivateProfileSnapshot) {
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              !self.overlayVisible, !self.isProcessingActive, self.asrService?.isRunning != true else { return }
         DeliveryFailureOverlayController.shared.show(kind: .pasteNotLanded, transcript: transcript)
     }
 
     func showRecordingOverlayImmediately() {
+        guard PrivateProfileStorage.acceptsNewWork else { return }
         AutomaticDictionaryCorrectionTracker.shared.cancel()
 
         guard let asrService else {
@@ -1462,6 +1518,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private var canStartMeetingRecording: Bool {
+        guard PrivateProfileStorage.acceptsNewWork else { return false }
         switch self.meetingMenuPresentation.activity {
         case .inactive, .completed, .interrupted, .failed:
             return true
@@ -1490,7 +1547,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     @objc private func startMeetingRecording() {
+        let profile = PrivateProfileStorage.current
         Task { @MainActor in
+            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
             await self.startMeetingRecordingInBackground {
                 try await AppServices.shared.startMeetingRecordingFromMenuBar()
             }
@@ -1500,17 +1559,23 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     /// Keep source discovery and permission waits inside the duplicate-click guard.
     /// Errors stay in the menu; starting must never request main-window navigation.
     func startMeetingRecordingInBackground(using operation: () async throws -> Void) async {
-        guard SettingsStore.shared.fluidMeetEnabled, self.canStartMeetingRecording, !self.meetingStartRequested else { return }
+        let profile = PrivateProfileStorage.current
+        guard SettingsStore.shared.fluidMeetEnabled,
+               PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              self.canStartMeetingRecording, !self.meetingStartRequested else { return }
         self.meetingStartRequested = true
         self.meetingStartError = nil
         self.updateMeetingMenuItemsText()
         defer {
-            self.meetingStartRequested = false
-            self.updateMeetingMenuItemsText()
+            if PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork {
+                self.meetingStartRequested = false
+                self.updateMeetingMenuItemsText()
+            }
         }
         do {
             try await operation()
         } catch {
+            guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork else { return }
             self.meetingStartError = error.localizedDescription
             DebugLogger.shared.error("Menu action: Start meeting recording failed: \(error.localizedDescription)", source: "MenuBarManager")
             AccessibilityNotification.Announcement("Meeting recording could not start. \(error.localizedDescription)").post()
@@ -1566,9 +1631,12 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     private func createAndShowMainWindow() {
         // Build the SwiftUI root view with required environment
         let rootView = AdaptiveAppTheme(accent: SettingsStore.shared.accentColor) {
-            ContentView()
-                .environmentObject(self)
-                .environmentObject(AppServices.shared)
+            PrivateProfileRoot(services: AppServices.shared, profiles: AppServices.shared.privateProfiles) {
+                ContentView()
+                    .environmentObject(self)
+                    .environmentObject(AppServices.shared)
+                    .environment(\.locale, PichiLocalization.locale)
+            }
         }
 
         // Host inside an AppKit window

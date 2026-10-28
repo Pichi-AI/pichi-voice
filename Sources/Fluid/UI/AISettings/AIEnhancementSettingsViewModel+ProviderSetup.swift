@@ -26,7 +26,7 @@ extension AIEnhancementSettingsViewModel {
 
     /// Keep legacy connections discoverable even when their verification or credentials expire.
     func addedProviderItems(from items: [ProviderItemData]) -> [ProviderItemData] {
-        let explicit = Set(UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? [])
+        let explicit = Set(self.settings.defaults.stringArray(forKey: Self.addedProviderIDsKey) ?? [])
         let referenced = Set(self.settings.dictationPromptConfigurations.values.map(\.providerID))
         return items.filter { item in
             guard item.id != PrivateAIProviderFeature.shared.providerID else { return false }
@@ -63,9 +63,9 @@ extension AIEnhancementSettingsViewModel {
         if !builtIn { self.savedProviders.append(provider) }
         self.availableModelsByProvider[key] = models
         self.selectedModelByProvider[key] = models.first ?? ""
-        var added = Set(UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? [])
+        var added = Set(self.settings.defaults.stringArray(forKey: Self.addedProviderIDsKey) ?? [])
         added.insert(id)
-        UserDefaults.standard.set(added.sorted(), forKey: Self.addedProviderIDsKey)
+        self.settings.defaults.set(added.sorted(), forKey: Self.addedProviderIDsKey)
         self.saveSavedProviders()
         return true
     }

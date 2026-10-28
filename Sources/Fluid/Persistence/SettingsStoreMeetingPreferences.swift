@@ -351,6 +351,12 @@ extension SettingsStore {
         }
     }
 
+    /// Profile-scoped future-capture policy. Existing manifests retain their own immutable requirement.
+    var meetingEncryptLocalRecordings: Bool {
+        get { self.defaults.bool(forKey: Keys.meetingEncryptLocalRecordings) }
+        set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingEncryptLocalRecordings) }
+    }
+
     var meetingSaveAudio: Bool {
         get { self.defaults.object(forKey: Keys.meetingSaveAudio) as? Bool ?? true }
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingSaveAudio) }

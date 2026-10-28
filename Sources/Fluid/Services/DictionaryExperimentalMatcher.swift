@@ -5,21 +5,20 @@ import Foundation
 nonisolated enum DictionaryMatcherExperiment {
     static let defaultEnabled = true
     static var sharedFeaturesEnabled: Bool {
-        UserDefaults.standard.object(forKey: "DictionarySharedFeatureMatcherEnabled") as? Bool ?? self.defaultEnabled
+        PrivateProfileDefaults.shared.object(forKey: "DictionarySharedFeatureMatcherEnabled") as? Bool ?? self.defaultEnabled
     }
-
     static let didChangeNotification = Notification.Name("DictionaryPronunciationDidChange")
-    static var generation: String { UserDefaults.standard.string(forKey: "DictionaryPronunciationGeneration") ?? "initial" }
+    static var generation: String { PrivateProfileDefaults.shared.string(forKey: "DictionaryPronunciationGeneration") ?? "initial" }
     static func setEnabled(_ enabled: Bool) {
         guard self.sharedFeaturesEnabled != enabled else { return }
-        UserDefaults.standard.set(UUID().uuidString, forKey: "DictionaryPronunciationGeneration")
-        UserDefaults.standard.set(enabled, forKey: "DictionarySharedFeatureMatcherEnabled")
+        PrivateProfileDefaults.shared.set(UUID().uuidString, forKey: "DictionaryPronunciationGeneration")
+        PrivateProfileDefaults.shared.set(enabled, forKey: "DictionarySharedFeatureMatcherEnabled")
         NotificationCenter.default.post(name: self.didChangeNotification, object: nil)
     }
 
     static var positiveEnabled: Bool { sharedFeaturesEnabled }
-    static var collectNegatives: Bool { sharedFeaturesEnabled && UserDefaults.standard.bool(forKey: "DictionaryNegativeLearningEnabled") }
-    static var compareNegatives: Bool { sharedFeaturesEnabled && UserDefaults.standard.bool(forKey: "DictionaryNegativeComparisonEnabled") }
+    static var collectNegatives: Bool { sharedFeaturesEnabled && PrivateProfileDefaults.shared.bool(forKey: "DictionaryNegativeLearningEnabled") }
+    static var compareNegatives: Bool { sharedFeaturesEnabled && PrivateProfileDefaults.shared.bool(forKey: "DictionaryNegativeComparisonEnabled") }
     static var needsFrames: Bool { sharedFeaturesEnabled }
     static let version = "parakeet-exact-rms005-frames-v1"
 }

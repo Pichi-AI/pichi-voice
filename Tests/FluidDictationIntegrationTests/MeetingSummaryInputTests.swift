@@ -48,8 +48,7 @@ final class MeetingSummaryInputTests: XCTestCase {
         XCTAssertNotEqual(MeetingSummaryInput.fingerprint(original), MeetingSummaryInput.fingerprint(legacy), "Existing summaries cannot silently reuse input that lacked language metadata")
     }
 
-    /// A meeting is saved with whole-second dates. The summary text must not depend on the fractions
-    /// the app still holds right after recording, or a summary made then is hidden after a restart.
+    /// Exact persisted dates keep a freshly generated summary current after a restart.
     func testSummaryMadeRightAfterRecordingStillMatchesOnceTheMeetingIsReloaded() async throws {
         var live = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
         live.startedAt = Date(timeIntervalSince1970: 1_700_000_000.7)
@@ -60,13 +59,42 @@ final class MeetingSummaryInputTests: XCTestCase {
         try await store.create(live)
         let loaded = try await store.load(id: live.id)
         let reloaded = try XCTUnwrap(loaded)
-        XCTAssertNotEqual(reloaded.endedAt, live.endedAt, "The store keeps whole seconds; that is the difference under test")
+        XCTAssertEqual(reloaded, live, "New manifests preserve fractional dates and every input field exactly")
 
         XCTAssertEqual(MeetingSummaryInput.transcript(for: live), MeetingSummaryInput.transcript(for: reloaded))
         XCTAssertEqual(
             MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: live)),
             MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: reloaded))
         )
+        XCTAssertEqual(MeetingSummaryInput.contentFingerprint(for: live), MeetingSummaryInput.contentFingerprint(for: reloaded))
+    }
+
+    func testLegacyISOManifestStillMatchesSummaryMadeBeforeReload() async throws {
+        var live = self.session(origin: 0, segmentStart: 0, segmentEnd: 1, gapStart: 2, gapEnd: 3)
+        live.startedAt = Date(timeIntervalSince1970: 1_700_000_000.7)
+        live.endedAt = Date(timeIntervalSince1970: 1_700_001_800.3)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("MeetingSummaryLegacyISOTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingSessionStore(rootDirectory: root)
+        try await store.create(live)
+        let directory = try await store.sessionDirectory(for: live.id)
+        let manifest = directory.appendingPathComponent("session.json")
+        let legacyEncoder = JSONEncoder()
+        legacyEncoder.dateEncodingStrategy = .iso8601
+        let legacyData = try legacyEncoder.encode(live)
+        try legacyData.write(to: manifest)
+        let legacyDecoder = JSONDecoder()
+        legacyDecoder.dateDecodingStrategy = .iso8601
+        let expected = try legacyDecoder.decode(MeetingSession.self, from: legacyData)
+
+        let loaded = try await store.load(id: live.id)
+        let reloaded = try XCTUnwrap(loaded)
+        XCTAssertEqual(reloaded, expected, "The actual store reads every field from an old ISO manifest")
+        XCTAssertNotEqual(reloaded.endedAt, live.endedAt, "Only the legacy fixture omits fractions")
+        XCTAssertEqual(try Data(contentsOf: manifest), legacyData, "Reading legacy data does not rewrite it")
+        XCTAssertEqual(MeetingSummaryInput.transcript(for: live), MeetingSummaryInput.transcript(for: reloaded))
+        XCTAssertEqual(MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: live)),
+                       MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: reloaded)))
         XCTAssertEqual(MeetingSummaryInput.contentFingerprint(for: live), MeetingSummaryInput.contentFingerprint(for: reloaded))
     }
 

@@ -161,6 +161,9 @@ actor CloudTextProviderAuthorization {
     static let shared = CloudTextProviderAuthorization()
     private struct Token { let value: String; let expiry: Date }
     private var tokens: [String: Token] = [:]
+    private var generation = UUID()
+    private var admissionClosed = false
+    private var operations: [UUID: Task<[String: String], Error>] = [:]
     private let session: URLSession
     private let now: @Sendable () -> Date
 
@@ -175,7 +178,35 @@ actor CloudTextProviderAuthorization {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
+    func pauseAndClearForPrivateProfileTransition() async {
+        self.admissionClosed = true
+        self.generation = UUID()
+        let admitted = Array(self.operations.values)
+        for operation in admitted { operation.cancel() }
+        for operation in admitted { _ = await operation.result }
+        self.tokens.removeAll()
+    }
+
+    func resumeAfterPrivateProfileTransition() {
+        self.generation = UUID()
+        self.admissionClosed = false
+    }
+
     func headers(for provider: CloudTextProvider, credential: String, options: [String: String], rejecting: String? = nil) async throws -> [String: String] {
+        guard !self.admissionClosed else { throw CancellationError() }
+        let generation = self.generation
+        let operationID = UUID()
+        let operation = Task { try await self.makeHeaders(for: provider, credential: credential, options: options, rejecting: rejecting) }
+        self.operations[operationID] = operation
+        defer { self.operations.removeValue(forKey: operationID) }
+        let result = try await withTaskCancellationHandler {
+            try await operation.value
+        } onCancel: { operation.cancel() }
+        guard !self.admissionClosed, generation == self.generation else { throw CancellationError() }
+        return result
+    }
+
+    private func makeHeaders(for provider: CloudTextProvider, credential: String, options: [String: String], rejecting: String? = nil) async throws -> [String: String] {
         try Task.checkCancellation()
         let options = try provider.normalizedOptions(options)
         try CloudTextProvider.validateCredential(credential)

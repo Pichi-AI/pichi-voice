@@ -268,8 +268,12 @@ builds/
 !/docs/development/speaker-colors/iphone-light.png
 !/docs/development/speaker-colors/iphone-dark.png
 !/docs/development/mobile-first-run-setup.md
+!/docs/development/pichi-native-isolation-outbox.md
+!/docs/development/pichi-private-profile-api.md
 !/docs/development/mobile-meetings.md
 !/docs/development/ipad-demo-install-via-mac.md
+!/docs/development/ipad-demo-testflight.md
+!/docs/development/mobile-testflight-packaging.md
 !/scripts/
 /scripts/*
 !/scripts/dev/
@@ -278,6 +282,7 @@ builds/
 !/scripts/dev/check-localization.py
 !/scripts/dev/check-diarization-repeatability.py
 !/scripts/dev/check-xcode-build-settings.py
+!/scripts/dev/mobile-framework-metadata.py
 !/scripts/dev/capture-mobile-frames.py
 !/scripts/dev/mobile-screen-stream.swift
 !/docs/development/upstream-sync-1.6.11.md
@@ -302,3 +307,4 @@ builds/
 !/docs/development/upstream-sync-1.6.12.md
 !/docs/development/onboarding-integration-2026-10-22.md
 !docs/development/upstream-sync-1.6.13-beta1.md
+!docs/development/pichi-native-account-core.md

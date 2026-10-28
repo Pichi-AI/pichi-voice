@@ -1,2 +1,4 @@
 "NSMicrophoneUsageDescription" = "Record in-room meetings and transcribe speech on this device.";
+"NSSpeechRecognitionUsageDescription" = "Use speech recognition to transcribe recorded meetings.";
 "NSLocationWhenInUseUsageDescription" = "Use your location once when an in-room meeting starts to save its address. Apple resolves the address from the location.";
+"NSLocalNetworkUsageDescription" = "Connect to the server configured for this installation on the local network.";

@@ -1180,6 +1180,9 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
                 XCTAssertFalse(fixture.service.audioRouteRecoveryStateForTesting.pending)
                 var stoppedCallbacks = 0
                 _ = await fixture.service.stop(onCaptureStopped: { stoppedCallbacks += 1 }, forDictionaryTraining: true)
+                // Stop can return before the admitted provider's async cleanup.
+                // The next ordinary capture begins only after that owner retires.
+                try await fixture.waitForDictationRetirement()
                 XCTAssertEqual(stoppedCallbacks, 1)
                 XCTAssertFalse(fixture.service.isRunning)
                 XCTAssertFalse(fixture.service.isStarting)
@@ -1187,6 +1190,8 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
                 fixture.assertSettingsPreserved()
             }
             XCTAssertEqual(fixture.hardware.startCount(deviceID: 100), 20)
+            XCTAssertEqual(fixture.provider.transcriptionCalls, 20)
+            XCTAssertEqual(fixture.provider.completedAdmissions, 20)
         }
     }
 
@@ -1801,6 +1806,7 @@ private final class ASRRecoveryFixture {
     }
 
     let service: ASRService
+    let provider: ASRRecoveryTranscriptionProvider
     let controller: DirectCoreAudioLifecycleController
     let hardware: ASRRecoveryHardware
     let mediaTransport: RecoveryMediaTransport
@@ -1860,7 +1866,11 @@ private final class ASRRecoveryFixture {
         let media = MediaPlaybackService(transport: mediaTransport, settle: {})
         self.mediaTransport = mediaTransport
         self.media = media
+        let provider = ASRRecoveryTranscriptionProvider()
+        self.provider = provider
         let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        // Recovery and stop tests own synthetic PCM and must never prepare a real model.
+        service.modelProvidersForTesting[settings.selectedSpeechModel] = provider
         service.useMediaPlaybackForTesting(media)
         self.service = service
         let hardware = ASRRecoveryHardware(
@@ -1893,6 +1903,14 @@ private final class ASRRecoveryFixture {
             controller: self.controller, devices: [self.hardware.builtIn], initialSamples: self.prefix
         )
         self.service.partialTranscription = "words already captured"
+    }
+
+    func waitForDictationRetirement() async throws {
+        for _ in 0..<1000 {
+            if self.service.activeExclusiveActivity == nil { return }
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        XCTFail("The prior capture's admitted provider did not finish cleanup")
     }
 
     func waitForRecoveryAttempt() async throws {
@@ -1948,6 +1966,34 @@ private final class ASRRecoveryFixture {
         func listInputDevices() -> [AudioDevice.Device] { [self.input] }
         func defaultInputDevice() -> AudioDevice.Device? { self.input }
         func isInputDeviceUsable(_ device: AudioDevice.Device) -> Bool { device.isAlive }
+    }
+}
+
+/// Exercises the production admission and finalization contracts without models or I/O.
+@MainActor
+private final class ASRRecoveryTranscriptionProvider: TranscriptionProvider {
+    let name = "Synthetic recovery fixture"
+    let isAvailable = true
+    let isReady = true
+    private(set) var transcriptionCalls = 0
+    private(set) var completedAdmissions = 0
+    private var admissions: Set<UUID> = []
+
+    func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {}
+    func modelsExistOnDisk() -> Bool { true }
+
+    func beginAdmittedTranscription(leaseID: UUID) throws {
+        XCTAssertTrue(self.admissions.insert(leaseID).inserted)
+    }
+
+    func endAdmittedTranscription(leaseID: UUID) async {
+        XCTAssertNotNil(self.admissions.remove(leaseID))
+        self.completedAdmissions += 1
+    }
+
+    func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        self.transcriptionCalls += 1
+        return ASRTranscriptionResult(text: "", confidence: 0)
     }
 }
 

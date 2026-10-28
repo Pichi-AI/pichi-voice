@@ -23298,6 +23298,210 @@
         }
       }
     },
+    "Another meeting recording is already active.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another meeting recording is already active."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Уже идёт запись другой встречи."
+          }
+        }
+      }
+    },
+    "There is no active meeting recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is no active meeting recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас нет активной записи встречи."
+          }
+        }
+      }
+    },
+    "A different meeting recording is active.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A different meeting recording is active."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас активна запись другой встречи."
+          }
+        }
+      }
+    },
+    "No display is available for meeting-audio capture.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No display is available for meeting-audio capture."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет доступного дисплея для записи звука встречи."
+          }
+        }
+      }
+    },
+    "The selected microphone is unavailable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected microphone is unavailable."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранный микрофон недоступен."
+          }
+        }
+      }
+    },
+    "Microphone permission is required to record this meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone permission is required to record this meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы записать эту встречу, разрешите доступ к микрофону."
+          }
+        }
+      }
+    },
+    "Screen & System Audio permission is required. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen & System Audio permission is required. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужен доступ к экрану и системному аудио. %@"
+          }
+        }
+      }
+    },
+    "Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Недостаточно свободного места для записи встречи. Освободите место хотя бы для часа записи и её обработки, затем повторите попытку."
+          }
+        }
+      }
+    },
+    "Meeting recording could not start. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting recording could not start. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось начать запись встречи. %@"
+          }
+        }
+      }
+    },
+    "Meeting recording could not stop cleanly. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting recording could not stop cleanly. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось корректно остановить запись встречи. %@"
+          }
+        }
+      }
+    },
+    "The selected audio source uses an unsupported format.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected audio source uses an unsupported format."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранный источник звука использует неподдерживаемый формат."
+          }
+        }
+      }
+    },
+    "Meeting audio could not be saved. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting audio could not be saved. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить звук встречи. %@"
+          }
+        }
+      }
+    },
     "Meeting recording in progress": {
       "extractionState": "manual",
       "localizations": {
@@ -56052,6 +56256,3512 @@
           "stringUnit": {
             "state": "translated",
             "value": "Автоматически определяет 30 языков. Расшифровывает на вашем Mac после остановки записи."
+          }
+        }
+      }
+    },
+    "Kiosk mode": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kiosk mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Режим киоска"
+          }
+        }
+      }
+    },
+    "Administrator": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Administrator"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Администратор"
+          }
+        }
+      }
+    },
+    "Administrator password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Administrator password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пароль администратора"
+          }
+        }
+      }
+    },
+    "Current password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текущий пароль"
+          }
+        }
+      }
+    },
+    "Confirm password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторите пароль"
+          }
+        }
+      }
+    },
+    "Enable kiosk mode": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable kiosk mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить режим киоска"
+          }
+        }
+      }
+    },
+    "Exit kiosk mode": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exit kiosk mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выйти из режима киоска"
+          }
+        }
+      }
+    },
+    "Finishing recording…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finishing recording…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершение записи…"
+          }
+        }
+      }
+    },
+    "Recording saved": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording saved"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись сохранена"
+          }
+        }
+      }
+    },
+    "Recording could not be completed. Contact your administrator.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording could not be completed. Contact your administrator."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось завершить запись. Обратитесь к администратору."
+          }
+        }
+      }
+    },
+    "Recording was interrupted. Contact your administrator.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording was interrupted. Contact your administrator."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись прервана. Обратитесь к администратору."
+          }
+        }
+      }
+    },
+    "Configure recording, transcription and storage first. Kiosk mode keeps these settings and shows only recording controls.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configure recording, transcription and storage first. Kiosk mode keeps these settings and shows only recording controls."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала настройте запись, расшифровку и хранение. Режим киоска использует эти настройки и показывает только управление записью."
+          }
+        }
+      }
+    },
+    "To keep audio on this device, enable Save Audio and choose the recording retention period before entering kiosk mode.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To keep audio on this device, enable Save Audio and choose the recording retention period before entering kiosk mode."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы хранить аудио на этом устройстве, включите сохранение аудио и выберите срок хранения перед включением киоска."
+          }
+        }
+      }
+    },
+    "The password is required to leave kiosk mode. Kiosk mode stays enabled after restarting the app.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The password is required to leave kiosk mode. Kiosk mode stays enabled after restarting the app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для выхода из режима киоска нужен пароль. После перезапуска приложения режим киоска остаётся включённым."
+          }
+        }
+      }
+    },
+    "To keep the device in this app, also enable Guided Access in iPad or iPhone settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To keep the device in this app, also enable Guided Access in iPad or iPhone settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы устройство оставалось в этом приложении, также включите «Гид-доступ» в настройках iPad или iPhone."
+          }
+        }
+      }
+    },
+    "Use a password with 6 to 128 characters.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use a password with 6 to 128 characters."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Используйте пароль длиной от 6 до 128 символов."
+          }
+        }
+      }
+    },
+    "The passwords do not match.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The passwords do not match."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пароли не совпадают."
+          }
+        }
+      }
+    },
+    "The administrator password is incorrect.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The administrator password is incorrect."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неверный пароль администратора."
+          }
+        }
+      }
+    },
+    "Too many attempts. Wait one minute before trying again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many attempts. Wait one minute before trying again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много попыток. Подождите одну минуту и попробуйте снова."
+          }
+        }
+      }
+    },
+    "Kiosk security is unavailable. Access remains locked. Try again after unlocking the device.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kiosk security is unavailable. Access remains locked. Try again after unlocking the device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Защита киоска недоступна. Доступ остаётся заблокированным. Разблокируйте устройство и попробуйте снова."
+          }
+        }
+      }
+    },
+    "A password check is already in progress.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A password check is already in progress."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка пароля уже выполняется."
+          }
+        }
+      }
+    },
+    "Password": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пароль"
+          }
+        }
+      }
+    },
+    "Would you like to set up your voice?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Would you like to set up your voice?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроить свой голос?"
+          }
+        }
+      }
+    },
+    "Administrator access is unavailable. Try again after unlocking the device.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Administrator access is unavailable. Try again after unlocking the device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ администратора недоступен. Разблокируйте устройство и попробуйте снова."
+          }
+        }
+      }
+    },
+    "Unlock": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unlock"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разблокировать"
+          }
+        }
+      }
+    },
+    "Restricted mode": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restricted mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ограниченный режим"
+          }
+        }
+      }
+    },
+    "Enable restricted mode": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable restricted mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить ограниченный режим"
+          }
+        }
+      }
+    },
+    "Configure recording, transcription and storage first. Restricted access keeps these settings and allows only recording and your voice setup.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configure recording, transcription and storage first. Restricted access keeps these settings and allows only recording and your voice setup."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала настройте запись, расшифровку и хранение. При ограниченном доступе эти настройки сохраняются, а доступны только запись и настройка своего голоса."
+          }
+        }
+      }
+    },
+    "To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To keep audio on this device, enable Save Audio and choose the recording retention period before restricting access."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы хранить аудио на устройстве, включите сохранение аудио и выберите срок хранения перед ограничением доступа."
+          }
+        }
+      }
+    },
+    "The password is required to restore full access. Restricted access stays enabled after restarting the app.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The password is required to restore full access. Restricted access stays enabled after restarting the app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для восстановления полного доступа нужен пароль. Ограниченный доступ сохраняется после перезапуска приложения."
+          }
+        }
+      }
+    },
+    "cloud.assessment.cancel": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отмена"
+          }
+        }
+      }
+    },
+    "cloud.assessment.chooseParticipant": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a represented participant"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите участника, от имени которого выполняется оценка"
+          }
+        }
+      }
+    },
+    "cloud.assessment.currentEmpty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No current assessment selection"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текущие параметры оценки не заданы"
+          }
+        }
+      }
+    },
+    "cloud.assessment.explicitChoice": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When selection is available, choose a represented participant and at least one criterion. Nothing is selected automatically."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Если выбор доступен, укажите участника, от имени которого выполняется оценка, и хотя бы один критерий. Ничего не выбирается автоматически."
+          }
+        }
+      }
+    },
+    "cloud.assessment.limit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select up to 100 criteria."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Можно выбрать не более 100 критериев."
+          }
+        }
+      }
+    },
+    "cloud.assessment.nextPage": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next criteria page"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Следующая страница критериев"
+          }
+        }
+      }
+    },
+    "cloud.assessment.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose participant and criteria"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать участника и критерии"
+          }
+        }
+      }
+    },
+    "cloud.assessment.reload": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reload assessment options"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузить параметры оценки заново"
+          }
+        }
+      }
+    },
+    "cloud.assessment.unchanged": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The current selection is shown for reference. Loading options does not change it."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текущий выбор показан для справки. Загрузка параметров не меняет его."
+          }
+        }
+      }
+    },
+    "cloud.assessment.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose assessment options"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать параметры оценки"
+          }
+        }
+      }
+    },
+    "cloud.assessment.current": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current assessment"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текущая оценка"
+          }
+        }
+      }
+    },
+    "cloud.assessment.currentCriteria": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previously selected criteria: %lld"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Количество ранее выбранных критериев: %lld"
+          }
+        }
+      }
+    },
+    "cloud.assessment.explicitChoices": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Existing choices are shown for reference. Choose a participant and criteria explicitly below."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Существующие параметры показаны для справки. Явно выберите участника и критерии ниже."
+          }
+        }
+      }
+    },
+    "cloud.assessment.participant": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Represented participant"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Представляемый участник"
+          }
+        }
+      }
+    },
+    "cloud.assessment.criteria": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assessment criteria"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Критерии оценки"
+          }
+        }
+      }
+    },
+    "cloud.assessment.selected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected criteria"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранные критерии"
+          }
+        }
+      }
+    },
+    "cloud.assessment.remove": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove selection"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Убрать выбор"
+          }
+        }
+      }
+    },
+    "cloud.assessment.loading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading assessment options"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загружаем параметры оценки"
+          }
+        }
+      }
+    },
+    "cloud.assessment.loadMore": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load more criteria"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузить ещё критерии"
+          }
+        }
+      }
+    },
+    "cloud.assessment.noParticipants": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No represented participants are available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет доступных представляемых участников."
+          }
+        }
+      }
+    },
+    "cloud.assessment.noCriteria": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No assessment criteria are available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет доступных критериев оценки."
+          }
+        }
+      }
+    },
+    "cloud.assessment.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assessment options are unavailable. Review cloud status and try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Параметры оценки недоступны. Проверьте статус в облаке и повторите попытку."
+          }
+        }
+      }
+    },
+    "cloud.assessment.notPending": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This upload cannot accept an assessment selection now."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сейчас для этой загрузки нельзя выбрать параметры оценки."
+          }
+        }
+      }
+    },
+    "cloud.assessment.confirm": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review selection"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить выбор"
+          }
+        }
+      }
+    },
+    "cloud.assessment.confirmTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Submit this selection for assessment?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправить выбранные параметры для оценки?"
+          }
+        }
+      }
+    },
+    "cloud.assessment.submit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Submit selection"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправить выбор"
+          }
+        }
+      }
+    },
+    "cloud.assessment.confirmSummary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@. Selected criteria: %lld."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@. Количество выбранных критериев: %lld."
+          }
+        }
+      }
+    },
+    "cloud.assessment.selectionLimit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select up to 100 criteria."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Можно выбрать не более 100 критериев."
+          }
+        }
+      }
+    },
+    "cloud.action.reconcile": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh cloud status"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновить статус в облаке"
+          }
+        }
+      }
+    },
+    "cloud.consent.futureOnly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Existing recordings are not sent automatically. Signing in alone does not enable cloud sync."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Существующие записи не отправляются автоматически. Вход в аккаунт сам по себе не включает синхронизацию с облаком."
+          }
+        }
+      }
+    },
+    "cloud.consent.payload": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically send protected transcripts and metadata from new recordings to this workspace. Audio is never sent. Metadata may contain personal information."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматически отправлять защищённые расшифровки и метаданные новых записей в это рабочее пространство. Аудио не отправляется. Метаданные могут содержать персональные данные."
+          }
+        }
+      }
+    },
+    "cloud.error.busy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A cloud operation is still finishing. Try again shortly."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Операция с облаком ещё выполняется. Повторите попытку чуть позже."
+          }
+        }
+      }
+    },
+    "cloud.error.operation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The cloud operation could not finish. Review its status and try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось завершить операцию с облаком. Проверьте её статус и повторите попытку."
+          }
+        }
+      }
+    },
+    "cloud.state.off": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud sync is off"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Синхронизация с облаком выключена"
+          }
+        }
+      }
+    },
+    "cloud.status.conflict": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud source conflict"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Конфликт исходных данных в облаке"
+          }
+        }
+      }
+    },
+    "cloud.onboarding.localRecognition": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record conversations, follow the transcript as people speak, and return to any moment later. Speech recognition runs on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывайте разговоры, следите за текстом по мере речи и возвращайтесь к любому моменту позже. Распознавание речи выполняется на этом устройстве."
+          }
+        }
+      }
+    },
+    "cloud.action.pause": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause cloud uploads"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приостановить отправку в облако"
+          }
+        }
+      }
+    },
+    "cloud.action.recover": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry displayed setting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторить сохранение показанной настройки"
+          }
+        }
+      }
+    },
+    "cloud.action.refresh": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh cloud status"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновить статус в облаке"
+          }
+        }
+      }
+    },
+    "cloud.action.resume": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume cloud uploads"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Возобновить отправку в облако"
+          }
+        }
+      }
+    },
+    "cloud.action.retry": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry cloud upload"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторить отправку в облако"
+          }
+        }
+      }
+    },
+    "cloud.action.send": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send protected transcript"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправить защищённую расшифровку"
+          }
+        }
+      }
+    },
+    "cloud.analysis.failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analysis failed. Upload retained."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось выполнить анализ. Загруженная запись сохранена."
+          }
+        }
+      }
+    },
+    "cloud.analysis.needsCriteria": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose assessment criteria"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите критерии оценки"
+          }
+        }
+      }
+    },
+    "cloud.analysis.needsParticipant": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the represented participant"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите представляемого участника"
+          }
+        }
+      }
+    },
+    "cloud.analysis.queued": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analysis queued"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Анализ в очереди"
+          }
+        }
+      }
+    },
+    "cloud.analysis.running": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analysis running"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Анализ выполняется"
+          }
+        }
+      }
+    },
+    "cloud.analysis.succeeded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Analysis completed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Анализ завершён"
+          }
+        }
+      }
+    },
+    "cloud.availability.paused": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud uploads are paused."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправка в облако приостановлена."
+          }
+        }
+      }
+    },
+    "cloud.availability.pausing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopping cloud sync. The displayed setting has not changed yet."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Останавливаем синхронизацию с облаком. Показанная настройка ещё не изменена."
+          }
+        }
+      }
+    },
+    "cloud.availability.profileUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud sync is unavailable while account data is hidden."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Синхронизация с облаком недоступна, пока данные аккаунта скрыты."
+          }
+        }
+      }
+    },
+    "cloud.availability.ready": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud sync is ready."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Синхронизация с облаком готова."
+          }
+        }
+      }
+    },
+    "cloud.availability.signedOut": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in to use cloud sync."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Войдите в аккаунт для синхронизации с облаком."
+          }
+        }
+      }
+    },
+    "cloud.availability.storageUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud sync storage is unavailable. Transfers are paused."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранилище синхронизации недоступно. Передача приостановлена."
+          }
+        }
+      }
+    },
+    "cloud.availability.transportUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud connection is unavailable. Recordings can still be saved on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Соединение с облаком недоступно. Записи по-прежнему можно сохранять на этом устройстве."
+          }
+        }
+      }
+    },
+    "cloud.availability.unconfigured": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud sync is not configured for this app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Синхронизация с облаком не настроена для этого приложения."
+          }
+        }
+      }
+    },
+    "cloud.commandFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The cloud operation could not finish. Review its status and try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось завершить операцию с облаком. Проверьте её статус и повторите попытку."
+          }
+        }
+      }
+    },
+    "cloud.consent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically send protected transcripts and metadata from new recordings to this workspace. Audio is never sent. Metadata may contain personal information."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматически отправлять защищённые расшифровки и метаданные новых записей в это рабочее пространство. Аудио не отправляется. Метаданные могут содержать персональные данные."
+          }
+        }
+      }
+    },
+    "cloud.history": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Existing recordings are not sent automatically. Signing in alone does not enable cloud sync."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Существующие записи не отправляются автоматически. Вход в аккаунт сам по себе не включает синхронизацию с облаком."
+          }
+        }
+      }
+    },
+    "cloud.pause.accountReview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review account balance"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте баланс аккаунта"
+          }
+        }
+      }
+    },
+    "cloud.pause.authenticationRequired": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in again to resume cloud uploads"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Войдите снова, чтобы возобновить отправку в облако"
+          }
+        }
+      }
+    },
+    "cloud.pause.permissionReview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review workspace access"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте доступ к рабочему пространству"
+          }
+        }
+      }
+    },
+    "cloud.pause.profileTransition": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud upload paused after an account change"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправка в облако приостановлена после смены аккаунта"
+          }
+        }
+      }
+    },
+    "cloud.pause.receiptReview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review cloud upload status"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте статус загрузки в облако"
+          }
+        }
+      }
+    },
+    "cloud.pause.retryAfterBeyondBudget": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server requested a longer retry delay"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервер запросил более длительную задержку перед повторной попыткой"
+          }
+        }
+      }
+    },
+    "cloud.pause.retryBudgetExhausted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic retries paused"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматические повторные попытки приостановлены"
+          }
+        }
+      }
+    },
+    "cloud.pause.sourceConflict": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud source conflict"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Конфликт исходных данных в облаке"
+          }
+        }
+      }
+    },
+    "cloud.pause.storageUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud sync storage unavailable"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранилище синхронизации недоступно"
+          }
+        }
+      }
+    },
+    "cloud.pause.transportUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud connection unavailable"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Соединение с облаком недоступно"
+          }
+        }
+      }
+    },
+    "cloud.pause.uncertainDelivery": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud delivery needs confirmation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доставка в облако требует подтверждения"
+          }
+        }
+      }
+    },
+    "cloud.pause.userRequested": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud uploads paused"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправка в облако приостановлена"
+          }
+        }
+      }
+    },
+    "cloud.pause.validationRejected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud upload needs validation review"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте данные для загрузки в облако"
+          }
+        }
+      }
+    },
+    "cloud.status.accepted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud upload accepted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка в облако принята"
+          }
+        }
+      }
+    },
+    "cloud.status.loading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking cloud status"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверяем статус в облаке"
+          }
+        }
+      }
+    },
+    "cloud.status.localOnly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved on this device"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранено на этом устройстве"
+          }
+        }
+      }
+    },
+    "cloud.status.queued": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Queued for cloud upload"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В очереди на отправку в облако"
+          }
+        }
+      }
+    },
+    "cloud.status.retryScheduled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry at %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторная попытка: %@"
+          }
+        }
+      }
+    },
+    "cloud.status.sending": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uploading protected transcript"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправляем защищённую расшифровку"
+          }
+        }
+      }
+    },
+    "cloud.status.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud status is unavailable"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Статус в облаке недоступен"
+          }
+        }
+      }
+    },
+    "cloud.status.waitingForSource": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for protected transcript"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ожидается защищённая расшифровка"
+          }
+        }
+      }
+    },
+    "cloud.status.withheld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kept on this device"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оставлено на этом устройстве"
+          }
+        }
+      }
+    },
+    "cloud.storageRecovery": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry keeps the displayed setting. Use the toggle to change it."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторная попытка сохраняет показанную настройку. Чтобы изменить её, используйте переключатель."
+          }
+        }
+      }
+    },
+    "cloud.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud sync"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Синхронизация с облаком"
+          }
+        }
+      }
+    },
+    "cloud.withheld.completenessUnknown": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recognition completeness is unknown."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Полнота распознавания неизвестна."
+          }
+        }
+      }
+    },
+    "cloud.withheld.emptyTranscript": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No transcript text to upload."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет текста расшифровки для отправки."
+          }
+        }
+      }
+    },
+    "cloud.withheld.excludedIntervals": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some audio intervals have no transcript."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для некоторых участков аудио нет расшифровки."
+          }
+        }
+      }
+    },
+    "cloud.withheld.exportLimitExceeded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This source exceeds cloud upload limits."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта расшифровка превышает ограничения отправки в облако."
+          }
+        }
+      }
+    },
+    "cloud.withheld.incompleteTranscript": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recognition is incomplete. Kept on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание не завершено. Запись оставлена на этом устройстве."
+          }
+        }
+      }
+    },
+    "cloud.withheld.invalidTranscript": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This protected source needs review."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта защищённая расшифровка требует проверки."
+          }
+        }
+      }
+    },
+    "cloud.withheld.notCompleted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This recording is not complete yet."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обработка этой записи ещё не завершена."
+          }
+        }
+      }
+    },
+    "cloud.withheld.originalTextRetained": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Original text is still stored."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исходный текст всё ещё хранится."
+          }
+        }
+      }
+    },
+    "cloud.withheld.redactionNotEnabled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This recording was captured without text redaction."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта запись сделана без удаления чувствительных данных из текста."
+          }
+        }
+      }
+    },
+    "account.action.cancelSignIn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel sign-in"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отменить вход"
+          }
+        }
+      }
+    },
+    "account.action.guest": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue as guest"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Продолжить без входа"
+          }
+        }
+      }
+    },
+    "account.action.reauthenticate": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in again"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Войти снова"
+          }
+        }
+      }
+    },
+    "account.action.signIn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Войти"
+          }
+        }
+      }
+    },
+    "account.action.signOut": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign out"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выйти"
+          }
+        }
+      }
+    },
+    "account.action.switchPerson": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch account"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сменить аккаунт"
+          }
+        }
+      }
+    },
+    "account.error.busy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An account operation is still finishing. Try again shortly."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Операция с аккаунтом ещё выполняется. Повторите попытку чуть позже."
+          }
+        }
+      }
+    },
+    "account.error.cancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in was cancelled. You can continue as guest."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вход отменён. Можно продолжить без входа."
+          }
+        }
+      }
+    },
+    "account.error.credentialsUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account cleanup could not finish. Retry sign-out before signing in again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось завершить очистку данных аккаунта. Повторите выход, прежде чем войти снова."
+          }
+        }
+      }
+    },
+    "account.error.invalidAccount": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your account could not be verified. Please sign in again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подтвердить аккаунт. Войдите снова."
+          }
+        }
+      }
+    },
+    "account.error.invalidCallback": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in could not be verified. Please try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подтвердить вход. Повторите попытку."
+          }
+        }
+      }
+    },
+    "account.error.invalidConfiguration": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in is unavailable in this app configuration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вход недоступен в этой конфигурации приложения."
+          }
+        }
+      }
+    },
+    "account.error.invalidResponse": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The account service returned an invalid response. Please try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервис аккаунтов вернул некорректный ответ. Повторите попытку."
+          }
+        }
+      }
+    },
+    "account.error.invalidState": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in could not be verified. Please try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подтвердить вход. Повторите попытку."
+          }
+        }
+      }
+    },
+    "account.error.invalidToken": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your account could not be verified. Please sign in again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подтвердить аккаунт. Войдите снова."
+          }
+        }
+      }
+    },
+    "account.error.isolationRequired": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in is not available yet. You can continue using this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вход пока недоступен. Вы можете продолжать пользоваться приложением на этом устройстве."
+          }
+        }
+      }
+    },
+    "account.error.networkUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The account service could not be reached. Check your connection and try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось подключиться к сервису аккаунтов. Проверьте подключение и повторите попытку."
+          }
+        }
+      }
+    },
+    "account.error.permissionDenied": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your account does not have access to this workspace."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "У вашего аккаунта нет доступа к этому рабочему пространству."
+          }
+        }
+      }
+    },
+    "account.error.previousAccountReturned": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The same account was returned. Try switching again and choose a different account."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервис вернул тот же аккаунт. Повторите смену и выберите другой аккаунт."
+          }
+        }
+      }
+    },
+    "account.error.reauthenticationRequired": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please sign in again to reconnect your account."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Войдите снова, чтобы восстановить подключение к аккаунту."
+          }
+        }
+      }
+    },
+    "account.error.revocationUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signed out on this device. The server could not confirm revocation of this device's session."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вы вышли на этом устройстве. Сервер не смог подтвердить отзыв его сеанса."
+          }
+        }
+      }
+    },
+    "account.error.staleOperation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your account changed. Please try again from the current account."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аккаунт изменился. Повторите попытку из текущего аккаунта."
+          }
+        }
+      }
+    },
+    "account.error.unconfigured": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in is not configured for this app. You can continue using this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вход в этом приложении не настроен. Вы можете продолжать пользоваться им на этом устройстве."
+          }
+        }
+      }
+    },
+    "account.error.workspaceUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This workspace is no longer available. Choose another workspace."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Это рабочее пространство больше недоступно. Выберите другое."
+          }
+        }
+      }
+    },
+    "account.guest.explanation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in is optional. You can record and export without an account."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вход необязателен. Записывать и экспортировать можно без аккаунта."
+          }
+        }
+      }
+    },
+    "account.history.local": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing in does not upload existing recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вход не загружает существующие записи в облако."
+          }
+        }
+      }
+    },
+    "account.onboarding.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optional account"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аккаунт по желанию"
+          }
+        }
+      }
+    },
+    "account.profile.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account data is temporarily hidden. Finish the current recording or operation, then retry sign-out."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Данные аккаунта временно скрыты. Завершите текущую запись или операцию и повторите выход."
+          }
+        }
+      }
+    },
+    "account.state.signingIn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing in"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выполняется вход"
+          }
+        }
+      }
+    },
+    "account.state.updating": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating account"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновление аккаунта"
+          }
+        }
+      }
+    },
+    "account.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аккаунт"
+          }
+        }
+      }
+    },
+    "account.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign-in is not available yet. You can continue using this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вход пока недоступен. Вы можете продолжать пользоваться приложением на этом устройстве."
+          }
+        }
+      }
+    },
+    "account.workspace.choose": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a workspace"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите рабочее пространство"
+          }
+        }
+      }
+    },
+    "account.workspace.empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No workspaces are available for this account. You can continue recording on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этого аккаунта нет доступных рабочих пространств. Вы можете продолжать запись на этом устройстве."
+          }
+        }
+      }
+    },
+    "account.workspace.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рабочее пространство"
+          }
+        }
+      }
+    },
+    "Speech is transcribed on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speech is transcribed on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Речь распознаётся на этом устройстве."
+          }
+        }
+      }
+    },
+    "Start your first meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start your first meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начните первую встречу"
+          }
+        }
+      }
+    },
+    "On": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включено"
+          }
+        }
+      }
+    },
+    "Record a meeting and return to its transcript.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record a meeting and return to its transcript."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запишите встречу и вернитесь к её тексту."
+          }
+        }
+      }
+    },
+    "account.legacy.email": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Электронная почта"
+          }
+        }
+      }
+    },
+    "account.legacy.password": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пароль"
+          }
+        }
+      }
+    },
+    "account.legacy.sessionOnly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your password is used only to sign in. This device stores your session securely."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пароль используется только для входа. Сеанс безопасно хранится на этом устройстве."
+          }
+        }
+      }
+    },
+    "account.legacy.logoutTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign out on all devices?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выйти на всех устройствах?"
+          }
+        }
+      }
+    },
+    "account.legacy.logoutWarning": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing out ends your account sessions on every device, including the web app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выход завершит сеансы вашей учётной записи на всех устройствах, включая веб-приложение."
+          }
+        }
+      }
+    },
+    "cloud.legacy.destination": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Destination"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Куда отправляем"
+          }
+        }
+      }
+    },
+    "cloud.legacy.employee": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Employee to assess"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сотрудник для оценки"
+          }
+        }
+      }
+    },
+    "cloud.legacy.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send protected transcript"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправить защищённый транскрипт"
+          }
+        }
+      }
+    },
+    "cloud.legacy.confirm": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send this protected transcript to the selected account and workspace?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправить защищённый транскрипт в выбранную учётную запись и рабочее пространство?"
+          }
+        }
+      }
+    },
+    "cloud.legacy.protectedOnly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only the completed protected text and metadata, including participant names and timing, are sent. Check the destination, employee, source participant and criteria before sending."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправляются только завершённый защищённый текст и метаданные, включая имена участников и время. Проверьте адрес, сотрудника, участника записи и критерии перед отправкой."
+          }
+        }
+      }
+    },
+    "cloud.legacy.consent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable protected delivery before starting a new recording. Each completed recording requires a separate Send action."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включите отправку защищённого текста до начала новой записи. Для каждой завершённой записи нужно отдельно нажать «Отправить»."
+          }
+        }
+      }
+    },
+    "cloud.legacy.accountID": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account ID"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID учётной записи"
+          }
+        }
+      }
+    },
+    "cloud.legacy.workspaceID": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace ID"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID рабочего пространства"
+          }
+        }
+      }
+    },
+    "account.error.captchaRequired": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This sign-in requires a browser verification that this app cannot complete. Wait for the sign-in limit to expire before trying again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для входа нужна проверка в браузере, которую это приложение пока не поддерживает. Повторите попытку после окончания ограничения на вход."
+          }
+        }
+      }
+    },
+    "account.error.browserLoginRequired": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account requires browser sign-in. Password sign-in is unavailable for this account."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой учётной записи нужен вход через браузер. Вход по паролю недоступен."
+          }
+        }
+      }
+    },
+    "account.error.rateLimited": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many sign-in attempts. Wait before trying again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Слишком много попыток входа. Подождите и повторите попытку."
+          }
+        }
+      }
+    },
+    "account.legacy.chooseOrganization": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose this organization"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать эту организацию"
+          }
+        }
+      }
+    },
+    "account.legacy.revocationUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signed out on this device. The server could not confirm sign-out on all devices."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этом устройстве выполнен выход. Сервер не подтвердил завершение сеансов на всех устройствах."
+          }
+        }
+      }
+    },
+    "account.legacy.offline": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Offline. Your account will be checked again before anything is sent."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет связи. Перед отправкой учётная запись будет проверена снова."
+          }
+        }
+      }
+    },
+    "cloud.automatic.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send protected transcripts automatically"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправлять защищённые расшифровки автоматически"
+          }
+        }
+      }
+    },
+    "cloud.automatic.consent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New completed protected transcripts, participant names and timing are sent to your selected account and workspace automatically. Metadata may contain personal information. Audio is not retained in this mode. Turn on Data cleanup before recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новые завершённые защищённые расшифровки, имена участников и время автоматически отправляются в выбранную учётную запись и рабочее пространство. Метаданные могут содержать персональные сведения. В этом режиме аудио не сохраняется. Перед записью включите обезличивание данных."
+          }
+        }
+      }
+    },
+    "cloud.automatic.deleteLocal": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Do not keep recordings on this device"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не хранить записи на этом устройстве"
+          }
+        }
+      }
+    },
+    "cloud.automatic.retention": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applies to new recordings. The local recording is deleted only after the server confirms receipt. While the server is unavailable, an encrypted local copy is kept and delivery is retried."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Применяется к новым записям. Локальная запись удаляется только после подтверждения приёма сервером. Пока сервер недоступен, зашифрованная копия остаётся на устройстве, а отправка повторяется."
+          }
+        }
+      }
+    },
+    "cloud.automatic.runtime": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delivery resumes automatically while the app is running and the server is reachable."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправка возобновляется автоматически, когда приложение работает и сервер доступен."
+          }
+        }
+      }
+    },
+    "cloud.automatic.requiresPrivacy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn on Data cleanup before recording with automatic protected delivery."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перед записью с автоматической отправкой включите обезличивание данных."
+          }
+        }
+      }
+    },
+    "cloud.availability.protectedDataUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unlock this device to resume protected delivery."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разблокируйте устройство, чтобы продолжить защищённую отправку."
+          }
+        }
+      }
+    },
+    "account.legacy.protectedData": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unlock this device to restore your account and protected recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разблокируйте устройство, чтобы восстановить учётную запись и защищённые записи."
+          }
+        }
+      }
+    },
+    "cloud.automatic.destination": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Server"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сервер"
+          }
+        }
+      }
+    },
+    "recording.protection.section": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protected recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Защита записей"
+          }
+        }
+      }
+    },
+    "recording.protection.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encrypt data on this device"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Шифровать данные на устройстве"
+          }
+        }
+      }
+    },
+    "recording.protection.description": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New recordings are encrypted and cannot be viewed, copied or exported on this device. Audio is processed in memory and is not saved to disk. Existing ordinary history is unchanged. Turning this off does not unlock recordings that are already encrypted."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новые записи хранятся зашифрованно и недоступны для просмотра, копирования и экспорта на этом устройстве. Аудио обрабатывается в памяти и не сохраняется на диск. Существующая обычная история не изменяется. Отключение настройки не открывает уже зашифрованные записи."
+          }
+        }
+      }
+    },
+    "recording.protection.requiredForSync": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic sending requires encryption. Turn off automatic sending in Account before changing this setting. Already encrypted recordings stay protected."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для автоматической отправки требуется шифрование. Чтобы изменить эту настройку, сначала выключите автоматическую отправку в разделе «Аккаунт». Уже зашифрованные записи останутся защищёнными."
+          }
+        }
+      }
+    },
+    "recording.protection.guest": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Guest recordings are not moved into an account automatically. Connect your account before recording if new recordings need to be sent."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Гостевые записи не переносятся в аккаунт автоматически. Если новые записи нужно отправлять, подключите аккаунт до начала записи."
+          }
+        }
+      }
+    },
+    "recording.protection.concealed.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Encrypted recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зашифрованная запись"
+          }
+        }
+      }
+    },
+    "recording.protection.concealed.detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The contents of this recording cannot be viewed on this device. Automatic sending continues for recordings made in a connected account with sync enabled, including after the connection returns."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Содержимое записи недоступно для просмотра на этом устройстве. Автоматическая отправка продолжается для записей подключённого аккаунта с включённой синхронизацией, в том числе после восстановления связи."
+          }
+        }
+      }
+    },
+    "recording.deletion.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete recordings after sync"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалять записи после синхронизации"
+          }
+        }
+      }
+    },
+    "recording.deletion.description": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The local copy is deleted only after the server confirms that it has saved the recording. Without a connection, the recording stays on this device until a later sending attempt."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная копия удаляется только после подтверждения сервера, что запись сохранена. Без связи запись остаётся на устройстве до следующей попытки отправки."
+          }
+        }
+      }
+    },
+    "recording.deletion.accountRequired": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect an account and choose a workspace to enable deletion after sync."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключите аккаунт и выберите пространство, чтобы включить удаление после синхронизации."
+          }
+        }
+      }
+    },
+    "recording.deletion.syncDisabled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic sending is off. Enable it in Account so new recordings can be sent when a connection is available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматическая отправка выключена. Включите её в разделе «Аккаунт», чтобы новые записи отправлялись при доступной связи."
+          }
+        }
+      }
+    },
+    "recording.deletion.settingsLocation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deletion after sync and local encryption are configured in Data cleanup."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаление после синхронизации и шифрование на устройстве настраиваются в разделе «Очистка данных»."
+          }
+        }
+      }
+    },
+    "recording.protection.operationFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The protected recording operation could not be completed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось завершить операцию с защищённой записью."
+          }
+        }
+      }
+    },
+    "recording.settings.scope": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text cleanup and encryption apply to new recordings. Audio retention applies to existing recordings too. When deletion after sync is on, unchanged recordings already confirmed by the server are also removed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очистка текста и шифрование применяются к новым записям. Срок хранения аудио действует и для существующих записей. При включённом удалении после синхронизации удаляются также неизменённые записи, приём которых уже подтверждён сервером."
+          }
+        }
+      }
+    },
+    "Microphone, language and meeting location": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone, language and meeting location"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон, язык и место встречи"
+          }
+        }
+      }
+    },
+    "Speaker labels and your voice": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker labels and your voice"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Метки говорящих и ваш голос"
+          }
+        }
+      }
+    },
+    "Audio storage, cleanup and encryption": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio storage, cleanup and encryption"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранение аудио, очистка и шифрование"
+          }
+        }
+      }
+    },
+    "Recording only, full access with a password": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording only, full access with a password"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Только запись, полный доступ по паролю"
+          }
+        }
+      }
+    },
+    "The model will be removed from this device. Meetings and transcripts stay.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model will be removed from this device. Meetings and transcripts stay."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель будет удалена с этого устройства. Встречи и расшифровки сохранятся."
           }
         }
       }

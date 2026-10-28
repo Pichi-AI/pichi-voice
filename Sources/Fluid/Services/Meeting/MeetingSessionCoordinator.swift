@@ -208,6 +208,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private var sweepPending = false
     private var isReadingRetentionSessions = false
+    private var retentionReadWaiters: [CheckedContinuation<Void, Never>] = []
     private var retentionTimerTask: Task<Void, Never>?
 
     /// Only fields changed by participant reassignment, retained once per selected member.
@@ -520,6 +521,21 @@ final class MeetingSessionCoordinator: ObservableObject {
     ) async throws -> MeetingSession {
         try Task.checkCancellation()
         guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
+        // The existing storage/admission owner resolves security policy for every
+        // recording entry point before backend checks or microphone permission work.
+        var configuration = configuration
+        let persistencePolicy = try await self.store.prepareCapturePersistencePolicy()
+        if persistencePolicy.requiresPIIRedaction {
+            guard configuration.piiRedactionEnabled == true else {
+                throw NSError(domain: "ProtectedRecording", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                    PichiLocalization.text("cloud.automatic.requiresPrivacy", defaultValue: "Turn on Data cleanup before recording with automatic protected delivery.")])
+            }
+        }
+        if persistencePolicy.requiresEncryptedPersistence {
+            configuration.audioStorageMode = .memoryOnly
+            configuration.requiresEncryptedPersistence = true
+        }
+        try Task.checkCancellation()
         try configuration.validate()
         let selectedModelID = self.settings.selectedSpeechModel.rawValue
         let savedBackendID = self.settings.meetingTranscriptionBackendID
@@ -622,9 +638,11 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard recordingRedactor != nil else { throw MeetingPrivacyPublicationError.redactorUnavailable }
         }
         let lease = try await self.audioArbiter.acquireMeetingCapture()
+        let recordingSessionID = UUID()
         let recordingModelID: String
         let recordingBackendID: MeetingBackendID
         let recordingASRConfiguration: MeetingFinalProcessingConfiguration
+        let recordingProfileOwnership: MeetingProfileOwnership?
         do {
             try Task.checkCancellation()
             guard self.settings.fluidMeetEnabled else { throw MeetingCoordinatorError.featureDisabled }
@@ -671,7 +689,11 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
             try self.validateFrozenRecordingConfiguration(recordingASRConfiguration)
+            recordingProfileOwnership = try await self.store.captureOwnership(for: recordingSessionID, configuration: configuration)
+            guard self.startReservation == reservation, self.terminationTask == nil,
+                  !Task.isCancelled else { throw CancellationError() }
         } catch {
+            await self.store.cancelCaptureAdmission(for: recordingSessionID)
             await self.audioArbiter.release(lease)
             throw error
         }
@@ -688,7 +710,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.state = .idle
         }
         let timebase = Self.makeTimebase()
-        var session = MeetingSession(configuration: publicationConfiguration, timebase: timebase)
+        var session = MeetingSession(id: recordingSessionID, configuration: publicationConfiguration, timebase: timebase)
+        session.profileOwnership = recordingProfileOwnership
         session.recordingBackendID = recordingBackendID.rawValue
         session.recordingASRArtifactFingerprint = recordingASRConfiguration.asrArtifactFingerprint
         session.retention.retainAudioUntil = self.settings.meetingAudioRetentionPolicy
@@ -1151,17 +1174,26 @@ final class MeetingSessionCoordinator: ObservableObject {
         return try await self.process(session, generation: generation)
     }
 
-    func deleteSession(id: MeetingSessionID) async throws {
+    func deleteSession(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership? = nil,
+                       validating: (@Sendable (MeetingSession) throws -> Void)? = nil) async throws {
         await self.ensureRestored()
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.maintenanceInProgress }
         guard self.isQuiescent else { throw MeetingCoordinatorError.activityInProgress }
         self.isDeleting = true
         defer { self.isDeleting = false }
         await self.flushQueuedPersistence()
+        try Task.checkCancellation()
         // Re-check: the flush await gives a racing operation a window to start.
         guard !self.hasBlockingActivityTask else { throw MeetingCoordinatorError.activityInProgress }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.maintenanceInProgress }
-        try await self.store.delete(id: id)
+        if let validating {
+            guard let expectedOwnership else { throw CocoaError(.featureUnsupported) }
+            try await self.store.delete(id: id, expectedOwnership: expectedOwnership, validating: validating)
+        } else if let expectedOwnership { try await self.store.delete(id: id, expectedOwnership: expectedOwnership) }
+        else { try await self.store.delete(id: id) }
+        // Receipt-driven removal can target older history without changing the
+        // current recording state. Reuse the existing retention refresh signal.
+        self.retentionSweepRevision &+= 1
         self.correctionUndoStacks[id] = nil
         if self.activeSession?.id == id {
             self.activeSession = nil
@@ -1730,6 +1762,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// A request that arrived while manifests were being read runs once this read is finished.
     private func finishRetentionRead() {
         self.isReadingRetentionSessions = false
+        let waiters = self.retentionReadWaiters
+        self.retentionReadWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
         guard self.sweepPending, !self.isMutatingSession else { return }
         self.sweepPending = false
         guard self.terminationTask == nil else { return }
@@ -1930,6 +1965,25 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.restoreTask = task
         await task.value
+    }
+
+    /// Clears only in-memory private projections. Stored recovery offers remain unchanged in
+    /// their original profile; changing accounts must not dismiss or delete an unfinished meeting.
+    func prepareForPrivateProfileTransition() async throws {
+        guard isQuiescent else { throw MeetingCoordinatorError.activityInProgress }
+        let timer = retentionTimerTask
+        timer?.cancel(); await timer?.value; retentionTimerTask = nil; sweepPending = false
+        if isReadingRetentionSessions {
+            await withCheckedContinuation { retentionReadWaiters.append($0) }
+        }
+        locationTask?.cancel(); await locationTask?.value; locationTask = nil
+        await restoreTask?.value
+        await flushQueuedPersistence()
+        guard isQuiescent else { throw MeetingCoordinatorError.activityInProgress }
+        restoreTask = nil; activeSession = nil; latestCompletedSession = nil
+        trackHealth = [:]; liveTranscript = .empty; pendingSpeech = .empty
+        correctionUndoStacks.removeAll(); lastLiveSpeechAt = nil; captureStopHandoff = nil
+        state = .idle
     }
 
     private func restoreRecoverableSessionIfNeeded() async {

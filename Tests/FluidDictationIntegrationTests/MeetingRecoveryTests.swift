@@ -712,12 +712,12 @@ final class MeetingRecoveryTests: XCTestCase {
         try await self.assertMemoryTailSurvivesTerminalPath("normal")
     }
 
-    func testSessionManifestRoundTripPreservesMediaTimesAndWholeSecondWallClockDates() async throws {
+    func testSessionManifestRoundTripPreservesMediaTimesAndExactWallClockDates() async throws {
         let directory = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = MeetingSessionStore(rootDirectory: directory)
-        let startedAt = Date(timeIntervalSince1970: 1_700_000_000.625)
-        let stoppedAt = startedAt.addingTimeInterval(2)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000.125)
+        let stoppedAt = startedAt.addingTimeInterval(1.5)
         var track = self.makeMicrophoneTrack(chunks: [])
         track.health.status = .stopped
         track.health.lastSampleAt = stoppedAt
@@ -729,13 +729,13 @@ final class MeetingRecoveryTests: XCTestCase {
         try await store.create(session)
         let persisted = try await store.load(id: session.id)
         let saved = try XCTUnwrap(persisted)
-        XCTAssertEqual(saved.startedAt, Date(timeIntervalSince1970: 1_700_000_000))
-        XCTAssertEqual(saved.endedAt, Date(timeIntervalSince1970: 1_700_000_002))
-        XCTAssertNotEqual(saved.endedAt, stoppedAt, "The existing ISO-8601 manifest omits wall-clock fractions")
+        XCTAssertEqual(saved.startedAt, startedAt)
+        XCTAssertEqual(saved.endedAt, stoppedAt)
+        XCTAssertEqual(saved, session, "Every persisted field, including fractional wall-clock dates, survives exactly")
         XCTAssertEqual(saved.endedAt, try self.sessionManifestRoundTrip(stoppedAt))
         XCTAssertNotEqual(saved.endedAt, try self.sessionManifestRoundTrip(stoppedAt.addingTimeInterval(2)),
-            "Second-precision expectations still reject substituting model-drain completion for audio Stop")
-        XCTAssertEqual(saved.duration, 2, accuracy: 0.000_001)
+            "Exact date expectations reject substituting model-drain completion for audio Stop")
+        XCTAssertEqual(saved.duration, 1.5)
         XCTAssertEqual(saved.audioTracks, try self.sessionManifestRoundTrip([track]))
         XCTAssertEqual(saved.transcriptSegments, [segment], "Fractional media times and every other transcript field remain exact")
     }
@@ -2538,13 +2538,13 @@ final class MeetingRecoveryTests: XCTestCase {
         return bitmap
     }
 
-    // Match MeetingSessionStore's existing codec only for expectations read from disk.
-    // Live Stop values, durations, media times and every non-Date field stay exact.
+    // Use the shared persistence codec without normalizing any expected field.
+    // Exact source-value assertions separately guard against lossy codec changes.
     private func sessionManifestRoundTrip<Value: Codable>(_ value: Value) throws -> Value {
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = MeetingSessionDateCodec.encodingStrategy
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
         return try decoder.decode(Value.self, from: encoder.encode(value))
     }
 
@@ -4310,8 +4310,7 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(edited.transcriptSegments[0].isUserTextEdited, true)
         let loaded = try await store.load(id: session.id)
         let reloaded = try XCTUnwrap(loaded)
-        XCTAssertEqual(reloaded.updatedAt.timeIntervalSince1970, floor(edited.updatedAt.timeIntervalSince1970), accuracy: 0.001)
-        expected.updatedAt = reloaded.updatedAt // Existing ISO-8601 persistence has second precision.
+        XCTAssertEqual(reloaded.updatedAt, edited.updatedAt)
         XCTAssertEqual(reloaded, expected)
         XCTAssertTrue(MeetingTranscriptExporter.text(for: reloaded).contains("Corrected words"))
         let exportedJSON = try XCTUnwrap(String(data: MeetingTranscriptExporter.json(for: reloaded), encoding: .utf8))
@@ -4901,7 +4900,8 @@ final class MeetingRecoveryTests: XCTestCase {
             XCTAssertEqual(corrected.transcriptSegments[index], expected)
         }
         let persisted = try await store.load(id: session.id)
-        // The archive codec normalizes Date precision; compare the correction evidence exactly.
+        // The archive preserves dates and correction evidence exactly.
+        XCTAssertEqual(persisted?.updatedAt, corrected.updatedAt)
         XCTAssertEqual(persisted?.transcriptSegments, corrected.transcriptSegments)
         XCTAssertEqual(persisted?.speakers, corrected.speakers)
 

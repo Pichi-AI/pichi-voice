@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "repository": "Pichi-AI/web",
+  "commit": "ac2b6c352de1c74080c44e0fe206f039b84726eb",
+  "approval": "Coordinator approved source-only native assessment-options integration derived from this frozen W2 implementation",
+  "scope": "Synthetic response bodies for the existing GET assessment-options boundary; no runtime, network, native UI or production access acceptance",
+  "sources": [
+    {
+      "path": "packages/shared/recording-imports.ts",
+      "gitBlob": "b6d69608dd094ed080f1abc2a86cd1e800a77a5c",
+      "sha256": "888145bd0fab7f5e799b3b163640618958e1d764970be21b4ca38bf53de173f7",
+      "byteLength": 6079,
+      "role": "Authoritative response and query schemas at the frozen approved implementation revision"
+    },
+    {
+      "path": "apps/server/services/recording-import-reads.ts",
+      "gitBlob": "7a3be995f5c9ef53157d774a7407300bb0df885c",
+      "sha256": "4cb0ed950888862a6d25d111eace6c8018c1c1c1217001c6fc91a57956c3eddc",
+      "byteLength": 10103,
+      "role": "Authoritative represented participant projection, scoped canonical cursor encoding, criteria pagination, current assessment and pending-resolution calculation"
+    },
+    {
+      "path": "apps/server/routes/v1/recording-imports.ts",
+      "gitBlob": "bdcefda411384d6f3f1ba1322845d6e712589eb2",
+      "sha256": "95944e8827e18b0552d7742b7ef1e6d2644a868ddc52259badbec8f0243c5efe",
+      "byteLength": 6355,
+      "role": "Authoritative authenticated GET assessment-options route and query parsing"
+    },
+    {
+      "path": "packages/shared/fixtures/pichi-account-sync-v1/own-read-slice-candidate.json",
+      "gitBlob": "6c1670e5f9da7d37b581ead94c609c109eefa590",
+      "sha256": "0fcae5b209b594dfe00381fda4e3c2d37da787a9d436006a38b96086c65a155a",
+      "byteLength": 6659,
+      "role": "Inspected example only; its proposal status and runtime flag are historical and are not contract or acceptance authority"
+    }
+  ],
+  "nativeSource": {
+    "repository": "Pichi-AI/pichi-voice",
+    "commit": "9dc4b6d561aa8bb85c04dd9c78cbae0c71ffab7e",
+    "path": "Tests/Fixtures/PichiAccountSyncV1/protected-transcript.json",
+    "gitBlob": "52fd24f977e720981f86bdd36fff3e4346410f12",
+    "approvedWireCommit": "128e1dc17b51f0f0877e00eafb1f73c13cadddf5",
+    "sha256": "69fe4361b0ac24d1ae904d23e79d21ec929aff6cd545399acd5f7785952cde10",
+    "byteLength": 1392
+  },
+  "derivation": {
+    "context": {
+      "accountID": "123",
+      "organizationID": "17",
+      "workspaceID": "9"
+    },
+    "receipt": {
+      "importID": "synthetic-import-201",
+      "recordingID": "synthetic-recording-201",
+      "uploadState": "accepted"
+    },
+    "participants": "Copy only source.speakers whose ID occurs as a source.segments speakerID, preserving source order, UUID bytes and displayName bytes. Both represented speakers are fictional.",
+    "criteria": "Synthetic authorized criteria with numeric database IDs 31, 32 and 33, ordered ascending; labels are Synthetic criterion followed by the corresponding ID. These examples grant no policy or data access.",
+    "cursor": {
+      "encoding": "UTF-8 compact JSON in implementation object insertion order, then canonical unpadded base64url",
+      "json": "{\"version\":1,\"kind\":\"criteria\",\"userId\":123,\"organizationId\":17,\"workspaceId\":9,\"importID\":\"synthetic-import-201\",\"id\":\"32\"}",
+      "value": "eyJ2ZXJzaW9uIjoxLCJraW5kIjoiY3JpdGVyaWEiLCJ1c2VySWQiOjEyMywib3JnYW5pemF0aW9uSWQiOjE3LCJ3b3Jrc3BhY2VJZCI6OSwiaW1wb3J0SUQiOiJzeW50aGV0aWMtaW1wb3J0LTIwMSIsImlkIjoiMzIifQ"
+    },
+    "options-first-page.json": {
+      "method": "GET",
+      "path": "/api/v1/recordings/imports/synthetic-import-201/assessment-options?organizationID=17&workspaceID=9&limit=2",
+      "httpStatus": 200,
+      "case": "Unbound needsParticipant receipt; null participantID and empty criteriaIDs; first two criteria, with the third row establishing has_more and a cursor after criterion32."
+    },
+    "options-next-page.json": {
+      "method": "GET",
+      "path": "/api/v1/recordings/imports/synthetic-import-201/assessment-options?organizationID=17&workspaceID=9&limit=2&cursor=eyJ2ZXJzaW9uIjoxLCJraW5kIjoiY3JpdGVyaWEiLCJ1c2VySWQiOjEyMywib3JnYW5pemF0aW9uSWQiOjE3LCJ3b3Jrc3BhY2VJZCI6OSwiaW1wb3J0SUQiOiJzeW50aGV0aWMtaW1wb3J0LTIwMSIsImlkIjoiMzIifQ",
+      "httpStatus": 200,
+      "case": "Same unbound receipt and participants; echo the first-page cursor, return criterion33 and explicit next_cursor:null with has_more:false."
+    },
+    "options-bound.json": {
+      "method": "GET",
+      "path": "/api/v1/recordings/imports/synthetic-import-201/assessment-options?organizationID=17&workspaceID=9&limit=2",
+      "httpStatus": 200,
+      "case": "After explicit binding, queued receipt with the represented participant003 and criterion33 selected; retain first-page criteria31/32 and the valid next cursor. Selected criteria may be outside this page. canResolvePending is false."
+    },
+    "nullableFields": "Every response explicitly includes participantID, criteriaIDs, pagination.cursor and pagination.next_cursor; null is emitted where applicable.",
+    "serialization": "UTF-8, two-space indentation, literal Unicode and one trailing LF; .gitattributes disables text conversion for JSON in this new fixture directory."
+  },
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "9e8f041ed812cb5288282cc6b187de804e96b688d56647fdae181c49fec71863",
+      "byteLength": 13
+    },
+    {
+      "path": "options-bound.json",
+      "sha256": "a315cda47d5edc2b717a4aa41fc213e69c47ab1b5de28e898cb9ad2bc3f667d9",
+      "byteLength": 1189
+    },
+    {
+      "path": "options-first-page.json",
+      "sha256": "8efa598884b54e6001149560954bb98ec4dcff5ed8760dd455cca6e8a70575f8",
+      "byteLength": 1148
+    },
+    {
+      "path": "options-next-page.json",
+      "sha256": "ba0bc7f60e35a33ac57fd508341fb940bc0cfc8200902ff7c0de9fdb7e93daa8",
+      "byteLength": 1071
+    }
+  ],
+  "manifestHash": "The manifest does not contain a self hash; its exact bytes are pinned by the native fixture commit."
+}

@@ -16,9 +16,7 @@ struct MobileSensitiveDictionarySettings: View {
     @State private var error: String?
 
     var body: some View {
-        Section(PichiLocalization.text("Words and phrases to hide")) {
-            Text(PichiLocalization.text("Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new meetings."))
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+        Section {
             ForEach(settings.sensitiveDataDictionaryEntries) { entry in
                 Button { edit(entry) } label: {
                     HStack {
@@ -40,6 +38,10 @@ struct MobileSensitiveDictionarySettings: View {
                     .foregroundStyle(theme.palette.accentText)
             }.buttonStyle(.plain).accessibilityIdentifier("privacy.dictionary.add")
             if let error { Text(error).font(theme.typography.caption).foregroundStyle(theme.palette.warning) }
+        } header: {
+            Text(PichiLocalization.text("Words and phrases to hide"))
+        } footer: {
+            MobileSettingsFooter(PichiLocalization.text("Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new meetings."))
         }
     }
 }

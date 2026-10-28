@@ -10,8 +10,14 @@ struct MeetingOwnerVoiceSettingsContent: View {
     @StateObject private var model: MeetingOwnerVoiceEnrollmentModel
 
     init(audioArbiter: any MeetingAudioActivityArbitrating, microphone: MeetingMicrophoneIdentity?) {
+        self.init(model: MeetingOwnerVoiceEnrollmentModel(audioArbiter: audioArbiter), microphone: microphone)
+    }
+
+    /// A restricted host observes the same transaction to keep recording and dismissal
+    /// unavailable until microphone cancellation and resource handback have joined.
+    init(model: MeetingOwnerVoiceEnrollmentModel, microphone: MeetingMicrophoneIdentity?) {
         self.microphone = microphone
-        self._model = StateObject(wrappedValue: MeetingOwnerVoiceEnrollmentModel(audioArbiter: audioArbiter))
+        self._model = StateObject(wrappedValue: model)
     }
 
     var body: some View {
@@ -19,7 +25,7 @@ struct MeetingOwnerVoiceSettingsContent: View {
             Label(PichiLocalization.text(self.model.hasProfile ? "Your voice is saved" : "Your voice is not set up"),
                   systemImage: self.model.hasProfile ? "person.crop.circle.badge.checkmark" : "person.wave.2")
                 .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(self.theme.palette.primaryText)
+                .foregroundStyle(self.model.hasProfile ? self.theme.palette.success : self.theme.palette.primaryText)
                 .accessibilityIdentifier("ownerVoice.status")
             Text(PichiLocalization.text("Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."))
                 .font(self.theme.typography.bodySmall)
@@ -37,8 +43,15 @@ struct MeetingOwnerVoiceSettingsContent: View {
                     .accessibilityIdentifier("ownerVoice.readingPrompt")
             }
             if self.model.phase == .recording {
-                ProgressView(value: self.model.seconds, total: MeetingOwnerVoiceEnrollmentCapture.maximumSeconds)
-                    .accessibilityLabel(PichiLocalization.text("Voice sample duration"))
+                HStack(spacing: self.theme.metrics.spacing.md) {
+                    // The same live level as a recording meeting.
+                    AudioWaveformBars(color: self.theme.palette.accent, barCount: 7, barWidth: 3, barSpacing: 3,
+                        minHeight: 3, maxHeight: 24, level: { CGFloat(min(1, self.model.level * 5)) }, noiseThreshold: 0.02,
+                        isAnimating: true, isIdleWaveEnabled: false)
+                        .frame(width: 45, height: 26).accessibilityHidden(true)
+                    ProgressView(value: self.model.seconds, total: MeetingOwnerVoiceEnrollmentCapture.maximumSeconds)
+                        .accessibilityLabel(PichiLocalization.text("Voice sample duration"))
+                }
                 Text(Duration.seconds(self.model.seconds).formatted(.time(pattern: .minuteSecond)))
                     .font(self.theme.typography.caption).monospacedDigit()
                     .accessibilityIdentifier("ownerVoice.duration")
@@ -64,17 +77,34 @@ struct MeetingOwnerVoiceSettingsContent: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.ownerVoice")
         .task { await self.model.refresh() }
-        .onDisappear { self.model.cancel() }
+        .onDisappear { self.model.cancelIfVisible() }
         .onChange(of: self.scenePhase) { _, phase in
             // System permission prompts temporarily make the scene inactive.
             if phase == .background { self.model.cancel() }
         }
     }
 
+    /// iOS keeps the accent fill, so a prominent label takes the theme's ink for it, like Start Recording.
+    /// macOS greys prominent buttons in an inactive window and keeps choosing its own label color.
+    @ViewBuilder private func prominent(_ label: Text) -> some View {
+        #if os(iOS)
+        label.foregroundStyle(self.theme.palette.accentForeground)
+        #else
+        label
+        #endif
+    }
+
     @ViewBuilder private var actions: some View {
         if self.model.phase == .recording {
-            Button(PichiLocalization.text("Stop")) { self.model.finishRecording() }
-                .accessibilityIdentifier("ownerVoice.stop")
+            // Once the sample is long enough, finishing becomes the clear next step.
+            if self.model.seconds >= MeetingOwnerVoiceEnrollmentCapture.recommendedSeconds {
+                Button { self.model.finishRecording() } label: {
+                    self.prominent(Text(PichiLocalization.text("Done")))
+                }.buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.stop")
+            } else {
+                Button(PichiLocalization.text("Stop")) { self.model.finishRecording() }
+                    .accessibilityIdentifier("ownerVoice.stop")
+            }
             Button(PichiLocalization.text("Cancel")) { self.model.cancel() }
                 .accessibilityIdentifier("ownerVoice.cancel")
         } else if self.model.isBusy {
@@ -85,8 +115,9 @@ struct MeetingOwnerVoiceSettingsContent: View {
                 self.model.start(microphone: self.microphone)
             }.accessibilityIdentifier("ownerVoice.start")
             if self.model.phase == .ready {
-                Button(PichiLocalization.text("Save")) { self.model.save() }
-                    .buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.save")
+                Button { self.model.save() } label: {
+                    self.prominent(Text(PichiLocalization.text("Save")))
+                }.buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.save")
                 Button(PichiLocalization.text("Cancel")) { self.model.discardDraft() }
                     .accessibilityIdentifier("ownerVoice.cancel")
             }
@@ -105,13 +136,17 @@ struct MeetingOwnerVoiceSettingsContent: View {
 }
 
 @MainActor
-final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
+final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTransitionParticipant {
     enum Phase: Equatable { case idle, preparing, recording, checking, ready, saving }
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var hasProfile = false
     @Published private(set) var seconds: Double = 0
+    @Published private(set) var level: Float = 0
     @Published private(set) var error: String?
     @Published var showDeleteConfirmation = false
+    private let profile = PrivateProfileStorage.current
+    private var captureStopID: UUID?
+    private var isProfileVisible: Bool { PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork }
     private let audioArbiter: any MeetingAudioActivityArbitrating
     private let service: MeetingOwnerVoiceProfileService
     private let modelResidency: MeetingModelResidencyCoordinator
@@ -130,15 +165,27 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
         // The factory keeps lease/cancellation regressions from opening audio hardware.
         // Production still constructs the existing capture only after model admission.
         self.makeCapture = makeCapture
+        PrivateProfileService.shared.register(self)
     }
 
     func refresh() async {
-        do { self.hasProfile = try await self.service.metadata() != nil }
-        catch { self.error = Self.message(for: error) }
+        guard isProfileVisible else { return }
+        do {
+            let exists = try await self.service.metadata() != nil
+            if isProfileVisible { self.hasProfile = exists }
+        } catch { if isProfileVisible { self.error = Self.message(for: error) } }
     }
 
     func start(microphone: MeetingMicrophoneIdentity?) {
-        guard self.operation == nil else { return }
+        guard self.isProfileVisible, self.operation == nil,
+              !PrivateProfileService.shared.hasRetainedCaptureStopHandler else { return }
+        let captureID = UUID()
+        guard PrivateProfileService.shared.installCaptureStopHandler(id: captureID, stop: {
+            self.finishRecording()
+            await self.operation?.value
+        }) else { return }
+        self.captureStopID = captureID
+        let preferredMicrophoneUID = SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID
         self.error = nil; self.draft = nil; self.seconds = 0; self.stopRequested = false
         self.phase = .preparing
         self.operation = Task {
@@ -159,24 +206,29 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
                 if let microphone { selected = microphone }
                 else {
                     #if os(iOS)
-                    selected = try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID)
+                    selected = try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: preferredMicrophoneUID)
                     #else
-                    selected = try await MeetingCaptureSourceCatalog.defaultMicrophone(preferredCoreAudioUID: SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID)
+                    selected = try await MeetingCaptureSourceCatalog.defaultMicrophone(preferredCoreAudioUID: preferredMicrophoneUID)
                     #endif
                 }
                 try Task.checkCancellation()
+                guard !self.stopRequested else { throw CancellationError() }
                 let active = try self.makeCapture()
                 capture = active
                 try await active.start(microphone: selected)
-                self.phase = .recording
+                if self.isProfileVisible { self.phase = .recording }
                 let deadline = ContinuousClock.now.advanced(by: .seconds(25))
                 while !self.stopRequested, active.capturedSeconds < MeetingOwnerVoiceEnrollmentCapture.maximumSeconds, ContinuousClock.now < deadline {
                     try active.checkFailure()
-                    self.seconds = active.capturedSeconds
+                    let captured = active.capturedSeconds
+                    if self.isProfileVisible {
+                        self.level = captured > self.seconds ? active.recentLevel : self.level / 2
+                        self.seconds = captured
+                    } else { self.level = 0 }
                     try await Task.sleep(for: .milliseconds(100))
                 }
-                self.seconds = active.capturedSeconds
-                self.phase = .checking
+                self.level = 0
+                if self.isProfileVisible { self.seconds = active.capturedSeconds; self.phase = .checking }
                 var pcm = try await active.stop(discard: false)
                 capture = nil
                 do {
@@ -188,13 +240,16 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
             } catch {
                 if let capture { _ = try? await capture.stop(discard: true) }
                 self.draft = nil
-                if !(error is CancellationError) { self.error = Self.message(for: error) }
+                if self.isProfileVisible, !(error is CancellationError) { self.error = Self.message(for: error) }
             }
             if let modelOperation { self.modelResidency.endOperation(modelOperation) }
             if let lease { await self.audioArbiter.release(lease) }
-            if Task.isCancelled { self.draft = nil; self.error = nil }
+            if Task.isCancelled || !self.isProfileVisible { self.draft = nil; self.error = nil }
+            self.level = 0
             self.phase = self.draft == nil ? .idle : .ready
             self.operation = nil
+            if self.captureStopID == captureID { self.captureStopID = nil }
+            PrivateProfileService.shared.clearCaptureStopHandler(id: captureID)
         }
     }
 
@@ -202,33 +257,45 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
 
     /// The operation owns its cleanup and keeps itself alive until microphone,
     /// PCM conversion and embedding are joined, then releases the audio lease.
+    func cancelIfVisible() { if isProfileVisible { cancel() } }
+
     func cancel() {
         self.operation?.cancel()
         if self.operation == nil { self.discardDraft() }
     }
 
+    func prepareForPrivateProfileTransition() async throws {
+        self.level = 0
+        // Busy logout hides the retained owner; only the root Stop action or the
+        // existing capture deadline ends enrollment. It never auto-saves a profile.
+        if captureStopID != nil { hasProfile = false; return }
+        let task = operation; task?.cancel()
+        await task?.value
+        operation = nil; discardDraft(); hasProfile = false; seconds = 0
+    }
+
     func discardDraft() { self.draft = nil; self.phase = .idle; self.error = nil }
 
     func save() {
-        guard self.operation == nil, let draft = self.draft else { return }
+        guard self.isProfileVisible, self.operation == nil, let draft = self.draft else { return }
         self.phase = .saving
         self.operation = Task {
             do {
                 _ = try await self.service.save(draft)
-                self.hasProfile = true
+                if self.isProfileVisible { self.hasProfile = true }
                 self.draft = nil
-            } catch { if !(error is CancellationError) { self.error = Self.message(for: error) } }
+            } catch { if self.isProfileVisible, !(error is CancellationError) { self.error = Self.message(for: error) } }
             self.phase = self.draft == nil ? .idle : .ready
             self.operation = nil
         }
     }
 
     func delete() {
-        guard self.operation == nil else { return }
+        guard self.isProfileVisible, self.operation == nil else { return }
         self.phase = .saving
         self.operation = Task {
             do { try await self.service.delete(); self.hasProfile = false; self.draft = nil }
-            catch { if !(error is CancellationError) { self.error = Self.message(for: error) } }
+            catch { if self.isProfileVisible, !(error is CancellationError) { self.error = Self.message(for: error) } }
             self.phase = .idle
             self.operation = nil
         }

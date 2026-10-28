@@ -1,0 +1,255 @@
+{
+  "status": "approved-protocol-runtime-unimplemented",
+  "runtimeImplemented": false,
+  "consumer": "N5 native durable outbox (SSO8)",
+  "contractCommit": "f3ea4b15160b92c095d9d83036e6a66e3be81c34",
+  "errorEnvelopeSource": "apps/server/services/v1/contract.ts",
+  "scope": "Protected import endpoints only; manual import and generic idempotency behavior remain unchanged.",
+  "errors": [
+    {
+      "case": "invalid-request",
+      "httpStatus": 400,
+      "body": {
+        "error": {
+          "code": "INVALID_REQUEST",
+          "message": "Protected import request is invalid.",
+          "status": 400,
+          "request_id": "req_synthetic_import_fixture"
+        }
+      },
+      "nativeAction": "stopAndShowValidation",
+      "condition": "Missing/invalid operation UUID or required transport part; invalid schema/revision, JSON, source/hash, or malformed/unrepresented non-null participantID. An explicit null participantID is accepted pending resolution, not rejected by this case.",
+      "methods": [
+        "POST",
+        "PATCH"
+      ]
+    },
+    {
+      "case": "source-too-large",
+      "httpStatus": 413,
+      "body": {
+        "error": {
+          "code": "INVALID_REQUEST",
+          "message": "Protected transcript exceeds the supported limits.",
+          "status": 413,
+          "request_id": "req_synthetic_import_fixture"
+        }
+      },
+      "nativeAction": "stopAndShowValidation",
+      "condition": "Source exceeds byte/text limits or bounded multipart parser limits.",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "case": "authentication-required",
+      "httpStatus": 401,
+      "body": {
+        "error": {
+          "code": "AUTHENTICATION_FAILED",
+          "message": "Authentication required.",
+          "status": 401,
+          "request_id": "req_synthetic_import_fixture"
+        }
+      },
+      "nativeAction": "pauseForReauthentication",
+      "condition": "Missing, invalid or expired verified API user credential.",
+      "methods": [
+        "POST",
+        "GET",
+        "PATCH"
+      ]
+    },
+    {
+      "case": "insufficient-balance",
+      "httpStatus": 402,
+      "body": {
+        "error": {
+          "code": "PRECONDITION_FAILED",
+          "message": "Insufficient session balance.",
+          "status": 402,
+          "request_id": "req_synthetic_import_fixture",
+          "details": {
+            "reason_code": "org_sessions_exhausted"
+          }
+        }
+      },
+      "nativeAction": "pauseForAccountReview",
+      "condition": "Existing recording-session admission rejects a newly accepted source; reason_code comes from the existing safe billing reason allowlist. No automatic retry or logout.",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "case": "permission-denied",
+      "httpStatus": 403,
+      "body": {
+        "error": {
+          "code": "PERMISSION_DENIED",
+          "message": "Permission denied.",
+          "status": 403,
+          "request_id": "req_synthetic_import_fixture"
+        }
+      },
+      "nativeAction": "pauseForPermissionReview",
+      "condition": "Current membership/capability or criteria authorization is absent; GET/PATCH caller is not the uploader. Another uploader POST duplicate uses the separate generic conflict rule.",
+      "methods": [
+        "POST",
+        "GET",
+        "PATCH"
+      ]
+    },
+    {
+      "case": "receipt-not-found",
+      "httpStatus": 404,
+      "body": {
+        "error": {
+          "code": "RESOURCE_NOT_FOUND",
+          "message": "Import not found.",
+          "status": 404,
+          "request_id": "req_synthetic_import_fixture"
+        }
+      },
+      "nativeAction": "pauseForReceiptReview",
+      "condition": "No current import receipt is available. Preserve the original operation; never replace its key automatically.",
+      "methods": [
+        "GET",
+        "PATCH"
+      ]
+    },
+    {
+      "case": "source-conflict",
+      "httpStatus": 409,
+      "body": {
+        "error": {
+          "code": "CONFLICT",
+          "message": "Protected import conflicts with the accepted source.",
+          "status": 409,
+          "request_id": "req_synthetic_import_fixture"
+        }
+      },
+      "nativeAction": "pauseForConflictReview",
+      "condition": "Scoped key/source already exists with different exact bytes or original assessment binding, or belongs to another uploader.",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "case": "assessment-conflict",
+      "httpStatus": 409,
+      "body": {
+        "error": {
+          "code": "CONFLICT",
+          "message": "Assessment cannot be changed in the current state.",
+          "status": 409,
+          "request_id": "req_synthetic_import_fixture"
+        }
+      },
+      "nativeAction": "pauseForConflictReview",
+      "condition": "Existing attempt/concurrency boundary rejects the requested pending-assessment change.",
+      "methods": [
+        "PATCH"
+      ]
+    },
+    {
+      "case": "rate-limited",
+      "httpStatus": 429,
+      "body": {
+        "error": {
+          "code": "RATE_LIMITED",
+          "message": "Too many requests.",
+          "status": 429,
+          "request_id": "req_synthetic_import_fixture"
+        }
+      },
+      "nativeAction": "boundedRetry",
+      "condition": "Rate/quota limit. Honor a valid Retry-After header when present.",
+      "exampleHeaders": {
+        "Retry-After": "30"
+      },
+      "methods": [
+        "POST",
+        "GET",
+        "PATCH"
+      ]
+    },
+    {
+      "case": "internal-error",
+      "httpStatus": 500,
+      "body": {
+        "error": {
+          "code": "INTERNAL_ERROR",
+          "message": "Internal server error.",
+          "status": 500,
+          "request_id": "req_synthetic_import_fixture"
+        }
+      },
+      "nativeAction": "boundedRetry",
+      "condition": "Transient server failure or ambiguous acceptance. Replay exact bytes with the same scoped operation.",
+      "methods": [
+        "POST",
+        "GET",
+        "PATCH"
+      ]
+    },
+    {
+      "case": "dependency-unavailable",
+      "httpStatus": 503,
+      "body": {
+        "error": {
+          "code": "INTERNAL_ERROR",
+          "message": "Protected import is temporarily unavailable.",
+          "status": 503,
+          "request_id": "req_synthetic_import_fixture"
+        }
+      },
+      "nativeAction": "boundedRetry",
+      "condition": "Identity/database/queue dependency failure or inactive trusted deployment configuration; no anonymous/default workspace fallback.",
+      "exampleHeaders": {
+        "Retry-After": "30"
+      },
+      "methods": [
+        "POST",
+        "GET",
+        "PATCH"
+      ]
+    }
+  ],
+  "clientRules": [
+    "Classify by HTTP status and known error.code; never parse human message text for retry behavior.",
+    "Any unexpected or malformed success/error payload requires bounded reconciliation or visible review; never infer acceptance or analysis success.",
+    "Retry only the unchanged immutable source, original assessment fingerprint, operation key and owner/context.",
+    "Use a bounded retry policy for network/429/appropriate 5xx; honor valid Retry-After. Exhaustion pauses for visible review.",
+    "On GET 404 or any unknown non-retryable 4xx, preserve the operation and pause. Do not mint a replacement operation or upload to another context.",
+    "Request IDs are diagnostic correlation only and confer no access. Do not log protected source, personal metadata or credentials."
+  ],
+  "approvalBasis": "Coordinator protocol decisions in the current W2 chat, 2026-10-22; approval is not runtime proof.",
+  "remainingRuntimeGates": [
+    "Reviewed and frozen combined importer/W1 dependency-base SHA",
+    "Final W1 authMode/history landing and runtime acceptance",
+    "Transactional source/charge/dispatch implementation and isolated database/restart verification",
+    "Additional own-history GET contracts remain proposals pending coordinator approval"
+  ],
+  "billing": {
+    "newAcceptedSource": "one existing recording-session import charge, including pending source",
+    "identicalPostRetry": "read persisted receipt before fresh balance/quota admission; no new charge",
+    "patchOrWorkerRetry": "no additional import charge",
+    "transactionInvariant": "new source, existing-policy ledger/deduction and recoverable dispatch commit safely together",
+    "newPricingOrRefundPolicy": false
+  },
+  "pendingPrecedence": [
+    "null participantID -> needsParticipant, including empty criteriaIDs",
+    "represented participant + empty criteriaIDs -> needsCriteria",
+    "represented participant + nonempty authorized criteriaIDs -> queued"
+  ],
+  "assessmentResolution": {
+    "completeBindingRequired": true,
+    "pendingToBoundStatus": 202,
+    "identicalEffectiveBindingStatus": 200,
+    "conflictingBoundOrConcurrentBindingStatus": 409,
+    "replaysOriginalPostFingerprint": true,
+    "extraRevisionRequired": false,
+    "identicalPatchStartsAnotherJobOrCharge": false,
+    "failedAnalysisRetry": "separate explicit reanalysis policy requires approval; do not reinterpret identical PATCH as reanalysis"
+  }
+}

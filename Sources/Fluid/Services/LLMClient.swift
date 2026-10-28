@@ -267,6 +267,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
     /// Supports both streaming and non-streaming modes.
     /// Handles thinking token extraction, tool call parsing, and retries.
     @concurrent func call(_ config: Config) async throws -> Response {
+        let temperatureSupport = self.temperatureSupport.boundForOperation()
         self.benchmark(config, "call_enter")
         try Task.checkCancellation()
         var request: URLRequest
@@ -313,7 +314,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
                 "LLMClient: \(config.model) rejected temperature; retrying without it",
                 source: "LLMClient"
             )
-            self.temperatureSupport.record([config.model: false], baseURL: config.baseURL)
+            temperatureSupport.record([config.model: false], baseURL: config.baseURL)
             var retryConfig = config
             retryConfig.temperature = nil
             return try await self.call(retryConfig)

@@ -422,7 +422,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
                     "An existing meeting or transcription is not owned by this test")
         try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-        try tap(app.buttons["settings.recording"], "Open the ordinary recording settings")
+        try tap(app.buttons["settings.participants"], "Open the ordinary participant settings")
         let start = app.buttons["ownerVoice.start"]
         try reveal(start, in: app, revision: revision)
         let status = app.descendants(matching: .any)["ownerVoice.status"].firstMatch
@@ -504,7 +504,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
             try require(!app.buttons["meeting.stop"].exists, "Owner checking must release capture without starting a meeting")
             try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
-            try tap(app.buttons["settings.recording"], "Reopen recording settings after capture cleanup")
+            try tap(app.buttons["settings.participants"], "Reopen participant settings after capture cleanup")
             try reveal(start, in: app, revision: revision)
             try require(start.isEnabled && !app.buttons["ownerVoice.delete"].exists && !save.exists,
                         "Navigation must remain responsive and the discarded draft must not return")

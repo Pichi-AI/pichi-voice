@@ -11,6 +11,8 @@ import XCTest
 final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
     @MainActor
     func testEnrollmentJoinsIdleRetirementBeforeMicrophoneAndCancellationHandback() async throws {
+        let restoreProfile = admitSyntheticEnrollmentProfile()
+        defer { restoreProfile() }
         let residency = MeetingModelResidencyCoordinator()
         let idleOwner = MeetingIdlePreparedResourceOwner(residency: residency)
         let resource = EnrollmentIdleRetirementProbe()
@@ -45,6 +47,8 @@ final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
 
     @MainActor
     func testEnrollmentAdmissionRejectsQueuedIdleAndReleasesTokenBeforeAudio() async {
+        let restoreProfile = admitSyntheticEnrollmentProfile()
+        defer { restoreProfile() }
         let residency = MeetingModelResidencyCoordinator()
         let audio = EnrollmentAudioLeaseProbe(residency: residency)
         var captureConstructions = 0
@@ -80,6 +84,8 @@ final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
 
     @MainActor
     func testEnrollmentAdmissionFailureNeverConstructsCaptureAndReleasesAudio() async {
+        let restoreProfile = admitSyntheticEnrollmentProfile()
+        defer { restoreProfile() }
         let residency = MeetingModelResidencyCoordinator()
         residency.beginTermination()
         let audio = EnrollmentAudioLeaseProbe(residency: residency)
@@ -93,6 +99,58 @@ final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
         XCTAssertEqual(audio.releases, 1)
         XCTAssertFalse(residency.hasOrdinaryOperations)
         XCTAssertNotNil(model.error)
+    }
+
+    @MainActor
+    func testBusyConcealRetainsEnrollmentUntilRootStopJoins() async throws {
+        let restoreProfile = admitSyntheticEnrollmentProfile()
+        defer { restoreProfile() }
+        let residency = MeetingModelResidencyCoordinator()
+        let idleOwner = MeetingIdlePreparedResourceOwner(residency: residency)
+        let resource = EnrollmentIdleRetirementProbe()
+        let prepared = try await idleOwner.prepare(identity: resource.configurationIdentity) { resource }
+        let token = try XCTUnwrap(prepared)
+        let audio = EnrollmentAudioLeaseProbe(residency: residency)
+        var captureConstructions = 0
+        let model = MeetingOwnerVoiceEnrollmentModel(audioArbiter: audio, modelResidency: residency,
+            makeCapture: { captureConstructions += 1; throw EnrollmentCaptureProbeFailure.unexpectedHardware })
+        model.start(microphone: .init(captureDeviceID: "synthetic-unopened", displayName: "Synthetic"))
+        XCTAssertTrue(PrivateProfileService.shared.hasRetainedCaptureStopHandler)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !(await resource.cleanupStarted), ContinuousClock.now < deadline { await Task.yield() }
+        let cleanupStarted = await resource.cleanupStarted
+        XCTAssertTrue(cleanupStarted)
+        PrivateProfileStorage.conceal(generation: UUID())
+        try await model.prepareForPrivateProfileTransition()
+        XCTAssertEqual(model.phase, .preparing)
+        XCTAssertEqual(audio.releases, 0, "Logout retains the original enrollment owner")
+        let stop = Task { await PrivateProfileService.shared.requestCaptureStop() }
+        await Task.yield()
+        await resource.finishCleanup()
+        await stop.value
+        await idleOwner.cancel(token)
+        XCTAssertEqual(captureConstructions, 0, "Root Stop while preparing never opens microphone hardware")
+        XCTAssertEqual(audio.releases, 1)
+        XCTAssertFalse(PrivateProfileService.shared.hasRetainedCaptureStopHandler)
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertFalse(model.hasProfile)
+        XCTAssertNil(model.error)
+    }
+
+    /// Enrollment admission belongs to this fixture, independent of whether the
+    /// inert hosted application has completed its normal account restoration.
+    @MainActor
+    private func admitSyntheticEnrollmentProfile() -> @MainActor () -> Void {
+        let original = PrivateProfileStorage.current
+        let originalAdmission = PrivateProfileStorage.acceptsNewWork
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SyntheticEnrollmentProfile." + UUID().uuidString, isDirectory: true)
+        PrivateProfileStorage.select(.init(id: "guest", context: nil, generation: UUID(),
+            rootDirectory: root, legacyRootDirectory: root, isReadable: true))
+        return {
+            PrivateProfileStorage.select(original)
+            if !originalAdmission { PrivateProfileStorage.closeAdmission() }
+        }
     }
 
     @MainActor

@@ -2,6 +2,29 @@ import Foundation
 
 // Persisted metadata is shared by the application and read-only meeting helper.
 // These existing codecs perform no capture, inference, settings or filesystem work.
+nonisolated enum MeetingSessionDateCodec {
+    // Both local persistence consumers must agree on exact reference-time Doubles.
+    // Whole-second ISO encoding can shorten a capture below its final segment.
+    // Portable export, publication wire bytes and fingerprints retain their own codecs.
+    static let encodingStrategy: JSONEncoder.DateEncodingStrategy = .deferredToDate
+    static let decodingStrategy: JSONDecoder.DateDecodingStrategy = .custom { decoder in
+        let value = try decoder.singleValueContainer()
+        if let referenceSeconds = try? value.decode(Double.self) {
+            guard referenceSeconds.isFinite else {
+                throw DecodingError.dataCorruptedError(in: value, debugDescription: "Nonfinite meeting date")
+            }
+            return Date(timeIntervalSinceReferenceDate: referenceSeconds)
+        }
+        // The value parser avoids allocating a mutable formatter for every legacy date.
+        // Existing manifests/indexes are not rewritten merely because they were read.
+        let text = try value.decode(String.self)
+        guard let date = try? Date.ISO8601FormatStyle().parse(text) else {
+            throw DecodingError.dataCorruptedError(in: value, debugDescription: "Invalid legacy meeting date")
+        }
+        return date
+    }
+}
+
 nonisolated enum MeetingMicrophoneBindingOutcome: Equatable, Sendable {
     case boundVerified(UInt32)
     /// Bind failed but the default input already IS the requested device (Bluetooth/aggregate).

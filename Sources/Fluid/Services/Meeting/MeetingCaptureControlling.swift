@@ -39,33 +39,33 @@ nonisolated enum MeetingCaptureError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .captureAlreadyActive:
-            return "Another meeting recording is already active."
+            return PichiLocalization.text("Another meeting recording is already active.")
         case .noActiveCapture:
-            return "There is no active meeting recording."
+            return PichiLocalization.text("There is no active meeting recording.")
         case .wrongActiveSession:
-            return "A different meeting recording is active."
+            return PichiLocalization.text("A different meeting recording is active.")
         case .applicationNotSelected:
             return PichiLocalization.text("Choose the application that contains the online meeting.")
         case let .applicationUnavailable(name):
             return PichiLocalization.format("%@ is no longer available to record.", name)
         case .noCaptureDisplay:
-            return "No display is available for meeting-audio capture."
+            return PichiLocalization.text("No display is available for meeting-audio capture.")
         case .microphoneUnavailable:
-            return "The selected microphone is unavailable."
+            return PichiLocalization.text("The selected microphone is unavailable.")
         case .microphonePermissionDenied:
-            return "Microphone permission is required to record this meeting."
+            return PichiLocalization.text("Microphone permission is required to record this meeting.")
         case let .screenCapturePermissionDenied(detail):
-            return "Screen & System Audio permission is required. \(detail)"
+            return PichiLocalization.format("Screen & System Audio permission is required. %@", detail)
         case .insufficientDiskSpace:
-            return "Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again."
+            return PichiLocalization.text("Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again.")
         case let .captureStartFailed(detail):
-            return "Meeting recording could not start. \(detail)"
+            return PichiLocalization.format("Meeting recording could not start. %@", detail)
         case let .captureStopFailed(detail, _):
-            return "Meeting recording could not stop cleanly. \(detail)"
+            return PichiLocalization.format("Meeting recording could not stop cleanly. %@", detail)
         case .unsupportedAudioFormat:
-            return "The selected audio source uses an unsupported format."
+            return PichiLocalization.text("The selected audio source uses an unsupported format.")
         case let .writerFailed(detail):
-            return "Meeting audio could not be saved. \(detail)"
+            return PichiLocalization.format("Meeting audio could not be saved. %@", detail)
         }
     }
 }
@@ -87,7 +87,7 @@ nonisolated protocol MeetingMemoryAudioConsuming: Sendable {
     func finish() async throws
 }
 
-extension MeetingMemoryAudioConsuming {
+nonisolated extension MeetingMemoryAudioConsuming {
     var rejectionReason: String? { nil }
 }
 

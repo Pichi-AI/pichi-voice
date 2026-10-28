@@ -179,6 +179,65 @@ final class WhisperProvider: TranscriptionProvider {
 
     let modelOverride: SettingsStore.SpeechModel?
 
+    // MARK: - Dictation capture configuration
+
+    private struct DictationCaptureConfiguration {
+        let leaseID: UUID
+        let model: SettingsStore.SpeechModel
+        let languageCode: String?
+        let modelDirectory: URL
+    }
+
+    private let dictationCaptureLock = NSRecursiveLock()
+    private var dictationCaptureConfiguration: DictationCaptureConfiguration?
+
+    func beginAdmittedTranscription(leaseID: UUID) throws {
+        try self.dictationCaptureLock.withLock {
+            if let capture = self.dictationCaptureConfiguration {
+                guard capture.leaseID == leaseID else {
+                    throw CancellationError()
+                }
+                return
+            }
+            self.dictationCaptureConfiguration = DictationCaptureConfiguration(
+                leaseID: leaseID, model: self.selectedModel,
+                languageCode: self.resolvedLanguageCode(), modelDirectory: self.modelDirectory
+            )
+        }
+    }
+
+    func endAdmittedTranscription(leaseID: UUID) {
+        self.dictationCaptureLock.withLock {
+            guard self.dictationCaptureConfiguration?.leaseID == leaseID else { return }
+            self.dictationCaptureConfiguration = nil
+        }
+    }
+
+    private var selectedModel: SettingsStore.SpeechModel {
+        self.dictationCaptureLock.withLock {
+            self.dictationCaptureConfiguration?.model ?? self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
+        }
+    }
+
+    private var modelDirectory: URL {
+        self.dictationCaptureLock.withLock {
+            self.dictationCaptureConfiguration?.modelDirectory ?? self.overriddenModelDirectory
+                ?? AppBrand.cachesDirectory.appendingPathComponent("WhisperModels", isDirectory: true)
+        }
+    }
+
+    func resolvedLanguageCode(explicit: String? = nil, model: SettingsStore.SpeechModel? = nil) -> String? {
+        if let explicit { return explicit == "auto" ? nil : explicit }
+        return self.dictationCaptureLock.withLock {
+            if self.useAutomaticLanguageDetection { return nil }
+            if let capture = self.dictationCaptureConfiguration { return capture.languageCode }
+            let selected = self.languageCodeOverride ?? ((model ?? self.selectedModel).isWhisperModel ? SettingsStore.shared.selectedWhisperLanguageCode : nil)
+            return selected == "auto" ? nil : selected
+        }
+    }
+
+    // MARK: - Provider initialization
+
     init(
         modelDirectory: URL? = nil,
         urlSession: URLSession = .shared,
@@ -228,10 +287,6 @@ final class WhisperProvider: TranscriptionProvider {
         }
     }
 
-    private var selectedModel: SettingsStore.SpeechModel {
-        self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
-    }
-
     private var modelName: String {
         self.selectedModel.whisperModelFile ?? "whisper-base-Q8_0.gguf"
     }
@@ -246,13 +301,6 @@ final class WhisperProvider: TranscriptionProvider {
 
     private var legacyModelURL: URL? {
         self.legacyModelName.map { self.modelDirectory.appendingPathComponent($0) }
-    }
-
-    private var modelDirectory: URL {
-        if let overriddenModelDirectory {
-            return overriddenModelDirectory
-        }
-        return AppBrand.cachesDirectory.appendingPathComponent("WhisperModels", isDirectory: true)
     }
 
     private var modelDownloadURL: URL? {
@@ -724,13 +772,6 @@ final class WhisperProvider: TranscriptionProvider {
         case .word: "word"
         case .token: "token"
         }
-    }
-
-    func resolvedLanguageCode(explicit: String? = nil, model: SettingsStore.SpeechModel? = nil) -> String? {
-        if let explicit { return explicit == "auto" ? nil : explicit }
-        if self.useAutomaticLanguageDetection { return nil }
-        let selected = self.languageCodeOverride ?? ((model ?? self.selectedModel).isWhisperModel ? SettingsStore.shared.selectedWhisperLanguageCode : nil)
-        return selected == "auto" ? nil : selected
     }
 
     func releaseResidency() async {

@@ -1,0 +1,4 @@
+# Wire fixtures must retain exact bytes across platforms.
+protected-transcript.json -text
+pending-criteria.multipart binary
+pending-participant.multipart binary

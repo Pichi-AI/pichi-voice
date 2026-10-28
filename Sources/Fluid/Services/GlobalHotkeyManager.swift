@@ -295,6 +295,7 @@ final class GlobalHotkeyManager: NSObject {
     private var commandModeShortcutEnabled: Bool
     private var rewriteModeShortcutEnabled: Bool
     private var startRecordingCallback: (() async -> Void)?
+    private var fallbackCapture: PrivateDirectDictationCapture?
     private var dictationModeCallback: (() async -> Void)?
     private var stopAndProcessCallback: ((TimeInterval?) async -> Void)?
     private var promptModeCallback: (() async -> Void)?
@@ -1313,7 +1314,12 @@ final class GlobalHotkeyManager: NSObject {
                 }
                 var handled = result == .cancelled
                 if !handled, self.asrService.isRunningOrStarting {
-                    Task { @MainActor in await self.asrService.stopWithoutTranscription() }
+                    Task { @MainActor in if let capture = self.fallbackCapture {
+                _ = await capture.stop()
+                capture.acknowledgeVisibleResult()
+                let completed = await capture.complete()
+                if completed, self.fallbackCapture?.output.id == capture.output.id { self.fallbackCapture = nil }
+            } }
                     handled = true
                 }
                 let hasPendingPress = self.state.withLock {
@@ -2336,7 +2342,7 @@ final class GlobalHotkeyManager: NSObject {
                     "GlobalHotkeyManager: dictation callbacks missing; invoking ASRService.start directly",
                     source: "GlobalHotkeyManager"
                 )
-                await self.asrService.start()
+                await self.startFallbackCapture()
             }
         }
     }
@@ -2389,7 +2395,7 @@ final class GlobalHotkeyManager: NSObject {
                 if let callback = self.startRecordingCallback {
                     await callback()
                 } else {
-                    await self.asrService.start()
+                    await self.startFallbackCapture()
                 }
             }
         }
@@ -2408,9 +2414,22 @@ final class GlobalHotkeyManager: NSObject {
                 if let callback = self.startRecordingCallback {
                     await callback()
                 } else {
-                    await self.asrService.start()
+                    await self.startFallbackCapture()
                 }
             }
+        }
+    }
+
+    private func startFallbackCapture() async {
+        let settings = SettingsStore.shared
+        guard let capture = try? PrivateDirectDictationCapture(asr: self.asrService,
+            savesHistory: settings.saveTranscriptionHistory,
+            savesAudio: settings.saveAudioWithTranscriptionHistory,
+            transcriptionModel: settings.selectedSpeechModel.displayName) else { return }
+        self.fallbackCapture = capture
+        _ = await capture.start()
+        if capture.isFinished, self.fallbackCapture?.output.id == capture.output.id {
+            self.fallbackCapture = nil
         }
     }
 
@@ -2474,7 +2493,12 @@ final class GlobalHotkeyManager: NSObject {
         if let callback = stopAndProcessCallback {
             await callback(toggleStopRequestedAt)
         } else {
-            await self.asrService.stopWithoutTranscription()
+            if let capture = self.fallbackCapture {
+                _ = await capture.stop()
+                capture.acknowledgeVisibleResult()
+                let completed = await capture.complete()
+                if completed, self.fallbackCapture?.output.id == capture.output.id { self.fallbackCapture = nil }
+            }
         }
     }
 

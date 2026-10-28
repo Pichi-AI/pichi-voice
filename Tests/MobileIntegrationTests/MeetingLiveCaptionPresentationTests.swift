@@ -588,7 +588,7 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
         }
     }
 
-    func testReadableTurnHeadersShowElapsedTimeWithoutAnonymousRows() async throws {
+    func testReadableTurnHeadersPreserveUnresolvedSpeechAndElapsedTime() async throws {
         let first = MeetingSpeakerPresentation(identity: "first",
             label: .identified(.init(displayName: "Анна", isLocalUser: false)))
         let second = MeetingSpeakerPresentation(identity: "second",
@@ -603,9 +603,21 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
             .init(id: UUID(), speaker: .you, text: "Следующий участник отвечает.",
                   start: 3_755.2, end: 3_756, participant: second),
         ]
+        let original = snapshot
         let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
-        XCTAssertEqual(rows.filter(\.showsLabel).compactMap(\.captionLabel), ["00:07 Анна", "1:02:35 Борис"])
-        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 2)
+        XCTAssertEqual(rows.filter(\.showsLabel).compactMap(\.captionLabel),
+                       ["00:07 Анна", "00:26 Анна", "1:02:35 Борис"])
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
+        XCTAssertEqual(paragraphs.map { $0.text() },
+                       ["Первая реплика.", "А", "затем продолжение.", "Следующий участник отвечает."])
+        XCTAssertEqual(rows[1].participant, unknown,
+                       "Unresolved speech must not inherit the preceding participant")
+        XCTAssertFalse(rows[1].showsLabel)
+        XCTAssertNil(paragraphs[1].captionLabel)
+        XCTAssertEqual(paragraphs[2].captionLabel, "00:26 Анна",
+                       "The next known participant starts a new timed turn after unresolved speech")
+        XCTAssertEqual(paragraphs.flatMap(\.rows).map(\.id), snapshot.utterances.map(\.id))
+        XCTAssertEqual(snapshot, original)
         for scheme in [ColorScheme.light, .dark] {
             let host = try CaptionNativeHost(rows: [], scheme: scheme)
             defer { host.close() }
@@ -614,9 +626,9 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
                 .init(id: UInt64($0 + 1), source: .you, start: 3_756 + Double($0) * 0.4,
                       end: 3_756.4 + Double($0) * 0.4, widthHint: 0.8, level: 0.6)
             }, isCapturing: false, revision: 1)
-            try await settle(host, "Only real participant turns become native rows") {
+            try await settle(host, "Unresolved speech remains its own unlabeled native row") {
                 self.descendants(in: host.controller.view).compactMap { $0 as? UITableView }.contains {
-                    $0.numberOfSections > 0 && $0.numberOfRows(inSection: 0) == 2 && $0.visibleCells.count == 2
+                    $0.numberOfSections > 0 && $0.numberOfRows(inSection: 0) == 4 && $0.visibleCells.count == 4
                 }
             }
             capture(host, step: "readable-headers-elapsed-time", scheme: scheme)

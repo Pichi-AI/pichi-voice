@@ -19,7 +19,7 @@ struct MeetingSummaryView: View {
     var asrService: ASRService? = nil
     var isQuiescent = true
     @Environment(\.theme) private var theme
-    @AppStorage("MeetingSummaryWorkflow") private var workflow = MeetingSummaryWorkflow.grounded
+    @AppStorage("MeetingSummaryWorkflow", store: PrivateProfileDefaults.shared) private var workflow = MeetingSummaryWorkflow.grounded
     @StateObject private var templateController = MeetingSummaryController()
     @ObservedObject private var groundedController: PichiMeetingSummaryController
 
@@ -45,25 +45,31 @@ struct MeetingSummaryView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-            Picker("Summary format", selection: self.workflowSelection) {
-                ForEach(MeetingSummaryWorkflow.allCases) { workflow in
-                    Text(workflow.title).tag(workflow)
+        Group {
+            if self.session?.isLocalContentConcealed == true {
+                MeetingLocalContentConcealmentView()
+            } else {
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+                    Picker("Summary format", selection: self.workflowSelection) {
+                        ForEach(MeetingSummaryWorkflow.allCases) { workflow in
+                            Text(workflow.title).tag(workflow)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .font(self.theme.typography.bodySmall)
+                    .disabled(self.templateController.busy || self.groundedController.generating || self.groundedController.checking)
+                    .accessibilityIdentifier("meeting-summary-workflow")
+                    switch self.presentedWorkflow {
+                    case .grounded:
+                        PichiMeetingSummaryView(session: self.session, asrService: self.asrService, isQuiescent: self.isQuiescent)
+                    case .templates:
+                        TemplateMeetingSummaryView(session: self.session, asrService: self.asrService,
+                                                   isQuiescent: self.isQuiescent, controller: self.templateController)
+                    }
                 }
-            }
-            .pickerStyle(.menu)
-            .font(self.theme.typography.bodySmall)
-            .disabled(self.templateController.busy || self.groundedController.generating || self.groundedController.checking)
-            .accessibilityIdentifier("meeting-summary-workflow")
-            switch self.presentedWorkflow {
-            case .grounded:
-                PichiMeetingSummaryView(session: self.session, asrService: self.asrService, isQuiescent: self.isQuiescent)
-            case .templates:
-                TemplateMeetingSummaryView(session: self.session, asrService: self.asrService,
-                                           isQuiescent: self.isQuiescent, controller: self.templateController)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
