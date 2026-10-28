@@ -1126,9 +1126,12 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             do {
                 let failed = try await store.record(id: id)
                 let count = failed?.attemptCount ?? 1
-                let retry: (Int, PichiPublicationRetryAfter?) -> PichiPublicationRetryDecision = failed?.automaticAccountContext == true
-                    ? PichiPublicationRetryPolicy.automaticContextDecision(afterAttempt:retryAfter:)
-                    : PichiPublicationRetryPolicy.decision(afterAttempt:retryAfter:)
+                func retry(_ attempt: Int, _ retryAfter: PichiPublicationRetryAfter?) -> PichiPublicationRetryDecision {
+                    if failed?.automaticAccountContext == true {
+                        return PichiPublicationRetryPolicy.automaticContextDecision(afterAttempt: attempt, retryAfter: retryAfter)
+                    }
+                    return PichiPublicationRetryPolicy.decision(afterAttempt: attempt, retryAfter: retryAfter)
+                }
                 let updated: PichiPublicationOutboxRecord
                 if error is ProtectedDataAccessError {
                     let count = try await store.record(id: id)?.attemptCount ?? 1
