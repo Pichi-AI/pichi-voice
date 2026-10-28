@@ -400,64 +400,140 @@ struct MeetingTranscriptionView: View {
     var body: some View {
         let projection = self.privateState.capture()
         let activeSessionID = self.coordinator.activeSession?.id
+        self.meetingPresentation(projection: projection, activeSessionID: activeSessionID)
+        .sheet(isPresented: self.$privateState.isShowingMeetingSettings) {
+            self.recordingSettingsSheet(projection: projection)
+        }
+        .alert(
+            "Delete Meeting?",
+            isPresented: self.deleteMeetingIsPresented
+        ) {
+            self.deleteMeetingActions(projection: projection)
+        } message: {
+            Text("The recording and transcript will be permanently deleted from this Mac.")
+        }
+        .alert(
+            "Delete Audio?",
+            isPresented: self.deleteAudioIsPresented
+        ) {
+            self.deleteAudioActions(projection: projection)
+        } message: {
+            Text("The transcript stays; the audio files are deleted from this Mac.")
+        }
+    }
+
+    private func meetingHeader(projection: MeetingViewPrivateProjection.Stamp?, geometry: GeometryProxy) -> MeetingTranscriptionHeader {
+        MeetingTranscriptionHeader(
+            state: self.canvasState,
+            isMeetingHistoryVisible: self.isMeetingHistoryVisible,
+            isSummaryRunning: self.summaryActivity.selectionLock != nil,
+            onNewMeeting: { if self.privateState.accepts(projection) { self.startNewMeeting(hideHistory: geometry.size.width < 900) } },
+            onOpenMeetingSettings: { if self.privateState.accepts(projection) { self.openMeetingSettings() } },
+            onToggleMeetingHistory: { if self.privateState.accepts(projection) { self.toggleMeetingHistory() } }
+        )
+    }
+
+    private func meetingCanvas(projection: MeetingViewPrivateProjection.Stamp?, activeSessionID: MeetingSessionID?) -> MeetingTranscriptionCanvas {
+        MeetingTranscriptionCanvas(
+            setupDraft: self.$privateState.setupDraft,
+            state: self.canvasState,
+            pendingSpeech: self.profileService.isPrivateDataVisible ? self.coordinator.pendingSpeech : .empty,
+            applications: self.applications,
+            microphones: self.microphones,
+            readiness: self.readiness,
+            errorMessage: self.privateState.actionErrorMessage,
+            onStart: { if self.privateState.accepts(projection) { self.startRecording() } },
+            onStop: { self.stopAndTranscribe(expectedSessionID: activeSessionID) },
+            onRetrySession: { if self.privateState.accepts(projection) { self.retryProcessingSession(id: $0.id) } },
+            onRestartSession: { if self.privateState.accepts(projection) { self.retryProcessingSession(id: $0.id, restarting: true) } },
+            onRevealAudio: { if self.privateState.accepts(projection) { self.revealCapturedAudio($0) } },
+            onRecordAgain: { if self.privateState.accepts(projection) { self.recordAgain($0) } },
+            onCopyTranscript: { if self.privateState.accepts(projection) { self.copyTranscript($0, includeEchoes: $1) } },
+            onExportTranscript: { if self.privateState.accepts(projection) { self.exportTranscript($0, format: $1, includeEchoes: $2) } },
+            onReassignSegment: { if self.privateState.accepts(projection) { self.reassignSegment(sessionID: $0, segmentID: $1, to: $2) } },
+            onEditTranscriptSegment: { sessionID, segmentID, text, revision in
+                guard self.privateState.accepts(projection) else { return nil }
+                return await self.editTranscriptSegment(sessionID: sessionID, segmentID: segmentID, text: text, revision: revision)
+            },
+            onNameUnknownSegment: { if self.privateState.accepts(projection) { self.nameUnknownSegment(sessionID: $0, segmentID: $1, displayName: $2) } },
+            onUndoCorrection: { sessionID in
+                guard self.privateState.accepts(projection) else { return false }
+                return await self.undoTranscriptCorrection(sessionID: sessionID)
+            },
+            onRenameSession: { if self.privateState.accepts(projection) { self.renameMeetingSession(sessionID: $0, to: $1) } },
+            onAssignSpeakers: { sessionID, edits in
+                guard self.privateState.accepts(projection) else { return nil }
+                return await self.assignSpeakers(sessionID: sessionID, edits: edits)
+            },
+            canUndoCorrection: { self.privateState.accepts(projection) && self.coordinator.canUndoCorrection(sessionID: $0) },
+            isQuiescent: self.coordinator.isQuiescent && self.summaryActivity.selectionLock == nil,
+            onRepairSetup: self.repairRecordingSetup,
+            onEditSetup: self.openMeetingSettings,
+            isRetrying: self.isRetrying,
+            onCloseSelection: self.closeCanvasAction.map { action in
+                { if self.privateState.accepts(projection) { action() } }
+            },
+            summaryASRService: self.asrService,
+            onOpenIntegrations: self.openMeetingIntegrations,
+            onSetLocalUserSpeaker: { if self.privateState.accepts(projection) { self.setLocalUserSpeaker(sessionID: $0, speakerID: $1) } }
+        )
+    }
+
+    private func meetingHistoryInspector(projection: MeetingViewPrivateProjection.Stamp?, geometry: GeometryProxy) -> MeetingHistoryInspector {
+        MeetingHistoryInspector(
+            privateState: self.privateState,
+            sessions: self.profileService.isPrivateDataVisible ? self.historySnapshot.sessions : [],
+            selectedSessionID: Binding(
+                get: { self.privateState.selectedHistorySessionID },
+                set: {
+                    if self.privateState.accepts(projection), self.canBrowseMeetingHistory, self.summaryActivity.selectionLock == nil {
+                        self.privateState.selectedHistorySessionID = $0
+                        if geometry.size.width < 900 { self.isMeetingHistoryVisible = false }
+                    }
+                }
+            ),
+            errorMessage: self.historySnapshot.errorMessage,
+            isLoading: !self.historySnapshot.hasLoaded,
+            isQuiescent: self.coordinator.isQuiescent,
+            onRefresh: { self.privateState.run { _ in await self.loadMeetingHistory() } },
+            onRetry: { if self.privateState.accepts(projection) { self.retryProcessingSession(id: $0) } },
+            onRevealAudio: { if self.privateState.accepts(projection) { self.revealCapturedAudio($0) } },
+            onExportAudio: { if self.privateState.accepts(projection) { self.exportAudio($0) } },
+            onExportTranscript: { if self.privateState.accepts(projection) { self.exportTranscript($0, format: $1, includeEchoes: false) } },
+            onDeleteAudioRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteAudioSessionID = $0 } },
+            onDeleteRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteSessionID = $0 } },
+            onRename: { if self.privateState.accepts(projection) { self.renameMeetingSession(sessionID: $0, to: $1) } },
+            onRecordAgain: { if self.privateState.accepts(projection) { self.recordAgain($0) } },
+            onOpenIntegrations: self.openMeetingIntegrations
+        )
+    }
+
+    @ViewBuilder
+    private func concealedCaptureControls(activeSessionID: MeetingSessionID?) -> some View {
+        if !self.profileService.isPrivateDataVisible {
+            // Conceal transcript and history while the admitted recording keeps its
+            // original writer. Its stop control must survive logout without private text.
+            switch self.coordinator.state {
+            case .recording, .recordingDegraded:
+                Button("Stop & Transcribe") { self.stopAndTranscribe(expectedSessionID: activeSessionID) }
+                    .font(self.theme.typography.body)
+                    .disabled(self.isStopping)
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private func meetingLayout(projection: MeetingViewPrivateProjection.Stamp?, activeSessionID: MeetingSessionID?) -> some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
-                MeetingTranscriptionHeader(
-                    state: self.canvasState,
-                    isMeetingHistoryVisible: self.isMeetingHistoryVisible,
-                    isSummaryRunning: self.summaryActivity.selectionLock != nil,
-                    onNewMeeting: { if self.privateState.accepts(projection) { self.startNewMeeting(hideHistory: geometry.size.width < 900) } },
-                    onOpenMeetingSettings: { if self.privateState.accepts(projection) { self.openMeetingSettings() } },
-                    onToggleMeetingHistory: { if self.privateState.accepts(projection) { self.toggleMeetingHistory() } }
-                )
+                self.meetingHeader(projection: projection, geometry: geometry)
                 .padding(.horizontal, FluidPageLayout.inset)
                 .padding(.vertical, 12)
                 Divider()
 
                 ZStack(alignment: .trailing) {
-                    MeetingTranscriptionCanvas(
-                        setupDraft: self.$privateState.setupDraft,
-                        state: self.canvasState,
-                        pendingSpeech: self.profileService.isPrivateDataVisible ? self.coordinator.pendingSpeech : .empty,
-                        applications: self.applications,
-                        microphones: self.microphones,
-                        readiness: self.readiness,
-                        errorMessage: self.privateState.actionErrorMessage,
-                        onStart: { if self.privateState.accepts(projection) { self.startRecording() } },
-                        onStop: { self.stopAndTranscribe(expectedSessionID: activeSessionID) },
-                        onRetrySession: { if self.privateState.accepts(projection) { self.retryProcessingSession(id: $0.id) } },
-                        onRestartSession: { if self.privateState.accepts(projection) { self.retryProcessingSession(id: $0.id, restarting: true) } },
-                        onRevealAudio: { if self.privateState.accepts(projection) { self.revealCapturedAudio($0) } },
-                        onRecordAgain: { if self.privateState.accepts(projection) { self.recordAgain($0) } },
-                        onCopyTranscript: { if self.privateState.accepts(projection) { self.copyTranscript($0, includeEchoes: $1) } },
-                        onExportTranscript: { if self.privateState.accepts(projection) { self.exportTranscript($0, format: $1, includeEchoes: $2) } },
-                        onReassignSegment: { if self.privateState.accepts(projection) { self.reassignSegment(sessionID: $0, segmentID: $1, to: $2) } },
-                        onEditTranscriptSegment: { sessionID, segmentID, text, revision in
-                            guard self.privateState.accepts(projection) else { return nil }
-                            return await self.editTranscriptSegment(sessionID: sessionID, segmentID: segmentID, text: text, revision: revision)
-                        },
-                        onNameUnknownSegment: { if self.privateState.accepts(projection) { self.nameUnknownSegment(sessionID: $0, segmentID: $1, displayName: $2) } },
-                        onUndoCorrection: { sessionID in
-                            guard self.privateState.accepts(projection) else { return false }
-                            return await self.undoTranscriptCorrection(sessionID: sessionID)
-                        },
-                        onRenameSession: { if self.privateState.accepts(projection) { self.renameMeetingSession(sessionID: $0, to: $1) } },
-                        onAssignSpeakers: { sessionID, edits in
-                            guard self.privateState.accepts(projection) else { return nil }
-                            return await self.assignSpeakers(sessionID: sessionID, edits: edits)
-                        },
-                        canUndoCorrection: { self.privateState.accepts(projection) && self.coordinator.canUndoCorrection(sessionID: $0) },
-                        isQuiescent: self.coordinator.isQuiescent && self.summaryActivity.selectionLock == nil,
-                        onRepairSetup: self.repairRecordingSetup,
-                        onEditSetup: self.openMeetingSettings,
-                        isRetrying: self.isRetrying,
-                        onCloseSelection: self.closeCanvasAction.map { action in
-                            { if self.privateState.accepts(projection) { action() } }
-                        },
-                        summaryASRService: self.asrService,
-                        onOpenIntegrations: self.openMeetingIntegrations,
-                        onSetLocalUserSpeaker: { if self.privateState.accepts(projection) { self.setLocalUserSpeaker(sessionID: $0, speakerID: $1) } }
-                    )
+                    self.meetingCanvas(projection: projection, activeSessionID: activeSessionID)
                     .padding(.trailing, self.isMeetingHistoryVisible && geometry.size.width >= 900 ? 272 : 0)
                     .allowsHitTesting(!self.isMeetingHistoryVisible || geometry.size.width >= 900)
                     .accessibilityHidden(self.isMeetingHistoryVisible && geometry.size.width < 900)
@@ -472,32 +548,7 @@ struct MeetingTranscriptionView: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel("Close meeting history")
                         }
-                        MeetingHistoryInspector(
-                            privateState: self.privateState,
-                            sessions: self.profileService.isPrivateDataVisible ? self.historySnapshot.sessions : [],
-                            selectedSessionID: Binding(
-                                get: { self.privateState.selectedHistorySessionID },
-                                set: {
-                                    if self.privateState.accepts(projection), self.canBrowseMeetingHistory, self.summaryActivity.selectionLock == nil {
-                                        self.privateState.selectedHistorySessionID = $0
-                                        if geometry.size.width < 900 { self.isMeetingHistoryVisible = false }
-                                    }
-                                }
-                            ),
-                            errorMessage: self.historySnapshot.errorMessage,
-                            isLoading: !self.historySnapshot.hasLoaded,
-                            isQuiescent: self.coordinator.isQuiescent,
-                            onRefresh: { self.privateState.run { _ in await self.loadMeetingHistory() } },
-                            onRetry: { if self.privateState.accepts(projection) { self.retryProcessingSession(id: $0) } },
-                            onRevealAudio: { if self.privateState.accepts(projection) { self.revealCapturedAudio($0) } },
-                            onExportAudio: { if self.privateState.accepts(projection) { self.exportAudio($0) } },
-                            onExportTranscript: { if self.privateState.accepts(projection) { self.exportTranscript($0, format: $1, includeEchoes: false) } },
-                            onDeleteAudioRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteAudioSessionID = $0 } },
-                            onDeleteRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteSessionID = $0 } },
-                            onRename: { if self.privateState.accepts(projection) { self.renameMeetingSession(sessionID: $0, to: $1) } },
-                            onRecordAgain: { if self.privateState.accepts(projection) { self.recordAgain($0) } },
-                            onOpenIntegrations: self.openMeetingIntegrations
-                        )
+                        self.meetingHistoryInspector(projection: projection, geometry: geometry)
                         .frame(width: min(272, geometry.size.width))
                         .disabled(self.summaryActivity.selectionLock != nil)
                         .help(self.summaryActivity.selectionLock == nil ? PichiLocalization.text("Meeting history") : PichiLocalization.text("Finish or cancel the summary before switching meetings."))
@@ -517,20 +568,13 @@ struct MeetingTranscriptionView: View {
             .disabled(!self.profileService.isPrivateDataVisible)
             .accessibilityHidden(!self.profileService.isPrivateDataVisible)
             .overlay {
-                if !self.profileService.isPrivateDataVisible {
-                    // Conceal transcript and history while the admitted recording keeps its
-                    // original writer. Its stop control must survive logout without private text.
-                    switch self.coordinator.state {
-                    case .recording, .recordingDegraded:
-                        Button("Stop & Transcribe") { self.stopAndTranscribe(expectedSessionID: activeSessionID) }
-                            .font(self.theme.typography.body)
-                            .disabled(self.isStopping)
-                    default:
-                        EmptyView()
-                    }
-                }
+                self.concealedCaptureControls(activeSessionID: activeSessionID)
             }
         }
+    }
+
+    private func meetingPresentation(projection: MeetingViewPrivateProjection.Stamp?, activeSessionID: MeetingSessionID?) -> some View {
+        self.meetingLayout(projection: projection, activeSessionID: activeSessionID)
         .background(self.theme.palette.contentBackground)
         .onChange(of: self.profileService.projectionRevision) { _, _ in self.privateState.clearPayloads() }
         .clipped()
@@ -579,53 +623,56 @@ struct MeetingTranscriptionView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             self.refreshMeetingPresentationOnActivation()
         }
-        .sheet(isPresented: self.$privateState.isShowingMeetingSettings) {
-            MeetingRecordingSettingsSheet(
-                draft: self.$privateState.setupDraft,
-                retentionPolicy: self.$privateState.draftMeetingAudioRetentionPolicy,
-                applications: self.applications,
-                microphones: self.microphones,
-                readiness: self.readiness,
-                isFirstSetup: !SettingsStore.shared.meetingRecordingDefaults.isConfigured,
-                onRefreshSources: self.refreshSourcesFromUserAction,
-                onOpenMicrophoneSettings: { Self.openMicrophoneSettings() },
-                onOpenScreenRecordingSettings: { self.openScreenRecordingSettings() },
-                onOpenVoiceEngine: self.onOpenVoiceEngine,
-                onCancel: self.cancelMeetingSettings,
-                onSave: { if self.privateState.accepts(projection) { self.saveMeetingSettings() } },
-                onModelImported: { self.privateState.run { _ in await self.refreshModelReadiness() } },
-                initialSection: self.meetingSettingsInitialSection
-            )
-            .background(FluidSheetOutsideDismiss(onCancel: self.cancelMeetingSettings))
-            .interactiveDismissDisabled()
+    }
+
+    private func recordingSettingsSheet(projection: MeetingViewPrivateProjection.Stamp?) -> some View {
+        MeetingRecordingSettingsSheet(
+            draft: self.$privateState.setupDraft,
+            retentionPolicy: self.$privateState.draftMeetingAudioRetentionPolicy,
+            applications: self.applications,
+            microphones: self.microphones,
+            readiness: self.readiness,
+            isFirstSetup: !SettingsStore.shared.meetingRecordingDefaults.isConfigured,
+            onRefreshSources: self.refreshSourcesFromUserAction,
+            onOpenMicrophoneSettings: { Self.openMicrophoneSettings() },
+            onOpenScreenRecordingSettings: { self.openScreenRecordingSettings() },
+            onOpenVoiceEngine: self.onOpenVoiceEngine,
+            onCancel: self.cancelMeetingSettings,
+            onSave: { if self.privateState.accepts(projection) { self.saveMeetingSettings() } },
+            onModelImported: { self.privateState.run { _ in await self.refreshModelReadiness() } },
+            initialSection: self.meetingSettingsInitialSection
+        )
+        .background(FluidSheetOutsideDismiss(onCancel: self.cancelMeetingSettings))
+        .interactiveDismissDisabled()
+    }
+
+    private var deleteMeetingIsPresented: Binding<Bool> {
+        Binding(
+                        get: { self.privateState.pendingDeleteSessionID != nil },
+                        set: { if !$0 { self.privateState.pendingDeleteSessionID = nil } }
+                    )
+    }
+
+    private var deleteAudioIsPresented: Binding<Bool> {
+        Binding(
+                        get: { self.privateState.pendingDeleteAudioSessionID != nil },
+                        set: { if !$0 { self.privateState.pendingDeleteAudioSessionID = nil } }
+                    )
+    }
+
+    @ViewBuilder
+    private func deleteMeetingActions(projection: MeetingViewPrivateProjection.Stamp?) -> some View {
+        Button("Cancel", role: .cancel) { self.privateState.pendingDeleteSessionID = nil }
+        Button("Delete", role: .destructive) {
+            if self.privateState.accepts(projection), let id = self.privateState.pendingDeleteSessionID { self.deleteSession(id: id) }
         }
-        .alert(
-            "Delete Meeting?",
-            isPresented: Binding(
-                get: { self.privateState.pendingDeleteSessionID != nil },
-                set: { if !$0 { self.privateState.pendingDeleteSessionID = nil } }
-            )
-        ) {
-            Button("Cancel", role: .cancel) { self.privateState.pendingDeleteSessionID = nil }
-            Button("Delete", role: .destructive) {
-                if self.privateState.accepts(projection), let id = self.privateState.pendingDeleteSessionID { self.deleteSession(id: id) }
-            }
-        } message: {
-            Text("The recording and transcript will be permanently deleted from this Mac.")
-        }
-        .alert(
-            "Delete Audio?",
-            isPresented: Binding(
-                get: { self.privateState.pendingDeleteAudioSessionID != nil },
-                set: { if !$0 { self.privateState.pendingDeleteAudioSessionID = nil } }
-            )
-        ) {
-            Button("Cancel", role: .cancel) { self.privateState.pendingDeleteAudioSessionID = nil }
-            Button("Delete Audio", role: .destructive) {
-                if self.privateState.accepts(projection), let id = self.privateState.pendingDeleteAudioSessionID { self.deleteAudio(id: id) }
-            }
-        } message: {
-            Text("The transcript stays; the audio files are deleted from this Mac.")
+    }
+
+    @ViewBuilder
+    private func deleteAudioActions(projection: MeetingViewPrivateProjection.Stamp?) -> some View {
+        Button("Cancel", role: .cancel) { self.privateState.pendingDeleteAudioSessionID = nil }
+        Button("Delete Audio", role: .destructive) {
+            if self.privateState.accepts(projection), let id = self.privateState.pendingDeleteAudioSessionID { self.deleteAudio(id: id) }
         }
     }
 
