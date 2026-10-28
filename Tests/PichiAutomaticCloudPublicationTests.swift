@@ -320,13 +320,21 @@ extension PichiPublicationOutboxTests {
               "Validation Retry-After is retained as a durable lower bound")
         await transport.setAccountThrottled(false)
         let postsBeforePacedWake = await transport.postCount()
-        await service.notifySceneActive(true)
+        let validationsBeforePacedWake = await transport.validationGetCount()
+        for _ in 0..<3 {
+            await service.notifySceneActive(true)
+            await service.notifyServerAvailabilityChanged()
+        }
+        check(await transport.validationGetCount() == validationsBeforePacedWake,
+              "Repeated foreground and network wakes issue no validation GET before Retry-After")
         check(await transport.postCount() == postsBeforePacedWake,
               "A foreground wake cannot bypass the server's Retry-After lower bound")
         try await Task.sleep(for: .seconds(2.1))
         await service.notifySceneActive(true)
         try await wait { try record(serverPaced.id)?.sourcePurged == true }
         check(try record(serverPaced.id)?.receipt != nil, "Server-paced validation recovers after its lower bound")
+        check(await transport.validationGetCount() > validationsBeforePacedWake,
+              "The admitted validation GET resumes after its server deadline")
 
         await transport.holdNextResponse()
         let editedSource = try await createSource()
@@ -463,6 +471,7 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     let configuration: LegacyAccountConfiguration
     private var userID = "123", offline = false, loseNext = false, holdNext = false, holding = false
     private var accountThrottled = false
+    private var validationGets = 0
     private var accountRetryAfter: String?
     private var gate: CheckedContinuation<Void, Never>?
     private var rows: [String: [String: Any]] = [:]
@@ -472,6 +481,7 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
         userID = email.hasPrefix("b@") ? "124" : "123"; return try await account()
     }
     func account() async throws -> AccountSnapshot {
+        validationGets += 1
         if offline { throw LegacyAccountConnectivityFailure.unavailable }
         if accountThrottled { throw LegacyAccountConnectivityFailure.rateLimited(retryAfter: accountRetryAfter) }
         return .init(schemaVersion: 1, account: .init(id: userID, displayName: "Synthetic", email: nil),
@@ -484,6 +494,7 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     func clearSession() async {}
     func shutdown() async {}
     func setOffline(_ value: Bool) { offline = value }
+    func validationGetCount() -> Int { validationGets }
     func setAccountThrottled(_ value: Bool, retryAfter: String? = nil) {
         accountThrottled = value; accountRetryAfter = retryAfter
     }

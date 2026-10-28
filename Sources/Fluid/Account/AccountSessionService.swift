@@ -18,6 +18,8 @@ import Foundation
     @Published private(set) var isAwaitingProtectedData = false
     @Published private(set) var isAwaitingLegacyServerValidation = false
     private var legacySessionActive = false
+    // A wake is only a hint. All account validation paths share this server floor.
+    private var legacyValidationRetryNotBefore: (generation: UUID, date: Date)?
     private var legacyRemoteRevocationRequested = false
     var isConfigured: Bool { configuration != nil || legacyConfiguration != nil }
     var isLegacySession: Bool { legacyConfiguration != nil }
@@ -367,6 +369,7 @@ import Foundation
         let revokeToken = latestDeviceRefreshToken ?? (persisted ?? previousGrant)?.refreshToken
         grant = nil; context = nil; account = nil; requiresAccountValidation = false
         legacyStoredSession = nil; pendingLegacySession = nil; isAwaitingLegacyServerValidation = false
+        legacyValidationRetryNotBefore = nil
         isAwaitingProtectedData = false; legacyProtectedRollbackRequired = false
         state = isConfigured ? .signedOut : .unconfigured
         do { try await lifecycle?.transition(from: previousContext, to: nil, generation: captured) }
@@ -431,6 +434,7 @@ import Foundation
 
     private func failedAdmission(_ error: Error, generation captured: UUID) async {
         let failure = sanitized(error)
+        legacyValidationRetryNotBefore = nil
         await legacyTransport?.clearSession()
         legacySessionActive = false; legacyStoredSession = nil; pendingLegacySession = nil; isAwaitingLegacyServerValidation = false
         isAwaitingProtectedData = false; legacyProtectedRollbackRequired = false
@@ -515,6 +519,11 @@ extension AccountSessionService {
 
     private func freshLegacySnapshot(for expected: AccountContext? = nil) async throws -> AccountSnapshot {
         guard let legacyTransport else { throw AccountError.unconfigured }
+        let captured = generation
+        if let floor = legacyValidationRetryNotBefore, floor.generation == captured, floor.date > Date() {
+            let remaining = ceil(floor.date.timeIntervalSinceNow)
+            throw LegacyAccountConnectivityFailure.rateLimited(retryAfter: String(format: "%.0f", remaining))
+        }
         do {
             // Refresh cannot revive an expired session or change the server TTL.
             if let cookie = try await legacyTransport.sessionCookie(), cookie.expiresAt.timeIntervalSinceNow <= 60 {
@@ -530,8 +539,13 @@ extension AccountSessionService {
                           snapshot.contains(organizationID: organization, workspaceID: workspace) else { throw AccountError.permissionDenied }
                 }
             }
+            if generation == captured { legacyValidationRetryNotBefore = nil }
             return snapshot
         } catch {
+            if generation == captured, case let LegacyAccountConnectivityFailure.rateLimited(header) = error,
+               let date = Self.legacyValidationRetryDate(header, now: Date()) {
+                legacyValidationRetryNotBefore = (captured, date)
+            }
             if let expected, context == expected, generation == expected.generation {
                 let failure = sanitized(error)
                 if [.reauthenticationRequired, .invalidAccount, .permissionDenied].contains(failure) {
@@ -540,6 +554,26 @@ extension AccountSessionService {
             }
             throw error
         }
+    }
+
+    /// Account validation also runs outside publication, so retain its own scoped floor
+    /// before any cookie refresh or ACL request. No timer or independent retry is created.
+    private static func legacyValidationRetryDate(_ header: String?, now: Date) -> Date? {
+        guard let header, !header.isEmpty else { return nil }
+        guard header.utf8.count <= 128 else { return .distantFuture }
+        let value = header.trimmingCharacters(in: .whitespaces)
+        if !value.isEmpty && value.utf8.allSatisfy({ (48...57).contains($0) }) {
+            guard let seconds = Double(value), seconds.isFinite else { return .distantFuture }
+            return min(.distantFuture, now.addingTimeInterval(seconds))
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        formatter.isLenient = false
+        guard let date = formatter.date(from: value), formatter.string(from: date) == value else { return nil }
+        return max(now, date)
     }
 
     private func persistLegacySession(snapshot: AccountSnapshot, context expected: AccountContext) async throws {

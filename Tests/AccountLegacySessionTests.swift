@@ -331,17 +331,26 @@ extension AccountLegacySessionChecks {
         _ = try await recovered.performAuthorizedLegacyRequest(for: offlineOwner, request: request)
         expect(LegacyHTTPFixtureProtocol.requests.contains { $0.url?.path == "/api/recordings/transcript" }, "fresh me and ACL allow remote upload after recovery")
 
-        LegacyHTTPFixtureProtocol.configure(meStatus: 429, retryAfter: "120")
+        LegacyHTTPFixtureProtocol.configure(meStatus: 429, retryAfter: "1")
         do {
             _ = try await recovered.performAuthorizedLegacyRequest(for: offlineOwner, request: request)
             preconditionFailure("Temporary account validation was not throttled")
         } catch LegacyAccountConnectivityFailure.rateLimited(let header) {
-            expect(header == "120", "Account-validation throttling retains Retry-After for publication scheduling")
+            expect(header == "1", "Account-validation throttling retains Retry-After for publication scheduling")
         }
         expect(recovered.context == offlineOwner && recovered.isAwaitingLegacyServerValidation,
                "Validation throttling preserves the owner and requires fresh remote admission")
         LegacyHTTPFixtureProtocol.configure()
+        for _ in 0..<3 { await recovered.restoreAfterConnectivity() }
+        do { _ = try await recovered.performAuthorizedLegacyRequest(for: offlineOwner, request: request) } catch {}
+        expect(LegacyHTTPFixtureProtocol.requests.filter { $0.url?.path == "/api/auth/me" }.isEmpty,
+               "Foreground and authorized requests issue no validation GET before Retry-After")
+        expect(recovered.context == offlineOwner && recovered.isAwaitingLegacyServerValidation,
+               "Server pacing preserves the cached local owner without granting remote ACL")
+        try await Task.sleep(for: .seconds(1.1))
         await recovered.restoreAfterConnectivity()
+        expect(LegacyHTTPFixtureProtocol.requests.filter { $0.url?.path == "/api/auth/me" }.count == 1,
+               "Validation GET resumes exactly once after the server floor")
         expect(recovered.context == offlineOwner && !recovered.isAwaitingLegacyServerValidation,
                "Foreground validation recovers after throttling without another login")
 
@@ -353,6 +362,20 @@ extension AccountLegacySessionChecks {
         expect(recoveredLifecycle.activatedIdentities.allSatisfy { $0.internalUserID == "41" }, "server B can never activate through A restore")
         expect(await store.session == nil, "identity mismatch clears durable cookie")
         await recovered.shutdown()
+
+        LegacyHTTPFixtureProtocol.configure(meStatus: 429, retryAfter: "120")
+        let pacedStore = LegacyMemorySessionStore(saved), paced = try make(pacedStore)
+        await paced.restore()
+        expect(paced.context != nil && paced.isAwaitingLegacyServerValidation,
+               "Cold restore retains the account-scoped validation floor with its cached owner")
+        await paced.retireLegacySession()
+        LegacyHTTPFixtureProtocol.configure(cookie: cookie, userID: 42)
+        await paced.signIn(email: "new@synthetic.example", password: "synthetic")
+        expect(paced.state == .signedIn, "Explicit new login succeeds after the prior throttle is retired")
+        try await paced.selectWorkspace(organizationID: "7", workspaceID: "9")
+        expect(paced.context?.identity.internalUserID == "42" && !paced.isAwaitingLegacyServerValidation,
+               "Explicit retirement and new login cannot inherit a prior owner's validation floor")
+        await paced.shutdown()
 
         for failure in [401, 403] {
             LegacyHTTPFixtureProtocol.configure(meStatus: failure)
