@@ -349,7 +349,7 @@ private final class HTTPFixture {
         let root = relaunchRoot ?? manager.temporaryDirectory.appendingPathComponent("pichi-http-" + UUID().uuidString)
         let marker = root.appendingPathComponent("test-owner.json")
         guard root.path.hasPrefix("/"), root.standardizedFileURL == root,
-              root.resolvingSymlinksInPath() == root,
+              root.resolvingSymlinksInPath().path == root.path,
               root.lastPathComponent.hasPrefix("pichi-http-") else { throw Failure.invalidConfiguration }
         let identifier: UUID
         if restoring {
@@ -706,7 +706,7 @@ private final class HTTPFixture {
                 let owner = try JSONDecoder().decode(Ownership.self,
                     from: Data(contentsOf: root.appendingPathComponent("test-owner.json")))
                 guard owner.purpose == "pichi-native-http-acceptance-v1", owner.runID == runID,
-                      owner.origin == configuration.origin, root.resolvingSymlinksInPath() == root else {
+                      owner.origin == configuration.origin, root.resolvingSymlinksInPath().path == root.path else {
                     throw Failure.invalidConfiguration
                 }
                 try FileManager.default.removeItem(at: root)
