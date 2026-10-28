@@ -5,6 +5,37 @@ import PichiGigaAM
 import XCTest
 
 final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
+    func testNestedCoreMLArtifactsUseTheSameVerifiedInstallationOperation() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let files = ["Ready.mlpackage/Manifest.json": Data("synthetic manifest".utf8),
+                     "Ready.mlpackage/Data/model.mlmodel": Data("synthetic graph".utf8),
+                     "Ready.mlpackage/Data/weights/weight.bin": Data("synthetic weights".utf8),
+                     "vocabulary.txt": fixture.vocabularyBytes]
+        let artifacts = files.keys.sorted().map { name in
+            GigaAMModelArtifact(path: name, sha256: SHA256.hash(data: files[name]!).map { String(format: "%02x", $0) }.joined(),
+                               byteCount: Int64(files[name]!.count))
+        }
+        let descriptor = GigaAMModelDescriptor(id: "synthetic-package", modelFile: "Ready.mlpackage", modelSHA256: artifacts[0].sha256,
+                                               vocabularyFile: "vocabulary.txt", vocabularySHA256: artifacts.last!.sha256,
+                                               endOfUtteranceThreshold: nil, downloadBaseURL: URL(string: "https://fixture.invalid/revision/")!,
+                                               artifacts: artifacts)
+        let store = PichiGigaAMModelStore(directory: fixture.directory, downloadDescriptor: descriptor,
+                                         preferences: fixture.preferences, environment: [:]) { url, limit, progress in
+            let name = String(url.path.dropFirst("/revision/".count))
+            let bytes = try XCTUnwrap(files[name])
+            XCTAssertEqual(limit, Int64(bytes.count))
+            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try bytes.write(to: temporary)
+            progress(Int64(bytes.count), Int64(bytes.count))
+            return (temporary, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let installed = try await store.ensureInstalled()
+        try descriptor.verify(in: installed.directory)
+        for (name, bytes) in files { XCTAssertEqual(try Data(contentsOf: installed.directory.appendingPathComponent(name)), bytes) }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.directory.path), [descriptor.id])
+    }
+
     func testDownloadPublishesCompleteHashVerifiedFolder() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

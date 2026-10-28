@@ -13,6 +13,9 @@ final class ASRService: ObservableObject {
     @Published private(set) var deletingModelID: String?
     @Published private(set) var downloadProgress: Double?
     @Published private(set) var modelPreparationPhase: ModelPreparationPhase?
+    @Published private(set) var executionStatus: TranscriptionExecutionStatus?
+    private var executionStatusModelID: String?
+    private var executionStatusProviderID: ObjectIdentifier?
     var isRunning: Bool { false }
     var hasActiveModelDownload: Bool { self.downloadingModelId != nil }
     var hasActiveModelPreparation: Bool { self.modelOperation != nil }
@@ -64,6 +67,24 @@ final class ASRService: ObservableObject {
     var fileTranscriptionProvider: any TranscriptionProvider {
         guard let residentProvider else { preconditionFailure("ASR must be prepared before provider access") }
         return residentProvider
+    }
+
+    func executionStatus(for model: SettingsStore.SpeechModel) -> TranscriptionExecutionStatus? {
+        guard self.executionStatusModelID == model.id, self.settings.selectedSpeechModel == model else { return nil }
+        return self.executionStatus
+    }
+
+    private func refreshExecutionStatus(from provider: any TranscriptionProvider, modelID: String) {
+        guard self.settings.selectedSpeechModel.id == modelID else { return }
+        self.executionStatusModelID = modelID
+        self.executionStatusProviderID = ObjectIdentifier(provider as AnyObject)
+        self.executionStatus = provider.isReady ? provider.executionStatus : nil
+    }
+
+    private func refreshCurrentExecutionStatus(from provider: any TranscriptionProvider) {
+        guard self.executionStatusProviderID == ObjectIdentifier(provider as AnyObject),
+              let modelID = self.executionStatusModelID else { return }
+        self.refreshExecutionStatus(from: provider, modelID: modelID)
     }
 
     func modelIsInstalled(_ model: SettingsStore.SpeechModel) async throws -> Bool { self.installedModelExists(model) }
@@ -237,6 +258,7 @@ final class ASRService: ObservableObject {
                     self.residentProvider = provider
                     self.residentModelID = model.id
                     self.isAsrReady = true
+                    self.refreshExecutionStatus(from: provider, modelID: model.id)
                 } else {
                     await Task { @MainActor in await provider.releaseResidency() }.value
                     try self.recheckModelOperation(id: id, lease: lease, expectedSelection: expectedSelection)
@@ -280,6 +302,9 @@ final class ASRService: ObservableObject {
         self.residentProvider = nil
         self.residentModelID = nil
         self.isAsrReady = false
+        self.executionStatus = nil
+        self.executionStatusModelID = nil
+        self.executionStatusProviderID = nil
         guard let provider else { return }
         let task = Task { @MainActor in await provider.releaseResidency() }
         self.residentReleaseTask = task
@@ -319,7 +344,10 @@ final class ASRService: ObservableObject {
         let admission = try await self.residency.beginOperationRetiringIdle(owner: "speech", modelID: model.id)
         defer { self.residency.endOperation(admission) }
         self.deletingModelID = model.id
-        defer { self.deletingModelID = nil }
+        defer {
+            self.deletingModelID = nil
+            self.modelsExistOnDisk = self.installedModelExists(self.settings.selectedSpeechModel)
+        }
         let target: any TranscriptionProvider
         if self.residentModelID == model.id, let resident = self.residentProvider {
             target = resident
@@ -327,12 +355,15 @@ final class ASRService: ObservableObject {
             target = try await self.provider(for: model)
         }
         await self.executor.cancelAndAwaitPending()
+        if self.residentModelID == model.id, let resident = self.residentProvider,
+           resident as AnyObject === target as AnyObject {
+            // Retire the matching public claim before release can suspend or
+            // deletion can fail. A released provider cannot remain GPU-ready.
+            self.residentProvider = nil; self.residentModelID = nil; self.isAsrReady = false
+            self.executionStatus = nil; self.executionStatusModelID = nil; self.executionStatusProviderID = nil
+        }
         await target.releaseResidency()
         try await target.clearCache()
-        if self.residentModelID == model.id {
-            self.residentProvider = nil; self.residentModelID = nil; self.isAsrReady = false
-        }
-        self.modelsExistOnDisk = self.installedModelExists(self.settings.selectedSpeechModel)
     }
 
     func ensureAsrReady() async throws {
@@ -391,26 +422,38 @@ final class ASRService: ObservableObject {
                                   preparedProvider: MeetingASRPreparedProvider?,
                                   body: @escaping (any TranscriptionProvider) async throws -> T) async throws -> T {
         guard let lease = self.activityLease, lease.activity == .meeting else { throw MeetingASRPreparationError.invalidActivityLease }
-        defer { if let release = self.deferredRelease { self.releaseExclusiveActivity(release) } }
+        var scopedProvider: (any TranscriptionProvider)?
+        defer {
+            // The scope joins provider release before this final refresh.
+            if let provider = scopedProvider { self.refreshCurrentExecutionStatus(from: provider) }
+            if let release = self.deferredRelease { self.releaseExclusiveActivity(release) }
+        }
         #if DEBUG
         let owner = self.meetingASRPreparationOwnerForTesting ?? self.preparationOwner
         #else
         let owner = self.preparationOwner
         #endif
         return try await self.scope.run(lease: lease, attemptID: attemptID, configuration: configuration, owner: owner,
-            preparedProvider: preparedProvider, isActiveLease: { [weak self] in self?.activityLease == $0 }, body: body)
+            preparedProvider: preparedProvider, isActiveLease: { [weak self] in self?.activityLease == $0 }, body: { [weak self] provider in
+                scopedProvider = provider
+                self?.refreshExecutionStatus(from: provider, modelID: configuration.asrModel)
+                return try await body(provider)
+            })
     }
 
     func transcribeMeetingSamples(_ samples: [Float], provider: any TranscriptionProvider, languageCode: String) async throws -> ASRTranscriptionResult {
         guard self.activeExclusiveActivity == .meeting else { throw MeetingASRPreparationError.invalidActivityLease }
+        defer { self.refreshCurrentExecutionStatus(from: provider) }
         return try await self.executor.run { try await provider.transcribe(samples) }
     }
     func transcribeMeetingSamplesWithTimings(_ samples: [Float], provider: any TranscriptionProvider) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
         guard self.activeExclusiveActivity == .meeting else { throw MeetingASRPreparationError.invalidActivityLease }
+        defer { self.refreshCurrentExecutionStatus(from: provider) }
         return try await self.executor.run { try await provider.transcribeWithWordTimings(samples) }
     }
     func transcribeMeetingFile(at fileURL: URL, provider: any TranscriptionProvider) async throws -> ASRTranscriptionResult {
         guard self.activeExclusiveActivity == .meeting else { throw MeetingASRPreparationError.invalidActivityLease }
+        defer { self.refreshCurrentExecutionStatus(from: provider) }
         return try await self.executor.run { try await provider.transcribeFile(at: fileURL) }
     }
 }

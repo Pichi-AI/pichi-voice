@@ -59765,6 +59765,278 @@
           }
         }
       }
+    },
+    "GPU": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GPU"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GPU"
+          }
+        }
+      }
+    },
+    "CPU": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU"
+          }
+        }
+      }
+    },
+    "Neural Engine": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neural Engine"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neural Engine"
+          }
+        }
+      }
+    },
+    "Configured execution: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configured execution: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроенное выполнение: %@"
+          }
+        }
+      }
+    },
+    "The configured execution device is not a live utilization measurement.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The configured execution device is not a live utilization measurement."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Указанное устройство выполнения не является измерением его текущей загрузки."
+          }
+        }
+      }
+    },
+    "CPU fallback: a compatible GPU export is not installed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU fallback: a compatible GPU export is not installed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервный CPU: совместимый GPU-экспорт не установлен."
+          }
+        }
+      }
+    },
+    "CPU fallback: the GPU export failed validation.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU fallback: the GPU export failed validation."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервный CPU: GPU-экспорт не прошёл проверку."
+          }
+        }
+      }
+    },
+    "CPU fallback: GPU execution is unavailable on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU fallback: GPU execution is unavailable on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервный CPU: выполнение на GPU недоступно на этом устройстве."
+          }
+        }
+      }
+    },
+    "CPU fallback: the GPU model could not be loaded.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU fallback: the GPU model could not be loaded."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервный CPU: не удалось загрузить модель для GPU."
+          }
+        }
+      }
+    },
+    "CPU fallback: GPU execution failed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU fallback: GPU execution failed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервный CPU: выполнение на GPU завершилось ошибкой."
+          }
+        }
+      }
+    },
+    "CPU was explicitly selected for diagnostics.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU was explicitly selected for diagnostics."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU явно выбран для диагностики."
+          }
+        }
+      }
+    },
+    "GPU preferred; CPU fallback": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GPU preferred; CPU fallback"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приоритет GPU; резервный CPU"
+          }
+        }
+      }
+    },
+    "CPU fallback: the GPU export does not support this input shape.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU fallback: the GPU export does not support this input shape."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервный CPU: GPU-экспорт не поддерживает эту форму входных данных."
+          }
+        }
+      }
+    },
+    "CPU fallback: this imported export does not support GPU execution.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU fallback: this imported export does not support GPU execution."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервный CPU: импортированный экспорт не поддерживает выполнение на GPU."
+          }
+        }
+      }
+    },
+    "Punctuation, capitalization and text normalization. Published Core ML model.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punctuation, capitalization and text normalization. Published Core ML model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пунктуация, заглавные буквы и нормализация текста. Опубликованная модель Core ML."
+          }
+        }
+      }
+    },
+    "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Опубликованный экспорт GigaAM v3 для Core ML по умолчанию использует GPU. CPU включается только при недоступности или ошибке выполнения на GPU. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

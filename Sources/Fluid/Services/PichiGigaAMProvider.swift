@@ -5,6 +5,16 @@ extension GigaAMModelDescriptor {
     /// The E2E tokenizer identifies formatted exports; older character exports do not
     /// inherit their punctuation claims or the measured v5 CPU speed.
     nonisolated var libraryMetadata: SpeechModelLibraryMetadata {
+        if case .coreML = self.format {
+            return SpeechModelLibraryMetadata(
+                size: String(format: "~%.1f MiB", Double(self.artifacts.compactMap(\.byteCount).reduce(0, +)) / 1_048_576),
+                processor: "GPU preferred; CPU fallback",
+                recommendedMemory: "4 GB+ RAM recommended",
+                features: "Punctuation, capitalization and text normalization. Published Core ML model.",
+                performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
+                performanceExplanation: "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy."
+            )
+        }
         if let modelBytes = self.modelByteCount, let vocabularyBytes = self.vocabularyByteCount {
             return SpeechModelLibraryMetadata(
                 size: String(format: "~%.1f MiB", Double(modelBytes + vocabularyBytes) / 1_048_576),
@@ -38,7 +48,7 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     static let shared = PichiGigaAMModelStore()
     static var defaultDownloadByteCount: Int64 {
         let descriptor = GigaAMModelCatalog.downloadableModel
-        return (descriptor.modelByteCount ?? 0) + (descriptor.vocabularyByteCount ?? 0)
+        return descriptor.artifacts.compactMap(\.byteCount).reduce(0, +)
     }
     static var supportsDefaultDownload: Bool { GigaAMModelCatalog.downloadableModel.downloadBaseURL != nil }
     static var preferredLibraryMetadata: SpeechModelLibraryMetadata? { GigaAMModelCatalog.downloadableModel.libraryMetadata }
@@ -166,9 +176,8 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
         let task = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
             guard let source = descriptor.downloadBaseURL, source.scheme == "https",
-                  let modelBytes = descriptor.modelByteCount, modelBytes > 0,
-                  let vocabularyFile = descriptor.vocabularyFile,
-                  let vocabularyBytes = descriptor.vocabularyByteCount, vocabularyBytes > 0 else {
+                  !descriptor.artifacts.isEmpty,
+                  descriptor.artifacts.allSatisfy({ ($0.byteCount ?? 0) > 0 }) else {
                 throw GigaAMError.incompatibleModel
             }
             try Self.validateOwnedDirectory(destinationRoot)
@@ -179,9 +188,11 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
             try manager.createDirectory(at: stage, withIntermediateDirectories: false)
             defer { try? manager.removeItem(at: stage) }
             relay.report(.preparingDownload)
-            let totalBytes = modelBytes + vocabularyBytes
+            let totalBytes = descriptor.artifacts.compactMap(\.byteCount).reduce(0, +)
             var completedBytes: Int64 = 0
-            for (filename, byteCount) in [(descriptor.modelFile, modelBytes), (vocabularyFile, vocabularyBytes)] {
+            for artifact in descriptor.artifacts {
+                let filename = artifact.path
+                let byteCount = artifact.byteCount!
                 try Task.checkCancellation()
                 let base = completedBytes
                 let (temporaryURL, response) = try await self.download(source.appendingPathComponent(filename), byteCount) { written, _ in
@@ -196,7 +207,9 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
                 guard (attributes[.size] as? NSNumber)?.int64Value == byteCount else {
                     throw GigaAMError.checksumMismatch(filename)
                 }
-                try manager.moveItem(at: temporaryURL, to: stage.appendingPathComponent(filename))
+                let targetFile = stage.appendingPathComponent(filename)
+                try manager.createDirectory(at: targetFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try manager.moveItem(at: temporaryURL, to: targetFile)
                 completedBytes += byteCount
             }
             try descriptor.verify(in: stage)
@@ -268,9 +281,11 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
                 let stage = destinationRoot.appendingPathComponent(".import-\(UUID().uuidString)", isDirectory: true)
                 try manager.createDirectory(at: stage, withIntermediateDirectories: false)
                 defer { try? manager.removeItem(at: stage) }
-                for name in [descriptor.modelFile] + [descriptor.vocabularyFile].compactMap({ $0 }) {
+                for name in descriptor.artifacts.map(\.path) {
                     try Task.checkCancellation()
-                    try manager.copyItem(at: source.appendingPathComponent(name), to: stage.appendingPathComponent(name))
+                    let targetFile = stage.appendingPathComponent(name)
+                    try manager.createDirectory(at: targetFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try manager.copyItem(at: source.appendingPathComponent(name), to: targetFile)
                 }
                 try descriptor.verify(in: stage)
                 try Task.checkCancellation()
@@ -307,7 +322,7 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
             try Self.validateOwnedDirectory(installed)
             try FileManager.default.removeItem(at: installed)
         } else {
-            for name in [selection.descriptor.modelFile] + [selection.descriptor.vocabularyFile].compactMap({ $0 }) {
+            for name in selection.descriptor.artifacts.map(\.path) {
                 let path = directory.appendingPathComponent(name)
                 try Self.validateOwnedDirectory(path)
                 try FileManager.default.removeItem(at: path)
@@ -329,9 +344,11 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     private let modelStore: PichiGigaAMModelStore
     private let expectedModelFingerprint: String?
     private(set) var loadedModelFingerprint: String?
+    private(set) var executionStatus: TranscriptionExecutionStatus?
     private var runtime: GigaAMRuntime?
     private var preparationTask: Task<Void, Error>?
     private var lifecycleGeneration = 0
+    private var executionAttemptPending = false
 
     // MARK: - Admitted transcription configuration
 
@@ -344,11 +361,13 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         }
         let selection = self.expectedModelFingerprint == nil ? try self.modelStore.selectedArtifact() : nil
         self.admittedSource = (leaseID, selection)
+        self.executionAttemptPending = true
     }
 
     func endAdmittedTranscription(leaseID: UUID) {
         guard self.admittedSource?.leaseID == leaseID else { return }
         self.admittedSource = nil
+        self.executionAttemptPending = false
     }
 
     // MARK: - Provider lifecycle
@@ -395,6 +414,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             }
             self.loadedModelFingerprint = fingerprint
             self.isReady = true
+            await self.refreshExecutionStatus(from: runtime)
         }
         self.preparationTask = task
         defer {
@@ -416,6 +436,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
                 self.runtime = nil
                 self.loadedModelFingerprint = nil
                 self.isReady = false
+                self.executionStatus = nil
             }
             throw error
         }
@@ -424,7 +445,55 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     func transcribeDetailed(_ samples: [Float]) async throws -> GigaAMTranscript {
         try Task.checkCancellation()
         guard self.isReady, let runtime = self.runtime else { throw GigaAMError.notPrepared }
-        return try await runtime.transcribe(samples)
+        do {
+            if self.executionAttemptPending || self.admittedSource == nil {
+                self.executionAttemptPending = false
+                try await runtime.beginAttempt()
+                try Task.checkCancellation()
+                guard self.runtime === runtime, self.isReady else { throw CancellationError() }
+            }
+            let result = try await runtime.transcribe(samples)
+            await self.refreshExecutionStatus(from: runtime)
+            return result
+        } catch {
+            await self.refreshExecutionStatus(from: runtime)
+            throw error
+        }
+    }
+
+    private func refreshExecutionStatus(from runtime: GigaAMRuntime) async {
+        let value = await runtime.executionStatus
+        let ready = await runtime.isReady
+        guard self.runtime === runtime else { return }
+        guard ready, let value else {
+            self.isReady = false
+            self.loadedModelFingerprint = nil
+            self.executionStatus = nil
+            return
+        }
+        let backend: TranscriptionExecutionStatus.Backend
+        switch value.backend {
+        case .cpu: backend = .cpu
+        case .gpu: backend = .gpu
+        case .neuralEngine: backend = .neuralEngine
+        }
+        let reason: String?
+        switch value.fallbackReason {
+        case .compatibleExportMissing: reason = "CPU fallback: a compatible GPU export is not installed."
+        case .invalidExport: reason = "CPU fallback: the GPU export failed validation."
+        case .gpuUnavailable: reason = "CPU fallback: GPU execution is unavailable on this device."
+        case .acceleratorLoadFailed: reason = "CPU fallback: the GPU model could not be loaded."
+        case .acceleratorInferenceFailed: reason = "CPU fallback: GPU execution failed."
+        case .explicitCPU: reason = "CPU was explicitly selected for diagnostics."
+        case .unsupportedInputShape: reason = "CPU fallback: the GPU export does not support this input shape."
+        case .incompatibleExport: reason = "CPU fallback: this imported export does not support GPU execution."
+        case nil: reason = nil
+        }
+        let next = TranscriptionExecutionStatus(backend: backend, fallbackReason: reason)
+        if self.executionStatus != next {
+            DebugLogger.shared.log("GigaAM execution backend=\(value.backend.rawValue) fallback=\(value.fallbackReason?.rawValue ?? "none")", source: "GigaAM")
+        }
+        self.executionStatus = next
     }
 
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -456,6 +525,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         // Invalidate ownership before suspending. An old prepare completion cannot
         // publish readiness or clear a newer session after this point.
         self.lifecycleGeneration += 1
+        self.executionStatus = nil
         let preparationTask = self.preparationTask
         let runtime = self.runtime
         self.preparationTask = nil

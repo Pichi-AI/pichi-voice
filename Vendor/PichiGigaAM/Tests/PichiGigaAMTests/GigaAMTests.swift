@@ -5,7 +5,7 @@ import XCTest
 
 final class GigaAMTests: XCTestCase {
     func testCompactPublicExportPinsCompleteArtifactsAndOptionalEOU() {
-        let descriptor = GigaAMModelCatalog.downloadableModel
+        let descriptor = GigaAMModelCatalog.compactONNXModel
         XCTAssertEqual(descriptor.modelFile, "v3_e2e_ctc.int8.onnx")
         XCTAssertEqual(descriptor.modelByteCount, 224_893_347)
         XCTAssertEqual(descriptor.vocabularyByteCount, 2_007)
@@ -14,7 +14,23 @@ final class GigaAMTests: XCTestCase {
         XCTAssertEqual(descriptor.downloadBaseURL?.scheme, "https")
         XCTAssertTrue(descriptor.downloadBaseURL!.path.contains("322c3b29492673eb7d0b434bfa9dfb8653e34d02"))
         XCTAssertNil(descriptor.endOfUtteranceThreshold, "The public conversion has no private endpoint head")
+        XCTAssertTrue(GigaAMModelCatalog.models.contains(descriptor))
+    }
+
+    func testPublishedCoreMLExportPinsEveryRequiredFile() {
+        let descriptor = GigaAMModelCatalog.downloadableModel
+        XCTAssertEqual(descriptor.id, "gigaam-v3-e2e-ctc-coreml")
+        XCTAssertEqual(descriptor.artifacts.count, 6)
+        XCTAssertEqual(descriptor.artifacts.compactMap(\.byteCount).reduce(0, +), 442_427_628)
+        XCTAssertTrue(descriptor.downloadBaseURL!.path.contains("43dc96918bc232deafa7b7d0600fb499806f7ac1"))
+        XCTAssertEqual(descriptor.modelFile, "gigaam_v3_e2e.mlpackage")
+        XCTAssertNil(descriptor.endOfUtteranceThreshold)
         XCTAssertEqual(GigaAMModelCatalog.models.last, descriptor)
+        guard case let .coreML(configuration) = descriptor.format else { return XCTFail("Native Core ML required") }
+        XCTAssertEqual(configuration.featureFrameCount, 2_499)
+        XCTAssertEqual(configuration.windowFile, "gigaam-window.f32")
+        XCTAssertEqual(configuration.melFilterbankFile, "gigaam-melfb.f32")
+        XCTAssertTrue(descriptor.fingerprint.hasPrefix("gigaam-coreml-v1/"))
     }
 
     func testSilenceFrontendShapeAndFloor() throws {

@@ -1,7 +1,9 @@
 import Foundation
+import Metal
 import OnnxRuntimeBindings
 
 public enum GigaAMExecutionProvider: String, Sendable {
+    case automatic
     case cpu
     case coreML
 }
@@ -14,79 +16,185 @@ public actor GigaAMRuntime {
     private var vocabulary: GigaAMVocabulary?
     private var descriptor: GigaAMModelDescriptor?
     private var loadedURL: URL?
-    private let frontend: GigaAMFrontend
+    private var frontend: GigaAMFrontend
+    private var coreML: GigaAMCoreMLInference?
+    private var loadedIdentity: String?
+    public private(set) var executionStatus: GigaAMExecutionStatus?
 
     public init() throws { self.frontend = try GigaAMFrontend() }
 
-    public var isReady: Bool { self.session != nil }
+    public var isReady: Bool { self.session != nil || self.coreML?.isLoaded == true }
 
-    public func load(descriptor: GigaAMModelDescriptor, directory: URL, executionProvider: GigaAMExecutionProvider = .cpu) throws {
-        // Swift concurrency workers do not promise a pool per actor call. Drain native
-        // loader temporaries before another model phase claims residency.
+    public func load(descriptor: GigaAMModelDescriptor, directory: URL, executionProvider: GigaAMExecutionProvider = .automatic) throws {
         try autoreleasepool {
             try Task.checkCancellation()
             let modelURL = directory.appendingPathComponent(descriptor.modelFile)
-            if self.loadedURL == modelURL, self.session != nil { return }
-            // Do not retain both old and new models during a model switch.
+            let identity = descriptor.fingerprint + "/" + modelURL.path + "/" + executionProvider.rawValue
+            if self.loadedIdentity == identity, self.isReady { return }
             self.unload()
-            try descriptor.verify(in: directory)
-            let vocabulary: GigaAMVocabulary
-            if let file = descriptor.vocabularyFile {
-                vocabulary = try GigaAMVocabulary(contents: String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8))
-            } else {
-                vocabulary = .russianCharacters
+            do {
+                // Integrity and vocabulary errors are outside execution fallback.
+                try descriptor.verify(in: directory)
+                switch descriptor.format {
+                case .onnx:
+                    if let file = descriptor.vocabularyFile {
+                        self.vocabulary = try GigaAMVocabulary(contents: String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8))
+                    } else { self.vocabulary = .russianCharacters }
+                    self.frontend = try GigaAMFrontend()
+                    try self.loadONNX(modelURL: modelURL, useGPU: executionProvider == .coreML)
+                    self.executionStatus = executionProvider == .coreML
+                        ? .init(backend: .gpu, fallbackReason: nil)
+                        : .init(backend: .cpu, fallbackReason: executionProvider == .cpu ? .explicitCPU : .incompatibleExport)
+                case .coreML(let configuration):
+                    guard let vocabularyFile = descriptor.vocabularyFile else { throw GigaAMError.invalidVocabulary }
+                    let pieces = try String(contentsOf: directory.appendingPathComponent(vocabularyFile), encoding: .utf8)
+                        .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+                    var tokens = pieces
+                    if tokens.last == "" { tokens.removeLast() }
+                    guard !tokens.isEmpty, tokens.count <= 65_535, tokens.first == "<unk>",
+                          !tokens.contains("<blk>") else { throw GigaAMError.invalidVocabulary }
+                    self.vocabulary = GigaAMVocabulary(tokens: tokens + ["<blk>"], blankID: tokens.count, unknownID: 0, subword: true)
+                    self.frontend = try GigaAMFrontend(windowURL: directory.appendingPathComponent(configuration.windowFile),
+                                                       melFilterbankURL: directory.appendingPathComponent(configuration.melFilterbankFile))
+                    let native = try GigaAMCoreMLInference(packageURL: modelURL, featureFrameCount: configuration.featureFrameCount)
+                    self.coreML = native
+                    if executionProvider == .cpu {
+                        try native.load(gpu: false)
+                        self.executionStatus = .init(backend: .cpu, fallbackReason: .explicitCPU)
+                    } else if MTLCreateSystemDefaultDevice() == nil {
+                        try native.load(gpu: false)
+                        self.executionStatus = .init(backend: .cpu, fallbackReason: .gpuUnavailable)
+                    } else {
+                        do {
+                            try native.load(gpu: true)
+                            let smoke = self.frontend.features([Float](repeating: 0, count: GigaAMFrontend.fftSize))
+                            _ = try native.predict(features: smoke.values, frameCount: smoke.frameCount)
+                            self.executionStatus = .init(backend: .gpu, fallbackReason: nil)
+                        } catch {
+                            try Task.checkCancellation()
+                            guard Self.permitsExecutionFallback(error) else { throw error }
+                            native.unloadModel()
+                            try native.load(gpu: false)
+                            self.executionStatus = .init(backend: .cpu, fallbackReason: .acceleratorLoadFailed)
+                        }
+                    }
+                }
+                try Task.checkCancellation()
+                self.descriptor = descriptor
+                self.loadedURL = modelURL
+                self.loadedIdentity = identity
+            } catch {
+                self.unload()
+                throw error
             }
-            let environment = try ORTEnv(loggingLevel: .warning)
-            let options = try ORTSessionOptions()
-            #if os(iOS)
-            // One thread still exceeded the physical background CPU limit. Historical
-            // four-thread and later one-thread runs measured about 2.9s and 8.5s per
-            // 20s window, with differing capture/UI scopes rather than controlled A/B.
-            // Restore bounded foreground throughput in the immutable prepared session;
-            // this is not evidence of safe sustained background execution.
-            try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
-            try options.addConfigEntry(withKey: "session.intra_op.allow_spinning", value: "0")
-            try options.addConfigEntry(withKey: "session.inter_op.allow_spinning", value: "0")
-            #else
-            try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
-            #endif
-            try options.setGraphOptimizationLevel(.all)
-            // Dynamic GigaAM shapes are supported by the CPU EP on both architectures.
-            // CoreML remains opt-in until a particular export/device passes parity.
-            if executionProvider == .coreML {
-                let coreML = ORTCoreMLExecutionProviderOptions()
-                coreML.createMLProgram = true
-                coreML.onlyEnableForDevicesWithANE = true
-                try options.appendCoreMLExecutionProvider(with: coreML)
-            }
-            let session = try ORTSession(env: environment, modelPath: modelURL.path, sessionOptions: options)
-            guard Set(try session.inputNames()).isSuperset(of: ["features", "feature_lengths"]),
-                  Set(try session.outputNames()).contains("log_probs") else { throw GigaAMError.incompatibleModel }
+        }
+    }
+
+    private func loadONNX(modelURL: URL, useGPU: Bool) throws {
+        let environment = try ORTEnv(loggingLevel: .warning)
+        let options = try ORTSessionOptions()
+        try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
+        #if os(iOS)
+        try options.addConfigEntry(withKey: "session.intra_op.allow_spinning", value: "0")
+        try options.addConfigEntry(withKey: "session.inter_op.allow_spinning", value: "0")
+        #endif
+        try options.setGraphOptimizationLevel(.all)
+        if useGPU {
+            let optionsCoreML = ORTCoreMLExecutionProviderOptions()
+            optionsCoreML.createMLProgram = true
+            optionsCoreML.useCPUAndGPU = true
+            try options.appendCoreMLExecutionProvider(with: optionsCoreML)
+        }
+        let session = try ORTSession(env: environment, modelPath: modelURL.path, sessionOptions: options)
+        guard Set(try session.inputNames()).isSuperset(of: ["features", "feature_lengths"]),
+              Set(try session.outputNames()).contains("log_probs") else { throw GigaAMError.incompatibleModel }
+        try Task.checkCancellation()
+        self.environment = environment
+        self.session = session
+    }
+
+    private static func permitsExecutionFallback(_ error: Error) -> Bool {
+        if error is CancellationError { return false }
+        if let error = error as? GigaAMError {
+            if case .invalidOutput = error { return true }
+            return false
+        }
+        return true
+    }
+
+    /// A transient fallback is sticky within an admitted operation. A later
+    /// operation tries GPU again using the same frozen compilation derivative.
+    public func beginAttempt() throws {
+        try autoreleasepool {
             try Task.checkCancellation()
-            self.environment = environment
-            self.session = session
-            self.vocabulary = vocabulary
-            self.descriptor = descriptor
-            self.loadedURL = modelURL
+            guard let native = self.coreML, self.executionStatus?.backend == .cpu,
+                  let reason = self.executionStatus?.fallbackReason,
+                  [.gpuUnavailable, .acceleratorLoadFailed, .acceleratorInferenceFailed].contains(reason),
+                  MTLCreateSystemDefaultDevice() != nil else { return }
+            do {
+                try native.load(gpu: true)
+                let smoke = self.frontend.features([Float](repeating: 0, count: GigaAMFrontend.fftSize))
+                _ = try native.predict(features: smoke.values, frameCount: smoke.frameCount)
+                self.executionStatus = .init(backend: .gpu, fallbackReason: nil)
+            } catch {
+                try Task.checkCancellation()
+                guard Self.permitsExecutionFallback(error) else { throw error }
+                native.unloadModel()
+                do { try native.load(gpu: false) }
+                catch { self.unload(); throw error }
+                self.executionStatus = .init(backend: .cpu, fallbackReason: .acceleratorLoadFailed)
+            }
         }
     }
 
     public func unload() {
         autoreleasepool {
+            self.coreML?.unloadModel()
+            self.coreML = nil
             self.session = nil
             self.environment = nil
             self.vocabulary = nil
             self.descriptor = nil
             self.loadedURL = nil
+            self.loadedIdentity = nil
+            self.executionStatus = nil
         }
     }
 
     /// Audio is 16 kHz mono float PCM. Long inputs use overlapping, bounded windows.
     /// Every word keeps its CTC-derived timing; midpoint ownership avoids duplicated overlap.
     public func transcribe(_ samples: [Float]) throws -> GigaAMTranscript {
+        let start = ProcessInfo.processInfo.systemUptime
+        do { return try self.transcribeAttempt(samples) }
+        catch {
+            try Task.checkCancellation()
+            guard samples.allSatisfy(\.isFinite), Self.permitsExecutionFallback(error),
+                  self.executionStatus?.backend == .gpu, let native = self.coreML else { throw error }
+            // The failed synchronous prediction has joined. Retire its GPU model
+            // before loading CPU from the same frozen compilation derivative.
+            do {
+                try autoreleasepool {
+                    native.unloadModel()
+                    try native.load(gpu: false)
+                }
+            }
+            catch {
+                self.unload()
+                throw error
+            }
+            self.executionStatus = .init(backend: .cpu, fallbackReason: .acceleratorInferenceFailed)
+            // Re-run the complete input to avoid mixing internal window backends.
+            let result = try self.transcribeAttempt(samples)
+            return GigaAMTranscript(text: result.text, confidence: result.confidence, words: result.words,
+                                    endOfUtteranceProbability: result.endOfUtteranceProbability,
+                                    processingDuration: ProcessInfo.processInfo.systemUptime - start)
+        }
+    }
+
+    private func transcribeAttempt(_ samples: [Float]) throws -> GigaAMTranscript {
         try Task.checkCancellation()
         guard samples.allSatisfy(\.isFinite) else { throw GigaAMError.invalidAudio }
-        guard self.session != nil else { throw GigaAMError.notPrepared }
+        guard self.isReady else { throw GigaAMError.notPrepared }
         let start = ProcessInfo.processInfo.systemUptime
         guard !samples.isEmpty else { return GigaAMTranscript(text: "", confidence: 0, words: [], endOfUtteranceProbability: nil, processingDuration: 0) }
         let coreSamples = 20 * GigaAMFrontend.sampleRate
@@ -124,34 +232,44 @@ public actor GigaAMRuntime {
         // A model call can create autoreleased Objective-C tensors and backing buffers.
         // Only the Swift transcript escapes this bounded window.
         try autoreleasepool {
-            guard let session = self.session, let vocabulary = self.vocabulary else { throw GigaAMError.notPrepared }
+            guard self.isReady, let vocabulary = self.vocabulary else { throw GigaAMError.notPrepared }
             let start = ProcessInfo.processInfo.systemUptime
             let features = self.frontend.features(samples)
-            let featureData = features.values.withUnsafeBytes { NSMutableData(bytes: $0.baseAddress!, length: $0.count) }
-            var length = Int64(features.frameCount)
-            let lengthData = NSMutableData(bytes: &length, length: MemoryLayout<Int64>.size)
-            let inputs = [
-                "features": try ORTValue(tensorData: featureData, elementType: .float, shape: [1, NSNumber(value: GigaAMFrontend.melCount), NSNumber(value: features.frameCount)]),
-                "feature_lengths": try ORTValue(tensorData: lengthData, elementType: .int64, shape: [1]),
-            ]
-            var outputNames: Set<String> = ["log_probs"]
-            if self.descriptor?.endOfUtteranceThreshold != nil { outputNames.insert("eou_prob") }
-            let outputs = try session.run(withInputs: inputs, outputNames: outputNames, runOptions: nil)
-            try Task.checkCancellation()
-            guard let logits = outputs["log_probs"] else { throw GigaAMError.invalidOutput }
-            let shape = try logits.tensorTypeAndShapeInfo().shape.map(\.intValue)
-            guard shape.count == 3, shape[0] == 1, shape[2] == vocabulary.tokens.count else { throw GigaAMError.invalidOutput }
-            let frameCount = min(shape[1], (features.frameCount - 1) / 4 + 1)
-            let allValues = try Self.floatValues(logits)
-            let values = Array(allValues.prefix(frameCount * vocabulary.tokens.count))
+            let values: [Float]
+            let frameCount: Int
+            var probability: Float?
+            if let native = self.coreML {
+                let output = try native.predict(features: features.values, frameCount: features.frameCount)
+                guard output.vocabularySize == vocabulary.tokens.count else { throw GigaAMError.invalidOutput }
+                values = output.values
+                frameCount = output.frameCount
+            } else {
+                guard let session = self.session else { throw GigaAMError.notPrepared }
+                let featureData = features.values.withUnsafeBytes { NSMutableData(bytes: $0.baseAddress!, length: $0.count) }
+                var length = Int64(features.frameCount)
+                let lengthData = NSMutableData(bytes: &length, length: MemoryLayout<Int64>.size)
+                let inputs = [
+                    "features": try ORTValue(tensorData: featureData, elementType: .float, shape: [1, NSNumber(value: GigaAMFrontend.melCount), NSNumber(value: features.frameCount)]),
+                    "feature_lengths": try ORTValue(tensorData: lengthData, elementType: .int64, shape: [1]),
+                ]
+                var outputNames: Set<String> = ["log_probs"]
+                if self.descriptor?.endOfUtteranceThreshold != nil { outputNames.insert("eou_prob") }
+                let outputs = try session.run(withInputs: inputs, outputNames: outputNames, runOptions: nil)
+                try Task.checkCancellation()
+                guard let logits = outputs["log_probs"] else { throw GigaAMError.invalidOutput }
+                let shape = try logits.tensorTypeAndShapeInfo().shape.map(\.intValue)
+                guard shape.count == 3, shape[0] == 1, shape[2] == vocabulary.tokens.count else { throw GigaAMError.invalidOutput }
+                frameCount = min(shape[1], (features.frameCount - 1) / 4 + 1)
+                let allValues = try Self.floatValues(logits)
+                values = Array(allValues.prefix(frameCount * vocabulary.tokens.count))
+                if let output = outputs["eou_prob"], let threshold = self.descriptor?.endOfUtteranceThreshold, let raw = try Self.floatValues(output).first {
+                    let clipped = min(1 - 1e-6, max(1e-6, raw))
+                    let calibratedLogit = (log(clipped / (1 - clipped)) - log(threshold / (1 - threshold))) * 2
+                    probability = 1 / (1 + exp(-calibratedLogit))
+                }
+            }
             let duration = Double(samples.count) / Double(GigaAMFrontend.sampleRate)
             let words = try GigaAMCTC.decode(logProbabilities: values, frameCount: frameCount, vocabulary: vocabulary, audioDuration: duration)
-            var probability: Float?
-            if let output = outputs["eou_prob"], let threshold = self.descriptor?.endOfUtteranceThreshold, let raw = try Self.floatValues(output).first {
-                let clipped = min(1 - 1e-6, max(1e-6, raw))
-                let calibratedLogit = (log(clipped / (1 - clipped)) - log(threshold / (1 - threshold))) * 2
-                probability = 1 / (1 + exp(-calibratedLogit))
-            }
             return GigaAMTranscript(text: words.map(\.text).joined(separator: " "), confidence: words.isEmpty ? 0 : words.map(\.confidence).reduce(0, +) / Float(words.count), words: words, endOfUtteranceProbability: probability, processingDuration: ProcessInfo.processInfo.systemUptime - start)
         }
     }

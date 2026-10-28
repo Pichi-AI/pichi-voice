@@ -1,15 +1,16 @@
 # Pichi GigaAM native runtime
 
-This narrow Swift package runs local GigaAM v3 ONNX exports on macOS, including the compact public INT8 export and Pichi's existing optimized exports. It uses Microsoft's pinned ONNX Runtime 1.24.2 package, whose macOS binary contains both arm64 and x86_64. No Python installation, cloud inference or separate STT server is needed.
+This package runs the ready-made [Inhum GigaAM v3 Core ML conversion](https://huggingface.co/inhum/gigaam-v3-coreml), pinned to revision `43dc96918bc232deafa7b7d0600fb499806f7ac1`, and retains existing ONNX imports. No graph rewriting, model conversion, Python installation or server is needed by the application.
 
-The default execution provider is CPU. The CoreML diagnostic option was tested and failed for the current dynamic-shape attention graph. It is not enabled by the app; its package API is retained only for export-compatibility experiments. Apple Silicon CPU inference has been verified on a synthetic Russian sample. Rosetta checks are compatibility evidence, not native Intel performance measurements.
+Native Core ML prefers GPU using `cpuAndGPU` on every supported device. CPU is the reserve path when GPU preparation or execution fails; its concrete reason is shown in the existing settings. Both paths use the same unchanged package. Cancellation, invalid audio and failed source verification remain errors. Configured execution is distinct from measured hardware utilization. Pinned ONNX jobs keep their exact content identity and CPU compatibility.
 
 ## Models and installation
 
-`GigaAMModelCatalog` records SHA-256 checksums for supported imports and the pinned public download. The default source is the public GigaAM v3 E2E CTC INT8 export on Hugging Face. Files left by an earlier import do not change that default. An import becomes the selected source only after the user explicitly imports a folder and verification succeeds:
+The default download is the published Core ML package plus its required window, filterbank and vocabulary, totaling 442,427,628 bytes. All six files are pinned by SHA-256. Existing files do not change the selected source; folder imports become selected after explicit import and verification:
 
 | Export | Decoder | EOU threshold |
 | --- | --- | --- |
+| `gigaam_v3_e2e.mlpackage` | BPE with punctuation, digits and Latin | No EOU head |
 | `v3_e2e_ctc_eou_v5.fp16.onnx` | BPE with punctuation, digits and Latin | 0.48 |
 | `v3_ctc_eou_v3.fp16.onnx` | Russian characters | 0.44 |
 | `v3_ctc_eou.fp16.onnx` | Russian characters | 0.5 |
@@ -19,20 +20,25 @@ The e2e export also needs `v3_e2e_ctc_vocab.txt` from the same model folder. The
 
 Meeting jobs can pin `installedModelFingerprint()` (export ID, model checksum, vocabulary checksum and frontend revision). `PichiGigaAMProvider(expectedModelFingerprint:)` rejects an installed export that differs from the scheduled one. The fingerprint contains no local path.
 
-The default download is the community ONNX export from [istupakov/gigaam-v3-onnx](https://huggingface.co/istupakov/gigaam-v3-onnx), pinned to revision `322c3b29492673eb7d0b434bfa9dfb8653e34d02`. Its model has 224,893,347 bytes and SHA-256 `2e3fcb7a7b66030336fd10c2fcfb033bd1dc7e1bf238fe5cfd83b1d0cfc9d28e`; its 2,007-byte vocabulary uses the same hash as existing e2e imports. It derives from the official GigaAM v3 model and uses its MIT license, preserved in the app's Notices. It has no Pichi EOU head. The existing provider prepares missing files through the shared progressive downloader, validates size and checksums, atomically publishes a complete directory and then loads the native session. Onboarding and Settings share this preparation operation.
+The earlier [community ONNX export](https://huggingface.co/istupakov/gigaam-v3-onnx) remains pinned to revision `322c3b29492673eb7d0b434bfa9dfb8653e34d02` for compatibility. Both public conversions derive from the official GigaAM model and declare MIT; attribution is preserved in Notices. The existing progressive downloader verifies sizes and hashes before publishing a complete folder atomically. Settings and onboarding share this operation for both formats.
 
 Pichi's optimized EOU weights retain their verified local import path; their distribution destination is still unpublished. No weights, recordings or private training data are included in this package or Git.
 
 ### Default download and optional folder import
 
-In Speech Recognition, choose GigaAM and click Download, then Activate. The application fetches the public 224,895,354-byte model and vocabulary from Hugging Face and verifies both files. No external application or manually supplied file is required.
+In Speech Recognition, choose GigaAM and click Download, then Activate. The application fetches and verifies the published Core ML package and its three preprocessing/decoding files. No external application or manually supplied file is required.
 
 For a local model, use GigaAM's Other options menu, then Import model folder. Choose a folder containing one supported export. For the same public model downloaded manually, the folder is:
 
 ```text
 gigaam-local/
-  v3_e2e_ctc.int8.onnx
-  v3_e2e_ctc_vocab.txt
+  gigaam_v3_e2e.mlpackage/
+    Manifest.json
+    Data/com.apple.CoreML/model.mlmodel
+    Data/com.apple.CoreML/weights/weight.bin
+  gigaam-window.f32
+  gigaam-melfb.f32
+  gigaam-vocab.txt
 ```
 
 For our existing custom E2E v5 model, the folder is:
@@ -43,7 +49,9 @@ gigaam-custom/
   v3_e2e_ctc_vocab.txt
 ```
 
-The older character CTC exports in the table above require only their named ONNX file. Imports accept the registered filenames and exact SHA-256 checksums in `GigaAMModelCatalog`; a renamed model, arbitrary ONNX/GGUF file, or a different Hugging Face export is not automatically compatible. The application copies the required files into its model storage and selects that imported export only after verification and complete publication. Click Activate to load it.
+The earlier public INT8 import requires `v3_e2e_ctc.int8.onnx` and `v3_e2e_ctc_vocab.txt`. Older character exports require only their named ONNX file. Imports accept the registered filenames and exact SHA-256 checksums in `GigaAMModelCatalog`; another export is not automatically compatible. The shared operation copies only required files and selects the import after complete verified publication. Click Activate to load it.
+
+The published Core ML binary contract is checked independently of its model card: the filterbank bytes are bin-major, logits are FP16 with padded strides, and the reported encoded length can round upward above 2048 input frames. The adapter reads the supplied files unchanged and caps CTC output by both real audio length and physical tensor dimensions. No graph or weight changes are made.
 
 To return to the public model, choose Other options, then Use Hugging Face model (default), and click Download or Activate. This switches the source without deleting the imported files. A failed import or cancellation before publication keeps the previous source. Recording and meeting operations block source changes until their owned work finishes. Already scheduled meeting attempts retain their pinned artifact identity.
 
@@ -51,7 +59,7 @@ The developer `PICHI_GIGAAM_MODEL_DIR` override and descriptor-named artifact di
 
 ## Library characteristics
 
-The preferred E2E v5 export and its vocabulary occupy 456,341,702 bytes (435.2 MiB) on disk. The older character exports occupy about 428.8 MiB. The library separately shows the existing 4 GB system-RAM recommendation; this is not a measurement of model RAM consumption. Both Apple Silicon and Intel use CPU inference.
+The default published Core ML files occupy 421.9 MiB. The imported E2E v5 ONNX export and vocabulary occupy 435.2 MiB; older character exports occupy about 428.8 MiB. The existing 4 GB system-RAM recommendation is not a model RAM measurement. The Core ML route prefers GPU on Apple Silicon and Intel; actual compatibility and measured performance remain device-specific.
 
 E2E output includes punctuation, capitalization and text normalization. The FP16 conversion reduces weight storage, and Pichi's trained EOU head detects phrase completion using the shared speech encoder. The native provider does not include the browser/server domain-term spotter or a separate grammar-correction model. Older character exports do not produce the E2E formatting features. The installation snapshot supplies the imported descriptor's characteristics to the common library card without filesystem reads during rendering.
 

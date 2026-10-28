@@ -14,11 +14,27 @@ final class GigaAMFrontend {
     private let window: [Float]
     private let filters: [Float]
 
-    init() throws {
+    init(windowURL: URL? = nil, melFilterbankURL: URL? = nil) throws {
+        // The pinned published binary stores [bin, mel], matching this DFT loop.
+        // Its model card describes the logical dimensions, not the byte order.
+        let supplied: (window: [Float], filters: [Float])?
+        if let windowURL, let melFilterbankURL {
+            let window = try Self.readTable(windowURL, count: Self.fftSize)
+            let filters = try Self.readTable(melFilterbankURL, count: Self.melCount * Self.binCount)
+            supplied = (window, filters)
+        } else {
+            guard windowURL == nil, melFilterbankURL == nil else { throw GigaAMError.frontendInitialization }
+            supplied = nil
+        }
         guard let setup = vDSP_DFT_zop_CreateSetup(nil, vDSP_Length(Self.fftSize), .FORWARD) else {
             throw GigaAMError.frontendInitialization
         }
         self.setup = setup
+        if let supplied {
+            self.window = supplied.window
+            self.filters = supplied.filters
+            return
+        }
         self.window = (0..<Self.fftSize).map { index in
             Self.bf16(Float(0.5 - 0.5 * cos(2 * .pi * Double(index) / Double(Self.fftSize))))
         }
@@ -36,6 +52,16 @@ final class GigaAMFrontend {
             }
         }
         self.filters = filters
+    }
+
+    private static func readTable(_ url: URL, count: Int) throws -> [Float] {
+        let data = try Data(contentsOf: url)
+        guard data.count == count * MemoryLayout<UInt32>.size else { throw GigaAMError.frontendInitialization }
+        let values = data.withUnsafeBytes { bytes in
+            (0..<count).map { Float(bitPattern: UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self))) }
+        }
+        guard values.allSatisfy(\.isFinite) else { throw GigaAMError.frontendInitialization }
+        return values
     }
 
     deinit { vDSP_DFT_DestroySetup(self.setup) }

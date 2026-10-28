@@ -15,7 +15,7 @@ let package = Package(
         .target(
             name: "PichiGigaAM",
             dependencies: [.product(name: "onnxruntime", package: "onnxruntime-swift-package-manager")],
-            linkerSettings: [.linkedFramework("Accelerate")]
+            linkerSettings: [.linkedFramework("Accelerate"), .linkedFramework("CoreML"), .linkedFramework("Metal")]
         ),
         .testTarget(name: "PichiGigaAMTests", dependencies: ["PichiGigaAM"]),
         // Text privacy shares the already pinned native ONNX runtime. It has no
