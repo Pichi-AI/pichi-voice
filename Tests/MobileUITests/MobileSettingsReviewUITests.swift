@@ -156,5 +156,6 @@ final class MobileSettingsReviewUITests: XCTestCase {
         attachment.name = "settings-\(device)-\(step)-\(revision)"
         attachment.lifetime = .keepAlways
         add(attachment)
+        reviewNativeScreenshotIfRequested(step, namePrefix: "settings-\(device)", revision: revision)
     }
 }
