@@ -248,6 +248,7 @@ struct MeetingSessionStoreCheckpointTests {
         try await Self.checkPrivateProfileLifecycle(root: root.appendingPathComponent("profile-lifecycle"), check: check)
         try await Self.checkPrivateProfileOperationOwner(root: root.appendingPathComponent("profile-operation"), check: check)
         try await Self.checkRecordingEncryption(root: root.appendingPathComponent("recording-encryption"), check: check)
+        try await Self.checkLocalReaderDates(root: root.appendingPathComponent("local-reader-dates"), check: check)
 
         let nativePresentation = MeetingTranscriptExporter.speakerPresentation(
             for: session.transcriptSegments[0], in: session)

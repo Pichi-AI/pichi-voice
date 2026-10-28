@@ -36,7 +36,7 @@ final class MeetingExistingAudioReplayTests: XCTestCase {
         XCTAssertFalse(sourceDirectories.isEmpty)
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
         let asrService = ASRService()
         let meetingLease = try asrService.acquireExclusiveActivity(.meeting)
         defer { asrService.releaseExclusiveActivity(meetingLease) }
@@ -243,7 +243,7 @@ extension MeetingExistingAudioReplayTests {
         probe.mark("baseline_settling")
         try await Task.sleep(for: .seconds(10))
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
         var baselineTexts: [UUID: [String]] = [:]
         var dictationText: String?
         var reports: [[String: Any]] = []

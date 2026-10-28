@@ -76,6 +76,10 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
+    Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift \
+    Sources/Fluid/Services/Meeting/PichiMeetingSummaryDocument.swift \
+    Sources/Fluid/Services/FluidServe/FluidServeFileBoundary.swift \
+    Sources/Fluid/Services/FluidServe/FluidServeMeetings.swift \
     Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationSource.swift \
     Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationPayload.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
@@ -94,6 +98,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingRetainedProcessingCheckpoint.swift \
     "$task_test_dir/ApplicationSupport.swift" Tests/MeetingSessionStoreCheckpointTests.swift \
     Tests/MeetingRecordingEncryptionTests.swift \
+    Tests/MeetingLocalReaderDateTests.swift \
     Tests/MeetingTranscriptReadingContractTests.swift \
     Tests/MeetingProtectedTranscriptExportTests.swift \
     Tests/PichiProtectedPublicationSourceTests.swift \

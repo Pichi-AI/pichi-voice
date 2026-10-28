@@ -225,7 +225,7 @@ nonisolated enum FluidServeMeetings {
         catch FluidServeFileBoundary.Rejection.missing { return [] }
         let budget = FluidServeFileBoundary.Budget(maximumBytes: self.maximumTotalReadBytes)
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
         var entries: [Entry] = []
         var inspected = 0
         for name in try owned.names(maximumEntries: self.maximumDirectoryEntries) {

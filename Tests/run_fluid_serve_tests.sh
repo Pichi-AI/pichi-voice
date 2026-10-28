@@ -5,7 +5,20 @@ task_test_dir=$(mktemp -d /tmp/pichi-fluid-serve.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT
 # Compile the production persisted codecs and command, without launching the app.
 python3 Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift" --fingerprint
-set -- Sources/Fluid/Services/ModelTemperatureSupport.swift \
+# The temperature-key fixture injects an ordinary synthetic UserDefaults suite.
+# Profile selection is outside this read-only helper probe and must never run here.
+cat > "$task_test_dir/ProfileDefaultsSupport.swift" <<'SWIFT'
+import Foundation
+nonisolated struct PrivateProfileSnapshot {}
+nonisolated final class PrivateProfileDefaults: UserDefaults, @unchecked Sendable {
+    static var shared: UserDefaults { preconditionFailure("Unexpected shared profile preferences") }
+    var selectedProfile: PrivateProfileSnapshot { preconditionFailure("Unexpected profile selection") }
+    static func bound(to profile: PrivateProfileSnapshot) -> UserDefaults {
+        preconditionFailure("Unexpected profile preferences binding")
+    }
+}
+SWIFT
+set -- "$task_test_dir/ProfileDefaultsSupport.swift" Sources/Fluid/Services/ModelTemperatureSupport.swift \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
