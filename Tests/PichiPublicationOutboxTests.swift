@@ -396,7 +396,7 @@ struct PichiPublicationOutboxTests {
         for control in [ConnectivityRaceControl.pause, .off] {
             checks += try await checkConnectivityRestorationRace(
                 root: root.appendingPathComponent(control == .pause ? "remote-pause" : "remote-off"),
-                restorationFinishesFirst: true, failure: .remote429, control: control)
+                restorationFinishesFirst: true, failure: .http429, control: control)
         }
         return checks
     }

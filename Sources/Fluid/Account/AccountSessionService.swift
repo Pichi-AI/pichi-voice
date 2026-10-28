@@ -862,7 +862,8 @@ extension AccountSessionService {
 
     /// Fresh identity and editable-workspace evidence precede every protected operation.
     /// The publication service remains the single owner of transfer/retry/outbox work.
-    func performAuthorizedLegacyRequest(for expected: AccountContext, request: URLRequest) async throws -> LegacyAccountHTTPResponse {
+    func performAuthorizedLegacyRequest(for expected: AccountContext, request: URLRequest,
+        responseFailure: (@Sendable (Int, String?) -> (any Error)?)? = nil) async throws -> LegacyAccountHTTPResponse {
         guard let legacyTransport, let configuration = legacyConfiguration, isCurrent(expected),
               let workspace = expected.workspaceID, let organization = expected.organizationID else { throw AccountError.staleOperation }
         guard Self.isLegacyPublicationRequest(request, workspace: workspace, origin: configuration.apiBaseURL) else {
@@ -878,6 +879,10 @@ extension AccountSessionService {
             try await persistLegacySession(snapshot: snapshot, context: expected)
             guard isCurrent(expected) else { throw AccountError.staleOperation }
             let response = try await legacyTransport.perform(request)
+            // The caller may retain safe failure metadata from its already admitted
+            // request before a racing validation closes current-owner admission.
+            // Success data still requires all ordinary checks below.
+            if let failure = responseFailure?(response.status, response.retryAfter) { throw failure }
             try Task.checkCancellation()
             guard isCurrent(expected) else { throw AccountError.staleOperation }
             if response.status == 401 || response.status == 403 {

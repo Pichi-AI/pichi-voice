@@ -483,8 +483,14 @@ extension PichiPublicationOutboxTests {
         service = makeService(); try await service.install()
         await transport.setOffline(false)
         await transport.holdValidationCalls(2)
+        if failure.isHTTPResponse { await transport.holdNextResponse(); await transport.failNextHTTP(failure == .http429 ? 429 : 503) }
         try await service.activateCurrentProfile()
         try await wait { await transport.heldValidationCount() == 1 }
+        if failure.isHTTPResponse {
+            await transport.releaseValidationCall(0)
+            try await wait { await transport.isHolding() }
+        }
+        let postsBeforeReplay = failure.isHTTPResponse ? 1 : 0
         let context = account.context!
         let restoring = Task { await account.restoreAfterConnectivity() }
         try await wait { await transport.heldValidationCount() == 2 }
@@ -499,21 +505,25 @@ extension PichiPublicationOutboxTests {
             await service.notifySceneActive(true)
             check(try record()?.state == .sending,
                   "The foreground activation has already observed sending before local retirement starts")
-            check(await transport.postCount() == 0, "The early foreground wake sends no POST while request validation is still held")
+            check(await transport.postCount() == postsBeforeReplay, "The early foreground wake cannot duplicate the held request")
         }
         let controlling: Task<Void, Error>?
         switch control {
         case .none: controlling = nil
         case .pause:
             controlling = Task { await service.pause() }
-            try await wait { await transport.validationWasCancelled(0) }
+            try await wait {
+                if failure.isHTTPResponse { return await transport.responseWasCancelled() }
+                return await transport.validationWasCancelled(0)
+            }
         case .off:
             controlling = Task { try await service.setCloudSyncEnabled(false) }
             try await wait { service.snapshot.availability == .pausing }
         }
-        await transport.failHeldValidation(0, as: failure)
+        if !failure.isHTTPResponse { await transport.failHeldValidation(0, as: failure) }
         let failedAt = Date()
-        await transport.releaseValidationCall(0)
+        if failure.isHTTPResponse { await transport.releaseResponse() }
+        else { await transport.releaseValidationCall(0) }
         try await wait { try record()?.state != .sending }
         try await controlling?.value
         let retired = try record()!
@@ -534,7 +544,7 @@ extension PichiPublicationOutboxTests {
                   "The decoded remote Retry-After survives account validation and cancellation exactly once")
         }
         if !restorationFinishesFirst {
-            check(await transport.postCount() == 0, "Temporarily unavailable account admission sends no protected POST")
+            check(await transport.postCount() == postsBeforeReplay, "Temporarily unavailable account admission sends no additional protected POST")
             await transport.releaseValidationCall(1)
             await restoring.value
             check(account.isCurrent(context) && !account.isAwaitingLegacyServerValidation,
@@ -543,7 +553,7 @@ extension PichiPublicationOutboxTests {
         if control != .none {
             await service.notifySceneActive(true)
             let userPausedRecord = try record()
-            check(await transport.postCount() == 0 && userPausedRecord?.pauseReason == .userRequested,
+            check(await transport.postCount() == postsBeforeReplay && userPausedRecord?.pauseReason == .userRequested,
                   "A racing user pause or OFF stays paused across the post-retirement wake")
             if control == .off { try await service.setCloudSyncEnabled(true) }
             else { try await service.resume() }
@@ -551,7 +561,7 @@ extension PichiPublicationOutboxTests {
         if failure.hasServerDeadline {
             for _ in 0..<3 { await service.notifySceneActive(true) }
             let pacedRecord = try record()
-            check(await transport.postCount() == 0 && pacedRecord?.attemptCount == 2,
+            check(await transport.postCount() == postsBeforeReplay && pacedRecord?.attemptCount == 2,
                   "Repeated foreground wakes cannot import before the durable server deadline")
             let due = try record()!.serverRetryNotBefore!
             try await Task.sleep(for: .seconds(max(0, due.timeIntervalSinceNow) + 0.05))
@@ -560,7 +570,11 @@ extension PichiPublicationOutboxTests {
         try await wait { try record()?.receipt != nil }
         check(try record()?.state == .accepted && record()?.attemptCount == 3,
               "A foreground wake resumes the same durable source and receives its matching receipt")
-        check(await transport.postCount() == 1, "The interrupted authorization creates exactly one eventual import POST")
+        check(await transport.postCount() == postsBeforeReplay + 1, "The interrupted authorization permits exactly one eventual import replay")
+        if failure.isHTTPResponse {
+            let replay = await transport.replaySummary(for: session.id)
+            check(replay.rows == 1 && replay.identical, "Actual HTTP failures replay identical bytes into one server source")
+        }
         let accepted = try record()!
         check(accepted.operationID == original.operationID && accepted.transcriptBytes == original.transcriptBytes
             && accepted.sourceSHA256 == original.sourceSHA256 && accepted.localSourceSHA256 == original.localSourceSHA256,
@@ -580,8 +594,9 @@ private actor AutomaticStoredSession: LegacyAccountSessionStoring {
 }
 
 enum ConnectivityRaceFailure: String, CaseIterable, Sendable {
-    case stale, network, remote429, remote503
-    var hasServerDeadline: Bool { self == .remote429 || self == .remote503 }
+    case stale, network, remote429, remote503, http429, http503
+    var hasServerDeadline: Bool { self == .remote429 || self == .remote503 || isHTTPResponse }
+    var isHTTPResponse: Bool { self == .http429 || self == .http503 }
 }
 enum ConnectivityRaceControl: Sendable { case none, pause, off }
 
@@ -653,6 +668,8 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     private var accountThrottled = false
     private var validationGets = 0
     private var accountRetryAfter: String?
+    private var nextHTTPFailure: Int?
+    private var responseCancelled = false
     private var gate: CheckedContinuation<Void, Never>?
     private var rows: [String: [String: Any]] = [:]
     private var bodies: [String: [Data]] = [:]
@@ -676,7 +693,7 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
             case .remote429: throw LegacyAccountConnectivityFailure.rateLimited(retryAfter: "3")
             case .remote503:
                 throw PichiPublicationRemoteFailure(action: .boundedRetry, httpStatus: 503, code: .internalError, retryAfter: .seconds(3))
-            case nil: break
+            case .http429, .http503, nil: break
             }
         }
         if offline { throw LegacyAccountConnectivityFailure.unavailable }
@@ -705,8 +722,11 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     func setAccountThrottled(_ value: Bool, retryAfter: String? = nil) {
         accountThrottled = value; accountRetryAfter = retryAfter
     }
+    func failNextHTTP(_ status: Int) { nextHTTPFailure = status }
     func loseNextResponse() { loseNext = true }
-    func holdNextResponse() { holdNext = true }
+    func holdNextResponse() { holdNext = true; responseCancelled = false }
+    private func markResponseCancelled() { responseCancelled = true }
+    func responseWasCancelled() -> Bool { responseCancelled }
     func isHolding() -> Bool { holding }
     func releaseResponse() { holding = false; gate?.resume(); gate = nil }
     func postCount() -> Int { bodies.values.reduce(0) { $0 + $1.count } }
@@ -735,7 +755,16 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
                 accepted["evaluationResults"] = NSNull(); accepted["importBillingStatus"] = "uncertain"
                 rows[key] = accepted
             }
-            if holdNext { holdNext = false; holding = true; await withCheckedContinuation { gate = $0 } }
+            if holdNext {
+                holdNext = false; holding = true
+                await withTaskCancellationHandler {
+                    await withCheckedContinuation { gate = $0 }
+                } onCancel: { Task { await self.markResponseCancelled() } }
+            }
+            if let status = nextHTTPFailure {
+                nextHTTPFailure = nil
+                return .init(status: status, body: Data(), retryAfter: "3")
+            }
             if loseNext { loseNext = false; throw LegacyAccountConnectivityFailure.unavailable }
             row = rows[key]!
         } else if request.url!.path.hasPrefix("/api/recordings/"),

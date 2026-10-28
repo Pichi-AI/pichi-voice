@@ -398,6 +398,14 @@ nonisolated struct PichiPublicationRequest: Sendable {
         return receipt
     }
 
+    /// Safe failure metadata can survive a post-response account/cancellation race.
+    /// This never parses a receipt or broadens the wire's strict retry classification.
+    func retryableFailure(from response: PichiPublicationHTTPResponse, now: Date = Date()) -> PichiPublicationRemoteFailure? {
+        guard response.body.count <= Self.maximumResponseBytes,
+              let failure = try? self.remoteFailure(response, now: now), failure.action == .boundedRetry else { return nil }
+        return failure
+    }
+
     private func remoteFailure(_ response: PichiPublicationHTTPResponse, now: Date) throws -> PichiPublicationRemoteFailure {
         struct Envelope: Decodable { struct Detail: Decodable { let code: String; let status: Int }; let error: Detail }
         let parsed = try? JSONDecoder().decode(Envelope.self, from: response.body)

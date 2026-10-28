@@ -234,6 +234,25 @@ extension PichiPublicationOutboxTests {
         let afterCancelledRetry = try durable(profileA, id: cancelledSource.id, settled: true)
         check(afterCancelledRetry.operationID == beforeCancel.operationID && afterCancelledRetry.attemptCount == 2,
               "Cancelled delivery can replay in the same retained service without restart")
+        for (status, code) in [(429, "RATE_LIMITED"), (503, "INTERNAL_ERROR")] {
+            let pacedSource = try await capture()
+            let before = try durable(profileA, id: pacedSource.id, settled: false)
+            await http.holdNextPost()
+            await http.failHeldPost(status: status, code: code)
+            let pacedSend = Task { try await service.send(pacedSource.id) }
+            try await wait { await http.isHeld() }
+            pacedSend.cancel()
+            await http.release(); _ = await pacedSend.result
+            let paced = try durable(profileA, id: pacedSource.id, settled: false)
+            check(paced.state == .retryScheduled && paced.retryNotBefore != nil && paced.receipt == nil,
+                  "A returned OIDC retry response keeps its durable floor despite racing cancellation")
+            check(paced.operationID == before.operationID && paced.transcriptBytes == before.transcriptBytes,
+                  "Safe OIDC failure extraction cannot replace frozen payload or authorize a receipt")
+            let beforeEarlyRetry = await http.count(method: "POST")
+            try await service.retry(pacedSource.id)
+            check(await http.count(method: "POST") == beforeEarlyRetry,
+                  "An explicit OIDC retry cannot send before the persisted server/backoff deadline")
+        }
         let diskFailureSource = try await capture()
         let beforeDiskFailure = try durable(profileA, id: diskFailureSource.id, settled: false)
         await http.holdNextPost()
@@ -514,6 +533,7 @@ private actor FacadeFixtureHTTP: PichiPublicationHTTPPerforming {
     private var closed = false
     private var failure: (method: String, status: Int, code: String)?
     private var finishStatus = false
+    private var heldPostFailure: (status: Int, code: String)?
     func count() -> Int { requests }
     func count(method: String) -> Int { requestMethods[method] ?? 0 }
     func identicalPosts() -> Bool { bodiesMatch }
@@ -525,6 +545,7 @@ private actor FacadeFixtureHTTP: PichiPublicationHTTPPerforming {
     func wasShutdown() -> Bool { closed }
     func failNextRequest(_ method: String, status: Int, code: String) { failure = (method, status, code) }
     func finishNextStatus() { finishStatus = true }
+    func failHeldPost(status: Int, code: String) { heldPostFailure = (status, code) }
     func perform(_ request: URLRequest) async throws -> PichiPublicationHTTPResponse {
         requests += 1
         let method = request.httpMethod ?? "GET"
@@ -571,6 +592,11 @@ private actor FacadeFixtureHTTP: PichiPublicationHTTPPerforming {
             }
         }
         if heldMethod == operation { heldMethod = nil; held = true; await withCheckedContinuation { gate = $0 } }
+        if method == "POST", let failure = heldPostFailure {
+            heldPostFailure = nil
+            return .init(status: failure.status,
+                body: try JSONSerialization.data(withJSONObject: ["error": ["code": failure.code, "status": failure.status]]), retryAfter: "3")
+        }
         if method == "POST", loseNext { loseNext = false; throw PichiPublicationNetworkFailure.unavailable }
         if isOptions {
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!

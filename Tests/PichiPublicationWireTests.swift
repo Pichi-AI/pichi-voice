@@ -120,6 +120,20 @@ extension PichiPublicationConsentTests {
         catch let error as PichiPublicationRemoteFailure { check(error.action == .pauseForReceiptReview && error.code == nil, "Status/code pairs must agree") }
         do { _ = try post.receipt(from: .init(status: 503, body: Data("<html>PRIVATE</html>".utf8), retryAfter: nil)); check(false, "Malformed errors cannot infer retry") }
         catch let error as PichiPublicationRemoteFailure { check(error.action == .pauseForReceiptReview, "Malformed errors pause for review") }
+        for (status, code) in [(429, "RATE_LIMITED"), (500, "INTERNAL_ERROR"), (503, "INTERNAL_ERROR")] {
+            let response = PichiPublicationHTTPResponse(status: status,
+                body: try json(["error": ["code": code, "status": status]]), retryAfter: "30")
+            check(post.retryableFailure(from: response, now: now)?.retryAfter == .seconds(30),
+                  "Early failure extraction preserves the existing strict wire retry classification")
+        }
+        for response in [PichiPublicationHTTPResponse(status: 202, body: Data(), retryAfter: "30"),
+                         .init(status: 401, body: try json(["error": ["code": "AUTHENTICATION_FAILED", "status": 401]]), retryAfter: "30"),
+                         .init(status: 403, body: mismatch, retryAfter: "30"),
+                         .init(status: 503, body: Data("<html>PRIVATE</html>".utf8), retryAfter: "30"),
+                         .init(status: 503, body: Data(repeating: 0, count: PichiPublicationRequest.maximumResponseBytes + 1), retryAfter: "30")] {
+            check(post.retryableFailure(from: response, now: now) == nil,
+                  "Early failure extraction admits no success, authentication, malformed or oversized response")
+        }
         var receiptObject = try object("receipt-pending-criteria.json")
         for (key, value) in [("schemaVersion", 2 as Any), ("uploadState", "pending"), ("analysisState", "unknown"), ("importID", ""), ("recordingID", "\nforeign")] {
             var changed = receiptObject; changed[key] = value

@@ -667,7 +667,11 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
         let id = UUID()
         let task = Task { @MainActor in
             do {
-                let response = try await self.account.performAuthorizedLegacyRequest(for: context, request: request)
+                let response = try await self.account.performAuthorizedLegacyRequest(for: context, request: request,
+                    responseFailure: { status, retryAfter in
+                        let failure = PichiLegacyPublicationRequest.remoteFailure(.init(status: status, body: Data(), retryAfter: retryAfter))
+                        return failure.action == .boundedRetry ? failure : nil
+                    })
                 try self.check(profile, context: context)
                 return PichiPublicationHTTPResponse(status: response.status, body: response.body, retryAfter: response.retryAfter)
             } catch AccountError.networkUnavailable { throw PichiPublicationNetworkFailure.unavailable }
@@ -985,6 +989,7 @@ nonisolated struct PichiCloudPublicationSnapshot: Equatable, Sendable {
             let authorized = try await request.authorized(using: self.account)
             try self.check(profile, context: request.context)
             let response = try await http.perform(authorized)
+            if let failure = request.retryableFailure(from: response) { throw failure }
             try self.check(profile, context: request.context)
             return response
         }
