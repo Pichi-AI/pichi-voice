@@ -8,6 +8,8 @@ import XCTest
 /// transport are real; no model downloads, app activation or microphone are used.
 @MainActor
 final class MobilePCMRuntimeCoverageTests: XCTestCase {
+    private var hasSyntheticProfile = false
+
     func testMeasuredPauseSealsShortSpeechWithoutRunningBatchASROnEverySmallDelta() async throws {
         for hasMeasuredPause in [true, false] {
             let fixture = try self.makeNativePCMPreviewFixture()
@@ -818,9 +820,37 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         }
     }
 
+    /// The injected fixture owns its admission and preserves the hosted app's
+    /// original privacy gate after every later resource teardown has joined.
+    private func admitSyntheticProfileIfNeeded() {
+        guard !hasSyntheticProfile else { return }
+        let original = PrivateProfileStorage.current
+        let originalAdmission = PrivateProfileStorage.acceptsNewWork
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MobilePCMRuntimeCoverageTests.Profile." + UUID().uuidString, isDirectory: true)
+        PrivateProfileStorage.select(.init(id: "guest", context: nil, generation: UUID(),
+            rootDirectory: root, legacyRootDirectory: root, isReadable: true))
+        hasSyntheticProfile = true
+        // Registered before callers add consumer/lease cleanup, so LIFO teardown
+        // restores this profile only after those owned resources have drained.
+        addTeardownBlock { [weak self] in
+            let owner = self
+            await MainActor.run {
+                PrivateProfileStorage.select(original)
+                if !originalAdmission { PrivateProfileStorage.closeAdmission() }
+                owner?.hasSyntheticProfile = false
+                if FileManager.default.fileExists(atPath: root.path) {
+                    do { try FileManager.default.removeItem(at: root) }
+                    catch { XCTFail("Synthetic hosted profile cleanup failed") }
+                }
+            }
+        }
+    }
+
     private func makeNativePCMPreviewFixture() throws -> (service: ASRService, lease: ASRActivityLease,
         provider: NativeScopeProvider, owner: MeetingASRPreparationOwner,
         runtime: MeetingParakeetNemotronRuntime, configuration: MeetingFinalProcessingConfiguration) {
+        admitSyntheticProfileIfNeeded()
         let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
         let lease = try service.acquireExclusiveActivity(.meeting)
         let provider = NativeScopeProvider()

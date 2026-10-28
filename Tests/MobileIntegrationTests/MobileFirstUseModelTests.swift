@@ -7,6 +7,8 @@ import XCTest
 /// microphone permission are controlled, so these tests never download weights or record audio.
 @MainActor
 final class MobileFirstUseModelTests: XCTestCase {
+    private var hasSyntheticProfile = false
+
     /// Explicit device maintenance after the user chooses Tiny. Ordinary test runs
     /// never change real preferences; this invokes the same operation as Settings.
     func testAuthorizedPhysicalDeviceActivationOfWhisperTiny() async throws {
@@ -81,7 +83,35 @@ final class MobileFirstUseModelTests: XCTestCase {
         #endif
     }
 
+    /// The injected fixture owns its admission and preserves the hosted app's
+    /// original privacy gate after every later resource teardown has joined.
+    private func admitSyntheticProfileIfNeeded() {
+        guard !hasSyntheticProfile else { return }
+        let original = PrivateProfileStorage.current
+        let originalAdmission = PrivateProfileStorage.acceptsNewWork
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MobileFirstUseModelTests.Profile." + UUID().uuidString, isDirectory: true)
+        PrivateProfileStorage.select(.init(id: "guest", context: nil, generation: UUID(),
+            rootDirectory: root, legacyRootDirectory: root, isReadable: true))
+        hasSyntheticProfile = true
+        // Registered before callers add consumer/lease cleanup, so LIFO teardown
+        // restores this profile only after those owned resources have drained.
+        addTeardownBlock { [weak self] in
+            let owner = self
+            await MainActor.run {
+                PrivateProfileStorage.select(original)
+                if !originalAdmission { PrivateProfileStorage.closeAdmission() }
+                owner?.hasSyntheticProfile = false
+                if FileManager.default.fileExists(atPath: root.path) {
+                    do { try FileManager.default.removeItem(at: root) }
+                    catch { XCTFail("Synthetic hosted profile cleanup failed") }
+                }
+            }
+        }
+    }
+
     private func settings() throws -> (SettingsStore, UserDefaults, String) {
+        admitSyntheticProfileIfNeeded()
         let name = "MobileFirstUseModelTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         self.addTeardownBlock { defaults.removePersistentDomain(forName: name) }
