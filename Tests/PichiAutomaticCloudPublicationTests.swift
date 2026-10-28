@@ -10,7 +10,11 @@ extension PichiPublicationOutboxTests {
         defer { PrivateProfileStorage.select(previous) }
         PrivateProfileStorage.select(try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root))
         var checks = 0
-        func check(_ condition: Bool, _ message: String) { precondition(condition, message); checks += 1 }
+        var lastCheckpoint = "setup"
+        defer { FileHandle.standardError.write(Data("Automatic fixture last checkpoint: \(lastCheckpoint)\n".utf8)) }
+        func check(_ condition: Bool, _ message: String) {
+            precondition(condition, message); checks += 1; lastCheckpoint = message
+        }
         func wait(_ condition: @MainActor () async throws -> Bool) async throws {
             let deadline = ContinuousClock.now.advanced(by: .seconds(12))
             while !(try await condition()) {
@@ -287,6 +291,7 @@ extension PichiPublicationOutboxTests {
         do { _ = try await box().record(id: source.id); check(false, "Encrypted record cannot downgrade to plaintext") }
         catch let failure as PichiPublicationOutboxFailure { check(failure == .invalidStorage, "A known encrypted-mode record rejects plaintext fallback") }
         try ciphertext.write(to: compactFile)
+        meetings = PrivateProfileMeetingStore(); cleanup.store = meetings
         service = makeService(meetings); try await service.install()
         try await service.resume()
 
