@@ -261,9 +261,11 @@ final class MeetingAEC3Tests: XCTestCase {
                     // A newer route arrives after the optimistic write but before the old
                     // continuation can compensate it. Its reopen shares the runtime's chain.
                     _ = gate.invalidate()
-                    let successorEpoch = gate.invalidationEpoch
                     chain.enqueue {
                         do {
+                            // Normal route resumption snapshots its epoch when the serialized
+                            // operation starts, after the predecessor's compensation finishes.
+                            let successorEpoch = gate.invalidationEpoch
                             let reopened = try await MeetingAECOutputCommitter.resumeMicrophone(
                                 .acousticallyClosed, writer: writer, transcriptGate: gate,
                                 expectedGateEpoch: successorEpoch, mayResume: { true }
