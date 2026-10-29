@@ -221,6 +221,7 @@ final class AppServices: ObservableObject {
                 self.privacyActivation.restore()
             }, conceal: { [weak self] in
                 guard let self else { throw AccountError.isolationRequired }
+                await self.privacyActivation.prepareForPrivateProfileTransition()
                 await self.recordingActivity?.conceal(admittedSessionID: self.meetingSessionCoordinator.activeSession?.id)
                 await PrivateProfileSources.conceal()
             })
@@ -268,8 +269,10 @@ final class AppServices: ObservableObject {
 
     private func restoreInitialLocalStateIfReady() async {
         guard !hasRestoredInitialState, hasRestoredAccount, PrivateProfileStorage.acceptsNewWork else { return }
+        let profile = PrivateProfileStorage.current
         await meetingSessionCoordinator.ensureRestored()
         await meetingSessionCoordinator.sweepExpiredAudio()
+        guard PrivateProfileStorage.acceptsNewWork, PrivateProfileStorage.isReadable(profile) else { return }
         hasRestoredInitialState = true
         privacyActivation.restore()
         requiredPreparationTask = Task { @MainActor [weak self] in

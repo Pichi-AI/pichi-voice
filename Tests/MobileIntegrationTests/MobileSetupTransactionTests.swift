@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import UIKit
 @testable import PichiVoiceMobile
 
 @MainActor
@@ -241,6 +243,7 @@ final class MobileSetupTransactionTests: XCTestCase {
         XCTAssertFalse(settings.meetingPIIRedactionEnabled)
         XCTAssertEqual(preparedProfiles, [fixture.guest.id],
             "Restoring an off preference must not download or activate anything")
+        try await captureNativePrivacyControls(activation, name: "profile-cleanup-off")
 
         activation.setEnabled(true)
         try await activation.waitUntilReadyIfRequested()
@@ -248,6 +251,105 @@ final class MobileSetupTransactionTests: XCTestCase {
         XCTAssertTrue(activation.isRequested)
         XCTAssertTrue(settings.meetingPIIRedactionEnabled)
         XCTAssertEqual(activation.state, .active)
+        try await captureNativePrivacyControls(activation, name: "profile-cleanup-on")
+    }
+
+    func testPrivacyProfileTransitionJoinsOldPreparationAndCancelsWaiters() async throws {
+        let fixture = try profileScopedSettings()
+        let settings = fixture.settings
+        var loader: CheckedContinuation<Void, Never>?
+        var calls = 0
+        let activation = MobilePrivacyActivation(settings: settings) { _ in
+            calls += 1
+            if calls == 1 { await withCheckedContinuation { loader = $0 } }
+        }
+        activation.setEnabled(true)
+        for _ in 0..<1_000 where loader == nil { await Task.yield() }
+        let oldLoader = try XCTUnwrap(loader)
+        let waiter = Task { try await activation.waitUntilReadyIfRequested() }
+        for _ in 0..<10 { await Task.yield() }
+        var firstJoined = false
+        var secondJoined = false
+        let first = Task {
+            await activation.prepareForPrivateProfileTransition()
+            firstJoined = true
+        }
+        for _ in 0..<1_000 where activation.state != .off { await Task.yield() }
+        let second = Task {
+            await activation.prepareForPrivateProfileTransition()
+            secondJoined = true
+        }
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertFalse(firstJoined)
+        XCTAssertFalse(secondJoined, "Repeated transition preparation must join the same draining work")
+        XCTAssertTrue(settings.meetingPIIRedactionRequested, "Concealing must preserve the source choice")
+        XCTAssertFalse(settings.meetingPIIRedactionEnabled)
+        activation.setEnabled(false)
+        XCTAssertTrue(settings.meetingPIIRedactionRequested, "UI input cannot rewrite a transitioning profile")
+        do { try await waiter.value; XCTFail("The old profile waiter must be cancelled") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        do { try await activation.waitUntilReadyIfRequested(); XCTFail("No readiness during transition") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        oldLoader.resume()
+        await first.value
+        await second.value
+        XCTAssertTrue(firstJoined && secondJoined)
+        XCTAssertEqual(activation.state, .off)
+
+        PrivateProfileStorage.select(fixture.account)
+        activation.restore()
+        XCTAssertFalse(settings.meetingPIIRedactionRequested)
+        XCTAssertFalse(settings.meetingPIIRedactionEnabled, "Late old completion must not commit to the target")
+        activation.setEnabled(true)
+        try await activation.waitUntilReadyIfRequested()
+        XCTAssertEqual(calls, 2)
+        XCTAssertEqual(activation.state, .active)
+    }
+
+    func testPrivacyRestoreCannotReopenConcealedProfile() async throws {
+        let fixture = try profileScopedSettings()
+        let activation = MobilePrivacyActivation(settings: fixture.settings) { _ in }
+        activation.setEnabled(true)
+        try await activation.waitUntilReadyIfRequested()
+        await activation.prepareForPrivateProfileTransition()
+        PrivateProfileStorage.conceal(generation: UUID())
+        activation.restore()
+        XCTAssertEqual(activation.state, .off)
+
+        // A delayed startup restore must not release the transition guard. Only
+        // a restore after the selected profile is readable can accept UI input.
+        PrivateProfileStorage.select(fixture.guest)
+        activation.setEnabled(false)
+        XCTAssertTrue(fixture.settings.meetingPIIRedactionRequested)
+        activation.restore()
+        try await activation.waitUntilReadyIfRequested()
+        XCTAssertEqual(activation.state, .active)
+    }
+
+    private func captureNativePrivacyControls(_ activation: MobilePrivacyActivation, name: String) async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true; previous?.makeKey() }
+        for (suffix, style, scheme) in [("light", UIUserInterfaceStyle.light, ColorScheme.light),
+                                       ("dark", UIUserInterfaceStyle.dark, ColorScheme.dark)] {
+            window.overrideUserInterfaceStyle = style
+            window.rootViewController = UIHostingController(rootView:
+                NavigationStack {
+                    Form { MobilePrivacyActivationControls(activation: activation, asFormRows: true) }
+                        .navigationTitle(PichiLocalization.text("Privacy"))
+                }.preferredColorScheme(scheme))
+            window.makeKeyAndVisible()
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .seconds(2))
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "\(name)-\(suffix)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
     }
 
     func testPrivacyRestorePreparesRequestedTargetProfileInsteadOfTrustingPreviousActiveState() async throws {
