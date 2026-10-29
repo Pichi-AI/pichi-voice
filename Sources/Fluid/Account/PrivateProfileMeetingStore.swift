@@ -191,6 +191,19 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
         return try await visibleSession(id: id, reader: reader, transcriptOnly: false)?.session
     }
 
+    func loadExistingSource(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws -> (session: MeetingSession, directory: URL)? {
+        let reader = try readableProfile()
+        guard let resolved = try await visibleSession(id: id, reader: reader, transcriptOnly: true) else { return nil }
+        guard expectedOwnership.matches(resolved.profile) else { throw AccountError.staleOperation }
+        // Resolve visibility once, then keep both full metadata and directory within that
+        // exact source. A later account sibling cannot redirect the second half of the read.
+        let source = try await store(for: resolved.profile).loadExistingSource(id: id, expectedOwnership: expectedOwnership)
+        try checkReadable(reader)
+        guard let source else { return nil }
+        guard permits(source.session, in: resolved.profile) else { throw AccountError.staleOperation }
+        return (projected(source.session, source: resolved.profile, reader: reader), source.directory)
+    }
+
     /// History/transcript reads preserve the same owner fence without reopening or hashing audio.
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? {
         let reader = try readableProfile()

@@ -637,6 +637,15 @@ struct MeetingResultCanvas: View {
             self.pendingEditedSegment = nil
             self.refreshUndoRegistration()
         }
+        .onChange(of: self.session.profileOwnership) { _, _ in
+            self.playback.stop()
+            self.pendingEditedSegment = nil
+            self.pendingMemberSelection = nil
+            self.selectedMemberAction = nil
+            self.pendingNameUnknownSegmentID = nil
+            self.isShowingAssignSpeakers = false
+            self.isRenamingSession = false
+        }
         .onChange(of: self.session.retention.audioDeletedAt) { _, _ in self.playback.stop() }
         .onChange(of: self.isQuiescent) { _, value in if !value { self.playback.stop() } }
         .onChange(of: self.documentSection) { _, _ in self.playback.stop() }
@@ -742,7 +751,7 @@ struct MeetingResultCanvas: View {
             canPlayAudio: self.session.retention.audioDeletedAt == nil && self.session.hasFinalizedAudio && self.isQuiescent,
             isAudioExpanded: audioExpanded, playback: self.playback,
             isLoadingAudio: audioExpanded && self.playback.isLoading,
-            onPlayAudio: { self.playback.toggle(sessionID: self.session.id, segmentIDs: members) },
+            onPlayAudio: { self.playback.toggle(session: self.session, segmentIDs: members) },
             editingSegment: editing,
             onEditText: { self.beginMemberAction(.editText, paragraph: row.paragraph) },
             onSaveText: { text in
@@ -765,7 +774,7 @@ struct MeetingResultCanvas: View {
                 MeetingDocumentTitle(title: self.session.displayTitle)
                     .editableTitle(
                         self.session.displayTitle,
-                        id: String(describing: self.session.id),
+                        id: "\(self.session.profileOwnership?.profileID ?? MeetingProfileOwnership.guest.profileID):\(self.session.id)",
                         enabled: self.isQuiescent,
                         editorFont: .fluidSystem(.largeTitle, design: .serif).weight(.medium),
                         onRename: self.onRenameSession

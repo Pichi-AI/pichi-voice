@@ -203,9 +203,9 @@ struct MobileMeetingRoot: View {
                     switch kind {
                     case .segment(let segment):
                         result = try await coordinator.editTranscriptText(sessionID: draft.session.id, segmentID: segment.id, text: updated,
-                            expectedRevision: segment.revision)
+                            expectedRevision: segment.revision, expectedOwnership: draft.session.profileOwnership ?? .guest)
                     case .title:
-                        result = try await coordinator.renameSession(sessionID: draft.session.id, to: updated)
+                        result = try await coordinator.renameSession(sessionID: draft.session.id, to: updated, expectedOwnership: draft.session.profileOwnership ?? .guest)
                     case .paragraph:
                         // The picker opens a revision-checked member editor before saving.
                         throw MeetingDomainError.segmentNotFound
@@ -225,9 +225,9 @@ struct MobileMeetingRoot: View {
                 run(session: draft.session) {
                     let result: MeetingSession
                     if let segmentID = segmentIDs.first, segmentIDs.count == 1 {
-                        result = try await coordinator.reassignSegment(sessionID: draft.session.id, segmentID: segmentID, to: speakerID)
+                        result = try await coordinator.reassignSegment(sessionID: draft.session.id, segmentID: segmentID, to: speakerID, expectedOwnership: draft.session.profileOwnership ?? .guest)
                     } else {
-                        result = try await coordinator.reassignSegments(sessionID: draft.session.id, segmentIDs: segmentIDs, to: speakerID)
+                        result = try await coordinator.reassignSegments(sessionID: draft.session.id, segmentIDs: segmentIDs, to: speakerID, expectedOwnership: draft.session.profileOwnership ?? .guest)
                     }
                     acceptCommittedSession(result)
                 }
@@ -790,7 +790,7 @@ struct MobileMeetingRoot: View {
                             if coordinator.canUndoCorrection(sessionID: session.id) {
                                 Button(PichiLocalization.text("Undo correction")) {
                                     run(session: session) {
-                                        let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+                                        let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id, expectedOwnership: session.profileOwnership ?? .guest)
                                         acceptCommittedSession(updated)
                                     }
                                 }.disabled(!coordinator.isQuiescent || isBusy)
@@ -862,6 +862,9 @@ struct MobileMeetingRoot: View {
                     guard !Task.isCancelled else { return }
                     withAnimation { reader.scrollTo(draft.id, anchor: .bottom) }
                 }
+                .onChange(of: session.profileOwnership) { _, _ in
+                    playback.stop(); edit = nil; participantEdit = nil; speakerAssignment = nil
+                }
                 .task(id: readingInput) {
                     let job = privatePresentation.publications.start(affectsBusy: false, report: report) { admission in
                         let projection = try await MeetingTranscriptExporter.readingParagraphs(for: session)
@@ -899,7 +902,7 @@ struct MobileMeetingRoot: View {
             save: { name in
                 guard coordinator.isQuiescent, !isBusy else { return }
                 run(session: session) {
-                    let updated = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speaker.id, to: name)
+                    let updated = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speaker.id, to: name, expectedOwnership: session.profileOwnership ?? .guest)
                     acceptCommittedSession(updated)
                     if canPresent(session) { participantEdit = nil }
                 }
@@ -907,7 +910,7 @@ struct MobileMeetingRoot: View {
                 guard coordinator.isQuiescent, !isBusy else { return }
                 run(session: session) {
                     let updated = try await coordinator.setLocalUserSpeaker(sessionID: session.id,
-                        speakerID: speaker.isLocalUser ? nil : speaker.id)
+                        speakerID: speaker.isLocalUser ? nil : speaker.id, expectedOwnership: session.profileOwnership ?? .guest)
                     acceptCommittedSession(updated)
                     if canPresent(session) { participantEdit = nil }
                 }
@@ -963,7 +966,7 @@ struct MobileMeetingRoot: View {
                 if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
                     Button {
                         if isAudioExpanded { playback.stop() }
-                        else { playback.toggle(sessionID: session.id, segmentIDs: paragraph.segments.map(\.id)) }
+                        else { playback.toggle(session: session, segmentIDs: paragraph.segments.map(\.id)) }
                     } label: {
                         Image(systemName: isAudioExpanded ? "xmark" : "play.fill")
                             .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())

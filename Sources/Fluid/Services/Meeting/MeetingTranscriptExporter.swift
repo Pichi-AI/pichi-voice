@@ -1008,6 +1008,7 @@ nonisolated enum MeetingTranscriptExporter {
     /// Arrays share the session's immutable value storage until a genuine edit arrives.
     struct ReadingInput: Equatable, Sendable {
         let sessionID: MeetingSessionID
+        let ownership: MeetingProfileOwnership?
         let state: MeetingSessionState
         let endedAt: Date?
         let isComplete: Bool?
@@ -1018,7 +1019,8 @@ nonisolated enum MeetingTranscriptExporter {
         let gaps: [MeetingTranscriptCoverageGap]?
 
         init(_ session: MeetingSession) {
-            sessionID = session.id; state = session.state; endedAt = session.endedAt
+            sessionID = session.id; ownership = session.profileOwnership
+            state = session.state; endedAt = session.endedAt
             isComplete = session.transcriptIsComplete; sidecar = session.resultSidecarReference
             latestAttempt = session.processingAttempts.last; speakers = session.speakers
             segments = session.transcriptSegments; gaps = session.transcriptCoverageGaps

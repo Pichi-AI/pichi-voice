@@ -4662,6 +4662,78 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(restoredDisk?.audioTracks, session.audioTracks)
     }
 
+    func testSharedGuestCorrectionAndUndoCannotRetargetCollidingAccountSource() async throws {
+        let originalProfile = PrivateProfileStorage.current
+        let dir = self.makeTempDirectory()
+        defer { PrivateProfileStorage.select(originalProfile); try? FileManager.default.removeItem(at: dir) }
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: dir)
+        let account = try PrivateProfileStorage.proposed(context: .init(identity: .init(
+            issuer: "https://identity.invalid/correction", subject: "source", internalUserID: "source"),
+            organizationID: "organization", workspaceID: "workspace", generation: UUID()),
+            generation: UUID(), legacyRootDirectory: dir)
+        let guestStore = MeetingSessionStore(rootDirectory: guest.directory("Meetings"))
+        let accountStore = MeetingSessionStore(rootDirectory: account.directory("Meetings"))
+        let (legacy, speakerA, speakerB, memberID) = self.makeCorrectionSession(state: .completed)
+        try await guestStore.create(legacy)
+        PrivateProfileStorage.select(guest)
+        let guestFacade = PrivateProfileMeetingStore()
+        let guestCoordinator = MeetingSessionCoordinator(store: guestFacade, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        _ = try await guestCoordinator.editTranscriptText(sessionID: legacy.id, segmentID: memberID,
+            text: "Guest mode edit", expectedRevision: legacy.transcriptSegments[0].revision, expectedOwnership: .guest)
+        let legacyUndo = try await guestCoordinator.undoTranscriptCorrection(sessionID: legacy.id, expectedOwnership: .guest)
+        XCTAssertEqual(legacyUndo.transcriptSegments, legacy.transcriptSegments,
+                       "A nil legacy guest edit can undo after persistence makes its guest owner explicit")
+        await guestCoordinator.shutdownForTermination()
+        await guestFacade.finishProfileTransition()
+        PrivateProfileStorage.select(account)
+        let facade = PrivateProfileMeetingStore()
+        let coordinator = MeetingSessionCoordinator(store: facade, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let loaded = try await facade.loadTranscript(id: legacy.id)
+        let displayed = try XCTUnwrap(loaded)
+        let edited = try await coordinator.editTranscriptText(sessionID: legacy.id, segmentID: memberID,
+            text: "Edited guest words", expectedRevision: displayed.transcriptSegments[0].revision,
+            expectedOwnership: .guest)
+        XCTAssertNil(coordinator.activeSession)
+        XCTAssertNil(coordinator.latestCompletedSession, "The regression must reload historical sources on undo")
+        var replacement = edited
+        replacement.profileOwnership = .init(profile: account)
+        replacement.title = "Same UUID and same member identities"
+        try await accountStore.create(replacement)
+        let guestURL = guest.directory("Meetings").appendingPathComponent(legacy.id.uuidString).appendingPathComponent("session.json")
+        let accountURL = account.directory("Meetings").appendingPathComponent(legacy.id.uuidString).appendingPathComponent("session.json")
+        let guestBefore = try Data(contentsOf: guestURL), accountBefore = try Data(contentsOf: accountURL)
+        // Even a compatibility caller without a displayed-owner argument cannot replay a
+        // guest inverse into an account source with matching member IDs and revisions.
+        do { _ = try await coordinator.undoTranscriptCorrection(sessionID: legacy.id); XCTFail("Undo must remain guest-owned") }
+        catch { XCTAssertEqual(error as? AccountError, .staleOperation) }
+        XCTAssertTrue(coordinator.canUndoCorrection(sessionID: legacy.id), "Rejected source replacement keeps the original inverse retryable")
+        let expectedRevision = replacement.transcriptSegments[0].revision
+        let operations: [() async throws -> MeetingSession] = [
+            { try await coordinator.editTranscriptText(sessionID: legacy.id, segmentID: memberID, text: "Stale guest edit",
+                expectedRevision: expectedRevision, expectedOwnership: .guest) },
+            { try await coordinator.reassignSegments(sessionID: legacy.id, segmentIDs: [memberID], to: speakerB, expectedOwnership: .guest) },
+            { try await coordinator.renameSpeaker(sessionID: legacy.id, speakerID: speakerA, to: "Stale name", expectedOwnership: .guest) },
+            { try await coordinator.nameUnknownSegment(sessionID: legacy.id, segmentID: memberID, displayName: "Stale new participant", expectedOwnership: .guest) },
+            { try await coordinator.editSpeakers(sessionID: legacy.id, edits: .init(names: [speakerA: "Stale roster"]), expectedOwnership: .guest) },
+            { try await coordinator.setLocalUserSpeaker(sessionID: legacy.id, speakerID: speakerA, expectedOwnership: .guest) },
+            { try await coordinator.renameSession(sessionID: legacy.id, to: "Stale title", expectedOwnership: .guest) }
+        ]
+        for operation in operations {
+            do { _ = try await operation(); XCTFail("Displayed guest commands cannot enter the account source") }
+            catch { XCTAssertEqual(error as? AccountError, .staleOperation) }
+        }
+        XCTAssertEqual(try Data(contentsOf: guestURL), guestBefore)
+        XCTAssertEqual(try Data(contentsOf: accountURL), accountBefore)
+        try await accountStore.delete(id: legacy.id)
+        let restored = try await coordinator.undoTranscriptCorrection(sessionID: legacy.id, expectedOwnership: .guest)
+        XCTAssertEqual(restored.transcriptSegments, legacy.transcriptSegments,
+                       "After the original source becomes visible, its retained inverse still restores only guest words")
+        await coordinator.shutdownForTermination()
+        await facade.finishProfileTransition()
+    }
+
     func testDesktopParagraphActionsKeepMemberEditsAndBatchSpeakerUndo() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

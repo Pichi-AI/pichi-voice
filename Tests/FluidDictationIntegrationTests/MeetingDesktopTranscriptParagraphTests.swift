@@ -60,6 +60,11 @@ final class MeetingDesktopTranscriptParagraphTests: XCTestCase {
         changed.transcriptSegments[0].text = "Changed"
         XCTAssertTrue(projection.rows(matching: .init(changed), includeEchoes: true).isEmpty)
         changed = source
+        changed.profileOwnership = .init(profileID: "synthetic-account", issuer: "https://identity.invalid",
+            subject: "source", internalUserID: "source", organizationID: "organization", workspaceID: "workspace")
+        XCTAssertTrue(projection.rows(matching: .init(changed), includeEchoes: false).isEmpty,
+                      "An owner-only same-UUID replacement invalidates the cached source")
+        changed = source
         changed.title = "Title changes do not change transcript membership"
         XCTAssertEqual(projection.rows(matching: .init(changed), includeEchoes: false).count, 3)
     }
