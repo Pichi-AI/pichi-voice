@@ -16,6 +16,9 @@ import FluidAudio
 /// `FLUIDVOICE_LIVE_REPLAY_APP_WAV` paths and distinct expected phrases in
 /// `FLUIDVOICE_LIVE_REPLAY_MIC_EXPECTED_TEXT` / `FLUIDVOICE_LIVE_REPLAY_APP_EXPECTED_TEXT`.
 /// Choose approved fixtures where each expected phrase belongs to only its source track.
+/// Cold buffered replay additionally sets `FLUIDVOICE_LIVE_REPLAY_COLD_START=1`,
+/// `FLUIDVOICE_LIVE_REPLAY_MODEL_ID` and `FLUIDVOICE_LIVE_REPLAY_LANGUAGE`. Its short
+/// opening markers must begin at zero and finalize within the first five seconds.
 final class MeetingLiveReplayTests: XCTestCase {
     private static let chunkFrames = 320 // 20ms @ 16kHz
     private static let sampleRate: Double = 16_000
@@ -143,6 +146,7 @@ final class MeetingLiveReplayTests: XCTestCase {
             var bufferFailures = 0
             var sampleBufferFailures = 0
             var offeredCount = 0
+            var firstOfferElapsed: TimeInterval?
             var totalWaitSeconds: Double = 0
             for (index, event) in events.enumerated() {
                 try Task.checkCancellation()
@@ -155,6 +159,7 @@ final class MeetingLiveReplayTests: XCTestCase {
                     sampleBufferFailures += 1
                     continue
                 }
+                if firstOfferElapsed == nil { firstOfferElapsed = Date().timeIntervalSince(harnessStart) }
                 coordinator.offer(kind: event.kind, sampleBuffer: sampleBuffer)
                 offeredCount += 1
                 let ptsSeconds = Double(event.ptsSamples) / Self.sampleRate
@@ -218,7 +223,12 @@ final class MeetingLiveReplayTests: XCTestCase {
             if coldStart {
                 let firstReady = box.lock.withLock { box.log.first { $0.snapshot.availability == .available }?.elapsed }
                 print("[cold-replay] first-ready-seconds=\(firstReady.map(String.init(describing:)) ?? "unavailable") feed-began-without-ready-wait=true")
-                XCTAssertNotNil(firstReady)
+                let readyElapsed = try XCTUnwrap(firstReady)
+                let offerElapsed = try XCTUnwrap(firstOfferElapsed)
+                print("[cold-replay] first-offer-seconds=\(offerElapsed)")
+                XCTAssertGreaterThan(readyElapsed, offerElapsed, "Input must begin while the cold provider is still preparing")
+                let openingIssues = Self.coldOpeningIssues(final, fixture: fixture)
+                XCTAssertTrue(openingIssues.isEmpty, openingIssues.joined(separator: "\n"))
                 XCTAssertTrue(degradedTransitions.isEmpty, "Cold preparation must retain opening packets without degrading captions")
             }
             print("Degraded-availability updates observed: \(degradedTransitions.count)")
@@ -423,6 +433,43 @@ final class MeetingLiveReplayTests: XCTestCase {
             previousStart = utterance.start
         }
         return issues
+    }
+
+    /// Cold fixtures put their short control phrase at time zero. Finding that text
+    /// somewhere later in a long transcript is insufficient evidence for opening coverage.
+    private static func coldOpeningIssues(_ snapshot: MeetingLiveTranscriptSnapshot, fixture: ReplayFixture) -> [String] {
+        var issues: [String] = []
+        for (speaker, marker) in [(MeetingLiveSpeaker.you, fixture.microphoneText), (.them, fixture.applicationText)] {
+            guard let first = snapshot.utterances.first(where: { $0.speaker == speaker }),
+                  ReplayFixture.normalize(first.text).contains(marker) else {
+                issues.append("A first finalized caption missed its opening marker.")
+                continue
+            }
+            if !first.start.isFinite || !first.end.isFinite || first.start < 0 || first.start > 0.1
+                || first.end <= first.start || first.end > 5 {
+                issues.append("An opening caption is shifted beyond its controlled first-phrase interval.")
+            }
+        }
+        return issues
+    }
+
+    func testColdReplayRejectsShiftedOrLaterOpeningMarkers() throws {
+        let fixture = try ReplayFixture(environment: Self.syntheticReplayEnvironment)
+        var valid = MeetingLiveTranscriptSnapshot.empty
+        valid.utterances = [
+            .init(id: UUID(), speaker: .you, text: "Microphone only", start: 0, end: 3),
+            .init(id: UUID(), speaker: .them, text: "Application only", start: 0, end: 3),
+        ]
+        XCTAssertTrue(Self.coldOpeningIssues(valid, fixture: fixture).isEmpty)
+        var shifted = valid
+        for index in shifted.utterances.indices {
+            shifted.utterances[index].start += 10
+            shifted.utterances[index].end += 10
+        }
+        XCTAssertFalse(Self.coldOpeningIssues(shifted, fixture: fixture).isEmpty)
+        var later = valid
+        later.utterances.insert(.init(id: UUID(), speaker: .you, text: "Unrelated later turn", start: 0, end: 1), at: 0)
+        XCTAssertFalse(Self.coldOpeningIssues(later, fixture: fixture).isEmpty)
     }
 
     func testReplayRequiresExplicitFixturesAndDistinctExpectedPhrases() throws {
