@@ -34,9 +34,12 @@ struct SpeechModelProviderPresentationTests {
         precondition(queries == 1)
         precondition(missing.resolvedMark(assetAvailable: { _ in true }) == .asset("MissingModelProviderAsset"))
         let publisher = SettingsStore.SpeechModel.Provider.saluteDevices.presentation
-        precondition(publisher.resolvedMark(assetAvailable: { _ in fatalError("A provider without a bundled logo must not probe assets") }) == .systemSymbol("waveform"))
+        precondition(publisher.mark == .asset("Provider_GigaChat"))
+        precondition(publisher.background == .neutral)
+        precondition(publisher.resolvedMark(assetAvailable: { $0 == "Provider_GigaChat" }) == .asset("Provider_GigaChat"))
+        precondition(publisher.resolvedMark(assetAvailable: { _ in false }) == .systemSymbol("waveform"))
         let future = SettingsStore.SpeechModel.Provider.futureProvider.presentation
         precondition(future.resolvedMark(assetAvailable: { _ in fatalError("Unknown providers use the generic symbol") }) == .systemSymbol("waveform"))
-        print("Missing provider assets and providers without a bundled logo have a generic mark")
+        print("GigaAM uses the GigaChat team mark; missing assets and unknown providers retain a generic mark")
     }
 }
