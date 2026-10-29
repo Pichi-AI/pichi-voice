@@ -175,4 +175,137 @@ private actor SettingsReviewLegacy: LegacyAccountTransporting {
     func clearSession() async {}
     func shutdown() async {}
 }
+
+/// Real meeting screens over a disposable device-guest/account library. This route exists
+/// only in a simulator Debug build and never starts recording, authentication or models.
+struct MobileSharedGuestHistoryReview: View {
+    static var isRequested: Bool { ProcessInfo.processInfo.environment["PICHI_UI_SHARED_GUEST_HISTORY_REVIEW"] == "1" }
+    @StateObject private var state = SharedGuestHistoryReviewState()
+
+    var body: some View {
+        Group {
+            if let services = state.services {
+                MobileMeetingRoot(coordinator: services.meetingSessionCoordinator, asr: services.asr,
+                    store: services.meetingStore, privacy: services.transcriptPrivacy,
+                    required: services.requiredResources, privacyActivation: services.privacyActivation,
+                    accountSession: services.accountSession,
+                    microphones: { .init(identities: [], defaultCoreAudioUID: nil) })
+            } else if state.failed {
+                Text(PichiLocalization.text("Unavailable")).accessibilityIdentifier("shared.history.review.failed")
+            } else if state.closed {
+                Text(PichiLocalization.text("Done")).accessibilityIdentifier("shared.history.review.closed")
+            } else {
+                ProgressView().accessibilityIdentifier("shared.history.review.preparing")
+            }
+        }.task { await state.start() }.onDisappear { state.close() }
+    }
+}
+
+@MainActor private final class SharedGuestHistoryReviewState: ObservableObject {
+    @Published private(set) var services: AppServices?
+    @Published private(set) var failed = false
+    @Published private(set) var closed = false
+    private var setup: Task<Void, Never>?
+    private var cleanup: Task<Void, Never>?
+    private var failurePending = false
+    private var root: URL?
+    private var previous: PrivateProfileSnapshot?
+    private var wasAdmitted = false
+    private var settingsSuite: String?
+    private var meetings: PrivateProfileMeetingStore?
+
+    func start() async {
+        guard setup == nil, root == nil, services == nil, cleanup == nil, !closed else { return }
+        let task = Task { @MainActor in
+            do {
+                let selected = ProcessInfo.processInfo.environment["PICHI_UI_SHARED_GUEST_HISTORY_PROFILE"] ?? "a"
+                guard ["a", "b", "guest"].contains(selected) else { throw AccountError.invalidConfiguration }
+                // Stable only inside the explicitly owned simulator app container. Reuse the
+                // invented manifests across process relaunches; parent deletion of the owned
+                // simulator releases this disposable library after evidence preservation.
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("SharedGuestHistoryReview-v1", isDirectory: true)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700])
+                self.root = root
+                previous = PrivateProfileStorage.current; wasAdmitted = PrivateProfileStorage.acceptsNewWork
+                let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root)
+                func account(_ subject: String) throws -> PrivateProfileSnapshot {
+                    let context = AccountContext(identity: .init(issuer: "https://identity.invalid/shared-guest-review",
+                        subject: subject, internalUserID: "synthetic-" + subject), organizationID: "synthetic-org",
+                        workspaceID: "synthetic-workspace", generation: UUID())
+                    return try PrivateProfileStorage.proposed(context: context, generation: UUID(), legacyRootDirectory: root)
+                }
+                let a = try account("a"), b = try account("b")
+                let fixtures = [
+                    (guest, "E0000000-0000-4000-8000-000000000001", "Гостевая встреча Ёж", 0.0),
+                    (a, "E0000000-0000-4000-8000-000000000002", "Встреча аккаунта А", 60.0),
+                    (b, "E0000000-0000-4000-8000-000000000003", "Встреча аккаунта Б", 120.0)
+                ]
+                for (profile, rawID, title, offset) in fixtures {
+                    guard let id = UUID(uuidString: rawID) else { throw AccountError.invalidConfiguration }
+                    let file = profile.directory("Meetings").appendingPathComponent(rawID).appendingPathComponent("session.json")
+                    guard !FileManager.default.fileExists(atPath: file.path) else { continue }
+                    let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+                        machTimebaseDenominator: 1, firstPresentationTime: nil)
+                    var record = MeetingSession(id: id, configuration: .init(mode: .inRoom, title: title,
+                        microphone: .init(captureDeviceID: "synthetic-history-review", displayName: "Synthetic microphone")),
+                        startedAt: Date(timeIntervalSince1970: 1_700_000_000 + offset), timebase: timebase)
+                    record.profileOwnership = profile.isGuest ? nil : .init(profile: profile)
+                    record.state = .completed; record.endedAt = record.startedAt.addingTimeInterval(30)
+                    record.audioStorageMode = .memoryOnly; record.transcriptTimeDomain = .meetingRelative
+                    let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+                        sourceDisplayName: "Synthetic microphone", format: nil, timebase: timebase, health: .waiting, chunks: [])
+                    record.audioTracks = [track]
+                    if profile.isGuest {
+                        record.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 1),
+                            end: .init(value: 2, timescale: 1), sourceTrackID: track.id, speakerID: nil,
+                            text: "Синтетический текст гостевой встречи.", revision: 0, status: .final,
+                            overlap: .none, completeness: .complete, attributionState: .unassigned)]
+                    }
+                    try await MeetingSessionStore(rootDirectory: profile.directory("Meetings")).create(record)
+                    try Task.checkCancellation()
+                }
+                try Task.checkCancellation()
+                PrivateProfileStorage.select(selected == "a" ? a : selected == "b" ? b : guest)
+                let suite = "SharedGuestHistoryReview.v1"
+                guard let defaults = UserDefaults(suiteName: suite) else { throw AccountError.invalidConfiguration }
+                settingsSuite = suite
+                let settings = SettingsStore(defaults: defaults, initializeDesktop: false)
+                settings.meetingAudioRetentionPolicy = .never
+                let accountSession = AccountSessionService(configuration: nil, browser: SettingsReviewBrowser(),
+                    transport: SettingsReviewOIDC(), credentials: SettingsReviewCredentials())
+                let meetings = PrivateProfileMeetingStore()
+                self.meetings = meetings
+                services = AppServices(store: meetings, settings: settings, accountSession: accountSession)
+            } catch {
+                failurePending = true
+                close()
+            }
+        }
+        setup = task
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        setup = nil
+    }
+
+    func close() {
+        guard cleanup == nil, !closed else { return }
+        let pending = setup; pending?.cancel()
+        cleanup = Task { @MainActor in
+            await pending?.value
+            let services = self.services; self.services = nil
+            await services?.shutdownForTermination()
+            await meetings?.finishProfileTransition(); meetings = nil
+            if let settingsSuite { UserDefaults.standard.removePersistentDomain(forName: settingsSuite) }
+            settingsSuite = nil
+            if let previous {
+                PrivateProfileStorage.select(previous)
+                if !wasAdmitted { PrivateProfileStorage.closeAdmission() }
+            }
+            // The fixed synthetic root is deliberately retained for the next app launch.
+            // It contains no audio, weights, personal data or account credentials.
+            root = nil; previous = nil; closed = !failurePending; failed = failurePending
+            cleanup = nil
+        }
+    }
+}
 #endif

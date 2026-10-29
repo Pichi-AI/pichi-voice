@@ -12,6 +12,16 @@ N1 remains the only account/token manager. N2 supplies one `PrivateProfileServic
 
 Guest roots remain at their legacy paths. Account-private defaults use an explicit persistent domain with no guest fallback, through `PrivateProfileDefaults.shared` or `PrivateProfileDefaults.bound(to: snapshot) -> UserDefaults`. Legacy provider credentials/dictionaries are not copied into a login. The explicit device allowlist is in `PrivateProfileDefaults.sharedDeviceKeys`.
 
+### Shared device guest meeting history
+
+The October 28 meeting policy explicitly shares device-owned guest recordings across accounts. `PrivateProfileMeetingStore` presents guest meetings together with the current account's meetings. Other accounts and workspaces remain excluded. Guest files stay in the original root, retain guest ownership, and gain no account publication consent. Reading legacy ownerless guest data from an account adds guest provenance only to the returned value; an ordinary later edit persists the guest marker in the original guest file.
+
+The existing UUID interface gives a current-profile directory precedence over a colliding guest UUID, including corrupt or foreign-owned current directories. Catalogs deduplicate by that same rule. Mutations reject mismatched owners and use the selected source's original root. Expected-owner deletion remains atomic and recognizes legacy ownerless guest records only for canonical guest ownership.
+
+Guest encryption remains enabled on disk when captured that way. The shared facade loads only an existing guest recording key, never creates or replaces one, and revalidates the active reader generation. Decrypted guest recordings can appear in the shared local history; protected account recordings keep their existing display/export restrictions. An unavailable guest key cannot hide healthy plaintext guest or account records, and direct encrypted reads still fail closed.
+
+Automatic retention uses `loadHistoryForMaintenance`, which excludes shared guest meetings while an account is selected. Automatic recovery also stays current-profile-only. Account preferences, provider credentials, dictionaries and voice profiles remain private; they are not inherited with shared meeting visibility.
+
 ## Recording admission and persisted meeting source
 
 `Sources/Fluid/Account/PrivateProfileMeetingStore.swift` defines:
@@ -61,7 +71,7 @@ Per-window readers and N5's delivery owner conform to:
 
 Register through `PrivateProfileService.shared.register(_:)`. Registration is weak; the composition/view retains its participant. Cleanup closes admission, cancels and joins owned work, and clears private projections before source replacement. N5's participant pauses and joins transfers but preserves the original owner's durable queue.
 
-N2 owns common app/window composition. Use `sourceRevision` for rebuilding private source-bound views after successful source replacement. `projectionRevision` also advances on concealment and must not key the whole app root during an admitted capture. Concealment hides private pixels, focus and accessibility while preserving the controller needed to stop/finalize the old recording. N3 owns mobile late copy/export/PDF result fences; N4 owns desktop view-local payload/projection fences. They must not install parallel root composition or profile managers. Account/workspace switching is blocked during capture/finalization and admitted output persistence. Logout clears N1 credentials offline while the local capture retains its original writer; another person cannot enter before required local cleanup completes. Token expiry alone never switches local profile or stops recording.
+N2 owns common app/window composition. Use `sourceRevision` for rebuilding private source-bound views after successful source replacement. `projectionRevision` also advances on concealment and must not key the whole app root during an admitted capture. Concealment hides private pixels, focus and accessibility while preserving the controller needed to stop/finalize the old recording. N3 owns mobile late copy/export result fences; N4 owns desktop view-local payload/projection fences. They must not install parallel root composition or profile managers. Account/workspace switching is blocked during capture/finalization and admitted output persistence. Logout clears N1 credentials offline while the local capture retains its original writer; another person cannot enter before required local cleanup completes. Token expiry alone never switches local profile or stops recording.
 
 ## Dictation and direct capture output
 

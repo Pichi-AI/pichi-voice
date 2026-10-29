@@ -86,26 +86,27 @@ extension PichiMeetingCaptionRecognizing {
 /// weights. Partial captions are periodic batch hypotheses, then replaced by the final pipeline.
 @MainActor
 final class PichiMeetingCaptionRecognizer: PichiMeetingCaptionRecognizing {
+    private let configuration: MeetingFinalProcessingConfiguration?
     private var provider: (any TranscriptionProvider)?
     private var preparation: Task<Void, Error>?
     private var isStopped = false
     private var inference: Task<PichiMeetingCaptionRecognition, Error>?
 
-    init(modelID: String, languageCode: String, artifactFingerprint: String? = nil) throws {
-        let configuration = PichiMeetingProviderFactory.configuration(
-            asrModel: modelID,
-            languageCode: languageCode,
-            artifactFingerprintOverride: artifactFingerprint
-        )
-        self.provider = try PichiMeetingProviderFactory.make(configuration)
+    /// Install the input owners synchronously before capture can offer its first packet.
+    /// Provider construction remains on its existing main-actor preparation boundary.
+    nonisolated init(configuration: MeetingFinalProcessingConfiguration) {
+        self.configuration = configuration
     }
 
     /// A fixed provider can be supplied by an existing composition boundary or deterministic test.
     /// This recognizer owns its preparation and joined release; it must not borrow another owner's runtime.
-    init(provider: any TranscriptionProvider) { self.provider = provider }
+    init(provider: any TranscriptionProvider) {
+        self.configuration = nil
+        self.provider = provider
+    }
 
     @MainActor func prepare() async throws {
-        guard !self.isStopped, let provider else { throw CancellationError() }
+        guard !self.isStopped else { throw CancellationError() }
         if let preparation {
             try await withTaskCancellationHandler {
                 try await preparation.value
@@ -116,7 +117,15 @@ final class PichiMeetingCaptionRecognizer: PichiMeetingCaptionRecognizing {
             return
         }
         let preparation = Task { @MainActor in
+            try Task.checkCancellation()
+            if self.provider == nil, let configuration = self.configuration {
+                self.provider = try PichiMeetingProviderFactory.make(configuration)
+            }
+            guard !self.isStopped, let provider = self.provider else { throw CancellationError() }
+            try Task.checkCancellation()
             try await provider.prepare(progressHandler: nil)
+            DebugLogger.shared.info("Buffered caption provider prepared; backend=\(provider.executionStatus?.backend.rawValue ?? "unreported")",
+                source: "PichiMeetingCaptionRecognizer")
         }
         self.preparation = preparation
         try await withTaskCancellationHandler {
@@ -198,19 +207,18 @@ final nonisolated class PichiMeetingCaptionInputEpoch: @unchecked Sendable {
     }
 }
 
-/// Bounded buffered captions for models without the upstream native English streaming decoder.
-/// Capture only enqueues copied PCM. Resampling, inference and endpointing run on this actor.
+/// Buffered captions for the retained-files path. Copied PCM crosses a bounded I/O handoff
+/// into an anonymous disk FIFO, so preparation/inference cannot evict opening speech.
+/// Memory-only/protected streaming recordings use their existing separate PCM owner.
+/// Resampling, inference and endpointing run on this actor.
 actor PichiMeetingBufferedTrackEngine {
     typealias PartialHandler = @Sendable (MeetingAudioTrackKind, UUID, String, CMTime, CMTime) -> Void
     typealias UtteranceHandler = @Sendable (MeetingAudioTrackKind, UUID, String, CMTime, CMTime) -> Void
     typealias DegradedHandler = @Sendable (MeetingAudioTrackKind, String) -> Void
     typealias ReadyHandler = @Sendable (MeetingAudioTrackKind) -> Void
 
-    private nonisolated struct Input: Sendable {
-        let sample: MeetingLiveSampleCopy.Sample
-        let epoch: UInt64
-    }
-    private nonisolated let queue = MeetingLiveBoundedQueue<Input>(capacity: 512)
+    private typealias Input = MeetingLiveAudioFIFO.Input
+    private nonisolated let queue = MeetingLiveAudioFIFO()
     private nonisolated let inputEpoch = PichiMeetingCaptionInputEpoch()
     private var activeInputEpoch: UInt64?
     private static let sampleRate: Double = 16_000
@@ -279,10 +287,13 @@ actor PichiMeetingBufferedTrackEngine {
         self.hasStarted = true
         self.loadTask = Task { [weak self] in
             guard let self else { return }
+            let started = ContinuousClock.now
             do {
                 try await self.recognizer.prepare()
                 try Task.checkCancellation()
                 await self.markReady()
+                DebugLogger.shared.info("Buffered captions prepared in \(started.duration(to: .now)); track=\(self.kind.rawValue)",
+                    source: "PichiMeetingBufferedTrackEngine")
             } catch {
                 guard !Task.isCancelled else { return }
                 await self.markLoadFailed(error)
@@ -310,12 +321,12 @@ actor PichiMeetingBufferedTrackEngine {
         self.generation &+= 1
         self.loadTask?.cancel()
         self.drainTask?.cancel()
+        await self.queue.close()
         await self.loadTask?.value
         await self.drainTask?.value
         self.loadTask = nil
         self.drainTask = nil
         self.isReady = false
-        _ = self.queue.drainAll()
         self.clearTurn()
         self.preRoll.removeAll()
         self.converter = nil
@@ -331,7 +342,10 @@ actor PichiMeetingBufferedTrackEngine {
         self.onReady?(self.kind)
     }
 
-    private func markLoadFailed(_ error: Error) {
+    private func markLoadFailed(_ error: Error) async {
+        guard !self.isStopped else { return }
+        self.drainTask?.cancel()
+        await self.queue.close()
         guard !self.isStopped else { return }
         self.onDegraded?(self.kind, "Buffered captions could not load: \(error.localizedDescription)")
     }
@@ -347,7 +361,18 @@ actor PichiMeetingBufferedTrackEngine {
                 self.reset()
                 self.onDegraded?(self.kind, "Live captions dropped audio and resynced. The recording is preserved.")
             }
-            let batch = self.queue.drainAll()
+            let batch: [Input]
+            do {
+                batch = try await self.queue.drainBatch()
+            } catch {
+                guard !Task.isCancelled, !self.isStopped else { return }
+                let reason = (error as? MeetingLiveAudioFIFO.Failure)?.rawValue ?? "storageUnavailable"
+                DebugLogger.shared.warning("Caption input paused; reason=\(reason); track=\(self.kind.rawValue)",
+                    source: "PichiMeetingBufferedTrackEngine")
+                self.onDegraded?(self.kind, "Live caption buffering failed. The recording is preserved.")
+                await self.queue.close()
+                return
+            }
             guard !batch.isEmpty else {
                 try? await Task.sleep(nanoseconds: 20_000_000)
                 continue
@@ -559,6 +584,7 @@ actor PichiMeetingBufferedTrackEngine {
         await self.consume(Input(sample: sample, epoch: epoch))
     }
     func bufferedSampleCountForTesting() -> Int { self.samples.count }
+    func inputStateForTesting() async -> MeetingLiveAudioFIFO.TestingState { await self.queue.testingState() }
     #endif
 }
 

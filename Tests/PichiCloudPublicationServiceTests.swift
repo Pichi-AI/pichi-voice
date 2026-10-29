@@ -82,6 +82,7 @@ extension PichiPublicationOutboxTests {
             return try JSONDecoder().decode(PichiPublicationOutboxRecord.self, from: plaintext)
         }
         let guestSource = try await capture()
+        let editableGuest = try await capture(text: "Synthetic shared guest source.")
         check(!manager.fileExists(atPath: root.appendingPathComponent("CloudPublication").path), "Guest callbacks do not create account publication storage")
         let guestFile = root.appendingPathComponent("Meetings/" + guestSource.id.uuidString + "/session.json")
         let guestBytes = try Data(contentsOf: guestFile)
@@ -89,14 +90,35 @@ extension PichiPublicationOutboxTests {
         try await service.refresh()
         let profileA = PrivateProfileStorage.current
         check(!service.snapshot.cloudSyncEnabled, "Fresh signed-in workspace consent defaults off")
-        let guestHidden = try await meetings.load(id: guestSource.id) == nil
+        let sharedGuest = try await meetings.load(id: guestSource.id)
         let guestPreserved = try Data(contentsOf: guestFile) == guestBytes
-        check(guestHidden && guestPreserved,
-              "Signing in neither exposes nor migrates guest history")
+        check(sharedGuest?.title == guestSource.title && sharedGuest?.profileOwnership?.matches(guest) == true && guestPreserved,
+              "Signing in exposes shared guest history locally without copying or adopting its original source")
+        check(try await meetings.loadHistory().contains(where: { $0.id == guestSource.id }),
+              "The signed-in History catalog includes the guest source")
         let localOnly = try await capture()
         check(try await service.status(for: localOnly.id) == .localOnly, "A capture without consent is durably local-only")
         try await service.setCloudSyncEnabled(true)
         await service.pause()
+        var editedGuest = try await meetings.loadTranscript(id: editableGuest.id)!
+        editedGuest.title = "Synthetic shared guest edit from A"
+        try await meetings.save(editedGuest)
+        check(try await meetings.loadTranscript(id: editedGuest.id)?.profileOwnership?.matches(guest) == true
+            && !manager.fileExists(atPath: profileA.directory("Meetings").appendingPathComponent(editedGuest.id.uuidString).path),
+              "Editing shared guest history as A keeps the original guest owner and creates no A copy")
+        let beforeGuestSend = await http.count()
+        let sharedGuestStatus = try await service.status(for: guestSource.id)
+        let editedGuestStatus = try await service.status(for: editedGuest.id)
+        check(sharedGuestStatus == .localOnly && editedGuestStatus == .localOnly,
+              "Account consent does not grant historical guest sources a delivery admission")
+        for guestID in [guestSource.id, editedGuest.id] {
+            do { try await service.send(guestID); check(false, "Shared guest history cannot be sent through account A consent") }
+            catch let error as PichiPublicationOutboxFailure { check(error == .notAdmitted, "Guest source lacks recording-time account admission") }
+        }
+        do { _ = try await service.assessmentOptions(for: guestSource.id); check(false, "Shared guest history cannot acquire account assessment state") }
+        catch let error as PichiPublicationOutboxFailure { check(error == .notAdmitted, "Assessment options cannot adopt a shared guest source") }
+        check(await http.count() == beforeGuestSend,
+              "Read/edit/status/send attempts on historical guest records create no account network traffic")
         check(try await service.status(for: localOnly.id) == .localOnly, "Opt-in after completion cannot grant historical consent")
         do { try await service.send(localOnly.id); check(false, "Historical local-only source cannot be admitted") }
         catch let error as PichiPublicationOutboxFailure { check(error == .notAdmitted, "Manual send cannot bypass recording-time policy") }
@@ -367,6 +389,11 @@ extension PichiPublicationOutboxTests {
         let firstAsB = try await service.status(for: first.id), pendingAsB = try await service.status(for: frozenConsent.id)
         check(!service.snapshot.cloudSyncEnabled && firstAsB == .localOnly
               && pendingAsB == .localOnly, "B cannot view or resume A's queue and has separate consent")
+        let guestAsB = try await meetings.loadTranscript(id: editedGuest.id)
+        check(guestAsB?.title == editedGuest.title && guestAsB?.profileOwnership?.matches(guest) == true,
+              "B sees the shared guest edit without receiving A-owned meeting data")
+        check(!manager.fileExists(atPath: PrivateProfileStorage.current.directory("Meetings")
+            .appendingPathComponent(editedGuest.id.uuidString).path), "Shared guest history is not copied into B")
         do { try await service.send(frozenConsent.id); check(false, "B cannot claim A's known session UUID") }
         catch let error as PichiPublicationOutboxFailure { check(error == .notAdmitted, "Foreign source ID cannot become a B admission") }
         do { _ = try await service.assessmentOptions(for: first.id); check(false, "B cannot fetch A's assessment options") }

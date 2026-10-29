@@ -1715,8 +1715,10 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             XCTAssertEqual(configuration.asrModel, modelID)
             XCTAssertNil(configuration.asrArtifactDirectory)
             if modelID == PichiMeetingProviderFactory.gigaamModelID {
-                // Admission reads catalog identity/file-presence metadata, not weight bytes.
-                XCTAssertTrue(configuration.asrArtifactFingerprint?.hasPrefix("gigaam-native-v1/") == true)
+                // Automatic GGUF and explicit ONNX/CoreML imports use different identity
+                // families. Require an exact approved catalog identity, not one old prefix.
+                let fingerprint = try XCTUnwrap(configuration.asrArtifactFingerprint)
+                XCTAssertTrue(Set(GigaAMModelCatalog.models.map(\.fingerprint)).contains(fingerprint))
             } else { XCTAssertNil(configuration.asrArtifactFingerprint) }
             XCTAssertTrue(configuration.diarizationFingerprint.hasPrefix("unavailable:"))
             XCTAssertNoThrow(try MeetingProviderOptions.resolve(configuration))

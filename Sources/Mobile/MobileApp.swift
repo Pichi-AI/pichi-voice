@@ -183,7 +183,7 @@ final class AppServices: ObservableObject {
         }.store(in: &idlePreparationObservers)
         observeIdleResourceStores()
         let recordingKeys = isProductionComposition
-            ? MeetingRecordingKeychainStore(namespace: (Bundle.main.bundleIdentifier ?? AppBrand.keychainService) + ".recording-encryption.v1") : nil
+            ? MeetingRecordingKeychainStore(namespace: MeetingRecordingKeychainStore.defaultNamespace) : nil
         let resolveRecordingCipher: @MainActor @Sendable (PrivateProfileSnapshot, Bool) async throws -> MeetingRecordingCipher? = { profile, create in
             guard let publicationStore else { return nil }
             guard PrivateProfileStorage.isReadable(profile) else { throw AccountError.staleOperation }
@@ -458,8 +458,6 @@ struct PichiVoiceMobileApp: App {
     @ObservedObject private var kiosk = MobileKioskAccess.shared
     @Environment(\.scenePhase) private var scenePhase
 
-    init() { FirstMeetingTip.configure() }
-
     #if DEBUG && targetEnvironment(simulator)
     /// Hosted fixtures own their service composition and the shared profile scope.
     /// Keep the hosted app inert so its UI cannot restore another account concurrently.
@@ -477,13 +475,14 @@ struct PichiVoiceMobileApp: App {
                 #if DEBUG && targetEnvironment(simulator)
                 if isHostedFixtureHost { Color.clear.accessibilityHidden(true) }
                 else if MobileAutomaticSettingsReview.isRequested { MobileAutomaticSettingsReview() }
+                else if MobileSharedGuestHistoryReview.isRequested { MobileSharedGuestHistoryReview() }
                 else { ordinaryRoot }
                 #else
                 ordinaryRoot
                 #endif
             }.task {
                 #if DEBUG && targetEnvironment(simulator)
-                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested || MobileSharedGuestHistoryReview.isRequested { return }
                 #endif
                 #if DEBUG
                 // Hosted unit probes own their injected model operations. The ordinary
@@ -511,19 +510,19 @@ struct PichiVoiceMobileApp: App {
             // captured scene cannot overwrite a newer foreground event after restore.
             .onChange(of: scenePhase, initial: true) { _, phase in
                 #if DEBUG && targetEnvironment(simulator)
-                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested || MobileSharedGuestHistoryReview.isRequested { return }
                 #endif
                 Task { await services.setSceneActive(phase == .active) }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
                 #if DEBUG && targetEnvironment(simulator)
-                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested || MobileSharedGuestHistoryReview.isRequested { return }
                 #endif
                 Task { await services.protectedDataDidBecomeAvailable() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                 #if DEBUG && targetEnvironment(simulator)
-                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested || MobileSharedGuestHistoryReview.isRequested { return }
                 #endif
                 Task { await services.didReceiveMemoryWarning() }
             }

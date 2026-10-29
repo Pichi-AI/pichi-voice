@@ -6,6 +6,9 @@ import Security
 /// Recording keys have a separate trusted namespace from login grants and provider keys.
 /// Actor isolation keeps Security I/O off MainActor. No key file or synchronizing item exists.
 actor MeetingRecordingKeychainStore {
+    nonisolated static var defaultNamespace: String {
+        (Bundle.main.bundleIdentifier ?? AppBrand.keychainService) + ".recording-encryption.v1"
+    }
     private let namespace: String
 
     init(namespace: String) { self.namespace = namespace }

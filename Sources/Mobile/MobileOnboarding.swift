@@ -29,6 +29,16 @@ struct MobileOnboarding: View {
     @State private var accountActionIsActive = false
     @State private var pageShownAt = -TimeInterval.infinity
     @State private var highlightsHeight: CGFloat = 0
+    /// The voice page keeps its actions in the fixed footer, so the footer observes the transaction.
+    @StateObject private var voice: MeetingOwnerVoiceEnrollmentModel
+    init(accountSession: AccountSessionService = AppServices.shared.accountSession,
+         cloudPublication: PichiCloudPublicationService? = nil, asr: ASRService, required: MobileRequiredResources,
+         privacy: MobilePrivacyActivation, audioArbiter: any MeetingAudioActivityArbitrating) {
+        self.accountSession = accountSession; self.cloudPublication = cloudPublication
+        self.asr = asr; self.required = required; self.privacy = privacy; self.audioArbiter = audioArbiter
+        self._voice = StateObject(wrappedValue: MeetingOwnerVoiceEnrollmentModel(audioArbiter: audioArbiter))
+    }
+
     private var step: Int { settings.mobileSetupStep }
     /// Phones in either orientation; Plus and Pro Max phones report a regular width in landscape.
     private var isCompact: Bool { horizontalSizeClass == .compact || verticalSizeClass == .compact }
@@ -111,7 +121,7 @@ struct MobileOnboarding: View {
                             VStack(alignment: .leading, spacing: 16) {
                                 content
                                 if let error {
-                                    Text(error).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
+                                    Text(PichiLocalization.text(error)).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
                                         .accessibilityIdentifier("onboarding.error")
                                 }
                             }
@@ -208,6 +218,7 @@ struct MobileOnboarding: View {
         switch step {
         case 1: "Choose a local speech model. You can change it later in Settings. Speed and memory use depend on your device."
         case 2: "Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."
+        case 4: "Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."
         case 6: "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings."
         default: nil
         }
@@ -260,20 +271,7 @@ struct MobileOnboarding: View {
             MobileAudioPrivacyControls().fluidOnboardingStepCard()
             MobilePrivacyActivationControls(activation: privacy).fluidOnboardingStepCard()
         case 4:
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "waveform").symbolEffect(.variableColor, options: .repeating, isActive: !reduceMotion)
-                    .foregroundStyle(theme.palette.accentText)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(PichiLocalization.text("You")).font(theme.typography.captionStrong).foregroundStyle(theme.palette.accentText)
-                    Text(PichiLocalization.text("Your speech can carry your own label."))
-                        .font(theme.typography.body)
-                }
-            }
-            .fluidOnboardingStepCard(isSelected: true)
-            .accessibilityIdentifier("onboarding.youDemo")
-            Text(PichiLocalization.text("Find a quiet place and read the phrase below. The microphone starts only when you choose Set up my voice. You can skip this step."))
-                .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
-            MeetingOwnerVoiceSettingsContent(audioArbiter: audioArbiter, microphone: nil).fluidOnboardingStepCard()
+            MeetingOwnerVoiceSettingsContent(model: voice, microphone: nil, layout: .setup).fluidOnboardingStepCard()
         case 5:
             MeetingLocationSettingsContent().fluidOnboardingStepCard()
         default:
@@ -296,7 +294,9 @@ struct MobileOnboarding: View {
             if advancing && step != 1 && asr.modelPreparationPhase != nil {
                 MobileASRPreparationStatus(asr: asr)
             }
-            HStack(spacing: isCompact ? 8 : 12) { backAction; Spacer(minLength: 0); optionalActions; nextAction }
+            HStack(spacing: isCompact ? 8 : 12) {
+                if step == 4 { voiceActions } else { backAction; Spacer(minLength: 0); optionalActions; nextAction }
+            }
         }
         .padding(.horizontal, isCompact ? 20 : FluidOnboardingLayout.footerHorizontalInset)
         .padding(.top, 16).padding(.bottom, isCompact ? 8 : 24)
@@ -335,6 +335,34 @@ struct MobileOnboarding: View {
         if advancing {
             pill("Cancel", prominent: false) { operation?.cancel(); asr.cancelModelDownload() }
                 .accessibilityIdentifier("onboarding.cancel")
+        }
+    }
+
+    /// One place and at most three actions for the voice page: start or skip, then finish or cancel
+    /// the recording, then record again or continue. Leaving is unavailable while the sample is taken.
+    @ViewBuilder private var voiceActions: some View {
+        switch voice.phase {
+        case .recording:
+            pill("Cancel", prominent: false) { voice.cancel() }.accessibilityIdentifier("ownerVoice.cancel")
+            Spacer(minLength: 0)
+            let longEnough = voice.seconds >= MeetingOwnerVoiceEnrollmentCapture.recommendedSeconds
+            pill(longEnough ? "Done" : "Stop", prominent: longEnough) { voice.finishRecording() }
+                .accessibilityIdentifier("ownerVoice.stop")
+        case .preparing, .checking, .saving, .ready:
+            pill("Cancel", prominent: false) { voice.cancel() }.accessibilityIdentifier("ownerVoice.cancel")
+            Spacer(minLength: 0)
+        case .idle:
+            backAction
+            Spacer(minLength: 0)
+            if voice.hasProfile {
+                pill("Record again", prominent: false) { voice.start(microphone: nil) }
+                    .accessibilityIdentifier("ownerVoice.start")
+                nextAction
+            } else {
+                optionalActions
+                pill("Record", prominent: true) { voice.start(microphone: nil) }
+                    .accessibilityIdentifier("ownerVoice.start")
+            }
         }
     }
 
@@ -412,10 +440,7 @@ struct MobileOnboarding: View {
                       privateProfile.isPrivateDataVisible, !privateProfile.isTransitioning,
                       privateProfile.projectionRevision == projectionRevision,
                       PrivateProfileStorage.current == profile else { return }
-                if current == 6 {
-                    if !settings.isReplayingMobileSetup { FirstMeetingTip.setupFinished = true }
-                    settings.mobileSetupCompleted = true
-                }
+                if current == 6 { settings.mobileSetupCompleted = true }
                 else { settings.mobileSetupStep = current + 1 }
             } catch is CancellationError { }
             catch {
@@ -456,7 +481,7 @@ struct MobileRequiredResourcesStatus: View {
             case .ready:
                 Label(PichiLocalization.text("Speech detection and speaker labels are ready"), systemImage: "checkmark.circle.fill")
             case .failed(let message):
-                Text(message)
+                Text(PichiLocalization.text(message))
                 Button(PichiLocalization.text("Try again")) {
                     guard let modelID = resources.modelID else { return }
                     Task { try? await resources.prepare(modelID: modelID) }
@@ -550,7 +575,7 @@ struct MobilePrivacyActivationControls: View {
         case .failed(let message):
             VStack(alignment: .leading, spacing: asFormRows ? 4 : 10) {
                 Text(PichiLocalization.text("Data cleanup is not active")).font(theme.typography.bodyStrong)
-                Text(message).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
+                Text(PichiLocalization.text(message)).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
             }
             Button(PichiLocalization.text("Try again")) { activation.setEnabled(true) }
                 .accessibilityIdentifier("privacy.pii.retry")

@@ -190,7 +190,10 @@ struct MobileSettingsFooter: View {
 extension View {
     /// Settings pages keep a readable width in a wide iPad detail column, and their buttons are
     /// action rows: the app-wide outlined style would draw a box inside each grouped row.
-    func mobileSettingsPage() -> some View { modifier(MobileSettingsColumn()).buttonStyle(MobileSettingsActionRowStyle()) }
+    func mobileSettingsPage() -> some View { mobileReadableColumn().buttonStyle(MobileSettingsActionRowStyle()) }
+
+    /// A list keeps a readable, centered width in a wide iPad detail column.
+    func mobileReadableColumn() -> some View { modifier(MobileSettingsColumn()) }
 }
 
 /// A grouped-row action reads as one: accent text, the outlined style's readable red for a
@@ -236,7 +239,7 @@ private struct MobileSettingsColumn: ViewModifier {
     }
 }
 
-/// What the next recording uses. The start screen opens the same page as a sheet.
+/// What the next recording uses. Meetings opens the same page as a sheet.
 struct MobileRecordingSettings: View {
     let microphones: [MeetingMicrophoneIdentity]
     var isPresentedAsSheet = false
@@ -254,23 +257,31 @@ struct MobileRecordingSettings: View {
             settings.meetingRecordingDefaults = value
         })
     }
-    private var supportedLanguages: [String] {
-        (PichiMeetingProviderFactory.registeredLanguageCodes(for: settings.selectedSpeechModel.rawValue) ?? []).sorted()
-    }
+    private var supportedLanguages: [String] { Self.supportedLanguages(settings: settings) }
     private var selectedLanguage: Binding<String> {
-        Binding(get: {
-            let stored = settings.meetingRecordingDefaults.languageCode
-            return stored.flatMap { supportedLanguages.contains($0) ? $0 : nil }
-                ?? PichiMeetingProviderFactory.defaultLanguageCode(for: settings.selectedSpeechModel.rawValue) ?? "auto"
-        }, set: { code in
+        Binding(get: { Self.effectiveLanguageCode(settings: settings) }, set: { code in
             var value = settings.meetingRecordingDefaults
             value.isConfigured = true; value.mode = .inRoom; value.languageCode = code
             settings.meetingRecordingDefaults = value
         })
     }
 
+    private static func supportedLanguages(settings: SettingsStore) -> [String] {
+        (PichiMeetingProviderFactory.registeredLanguageCodes(for: settings.selectedSpeechModel.rawValue) ?? []).sorted()
+    }
+
+    /// The saved language when the selected model supports it, otherwise the model's default.
+    private static func effectiveLanguageCode(settings: SettingsStore) -> String {
+        settings.meetingRecordingDefaults.languageCode.flatMap { supportedLanguages(settings: settings).contains($0) ? $0 : nil }
+            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: settings.selectedSpeechModel.rawValue) ?? "auto"
+    }
+
+    /// The next recording's language as its picker shows it.
+    static func languageTitle(settings: SettingsStore) -> String { languageName(effectiveLanguageCode(settings: settings)) }
+
     /// Language names start with a capital letter, like the interface language on the root.
-    private func languageName(_ code: String) -> String {
+    private static func languageName(_ code: String) -> String {
+        guard code != "auto" else { return PichiLocalization.text("Automatic") }
         let name = PichiLocalization.locale.localizedString(forLanguageCode: code) ?? code
         return name.prefix(1).uppercased(with: PichiLocalization.locale) + name.dropFirst()
     }
@@ -286,7 +297,7 @@ struct MobileRecordingSettings: View {
                 }.accessibilityIdentifier("recording.microphone")
                 Picker(PichiLocalization.text("Transcript language"), selection: selectedLanguage) {
                     ForEach(supportedLanguages, id: \.self) { code in
-                        Text(code == "auto" ? PichiLocalization.text("Automatic") : languageName(code)).tag(code)
+                        Text(Self.languageName(code)).tag(code)
                     }
                 }.accessibilityIdentifier("recording.language")
             }
