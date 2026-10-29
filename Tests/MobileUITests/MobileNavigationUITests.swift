@@ -52,7 +52,10 @@ final class MobileNavigationUITests: XCTestCase {
         continueAfterFailure = false
         if !productionDownload { XCUIDevice.shared.orientation = .portrait }
         app = XCUIApplication()
-        if !productionDownload { app.launchArguments += ["-PichiInterfaceLanguage", "en"] }
+        if !productionDownload {
+            let language = name.contains("testSharedGuestHistoryAcrossAccountProfiles") ? "ru" : "en"
+            app.launchArguments += ["-PichiInterfaceLanguage", language]
+        }
         if name.contains("testSharedGuestHistoryAcrossAccountProfiles") {
             app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_REVIEW"] = "1"
             app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_PROFILE"] = "a"
