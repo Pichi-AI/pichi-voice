@@ -760,8 +760,8 @@ final class MobileNavigationUITests: XCTestCase {
                 XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15),
                               "The actual meeting root must finish its isolated profile fixture")
                 capture("shared-guest-\(profile)-\(appearance)-ready")
-                let historyTitle = app.tabBars.buttons["История"].exists ? "История" : "History"
-                openNavigation("history", title: historyTitle)
+                let meetingsTitle = app.tabBars.buttons["Встречи"].exists ? "Встречи" : "Meetings"
+                openNavigation("meetings", title: meetingsTitle)
                 let guest = app.buttons["history.session.\(guestID)"]
                 XCTAssertTrue(guest.waitForExistence(timeout: 5),
                               "Every profile must show the saved device-guest meeting without refresh")
