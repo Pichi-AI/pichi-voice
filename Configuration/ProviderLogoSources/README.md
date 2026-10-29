@@ -11,6 +11,8 @@ The original SVGs are retained byte-for-byte here. They are provider trademarks,
 
 The GigaChat mark is the black symbol published by its official help site. Yandex AI Studio publishes a full-color circular icon. The original paths, proportions, colors, viewports and alpha are preserved. GigaChat is rendered directly from its transparent SVG, avoiding the white rectangle in the site's Apple-touch PNG.
 
+The local GigaAM speech provider also uses the existing GigaChat mark through its shared provider presentation metadata. The [official GigaAM announcement](https://sberdevices.ru/press/detail/sber-devices-predstavila-giga-am-semejstvo-open-source-modelej-mashinnogo-obucheniya-dlya-raspoznavaniya-rechi-i-emoczij/) credits the GigaChat and SaluteSpeech teams at SberDevices. This is an author-team mark, not a separate GigaAM logo. The model's SaluteDevices publisher credit and local execution remain unchanged. Its neutral tile keeps the black mark visible in both app themes.
+
 Raster renditions follow the existing `Provider_*` image set convention: 64 px at 1x and 128 px at 2x. The common provider tile remains 38 points, with a centered 26-point aspect-fit image and its existing neutral backing. That backing keeps the black mark legible in light and dark app themes without modifying or tinting the logo. Registration uses descriptor-owned `logoAssetName`; the UI uses the existing shared lookup and renderer.
 
 Reproduce with librsvg 2.61.3:

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Provider marks describe the execution provider; model names and publisher credits stay data.
+/// Provider marks identify providers or their credited author teams; model names and publisher credits stay data.
 /// Typed metadata replaces label substring matching and is shared by every model surface.
 nonisolated struct SpeechModelProviderPresentation: Equatable, Sendable {
     enum Mark: Equatable, Sendable {
@@ -22,6 +22,8 @@ nonisolated struct SpeechModelProviderPresentation: Equatable, Sendable {
 extension SettingsStore.SpeechModel.Provider {
     var presentation: SpeechModelProviderPresentation {
         switch self {
+        case .saluteDevices:
+            SpeechModelProviderPresentation(mark: .asset("Provider_GigaChat"), background: .neutral)
         case .nvidia:
             SpeechModelProviderPresentation(mark: .asset("Provider_NVIDIA"), background: .neutral, imageScale: 0.86)
         case .apple:
