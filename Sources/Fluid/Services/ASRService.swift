@@ -2394,6 +2394,20 @@ final class ASRService: ObservableObject {
         }
     }
 
+    func validateDictionaryPronunciations(_ captures: [PronunciationEnrollmentCapture]) async throws -> Bool {
+        let profile = PrivateProfileStorage.current
+        let generation = DictionaryMatcherExperiment.generation
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              DictionaryMatcherExperiment.sharedFeaturesEnabled, self.activeExclusiveActivity == nil else { throw CancellationError() }
+        let provider = self.transcriptionProvider
+        let result = try await provider.validateDictionaryPronunciations(captures)
+        try Task.checkCancellation()
+        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
+              DictionaryMatcherExperiment.sharedFeaturesEnabled,
+              generation == DictionaryMatcherExperiment.generation else { throw CancellationError() }
+        return result
+    }
+
     private func performOriginalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture {
         let generation = DictionaryMatcherExperiment.generation
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { throw CancellationError() }

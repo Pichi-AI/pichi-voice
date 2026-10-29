@@ -372,6 +372,7 @@ actor PronunciationDictionaryStore {
         modelKey: String,
         enrollments: [PronunciationEnrollmentCapture],
         automaticMatchingEnabled: Bool = false,
+        expectedExistingEnrollments: [PronunciationEnrollmentCapture]? = nil,
         canPersist: @Sendable () -> Bool = { true }
     ) throws {
         try self.requireAccess()
@@ -386,6 +387,9 @@ actor PronunciationDictionaryStore {
             $0.dictionaryEntryID == dictionaryEntryID && $0.modelKey == modelKey
         })
         let existingEnrollments = existingIndex.map { profiles[$0].enrollments } ?? []
+        if let expectedExistingEnrollments, existingEnrollments != expectedExistingEnrollments {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
         var prepared = enrollments
         var writtenInspectionIDs: [UUID] = []
         do {
@@ -456,6 +460,7 @@ actor PronunciationDictionaryStore {
         let selected = protected.union(remaining)
         // Manual references first so the matcher can keep its existing calibration.
         return selected.sorted { lhs, rhs in
+            if protected.contains(lhs) != protected.contains(rhs) { return protected.contains(lhs) }
             let leftManual = captures[lhs].originalAudioID == nil
             let rightManual = captures[rhs].originalAudioID == nil
             return leftManual == rightManual ? lhs < rhs : leftManual

@@ -109,6 +109,78 @@ extension PichiGigaAMIntegrationTests {
         XCTAssertNil(invalid)
     }
 
+    @MainActor
+    func testAcousticDictionaryChecksCompetitorsBeyondTwentyFourLabels() async throws {
+        let samples = Self.acousticTone(440, duration: 1.2)
+        let features = try GigaAMAcousticFeatures.extract(samples)
+        let references = [features, features, features]
+        let calibration = try XCTUnwrap(GigaAMAcousticMatcher.calibrate(references: references))
+        let words = (0..<40).map { index in
+            GigaAMDictionaryAcoustics.Word(entryID: UUID(), label: "Термин\(index)", profileKey: "\(index)",
+                references: references, calibration: calibration, negatives: [])
+        }
+        let snapshot = GigaAMDictionaryAcoustics.Snapshot(modelKey: "test", generation: "test", enabled: true,
+            entries: [], pronunciation: nil, negatives: nil)
+        let raw = GigaAMTranscript(text: "Слово.", confidence: 0.4,
+            words: [.init(text: "Слово.", start: 0, end: 1.2, confidence: 0.4)],
+            endOfUtteranceProbability: nil, processingDuration: 0)
+        let output = try await GigaAMDictionaryAcoustics.correct(transcript: raw, samples: samples, snapshot: snapshot, words: words)
+        XCTAssertEqual(output.text, raw.text)
+        XCTAssertTrue(output.evidence.isEmpty)
+    }
+
+    @MainActor
+    func testAcousticDictionaryFindsLateTermWithLargeVocabulary() async throws {
+        let reference = try GigaAMAcousticFeatures.extract(Self.acousticTone(440, duration: 1.2))
+        let other = try GigaAMAcousticFeatures.extract(Self.acousticTone(880, duration: 1.2))
+        let targetReferences = [reference, reference, reference]
+        let distractorReferences = [other, other, other]
+        let targetCalibration = try XCTUnwrap(GigaAMAcousticMatcher.calibrate(references: targetReferences))
+        let otherCalibration = try XCTUnwrap(GigaAMAcousticMatcher.calibrate(references: distractorReferences))
+        var terms = (0..<127).map { index in
+            GigaAMDictionaryAcoustics.Word(entryID: UUID(), label: "Другой\(index)", profileKey: "other\(index)",
+                references: distractorReferences, calibration: otherCalibration, negatives: [])
+        }
+        terms.append(.init(entryID: UUID(), label: "Термин", profileKey: "target", references: targetReferences,
+                           calibration: targetCalibration, negatives: []))
+        let samples = Self.acousticTone(880, duration: 10.8) + Self.acousticTone(440, duration: 1.2)
+        let rawWords = (0..<270).map { index in
+            GigaAMWordTiming(text: "слово", start: Double(index) * 0.04, end: Double(index + 1) * 0.04, confidence: 0.4)
+        } + [.init(text: "ошибка.", start: 10.8, end: 12, confidence: 0.4)]
+        let rawText = rawWords.map(\.text).joined(separator: " ")
+        let snapshot = GigaAMDictionaryAcoustics.Snapshot(modelKey: "test", generation: "test", enabled: true,
+            entries: [], pronunciation: nil, negatives: nil)
+        let raw = GigaAMTranscript(text: rawText, confidence: 0.4, words: rawWords,
+            endOfUtteranceProbability: nil, processingDuration: 0)
+        let output = try await GigaAMDictionaryAcoustics.correct(transcript: raw, samples: samples, snapshot: snapshot, words: terms)
+        XCTAssertEqual(output.text, Array(rawWords.dropLast()).map(\.text).joined(separator: " ") + " Термин.")
+        XCTAssertEqual(output.evidence.first?.sourceWordRange, 270..<271)
+    }
+
+    @MainActor
+    func testPronunciationReadinessRejectsInconsistentFeaturesWithoutLoadingModel() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("gigaam-readiness-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fingerprint = GigaAMModelCatalog.downloadableModel.fingerprint
+        let key = GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
+        let provider = PichiGigaAMProvider(modelStore: PichiGigaAMModelStore(directory: root), expectedModelFingerprint: fingerprint)
+        let samples = Self.acousticTone(440, duration: 0.48)
+        func capture(coordinate: Int) -> PronunciationEnrollmentCapture {
+            let row = (0..<40).map { Float($0 == coordinate ? 1 : 0) }
+            let inspection = DictionaryAudioInspection(samples: samples, recordedSampleCount: samples.count,
+                frames: [.init(offset: 0, frameDuration: 0.04, hiddenSize: 40,
+                               values: Array(repeating: row, count: 12).flatMap { $0 })],
+                words: [], selectedStart: 0, selectedEnd: 0.48)
+            return .init(values: row, sourceFrameCount: 12, modelKey: key,
+                extractorVersion: GigaAMAcousticFeatures.extractorVersion, pendingInspection: inspection)
+        }
+        let consistent = try await provider.validateDictionaryPronunciations([capture(coordinate: 0), capture(coordinate: 0), capture(coordinate: 0)])
+        let inconsistent = try await provider.validateDictionaryPronunciations([capture(coordinate: 0), capture(coordinate: 1), capture(coordinate: 2)])
+        XCTAssertTrue(consistent)
+        XCTAssertFalse(inconsistent)
+        XCTAssertFalse(provider.isReady)
+    }
+
     nonisolated private static func acousticTone(_ frequency: Double, duration: Double) -> [Float] {
         let count = Int(duration * 16_000)
         return (0..<count).map { index in

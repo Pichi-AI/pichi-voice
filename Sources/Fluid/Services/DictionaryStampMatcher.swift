@@ -37,19 +37,23 @@ nonisolated enum DictionaryStampMatcher {
     }
 
     /// Up to `limit` non-overlapping stretches of `query` closer than `greyZoneLimit` to any reference.
-    static func hits(references: [DictionaryMatchFrames], in query: DictionaryMatchFrames, limit: Int = 3) -> [Hit] {
+    static func hits(references: [DictionaryMatchFrames], in query: DictionaryMatchFrames, limit: Int = 3,
+                     maximumDistance: Float = greyZoneLimit) -> [Hit] {
         guard let prepared = self.prepare(query) else { return [] }
-        return self.hits(references: references, in: prepared, limit: limit)
+        return self.hits(references: references, in: prepared, limit: limit, maximumDistance: maximumDistance)
     }
 
-    static func hits(references: [DictionaryMatchFrames], in query: Query, limit: Int = 3) -> [Hit] {
-        self.hits(words: [references], in: query, limit: limit).first ?? []
+    static func hits(references: [DictionaryMatchFrames], in query: Query, limit: Int = 3,
+                     maximumDistance: Float = greyZoneLimit) -> [Hit] {
+        self.hits(words: [references], in: query, limit: limit, maximumDistance: maximumDistance).first ?? []
     }
 
     /// Every dictionary word's recordings against one dictation. All recording frames are compared
     /// with the dictation in a single matrix multiply, about 7x faster than one multiply per recording
     /// (100 words: 0.8 ms instead of 5.5 ms on an M-series Mac).
-    static func hits(words: [[DictionaryMatchFrames]], in query: Query, limit: Int = 3) -> [[Hit]] {
+    static func hits(words: [[DictionaryMatchFrames]], in query: Query, limit: Int = 3,
+                     maximumDistance: Float = greyZoneLimit) -> [[Hit]] {
+        guard maximumDistance.isFinite, (0...1).contains(maximumDistance), (1...16).contains(limit) else { return words.map { _ in [] } }
         let m = query.count, hidden = query.hiddenSize
         let usable = words.map { references in
             references.filter {
@@ -102,18 +106,18 @@ nonisolated enum DictionaryStampMatcher {
                         bestStart[j] = starts[j]
                     }
                 }
-                return self.pick(bestDistance: bestDistance, bestStart: bestStart, limit: limit)
+                return self.pick(bestDistance: bestDistance, bestStart: bestStart, limit: limit, maximumDistance: maximumDistance)
             }
         }
     }
 
-    private static func pick(bestDistance: [Float], bestStart: [Int], limit: Int) -> [Hit] {
+    private static func pick(bestDistance: [Float], bestStart: [Int], limit: Int, maximumDistance: Float) -> [Hit] {
         let m = bestDistance.count
         var hits: [Hit] = []
         var available = [Bool](repeating: true, count: m)
         while hits.count < limit {
             var candidate: Int?
-            for j in 0..<m where available[j] && bestDistance[j] < self.greyZoneLimit {
+            for j in 0..<m where available[j] && bestDistance[j] < maximumDistance {
                 if candidate.map({ bestDistance[j] < bestDistance[$0] }) ?? true { candidate = j }
             }
             guard let end = candidate else { break }

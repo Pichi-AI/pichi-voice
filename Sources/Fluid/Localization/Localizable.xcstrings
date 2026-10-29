@@ -60547,6 +60547,23 @@
         }
       },
       "extractionState": "manual"
+    },
+    "These recordings do not sound consistent. Record the term again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These recordings do not sound consistent. Record the term again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эти записи звучат неодинаково. Произнесите термин ещё раз."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

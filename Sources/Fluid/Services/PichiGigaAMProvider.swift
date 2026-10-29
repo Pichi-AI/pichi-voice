@@ -656,6 +656,37 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         return capture
     }
 
+    func validateDictionaryPronunciations(_ captures: [PronunciationEnrollmentCapture]) async throws -> Bool {
+        let generation = self.lifecycleGeneration
+        let fingerprint = self.loadedModelFingerprint ?? self.expectedModelFingerprint
+            ?? (try? self.modelStore.selectedArtifact().descriptor.fingerprint)
+        guard let fingerprint, captures.count >= 3 else { return false }
+        let key = GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
+        var references: [GigaAMAcousticFeatures] = []
+        for capture in captures.prefix(3) {
+            try Task.checkCancellation()
+            guard capture.modelKey == key, capture.extractorVersion == GigaAMAcousticFeatures.extractorVersion else { return false }
+            let inspection: DictionaryAudioInspection
+            if let pending = capture.pendingInspection { inspection = pending }
+            else if let id = capture.inspectionID { inspection = try await self.pronunciationStore.inspection(for: id) }
+            else { return false }
+            guard inspection.isValid, inspection.frames.count == 1,
+                  let frames = inspection.frames.first,
+                  frames.frameDuration == GigaAMAcousticFeatures.frameDuration,
+                  frames.hiddenSize == GigaAMAcousticFeatures.dimension else { return false }
+            do { references.append(try GigaAMAcousticFeatures(values: frames.values)) }
+            catch { return false }
+        }
+        let valid = try await Self.calibratesDictionaryReferences(references)
+        try Task.checkCancellation()
+        guard self.lifecycleGeneration == generation else { throw CancellationError() }
+        return valid
+    }
+
+    @concurrent private static func calibratesDictionaryReferences(_ references: [GigaAMAcousticFeatures]) async throws -> Bool {
+        try GigaAMAcousticMatcher.calibrate(references: references) != nil
+    }
+
     func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
         let result = try await self.transcribeDetailed(samples)
         return (

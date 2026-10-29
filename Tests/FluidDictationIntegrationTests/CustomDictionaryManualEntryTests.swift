@@ -540,6 +540,34 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
         XCTAssertEqual(PronunciationDictionaryStore.retainedEnrollments(Array(repeating: manual[0], count: 12)).count, 10)
     }
 
+    func testRetrainingPrioritizesLatestThreeManualRecordingsAndRetainsOlderVersions() {
+        let captures = (1...6).map { index in
+            PronunciationEnrollmentCapture(values: [Float(index)], sourceFrameCount: 1,
+                modelKey: "synthetic", inspectionID: UUID())
+        }
+        let kept = PronunciationDictionaryStore.retainedEnrollments(captures)
+        XCTAssertEqual(Array(kept.prefix(3)), Array(captures.suffix(3)))
+        XCTAssertEqual(Set(kept.compactMap(\.inspectionID)), Set(captures.compactMap(\.inspectionID)))
+    }
+
+    func testValidatedPronunciationSaveRejectsChangedExistingRecordings() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("validated-dictionary-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PronunciationDictionaryStore(fileURL: root.appendingPathComponent("profiles.json"))
+        let entryID = UUID()
+        let capture = PronunciationEnrollmentCapture(values: [1, 0], sourceFrameCount: 1, modelKey: "synthetic")
+        try await store.upsert(dictionaryEntryID: entryID, label: "Слово", modelKey: "synthetic", enrollments: [capture])
+        do {
+            try await store.upsert(dictionaryEntryID: entryID, label: "Слово", modelKey: "synthetic",
+                enrollments: [capture], expectedExistingEnrollments: [])
+            XCTFail("An intervening enrollment must invalidate the prior readiness check")
+        } catch let error as PronunciationDictionaryStoreError {
+            XCTAssertEqual(error, .staleEvidence)
+        }
+        let profiles = await store.profiles(modelKey: "synthetic")
+        XCTAssertEqual(profiles.first?.enrollments.count, 1)
+    }
+
     func testOriginalReferenceReadsOnlyFocalPCMAndChecksEntry() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
