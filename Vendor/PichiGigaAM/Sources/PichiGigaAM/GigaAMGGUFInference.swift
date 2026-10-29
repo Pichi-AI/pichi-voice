@@ -23,9 +23,11 @@ final class GigaAMGGUFInference {
             let device = try model.device
             guard model.arch == "gigaam", model.variant == "gigaam-v3-e2e-ctc",
                   capabilities.nativeSampleRate == 16_000,
-                  capabilities.languages.contains("ru"), capabilities.maxTimestampKind == .token,
-                  gpu ? device.kind == "metal" : device.kind == "cpu" else {
+                  capabilities.languages.contains("ru"), capabilities.maxTimestampKind == .token else {
                 throw GigaAMError.incompatibleModel
+            }
+            guard gpu ? device.kind == "metal" : device.kind == "cpu" else {
+                throw TranscribeError.backend("The requested GigaAM execution backend was not selected.")
             }
             let session = try model.session(.init(nThreads: Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount)))))
             try Task.checkCancellation()
