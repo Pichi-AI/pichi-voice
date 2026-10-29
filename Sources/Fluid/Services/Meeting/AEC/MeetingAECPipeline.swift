@@ -9,6 +9,7 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
     private let processor: any MeetingAECProcessing
     let committer: MeetingAECOutputCommitter
     private let diagnosticObserver: (@Sendable (MeetingAECJoinedFrame, [Float], MeetingAECBridgeStatistics) -> Void)?
+    private let fallbackObserver: @Sendable (MeetingAECFailure) -> Void
     private(set) var stopped = false
     /// Retry AEC on a new route, not on every callback while the current route is failing.
     private var fallbackFailure: MeetingAECFailure?
@@ -16,11 +17,18 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
     init(
         processor: any MeetingAECProcessing,
         committer: MeetingAECOutputCommitter,
-        diagnosticObserver: (@Sendable (MeetingAECJoinedFrame, [Float], MeetingAECBridgeStatistics) -> Void)? = nil
+        diagnosticObserver: (@Sendable (MeetingAECJoinedFrame, [Float], MeetingAECBridgeStatistics) -> Void)? = nil,
+        fallbackObserver: @escaping @Sendable (MeetingAECFailure) -> Void = { failure in
+            DebugLogger.shared.warning(
+                "aec_fallback reason=\(failure.rawValue) route=speaker targetProtection=unfiltered",
+                source: "MeetingAECPipeline"
+            )
+        }
     ) {
         self.processor = processor
         self.committer = committer
         self.diagnosticObserver = diagnosticObserver
+        self.fallbackObserver = fallbackObserver
     }
 
     func consumeRender(_ sampleBuffer: CMSampleBuffer, stream: MeetingAECStreamToken) {
@@ -85,7 +93,7 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
         currentRawCapture: CMSampleBuffer?
     ) {
         self.handle(self.joiner.flush(reason: failure))
-        self.fallbackFailure = failure
+        self.recordFallback(failure)
         if let currentRawCapture {
             self.committer.commitUnfiltered(currentRawCapture)
         }
@@ -110,13 +118,13 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
                     continue
                 }
                 if allowFallback {
-                    self.fallbackFailure = failure
+                    self.recordFallback(failure)
                     self.committer.commitUnfiltered(raw)
                 } else {
                     self.committer.commitRaw(raw, failure: failure)
                 }
             case let .reset(failure):
-                if allowFallback, failure != .stopped { self.fallbackFailure = failure }
+                if allowFallback, failure != .stopped { self.recordFallback(failure) }
             }
         }
         if flushRemainingCapture {
@@ -153,8 +161,17 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
     }
 
     private func beginFallback(_ capture: MeetingAECFrame, failure: MeetingAECFailure, allowFallback: Bool) {
-        self.fallbackFailure = failure
+        self.recordFallback(failure, report: allowFallback)
         self.commitRaw(capture, failure: failure, allowFallback: allowFallback)
+    }
+
+    /// The existing route latch bounds support diagnostics to its first failure. Lifecycle flushes
+    /// keep their original state transitions without being reported as a filtering failure.
+    private func recordFallback(_ failure: MeetingAECFailure, report: Bool = true) {
+        if report, failure != .stopped, self.fallbackFailure == nil {
+            self.fallbackObserver(failure)
+        }
+        self.fallbackFailure = failure
     }
 
     private func commitRaw(_ capture: MeetingAECFrame, failure: MeetingAECFailure, allowFallback: Bool = true) {
