@@ -2682,13 +2682,21 @@ struct CustomDictionaryView: View {
         let enrollments = self.trainingPronunciationEnrollments
         let savePronunciation = self.trainingProgress.pronunciationReady && !enrollments.isEmpty
         let pronunciationGeneration = DictionaryMatcherExperiment.generation
+        let speechModel = SettingsStore.shared.selectedSpeechModel
+        func selectionIsCurrent() -> Bool {
+            PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork &&
+                self.trainingSaveID == saveID && !Task.isCancelled &&
+                self.normalizedTrainingReplacement == replacementText &&
+                self.trainingPronunciationEnrollments == enrollments &&
+                SettingsStore.shared.selectedSpeechModel == speechModel &&
+                DictionaryMatcherExperiment.generation == pronunciationGeneration
+        }
         let filtered = await VoiceTrainingAliasFilter.filter(self.trainingVariants, manuallyConfirmed: self.manualTrainingSpellings)
         let exactTriggers = DictionaryTrainingSpellingPolicy.exactTriggers(
             accepted: filtered.accepted, manuallyConfirmed: self.manualTrainingSpellings,
             acousticCorrection: self.trainingAcousticCorrection
         )
-        guard PrivateProfileStorage.isReadable(profile), PrivateProfileStorage.acceptsNewWork,
-              self.trainingSaveID == saveID, !Task.isCancelled else { return }
+        guard selectionIsCurrent() else { return }
         DebugLogger.shared.info(
             "VOICE_TRAINING_ALIAS_FILTER accepted=\(filtered.accepted.count) rejected=\(filtered.rejected.count)",
             source: "CustomDictionary"
@@ -2716,16 +2724,37 @@ struct CustomDictionaryView: View {
         }
         if savePronunciation, let entry, let modelKey = enrollments.first?.modelKey {
             do {
+                let savedProfiles = await pronunciationStore.profiles(modelKey: modelKey)
+                guard selectionIsCurrent(), SettingsStore.shared.customDictionaryEntries == originalEntries else { return }
+                let saved = savedProfiles.first { $0.dictionaryEntryID == entry.id }?.enrollments ?? []
+                let combined = PronunciationDictionaryStore.retainedEnrollments(saved + enrollments)
+                let consistent = try await self.asr.validateDictionaryPronunciations(combined)
+                guard selectionIsCurrent(), SettingsStore.shared.customDictionaryEntries == originalEntries else { return }
+                guard consistent else {
+                    self.trainingHasError = true
+                    self.trainingStatusMessage = "These recordings do not sound consistent. Record the term again."
+                    self.wizardStep = .recording
+                    return
+                }
+                let latestProfiles = await pronunciationStore.profiles(modelKey: modelKey)
+                guard selectionIsCurrent(), SettingsStore.shared.customDictionaryEntries == originalEntries else { return }
+                guard (latestProfiles.first { $0.dictionaryEntryID == entry.id }?.enrollments ?? []) == saved else {
+                    self.trainingHasError = true
+                    self.trainingStatusMessage = "Your dictionary changed while saving. Try again."
+                    return
+                }
                 try await pronunciationStore.upsert(
                     dictionaryEntryID: entry.id,
                     label: replacementText,
                     modelKey: modelKey,
                     enrollments: enrollments,
                     automaticMatchingEnabled: true,
+                    expectedExistingEnrollments: saved,
                     canPersist: {
                         PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork &&
                             DictionaryMatcherExperiment.sharedFeaturesEnabled &&
                             DictionaryMatcherExperiment.generation == pronunciationGeneration &&
+                            SettingsStore.shared.selectedSpeechModel == speechModel &&
                             SettingsStore.shared.customDictionaryEntries == originalEntries
                     }
                 )
