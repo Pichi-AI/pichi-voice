@@ -29,7 +29,11 @@ extension PichiPublicationOutboxTests {
         let account = AccountSessionService(configuration: nil, browser: AutomaticFixtureBrowser(),
             transport: AutomaticFixtureOIDC(), credentials: AutomaticFixtureCredentials(),
             lifecycle: profiles, legacyConfiguration: configuration, legacyTransport: transport)
-        var meetings = PrivateProfileMeetingStore()
+        let sharedGuestCipher = try MeetingRecordingCipher(profileID: "guest", key: Data(repeating: 0xA7, count: 32))
+        func makeMeetings() -> PrivateProfileMeetingStore {
+            .init(sharedGuestCipherProvider: { sharedGuestCipher })
+        }
+        var meetings = makeMeetings()
         let cleanup = AutomaticCleanupOwner(store: meetings)
         let keyOwner = AutomaticCipherOwner()
         func makeService(_ store: PrivateProfileMeetingStore) -> PichiCloudPublicationService {
@@ -72,7 +76,7 @@ extension PichiPublicationOutboxTests {
               "Trusted local reads retain a per-record concealed-content marker")
         check(!manager.fileExists(atPath: guest.rootDirectory.appendingPathComponent("CloudPublication").path),
               "Guest encryption creates no account queue, receipt or upload consent")
-        await service.shutdown(); meetings = PrivateProfileMeetingStore(); cleanup.store = meetings
+        await service.shutdown(); meetings = makeMeetings(); cleanup.store = meetings
         service = makeService(meetings); try await service.install()
         do { _ = try await meetings.loadTranscript(id: guestSource.id); check(false, "A missing guest key cannot decode stored ciphertext") }
         catch MeetingRecordingCipher.Failure.unavailableKey { check(true, "Relaunch never treats existing ciphertext as plaintext without its key") }
@@ -104,7 +108,7 @@ extension PichiPublicationOutboxTests {
         let retainedGuestBytes = try Data(contentsOf: guestFile)
         check(disabledGuest == .init() && retainedGuestBytes == guestBytes,
               "Changing future encryption policy does not rewrite or decrypt existing history")
-        await service.shutdown(); meetings = PrivateProfileMeetingStore(); cleanup.store = meetings
+        await service.shutdown(); meetings = makeMeetings(); cleanup.store = meetings
         service = makeService(meetings); try await service.install()
         keyOwner.localEncryptionEnabled = true; keyOwner.holdNextLoad = true
         let guestBeforeLogin = Task { try await service.prepareCapturePersistencePolicy() }
@@ -120,8 +124,13 @@ extension PichiPublicationOutboxTests {
         keyOwner.localEncryptionEnabled = false; keyOwner.loads = 0
         check(try await service.prepareAutomaticCapture() == false && keyOwner.loads == 0,
               "Signed-in accounts without an available workspace keep ordinary local recording available")
-        check(try await meetings.loadTranscript(id: guestSource.id) == nil,
-              "A new login cannot adopt or expose an earlier guest's encrypted source")
+        let sharedEncryptedGuest = try await meetings.loadTranscript(id: guestSource.id)
+        check(sharedEncryptedGuest?.title == guestSource.title
+            && sharedEncryptedGuest?.profileOwnership?.matches(guest) == true
+            && sharedEncryptedGuest?.isLocalContentConcealed == true,
+              "An account can read shared guest ciphertext through its original guest key while retaining its protected presentation policy")
+        check(try Data(contentsOf: guestFile) == guestBytes,
+              "An account read neither copies nor rewrites the shared encrypted guest source")
         do { try await service.refresh(); check(false, "An unselected publication workspace remains an explicit configuration error") }
         catch AccountError.workspaceUnavailable { check(true, "Workspace configuration failure is typed without constructing storage") }
         let unselectedRoot = PrivateProfileStorage.current.rootDirectory
@@ -167,6 +176,17 @@ extension PichiPublicationOutboxTests {
             }
             return nil
         }
+        let guestUnderAccount = try await meetings.loadTranscript(id: guestSource.id)
+        let queuedGuest = try record(guestSource.id)
+        check(guestUnderAccount?.profileOwnership?.matches(guest) == true && queuedGuest == nil,
+              "Enabling account delivery leaves shared guest ciphertext guest-owned and outside the account queue")
+        let beforeGuestSend = await transport.postCount()
+        do { try await service.send(guestSource.id); check(false, "Shared encrypted guest history cannot inherit automatic account consent") }
+        catch let error as PichiPublicationOutboxFailure { check(error == .notAdmitted, "Encrypted guest history has no account recording-time admission") }
+        let afterGuestSend = await transport.postCount()
+        let refusedGuestBytes = try Data(contentsOf: guestFile)
+        check(afterGuestSend == beforeGuestSend && refusedGuestBytes == guestBytes,
+              "Refusing guest publication preserves its ciphertext and performs no upload")
 
         func createSource() async throws -> MeetingSession {
             var configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic automatic Ёё", languageCode: "ru",
@@ -234,7 +254,7 @@ extension PichiPublicationOutboxTests {
         let acceptedPendingBytes = try Data(contentsOf: queueFile)
         let postsBeforeRestart = await transport.postCount()
         await service.shutdown()
-        meetings = PrivateProfileMeetingStore(); cleanup.store = meetings
+        meetings = makeMeetings(); cleanup.store = meetings
         service = makeService(meetings); try await service.install(); try await service.activateCurrentProfile()
         check(await transport.postCount() == postsBeforeRestart, "Restarting delivery with a durable receipt never re-enters POST")
         cleanup.busy = false; cleanup.locked = true
@@ -294,7 +314,7 @@ extension PichiPublicationOutboxTests {
         do { _ = try await box().record(id: source.id); check(false, "Encrypted record cannot downgrade to plaintext") }
         catch let failure as PichiPublicationOutboxFailure { check(failure == .invalidStorage, "A known encrypted-mode record rejects plaintext fallback") }
         try ciphertext.write(to: compactFile)
-        meetings = PrivateProfileMeetingStore(); cleanup.store = meetings
+        meetings = makeMeetings(); cleanup.store = meetings
         service = makeService(meetings); try await service.install()
         try await service.resume()
 
