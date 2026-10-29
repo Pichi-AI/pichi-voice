@@ -38,7 +38,11 @@ extension MeetingSessionStoreCheckpointTests {
         await store.finishProfileTransition()
         PrivateProfileStorage.select(a)
         let aHistory = try await store.loadAll()
-        check(aHistory.isEmpty, "First account login cannot claim or list legacy guest history")
+        check(aHistory.count == 1 && aHistory.first?.id == id
+              && aHistory.first?.profileOwnership?.matches(guest) == true,
+            "First account login lists shared guest history with guest provenance, never account ownership")
+        check(try await store.loadHistoryForMaintenance().isEmpty,
+            "An account's automatic maintenance cannot apply its policy to shared guest history")
         var aSession = legacy
         aSession.title = "Synthetic account A"
         aSession.profileOwnership = try await store.captureOwnership(for: id)
@@ -46,6 +50,14 @@ extension MeetingSessionStoreCheckpointTests {
         try await store.create(aSession)
         let savedA = try await store.load(id: id)!
         check(savedA.profileOwnership?.matches(a) == true, "Account ownership is persisted at admission")
+        check(try await store.loadHistory().map(\.id) == [id],
+            "A same-UUID account record takes precedence without duplicate catalog identities")
+        var shadowedGuest = aHistory[0]
+        shadowedGuest.title = "Rejected shadowed guest edit"
+        do { try await store.save(shadowedGuest); check(false, "A shadowed guest snapshot cannot overwrite a same-UUID account record") }
+        catch { check(true, "Current-owner UUID precedence rejects a shadowed guest save") }
+        do { try await store.delete(id: id, expectedOwnership: .init(profile: guest)); check(false, "Pinned guest deletion cannot select a colliding account record") }
+        catch { check(true, "Current-owner UUID precedence rejects shadowed guest deletion") }
         check(try Data(contentsOf: legacyURL) == before, "Account admission must preserve original guest manifest bytes")
 
         // Logout can conceal account data immediately while the admitted writer drains locally.
@@ -62,7 +74,9 @@ extension MeetingSessionStoreCheckpointTests {
 
         await store.finishProfileTransition()
         PrivateProfileStorage.select(b)
-        check(try await store.load(id: id) == nil, "B cannot read A or guest by a known UUID")
+        let bGuest = try await store.load(id: id)
+        check(bGuest?.title == legacy.title && bGuest?.profileOwnership?.matches(guest) == true,
+            "B reads the shared guest sibling while A's same-UUID record stays private")
         var bSession = legacy
         bSession.title = "Synthetic account B"
         bSession.profileOwnership = try await store.captureOwnership(for: id)
@@ -90,5 +104,245 @@ extension MeetingSessionStoreCheckpointTests {
         let marker = try JSONSerialization.jsonObject(with: Data(contentsOf: markerURL)) as! [String: Any]
         check(marker["profileID"] as? String == "guest" && marker["isReadable"] as? Bool == true,
             "Atomic helper marker selects only the visible guest profile")
+
+        try await checkSharedGuestLibrary(root: root.appendingPathComponent("shared-library"), check: check)
+        try await checkSharedGuestCipherGeneration(root: root.appendingPathComponent("shared-cipher"), check: check)
     }
+
+    private static func checkSharedGuestLibrary(root: URL, check: (Bool, String) -> Void) async throws {
+        let original = PrivateProfileStorage.current
+        defer { PrivateProfileStorage.select(original) }
+        let manager = FileManager.default
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root)
+        func account(_ subject: String, workspace: String = "workspace") throws -> PrivateProfileSnapshot {
+            try PrivateProfileStorage.proposed(context: .init(identity: .init(issuer: "https://identity.invalid/shared",
+                subject: subject, internalUserID: "shared-" + subject), organizationID: "organization",
+                workspaceID: workspace, generation: UUID()), generation: UUID(), legacyRootDirectory: root)
+        }
+        let a = try account("A"), b = try account("B"), workspace = try account("A", workspace: "other")
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil)
+        func source(_ title: String, owner: PrivateProfileSnapshot?, offset: TimeInterval) -> MeetingSession {
+            var value = MeetingSession(configuration: .init(mode: .inRoom, title: title,
+                microphone: .init(captureDeviceID: "synthetic-shared", displayName: "Synthetic")),
+                startedAt: Date(timeIntervalSince1970: 1_700_000_000 + offset), timebase: timebase)
+            value.state = .completed; value.endedAt = value.startedAt.addingTimeInterval(5)
+            value.transcriptTimeDomain = .meetingRelative; value.audioStorageMode = .retainedFiles
+            value.profileOwnership = owner.map { .init(profile: $0) }
+            let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic-shared",
+                sourceDisplayName: "Synthetic", format: nil, timebase: timebase, health: .waiting, chunks: [])
+            value.audioTracks = [track]
+            value.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 1),
+                end: .init(value: 1, timescale: 1), sourceTrackID: track.id, speakerID: nil,
+                text: "Synthetic shared guest sentence.", revision: 0, status: .final,
+                overlap: .none, completeness: .complete, attributionState: .unassigned)]
+            return value
+        }
+        let legacy = source("Shared legacy guest", owner: nil, offset: 0)
+        let explicit = source("Shared explicit guest", owner: guest, offset: 1)
+        var interrupted = source("Shared interrupted guest", owner: nil, offset: 2)
+        interrupted.state = .interrupted
+        let ownedA = source("Private A only", owner: a, offset: 10)
+        let ownedB = source("Private B only", owner: b, offset: 20)
+        let ownedWorkspace = source("Private other workspace", owner: workspace, offset: 30)
+        let guestStore = MeetingSessionStore(rootDirectory: guest.directory("Meetings"))
+        let aStore = MeetingSessionStore(rootDirectory: a.directory("Meetings"))
+        let bStore = MeetingSessionStore(rootDirectory: b.directory("Meetings"))
+        let workspaceStore = MeetingSessionStore(rootDirectory: workspace.directory("Meetings"))
+        for session in [legacy, explicit, interrupted] { try await guestStore.create(session) }
+        try await aStore.create(ownedA); try await bStore.create(ownedB); try await workspaceStore.create(ownedWorkspace)
+        func manifest(_ profile: PrivateProfileSnapshot, _ id: MeetingSessionID) -> URL {
+            profile.directory("Meetings").appendingPathComponent(id.uuidString).appendingPathComponent("session.json")
+        }
+        let guestBefore = try Data(contentsOf: manifest(guest, legacy.id))
+        let explicitBefore = try Data(contentsOf: manifest(guest, explicit.id))
+        let privateABefore = try Data(contentsOf: manifest(a, ownedA.id))
+        let store = PrivateProfileMeetingStore()
+        let guestIDs = Set([legacy.id, explicit.id, interrupted.id])
+        for (profile, privateID) in [(a, ownedA.id), (b, ownedB.id), (workspace, ownedWorkspace.id)] {
+            await store.finishProfileTransition(); PrivateProfileStorage.select(profile)
+            let expected = guestIDs.union([privateID])
+            check(Set(try await store.loadHistory().map(\.id)) == expected,
+                "Every account/workspace catalog contains the shared guests plus only its own private meeting")
+            check(Set(try await store.loadAll().map(\.id)) == expected,
+                "Full API reads follow the same shared guest visibility as native History")
+            check(try await store.loadHistoryForMaintenance().map(\.id) == [privateID],
+                "Automatic audio maintenance is limited to the selected account's own storage")
+            check(try await store.loadRecoverable().isEmpty,
+                "Account startup cannot automatically recover or rewrite an interrupted shared guest")
+            let loaded = try await store.loadTranscript(id: legacy.id)
+            check(loaded?.title == legacy.title && loaded?.profileOwnership?.matches(guest) == true,
+                "Lightweight shared legacy reads carry explicit guest provenance without adopting the account")
+            for foreign in [ownedA, ownedB, ownedWorkspace] where foreign.id != privateID {
+                let foreignSession = try await store.load(id: foreign.id)
+                let foreignTranscript = try await store.loadTranscript(id: foreign.id)
+                check(foreignSession == nil && foreignTranscript == nil,
+                    "A foreign account/workspace meeting stays inaccessible even with its exact UUID")
+                check(try await store.existingSessionDirectory(for: foreign.id) == nil,
+                    "Foreign account UUIDs cannot expose playback or export directories")
+                do { _ = try await store.sessionDirectory(for: foreign.id); check(false, "A foreign UUID cannot obtain a writable recording directory") }
+                catch { check(true, "Foreign recording directory resolution rejects access") }
+            }
+        }
+        check(try Data(contentsOf: manifest(guest, legacy.id)) == guestBefore
+              && Data(contentsOf: manifest(guest, explicit.id)) == explicitBefore,
+            "Shared catalog/transcript reads never rewrite or move guest source bytes")
+
+        await store.finishProfileTransition(); PrivateProfileStorage.select(a)
+        var edited = try await store.loadTranscript(id: legacy.id)!
+        edited.title = "Guest edited from A"; edited.transcriptSegments[0].text = "Shared edit remains guest-owned."
+        try await store.save(edited)
+        let storedEdit = try await guestStore.loadTranscript(id: legacy.id)
+        check(storedEdit?.title == edited.title && storedEdit?.profileOwnership?.matches(guest) == true,
+            "Editing a shared legacy meeting persists in its original guest root with guest ownership")
+        check(!manager.fileExists(atPath: manifest(a, legacy.id).path),
+            "A guest edit must not create an account copy")
+        let guestDirectory = guest.directory("Meetings").appendingPathComponent(legacy.id.uuidString)
+        let tracks = guestDirectory.appendingPathComponent("tracks")
+        try Data("synthetic disposable audio bytes".utf8).write(to: tracks.appendingPathComponent("synthetic.bin"))
+        let writeDirectory = try await store.sessionDirectory(for: legacy.id)
+        let readDirectory = try await store.existingSessionDirectory(for: legacy.id)
+        check(writeDirectory.standardizedFileURL.path == guestDirectory.standardizedFileURL.path
+              && readDirectory?.standardizedFileURL.path == guestDirectory.standardizedFileURL.path,
+            "Shared playback/export and write-side paths resolve the original guest directory")
+        await store.finishProfileTransition(); PrivateProfileStorage.select(b)
+        check(try await store.loadTranscript(id: legacy.id)?.transcriptSegments == edited.transcriptSegments,
+            "A guest edit made from A is visible from B without transferring ownership")
+        try await store.deleteAudioFiles(for: legacy.id)
+        check(!manager.fileExists(atPath: tracks.path) && manager.fileExists(atPath: manifest(guest, legacy.id).path),
+            "Deleting guest audio from B removes only original guest audio and keeps the transcript")
+        do { try await store.save(ownedA); check(false, "B cannot save a known A-only record") }
+        catch { check(true, "Known foreign-owner snapshots remain rejected") }
+        try await store.delete(id: ownedA.id)
+        try await store.deleteAudioFiles(for: ownedA.id)
+        do { try await store.delete(id: ownedA.id, expectedOwnership: .init(profile: a)); check(false, "B cannot delete A using pinned A ownership") }
+        catch { check(true, "Foreign expected-ownership deletion stays fenced") }
+        check(try Data(contentsOf: manifest(a, ownedA.id)) == privateABefore,
+            "Foreign read/write/delete attempts leave A's original manifest unchanged")
+
+        let interruptedBefore = try Data(contentsOf: manifest(guest, interrupted.id))
+        do {
+            try await store.delete(id: interrupted.id, expectedOwnership: .init(profile: guest), validating: { _ in
+                throw CocoaError(.fileWriteNoPermission)
+            })
+            check(false, "A failed atomic validator cannot delete a shared legacy guest")
+        } catch { check(true, "Shared guest deletion preserves the atomic validator") }
+        check(try Data(contentsOf: manifest(guest, interrupted.id)) == interruptedBefore,
+            "Failed guest deletion preserves the original unowned manifest bytes")
+        let expectedInterruptedTitle = interrupted.title
+        try await store.delete(id: interrupted.id, expectedOwnership: .init(profile: guest), validating: { session in
+            guard session.title == expectedInterruptedTitle else { throw CocoaError(.fileWriteNoPermission) }
+        })
+        try await store.delete(id: interrupted.id, expectedOwnership: .init(profile: guest))
+        check(try await guestStore.load(id: interrupted.id) == nil,
+            "Pinned shared deletion supports legacy ownerless source bytes and is idempotent")
+        var replacementB = ownedB; replacementB.id = interrupted.id; replacementB.title = "New private B sibling"
+        try await bStore.create(replacementB)
+        do { try await store.delete(id: interrupted.id, expectedOwnership: .init(profile: guest)); check(false, "A repeated guest delete cannot fall through to a new account sibling") }
+        catch { check(true, "Repeated guest deletion rejects a colliding account replacement") }
+        check(try await bStore.loadTranscript(id: replacementB.id)?.title == replacementB.title,
+            "The account replacement survives repeated pinned guest deletion")
+
+        // A current-root directory is authoritative even if its manifest cannot be used.
+        let shadowDirectory = b.directory("Meetings").appendingPathComponent(explicit.id.uuidString)
+        try manager.createDirectory(at: shadowDirectory, withIntermediateDirectories: true)
+        let shadowManifest = shadowDirectory.appendingPathComponent("session.json")
+        try Data("invalid current-profile manifest".utf8).write(to: shadowManifest)
+        do { _ = try await store.loadTranscript(id: explicit.id); check(false, "A corrupt current record must not fall through to guest") }
+        catch { check(true, "A corrupt current UUID fails closed instead of selecting a guest sibling") }
+        check(!(try await store.loadHistory()).contains { $0.id == explicit.id },
+            "The merged catalog suppresses a guest UUID shadowed by an unreadable current record")
+        var foreignShadow = ownedA; foreignShadow.id = explicit.id
+        try await bStore.save(foreignShadow)
+        check(try await store.load(id: explicit.id) == nil,
+            "A foreign-owned current-root record cannot expose its guest sibling through fallback")
+        check(!(try await store.loadHistory()).contains { $0.id == explicit.id },
+            "Current-root ownership failure does not create duplicate or substituted guest rows")
+        var forgedGuest = explicit; forgedGuest.title = "Rejected shadowed guest write"
+        do { try await store.save(forgedGuest); check(false, "An explicit guest snapshot cannot bypass current-root collision precedence") }
+        catch { check(true, "Guest mutation rejects a foreign-owned colliding current-root record") }
+        try await store.delete(id: explicit.id)
+        check(try Data(contentsOf: manifest(guest, explicit.id)) == explicitBefore,
+            "Collision rejection and no-op deletion preserve the shared guest original")
+
+        try await store.delete(id: legacy.id)
+        await store.finishProfileTransition(); PrivateProfileStorage.select(a)
+        check(try await store.loadTranscript(id: legacy.id) == nil,
+            "Deleting a unique shared guest from B is reflected when A reloads")
+        await store.finishProfileTransition(); PrivateProfileStorage.select(guest)
+        check(Set(try await store.loadHistory().map(\.id)) == [explicit.id],
+            "Guest mode sees its surviving guest record and no account or workspace records")
+        check(try Data(contentsOf: manifest(a, ownedA.id)) == privateABefore,
+            "Shared guest edits and deletions never change private A data")
+    }
+
+    private static func checkSharedGuestCipherGeneration(root: URL, check: (Bool, String) -> Void) async throws {
+        let original = PrivateProfileStorage.current
+        defer { PrivateProfileStorage.select(original) }
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root)
+        func account(_ subject: String) throws -> PrivateProfileSnapshot {
+            try PrivateProfileStorage.proposed(context: .init(identity: .init(issuer: "https://identity.invalid/cipher",
+                subject: subject, internalUserID: subject), organizationID: "organization",
+                workspaceID: "workspace", generation: UUID()), generation: UUID(), legacyRootDirectory: root)
+        }
+        let a = try account("A"), b = try account("B")
+        let cipher = try MeetingRecordingCipher(profileID: guest.id, key: Data(repeating: 0x43, count: 32))
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil)
+        var source = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic protected guest",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic")), timebase: timebase)
+        source.audioStorageMode = .memoryOnly; source.requiresEncryptedPersistence = true
+        source.profileOwnership = .init(profile: guest)
+        let writer = MeetingSessionStore(rootDirectory: guest.directory("Meetings"), encryptionCipher: cipher)
+        try await writer.create(source)
+        let manifest = guest.directory("Meetings").appendingPathComponent(source.id.uuidString).appendingPathComponent("session.json")
+        let bytes = try Data(contentsOf: manifest)
+        PrivateProfileStorage.select(a)
+        let noKey = PrivateProfileMeetingStore()
+        do { _ = try await noKey.loadTranscript(id: source.id); check(false, "Missing guest key cannot become plaintext or successful absent history") }
+        catch { check(true, "Missing guest-key shared reads fail without inventing a replacement") }
+        let wrong = try MeetingRecordingCipher(profileID: b.id, key: Data(repeating: 0x43, count: 32))
+        let wrongOwner = PrivateProfileMeetingStore(sharedGuestCipherProvider: { wrong })
+        do { _ = try await wrongOwner.loadTranscript(id: source.id); check(false, "Another profile key cannot open guest data") }
+        catch { check(true, "Shared guest key preflight validates the returned profile ownership") }
+        let gate = SharedGuestCipherGate(cipher: cipher)
+        let store = PrivateProfileMeetingStore(sharedGuestCipherProvider: { await gate.load() })
+        let loading = Task { try await store.loadTranscript(id: source.id) }
+        var started = false
+        for _ in 0..<10_000 {
+            if await gate.isWaiting { started = true; break }
+            await Task.yield()
+        }
+        if !started {
+            await gate.release(); _ = await loading.result
+            check(false, "Shared guest key preflight must reach the bounded explicit test gate")
+            return
+        }
+        PrivateProfileStorage.select(b)
+        await gate.release()
+        do { _ = try await loading.value; check(false, "A late shared guest key cannot publish into a new profile generation") }
+        catch { check(true, "Shared key completion revalidates the original reader generation") }
+        await store.finishProfileTransition()
+        let restored = try await store.loadTranscript(id: source.id)
+        check(restored == source && restored?.isLocalContentConcealed == true,
+            "A fresh account read restores the original guest cipher while retaining its immutable concealment policy")
+        check(try Data(contentsOf: manifest) == bytes,
+            "Missing, wrong and late key attempts preserve the original guest ciphertext")
+    }
+}
+
+private actor SharedGuestCipherGate {
+    let cipher: MeetingRecordingCipher
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    private(set) var isWaiting = false
+    init(cipher: MeetingRecordingCipher) { self.cipher = cipher }
+    func load() async -> MeetingRecordingCipher? {
+        if !released {
+            await withCheckedContinuation { continuation = $0; isWaiting = true }
+            isWaiting = false
+        }
+        return cipher
+    }
+    func release() { released = true; continuation?.resume(); continuation = nil }
 }
