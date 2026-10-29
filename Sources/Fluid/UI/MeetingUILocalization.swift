@@ -9,7 +9,8 @@ nonisolated enum MeetingUILocalization {
             ("Live captions could not load: ", "Live captions could not load: %@"),
         ]
         for (prefix, format) in prefixes where reason.hasPrefix(prefix) {
-            return PichiLocalization.format(format, String(reason.dropFirst(prefix.count)))
+            // The reason after the prefix is often a model's own message with a catalog translation.
+            return PichiLocalization.format(format, PichiLocalization.text(String(reason.dropFirst(prefix.count))))
         }
         return PichiLocalization.text(reason)
     }

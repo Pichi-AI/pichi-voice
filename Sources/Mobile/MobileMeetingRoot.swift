@@ -262,7 +262,8 @@ struct MobileMeetingRoot: View {
                 route.wrappedValue = showsAccount ? Date().timeIntervalSince1970 : 0
             }
             if accountRouteRecordedAt > 0 {
-                if Date().timeIntervalSince1970 - accountRouteRecordedAt < 30 { destination = .settings; settingsPath = [.account] }
+                // A slow device can spend well over half a minute on the switch and its model changes.
+                if Date().timeIntervalSince1970 - accountRouteRecordedAt < 120 { destination = .settings; settingsPath = [.account] }
                 accountRouteRecordedAt = 0
             }
         }
@@ -291,6 +292,13 @@ struct MobileMeetingRoot: View {
                privateProfile.isPrivateDataVisible {
                 destination = .meetings
                 historyPath = [id]
+            }
+            // A start that fails over a pending recovery offer restores that offer right after its own
+            // failure; the recoverable meeting replaces the empty attempt that just opened.
+            if case .failed(let failedID?, _) = previous, historyPath == [failedID],
+               let offer = coordinator.activeSession, offer.id != failedID,
+               offer.state == .interrupted || offer.state == .failed {
+                historyPath = [offer.id]
             }
             Task { await refreshHistory() }
         }

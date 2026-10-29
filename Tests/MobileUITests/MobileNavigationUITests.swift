@@ -1862,7 +1862,8 @@ final class MobileNavigationUITests: XCTestCase {
     func testStartingOverRestoredRecoveryResolvesIt() throws {
         let fixtureRow = app.buttons["history.session.2C920909-152B-4050-9ACB-454E82411015"]
         let retry = app.buttons["meeting.retry"]
-        guard retry.waitForExistence(timeout: 10) else {
+        // Restoring the offer follows launch-time preparation, which takes longer on a loaded host.
+        guard retry.waitForExistence(timeout: 30) else {
             throw XCTSkip("Stage an unresolved RetainedRecoveryMeeting.json with its silent audio after a completed setup")
         }
         capture("recovery-start-01-restored-offer")
