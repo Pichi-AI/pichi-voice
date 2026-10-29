@@ -458,8 +458,6 @@ struct PichiVoiceMobileApp: App {
     @ObservedObject private var kiosk = MobileKioskAccess.shared
     @Environment(\.scenePhase) private var scenePhase
 
-    init() { FirstMeetingTip.configure() }
-
     #if DEBUG && targetEnvironment(simulator)
     /// Hosted fixtures own their service composition and the shared profile scope.
     /// Keep the hosted app inert so its UI cannot restore another account concurrently.

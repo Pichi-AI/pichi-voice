@@ -1,10 +1,15 @@
 import Combine
 import SwiftUI
 
-/// The two platform Settings screens share this transaction. Only the microphone
+/// The platform Settings screens and mobile setup share this transaction. Only the microphone
 /// identity and existing application audio arbiter are supplied by their hosts.
 struct MeetingOwnerVoiceSettingsContent: View {
+    /// Settings shows the status, explanation and actions together. Setup explains the step in its
+    /// own title and keeps the actions in its fixed footer, so only the text and progress stay here.
+    enum Layout { case settings, setup }
+
     let microphone: MeetingMicrophoneIdentity?
+    let layout: Layout
     @Environment(\.theme) private var theme
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model: MeetingOwnerVoiceEnrollmentModel
@@ -13,27 +18,32 @@ struct MeetingOwnerVoiceSettingsContent: View {
         self.init(model: MeetingOwnerVoiceEnrollmentModel(audioArbiter: audioArbiter), microphone: microphone)
     }
 
-    /// A restricted host observes the same transaction to keep recording and dismissal
+    /// A restricted or setup host observes the same transaction to keep recording and dismissal
     /// unavailable until microphone cancellation and resource handback have joined.
-    init(model: MeetingOwnerVoiceEnrollmentModel, microphone: MeetingMicrophoneIdentity?) {
+    init(model: MeetingOwnerVoiceEnrollmentModel, microphone: MeetingMicrophoneIdentity?, layout: Layout = .settings) {
         self.microphone = microphone
+        self.layout = layout
         self._model = StateObject(wrappedValue: model)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-            Label(PichiLocalization.text(self.model.hasProfile ? "Your voice is saved" : "Your voice is not set up"),
-                  systemImage: self.model.hasProfile ? "person.crop.circle.badge.checkmark" : "person.wave.2")
-                .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(self.model.hasProfile ? self.theme.palette.success : self.theme.palette.primaryText)
-                .accessibilityIdentifier("ownerVoice.status")
-            Text(PichiLocalization.text("Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."))
-                .font(self.theme.typography.bodySmall)
-                .foregroundStyle(self.theme.palette.secondaryText)
-            if self.model.phase == .recording || self.model.phase == .ready || !self.model.hasProfile {
-                Text(PichiLocalization.text("Read aloud at a natural pace for 15 to 20 seconds. Audio stays in memory and is discarded after checking. Only Save stores the voice profile."))
-                    .font(self.theme.typography.caption)
+            if self.layout == .settings {
+                Label(PichiLocalization.text(self.model.hasProfile ? "Your voice is saved" : "Your voice is not set up"),
+                      systemImage: self.model.hasProfile ? "person.crop.circle.badge.checkmark" : "person.wave.2")
+                    .font(self.theme.typography.bodyStrong)
+                    .foregroundStyle(self.model.hasProfile ? self.theme.palette.success : self.theme.palette.primaryText)
+                    .accessibilityIdentifier("ownerVoice.status")
+                Text(PichiLocalization.text("Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."))
+                    .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
+            }
+            if self.layout == .setup || self.model.phase == .recording || self.model.phase == .ready || !self.model.hasProfile {
+                if self.model.phase == .idle && !self.model.hasProfile {
+                    Text(PichiLocalization.text("Read aloud at a natural pace for 15 to 20 seconds. The audio stays in memory; after checking, only your voice profile is saved on this device."))
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                }
                 Text(PichiLocalization.text("Today I am setting up my voice for meeting transcripts. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."))
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.theme.palette.primaryText)
@@ -60,19 +70,25 @@ struct MeetingOwnerVoiceSettingsContent: View {
             } else if self.model.phase == .ready {
                 Label(PichiLocalization.text("Voice sample is ready. Save to use it in future meetings."), systemImage: "checkmark.circle")
                     .font(self.theme.typography.bodySmall)
+            } else if self.layout == .setup && self.model.hasProfile {
+                Label(PichiLocalization.text("Your voice is saved"), systemImage: "checkmark.circle.fill")
+                    .font(self.theme.typography.bodyStrong).foregroundStyle(self.theme.palette.success)
+                    .accessibilityIdentifier("ownerVoice.status")
             }
             if let error = self.model.error {
                 Text(error).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.warning)
                     .accessibilityIdentifier("ownerVoice.error")
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: self.theme.metrics.spacing.md) { self.actions }
-                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) { self.actions }
+            if self.layout == .settings {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: self.theme.metrics.spacing.md) { self.actions }
+                    VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) { self.actions }
+                }
+                .buttonStyle(.bordered)
+                #if os(iOS)
+                .controlSize(.large)
+                #endif
             }
-            .buttonStyle(.bordered)
-            #if os(iOS)
-            .controlSize(.large)
-            #endif
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.ownerVoice")
@@ -154,6 +170,9 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
     private var draft: MeetingOwnerVoiceProfileDraft?
     private var operation: Task<Void, Never>?
     private var stopRequested = false
+    /// Finishing a recording is the decision to keep it, so a checked sample is saved at once.
+    /// A profile boundary that stops the capture clears this and never saves.
+    private var savesWhenChecked = true
     var isBusy: Bool { self.phase != .idle && self.phase != .ready }
 
     init(audioArbiter: any MeetingAudioActivityArbitrating, service: MeetingOwnerVoiceProfileService = .shared,
@@ -181,12 +200,13 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
               !PrivateProfileService.shared.hasRetainedCaptureStopHandler else { return }
         let captureID = UUID()
         guard PrivateProfileService.shared.installCaptureStopHandler(id: captureID, stop: {
+            self.savesWhenChecked = false
             self.finishRecording()
             await self.operation?.value
         }) else { return }
         self.captureStopID = captureID
         let preferredMicrophoneUID = SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID
-        self.error = nil; self.draft = nil; self.seconds = 0; self.stopRequested = false
+        self.error = nil; self.draft = nil; self.seconds = 0; self.stopRequested = false; self.savesWhenChecked = true
         self.phase = .preparing
         self.operation = Task {
             var lease: MeetingAudioActivityLease?
@@ -237,6 +257,12 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject, PrivateProfileTr
                     pcm = []
                     try Task.checkCancellation()
                 } catch { pcm = []; throw error }
+                if self.savesWhenChecked, self.isProfileVisible, let draft = self.draft {
+                    self.phase = .saving
+                    _ = try await self.service.save(draft)
+                    if self.isProfileVisible { self.hasProfile = true }
+                    self.draft = nil
+                }
             } catch {
                 if let capture { _ = try? await capture.stop(discard: true) }
                 self.draft = nil

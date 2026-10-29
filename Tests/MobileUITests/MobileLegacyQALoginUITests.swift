@@ -11,17 +11,7 @@ final class MobileLegacyQALoginUITests: XCTestCase {
         #else
         guard let path = ProcessInfo.processInfo.environment["PICHI_QA_LOGIN_PIPE"] else { throw XCTSkip("Private one-shot input required") }
         continueAfterFailure = false
-        var metadata = stat()
-        guard lstat(path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFIFO,
-              metadata.st_uid == geteuid(), metadata.st_mode & 0o077 == 0 else { throw NSError(domain: "QALogin", code: 1) }
-        let fd = open(path, O_RDONLY | O_NOFOLLOW)
-        guard fd >= 0 else { throw NSError(domain: "QALogin", code: 2) }
-        let input = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        var bytes = try input.read(upToCount: 4097) ?? Data(); try input.close()
-        guard !bytes.isEmpty, bytes.count <= 4096 else { throw NSError(domain: "QALogin", code: 3) }
-        struct Credential: Decodable { let email: String; var password: String }
-        var credential = try JSONDecoder().decode(Credential.self, from: bytes)
-        bytes.resetBytes(in: 0..<bytes.count); bytes.removeAll()
+        var credential = try QALoginCredential(oneShotPipe: path)
         defer { credential.password = "" }
         let app = XCUIApplication()
         app.launchArguments = ["-PichiInterfaceLanguage", "en", "-ThemePreference", "light", "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
@@ -92,5 +82,24 @@ final class MobileLegacyQALoginUITests: XCTestCase {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = "qa-login-" + step + "-" + revision; attachment.lifetime = .keepAlways; add(attachment)
         reviewNativeScreenshotIfRequested(step, namePrefix: "qa-login", revision: revision)
+    }
+}
+
+/// Reads the authorized QA account once from a private host FIFO owned by this user.
+struct QALoginCredential: Decodable {
+    let email: String
+    var password: String
+
+    init(oneShotPipe path: String) throws {
+        var metadata = stat()
+        guard lstat(path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFIFO,
+              metadata.st_uid == geteuid(), metadata.st_mode & 0o077 == 0 else { throw NSError(domain: "QALogin", code: 1) }
+        let fd = open(path, O_RDONLY | O_NOFOLLOW)
+        guard fd >= 0 else { throw NSError(domain: "QALogin", code: 2) }
+        let input = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var bytes = try input.read(upToCount: 4097) ?? Data(); try input.close()
+        guard !bytes.isEmpty, bytes.count <= 4096 else { throw NSError(domain: "QALogin", code: 3) }
+        defer { bytes.resetBytes(in: 0..<bytes.count); bytes.removeAll() }
+        self = try JSONDecoder().decode(Self.self, from: bytes)
     }
 }
