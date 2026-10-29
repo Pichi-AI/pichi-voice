@@ -98,4 +98,55 @@ final class MeetingDesktopTranscriptParagraphTests: XCTestCase {
         XCTAssertEqual(paragraph.segments, Array(source.transcriptSegments.prefix(4)),
                        "Searching or abandoning a selection is presentation-only")
     }
+
+    func testCoverageDetailsMergeOverlappingReasonsWithoutChangingEvidence() throws {
+        var source = self.session()
+        let microphone = try XCTUnwrap(source.transcriptSegments.first?.sourceTrackID), application = UUID()
+        source.audioTracks = [MeetingAudioTrack(id: microphone, kind: .microphone, sourceIdentifier: "fixture",
+            sourceDisplayName: "Fixture", format: nil, timebase: source.timebase, health: .waiting, chunks: [])]
+        source.transcriptIsComplete = false
+        source.transcriptCoverageGaps = [
+            .init(trackID: microphone, start: 0, end: 0.5, reason: .inadmissibleCaptureEra),
+            .init(trackID: microphone, start: 0.25, end: 1, reason: .processingSkipped),
+            .init(trackID: microphone, start: 1, end: 2, reason: .processingFailed),
+            .init(trackID: microphone, start: 5, end: 6, reason: .providerTruncated),
+            .init(trackID: application, start: 0, end: 0.5, reason: .missingOrUnreadableAudio),
+            .init(trackID: microphone, start: .nan, end: 8, reason: .processingFailed),
+            .init(trackID: microphone, start: 7, end: 7, reason: .processingFailed)
+        ]
+        let originalSegments = source.transcriptSegments
+        let values = MeetingTranscriptExporter.coverageDetails(in: source)
+        XCTAssertEqual(values.count, 2)
+        let mic = try XCTUnwrap(values.first(where: { $0.trackID == microphone }))
+        XCTAssertEqual(mic.kind, .microphone)
+        XCTAssertEqual(mic.omittedSeconds, 3, accuracy: 0.000001)
+        XCTAssertEqual(mic.intervalCount, 2)
+        XCTAssertEqual(values.first(where: { $0.trackID == application })?.omittedSeconds, 0.5)
+        XCTAssertEqual(source.transcriptSegments, originalSegments)
+        XCTAssertEqual(source.transcriptCoverageGaps?.count, 7)
+        XCTAssertEqual(source.transcriptIsComplete, false, "Presenting a count cannot erase a real warning")
+        let english = try XCTUnwrap(MeetingTranscriptExporter.coverageDescription(in: source))
+        XCTAssertTrue(english.contains("Microphone: 3.0 s. Audio intervals: 2."))
+        let russian = try XCTUnwrap(MeetingTranscriptExporter.coverageDescription(in: source, language: .russian))
+        XCTAssertTrue(russian.contains("Микрофон: 3,0 с. Участков: 2."))
+    }
+
+    func testAbsentOrInvalidCoverageDoesNotInventOmittedTime() {
+        var source = self.session()
+        XCTAssertTrue(MeetingTranscriptExporter.coverageDetails(in: source).isEmpty)
+        XCTAssertNil(MeetingTranscriptExporter.coverageDescription(in: source))
+        source.transcriptCoverageGaps = [.init(trackID: UUID(), start: -1, end: 1, reason: .processingFailed),
+            .init(trackID: UUID(), start: 0, end: .infinity, reason: .processingFailed)]
+        XCTAssertNil(MeetingTranscriptExporter.coverageDescription(in: source))
+    }
+
+    func testMarkdownUsesTheSameReadingParagraphsAsDesktopAndPlainText() async throws {
+        let source = self.session()
+        let rows = try await self.projection(source).rows(matching: .init(source), includeEchoes: false)
+        let markdown = MeetingTranscriptExporter.markdown(for: source)
+        XCTAssertEqual(markdown.components(separatedBy: "\n").filter { $0.hasPrefix("### ") }.count, rows.count)
+        XCTAssertTrue(markdown.contains("Привет, обсудим план\\."))
+        XCTAssertEqual(MeetingTranscriptExporter.text(for: source).components(separatedBy: "\n\n").count, rows.count)
+        XCTAssertEqual(rows.flatMap { $0.paragraph.segments }, source.transcriptSegments)
+    }
 }

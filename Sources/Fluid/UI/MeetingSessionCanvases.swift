@@ -542,7 +542,9 @@ struct MeetingResultCanvas: View {
                             isSubtle: true
                         )
                     } else if self.session.events.contains(where: { $0.kind == .transcriptCoverageIncomplete }) {
-                        MeetingAudioTranscriptNotice(text: "Some recorded audio was not transcribed.")
+                        MeetingAudioTranscriptNotice(text: "Some recorded audio was not transcribed.",
+                            visibleDetail: MeetingTranscriptExporter.coverageDescription(in: self.session,
+                                language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language))
                     }
                     if !activeSpeakers.isEmpty {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
@@ -1127,14 +1129,20 @@ private struct MeetingAudioTranscriptNotice: View {
     let text: String
     var detail: String? = nil
     var isSubtle = false
+    var visibleDetail: String? = nil
     @Environment(\.theme) private var theme
 
     var body: some View {
-        Label(PichiLocalization.text(self.text), systemImage: self.isSubtle ? "info.circle" : "exclamationmark.triangle")
-            .font(self.theme.typography.caption)
-            .foregroundStyle(self.isSubtle ? self.theme.palette.secondaryText : self.theme.palette.warning)
-            .fixedSize(horizontal: false, vertical: true)
-            .help(PichiLocalization.text(self.detail ?? self.text))
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+            Label(PichiLocalization.text(self.text), systemImage: self.isSubtle ? "info.circle" : "exclamationmark.triangle")
+                .foregroundStyle(self.isSubtle ? self.theme.palette.secondaryText : self.theme.palette.warning)
+            if let visibleDetail {
+                Text(visibleDetail).foregroundStyle(self.theme.palette.secondaryText)
+            }
+        }
+        .font(self.theme.typography.caption)
+        .fixedSize(horizontal: false, vertical: true)
+        .help(PichiLocalization.text(self.detail ?? self.text))
     }
 }
 

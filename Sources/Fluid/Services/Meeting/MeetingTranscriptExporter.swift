@@ -2,6 +2,53 @@ import Foundation
 
 /// Single source of truth for rendering a `MeetingSession` transcript as plain text, Markdown or JSON.
 nonisolated enum MeetingTranscriptExporter {
+    struct CoverageDetail: Equatable, Sendable {
+        let trackID: MeetingAudioTrackID
+        let kind: MeetingAudioTrackKind?
+        let omittedSeconds: TimeInterval
+        let intervalCount: Int
+    }
+
+    /// Recorded intervals excluded from transcription, without counting overlapping
+    /// reasons twice. Missing capture time remains separate evidence.
+    static func coverageDetails(in session: MeetingSession) -> [CoverageDetail] {
+        let grouped = Dictionary(grouping: (session.transcriptCoverageGaps ?? []).filter {
+            $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start
+        }, by: \.trackID)
+        let trackOrder = Dictionary(uniqueKeysWithValues: session.audioTracks.enumerated().map { ($0.element.id, $0.offset) })
+        return grouped.keys.sorted {
+            (trackOrder[$0] ?? Int.max, $0.uuidString) < (trackOrder[$1] ?? Int.max, $1.uuidString)
+        }.compactMap { id in
+            let ordered = (grouped[id] ?? []).sorted { ($0.start, $0.end) < ($1.start, $1.end) }
+            var intervals: [(start: TimeInterval, end: TimeInterval)] = []
+            for gap in ordered {
+                if let last = intervals.last, gap.start <= last.end {
+                    intervals[intervals.count - 1].end = max(last.end, gap.end)
+                } else { intervals.append((gap.start, gap.end)) }
+            }
+            let seconds = intervals.reduce(0) { $0 + $1.end - $1.start }
+            guard seconds.isFinite, seconds > 0 else { return nil }
+            return CoverageDetail(trackID: id, kind: session.audioTracks.first(where: { $0.id == id })?.kind,
+                                  omittedSeconds: seconds, intervalCount: intervals.count)
+        }
+    }
+
+    static func coverageDescription(in session: MeetingSession,
+                                    language: PichiInterfaceLanguage = .english,
+                                    bundle: Bundle = .main) -> String? {
+        let descriptions = self.coverageDetails(in: session).map { value in
+            let key: String
+            switch value.kind {
+            case .microphone: key = "Microphone"
+            case .applicationAudio: key = "Meeting audio"
+            case nil: key = "Audio"
+            }
+            return PichiLocalization.format("%@: %.1f s. Audio intervals: %lld.", language: language,
+                bundle: bundle, arguments: [PichiLocalization.text(key, language: language, bundle: bundle),
+                                             value.omittedSeconds, Int64(value.intervalCount)])
+        }
+        return descriptions.isEmpty ? nil : descriptions.joined(separator: "\n")
+    }
     /// The persisted alias stays user data. UI and text export resolve the owner marker
     /// with their chosen interface locale without rewriting a saved participant name.
     static func speakerDisplayName(_ speaker: MeetingSessionSpeaker,
@@ -39,10 +86,12 @@ nonisolated enum MeetingTranscriptExporter {
             .filter { includeEchoes || !$0.isEcho }
             .sorted { $0.start.seconds < $1.start.seconds }
         var blocks = ["# \(title)", "## Transcript"]
-        for segment in segments {
-            let speaker = Self.markdownHeading(Self.speakerLabel(for: segment, in: session, speakerNames: speakerNames))
-            blocks.append("### [\(Self.timestampText(segment.start.seconds))] \(speaker)")
-            blocks.append(Self.escapeMarkdown(segment.text))
+        for paragraph in self.displayParagraphs(for: segments, in: session) {
+            let speaker = Self.captionLabel(for: paragraph, in: session, speakerNames: speakerNames)
+                .map(Self.markdownHeading)
+            let heading = speaker.map { " \($0)" } ?? ""
+            blocks.append("### [\(Self.timestampText(paragraph.firstSegment.start.seconds))]\(heading)")
+            blocks.append(Self.escapeMarkdown(paragraph.text))
         }
         return blocks.joined(separator: "\n\n") + "\n"
     }

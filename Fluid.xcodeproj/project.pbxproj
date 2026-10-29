@@ -722,6 +722,7 @@
 		E5EC00000000000000000092 /* ClockRegressionHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5EC00000000000000000091 /* ClockRegressionHelper.swift */; };
 		A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */; };
 		2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */; };
+		CB4DF31086A594FDA70AA660 /* MeetingDesktopTranscriptParagraphTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94A47E95791EFA17606F4DF6 /* MeetingDesktopTranscriptParagraphTests.swift */; };
 		68CCF04E921400D65E654C28 /* MeetingLiveAudioFIFOTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF31484A9A350A6DBFE43176 /* MeetingLiveAudioFIFOTests.swift */; };
 		F68E1D074EF74EBAB9C61702 /* MeetingAudioComparisonProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F68E1D074EF74EBAB9C61701 /* MeetingAudioComparisonProbeTests.swift */; };
 		C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */; };
@@ -927,6 +928,7 @@
 		E5EC00000000000000000091 /* ClockRegressionHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClockRegressionHelper.swift; sourceTree = "<group>"; };
 		355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveTranscriptionTests.swift; sourceTree = "<group>"; };
 		7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveReplayTests.swift; sourceTree = "<group>"; };
+		94A47E95791EFA17606F4DF6 /* MeetingDesktopTranscriptParagraphTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingDesktopTranscriptParagraphTests.swift; sourceTree = "<group>"; };
 		AF31484A9A350A6DBFE43176 /* MeetingLiveAudioFIFOTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingLiveAudioFIFOTests.swift; sourceTree = "<group>"; };
 		F68E1D074EF74EBAB9C61701 /* MeetingAudioComparisonProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAudioComparisonProbeTests.swift; sourceTree = "<group>"; };
 		C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineRetirementDrainTests.swift; sourceTree = "<group>"; };
@@ -1239,6 +1241,7 @@
 				E5EC00000000000000000091 /* ClockRegressionHelper.swift */,
 				355C1248D5386D1F815EB7D7 /* MeetingLiveTranscriptionTests.swift */,
 				7BE63EB94BB280F38F5CB028 /* MeetingLiveReplayTests.swift */,
+				94A47E95791EFA17606F4DF6 /* MeetingDesktopTranscriptParagraphTests.swift */,
 				AF31484A9A350A6DBFE43176 /* MeetingLiveAudioFIFOTests.swift */,
 				F68E1D074EF74EBAB9C61701 /* MeetingAudioComparisonProbeTests.swift */,
 				C0DE63600000000000000001 /* AudioEngineRetirementDrainTests.swift */,
@@ -1684,6 +1687,7 @@
 				E5EC00000000000000000092 /* ClockRegressionHelper.swift in Sources */,
 				A6E2246FA3744C7B3E2DB91C /* MeetingLiveTranscriptionTests.swift in Sources */,
 				2952403C87FFDE41C1BC85D5 /* MeetingLiveReplayTests.swift in Sources */,
+				CB4DF31086A594FDA70AA660 /* MeetingDesktopTranscriptParagraphTests.swift in Sources */,
 				68CCF04E921400D65E654C28 /* MeetingLiveAudioFIFOTests.swift in Sources */,
 				F68E1D074EF74EBAB9C61702 /* MeetingAudioComparisonProbeTests.swift in Sources */,
 				C0DE63600000000000000002 /* AudioEngineRetirementDrainTests.swift in Sources */,
