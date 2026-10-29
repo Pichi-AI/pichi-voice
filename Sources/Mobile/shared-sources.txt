@@ -169,7 +169,6 @@ Sources/Fluid/Services/WhisperProvider.swift
 Sources/Fluid/Theme/AppTheme.swift
 Sources/Fluid/Theme/Components/FluidDropdown.swift
 Sources/Fluid/Theme/Components/FluidGlassControls.swift
-Sources/Fluid/Theme/Components/FluidDisclosureGroupStyle.swift
 Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift
 Sources/Fluid/Theme/Components/OnboardingComponents.swift
 Sources/Fluid/Theme/Components/OnboardingFittedContent.swift

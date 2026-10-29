@@ -768,8 +768,9 @@ struct MobileCloudSyncSettings: View {
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                         .accessibilityIdentifier("cloud.sync.details.toggle")
                 }
-                .disclosureGroupStyle(FluidDisclosureGroupStyle())
-                .font(theme.typography.bodySmall).accessibilityIdentifier("cloud.sync.details")
+                .font(theme.typography.bodySmall)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("cloud.sync.details")
             }
             .foregroundStyle(theme.palette.primaryText)
             .accessibilityElement(children: .contain)
@@ -798,6 +799,7 @@ struct MobileCloudSyncSettings: View {
         }
         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
         .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("cloud.sync.details.content")
     }
 

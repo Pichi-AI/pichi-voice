@@ -59935,23 +59935,6 @@
           }
         }
       }
-    },
-    "Show or hide details": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show or hide details"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Показать или скрыть подробности"
-          }
-        }
-      }
     }
   },
   "version": "1.0"
