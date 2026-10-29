@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 @testable import FluidVoice_Debug
 import XCTest
 
@@ -28,8 +30,7 @@ final class MeetingDesktopTranscriptParagraphTests: XCTestCase {
     }
 
     private func projection(_ session: MeetingSession) async throws -> MeetingResultTranscriptProjection {
-        let paragraphs = try await MeetingTranscriptExporter.readingParagraphs(for: session)
-        return MeetingResultTranscriptProjection(session: session, paragraphs: paragraphs)
+        try await MeetingResultTranscriptProjection.make(for: session)
     }
 
     func testDesktopRowsGroupWordsAndKeepGenuineOneWordReply() async throws {
@@ -148,5 +149,111 @@ final class MeetingDesktopTranscriptParagraphTests: XCTestCase {
         XCTAssertTrue(markdown.contains("Привет, обсудим план\\."))
         XCTAssertEqual(MeetingTranscriptExporter.text(for: source).components(separatedBy: "\n\n").count, rows.count)
         XCTAssertEqual(rows.flatMap { $0.paragraph.segments }, source.transcriptSegments)
+    }
+
+    func testEqualStartTimesUseTheSameStableOrderInEveryReadingSurface() async throws {
+        var source = self.session()
+        source.transcriptSegments = Array(source.transcriptSegments.prefix(2))
+        source.transcriptSegments[0].text = "Longer"
+        source.transcriptSegments[0].start = .init(value: 0, timescale: 1)
+        source.transcriptSegments[0].end = .init(value: 2, timescale: 1)
+        source.transcriptSegments[1].text = "Shorter"
+        source.transcriptSegments[1].speakerID = source.speakers[1].id
+        source.transcriptSegments[1].start = .init(value: 0, timescale: 1)
+        source.transcriptSegments[1].end = .init(value: 1, timescale: 1)
+        let rows = try await self.projection(source).rows(matching: .init(source), includeEchoes: false)
+        XCTAssertEqual(rows.map { $0.paragraph.text }, ["Shorter", "Longer"])
+        for text in [MeetingTranscriptExporter.text(for: source), MeetingTranscriptExporter.markdown(for: source)] {
+            XCTAssertLessThan(try XCTUnwrap(text.range(of: "Shorter")?.lowerBound),
+                              try XCTUnwrap(text.range(of: "Longer")?.lowerBound))
+        }
+    }
+
+    func testCancelledProjectionDoesNotPublishOrLeaveUnjoinedWork() async {
+        let source = self.session()
+        let task = Task { try await MeetingResultTranscriptProjection.make(for: source) }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Cancelled source must not publish a projection") }
+        catch { XCTAssertTrue(error is CancellationError) }
+    }
+
+    /// Explicit local fixture only. No source session, recording, model or preference is changed.
+    @MainActor
+    func testNativeReadingPreviewForExplicitLongTranscript() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let fixture = environment["PICHI_TRANSCRIPT_READING_FIXTURE"],
+              let output = environment["PICHI_TRANSCRIPT_READING_OUTPUT"] else {
+            throw XCTSkip("Opt-in native transcript preview requires an explicit local fixture and output directory")
+        }
+        XCTAssertTrue(fixture.hasPrefix("/") && output.hasPrefix("/"))
+        let directory = URL(fileURLWithPath: output, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let source = try JSONDecoder().decode(MeetingSession.self, from: Data(contentsOf: URL(fileURLWithPath: fixture)))
+        let start = ProcessInfo.processInfo.systemUptime
+        let projection = try await MeetingResultTranscriptProjection.make(for: source)
+        let elapsed = ProcessInfo.processInfo.systemUptime - start
+        let rows = projection.rows(matching: .init(source), includeEchoes: false)
+        XCTAssertFalse(rows.isEmpty)
+        XCTAssertLessThan(rows.count, source.transcriptSegments.count)
+        XCTAssertEqual(Set(rows.flatMap(\.memberIDs)), Set(MeetingTranscriptExporter.displayParagraphs(
+            for: source.transcriptSegments.filter { !$0.isEcho }.sorted { ($0.start, $0.end) < ($1.start, $1.end) },
+            in: source).flatMap { $0.segments.map(\.id) }))
+        let audit: [String: Any] = ["sessionID": source.id.uuidString, "sourceSegments": source.transcriptSegments.count,
+            "readingRows": rows.count, "memberCount": rows.reduce(0) { $0 + $1.memberIDs.count },
+            "fullProjectionSeconds": elapsed, "coverageDetails": MeetingTranscriptExporter.coverageDetails(in: source).map {
+                ["seconds": $0.omittedSeconds, "intervals": $0.intervalCount] as [String: Any]
+            }]
+        try JSONSerialization.data(withJSONObject: audit, options: [.prettyPrinted, .sortedKeys])
+            .write(to: directory.appendingPathComponent("projection.json"), options: .atomic)
+        try MeetingTranscriptExporter.text(for: source)
+            .write(to: directory.appendingPathComponent("readable-transcript.txt"), atomically: true, encoding: .utf8)
+        let hold = min(180, max(0, Int(environment["PICHI_TRANSCRIPT_READING_HOLD_SECONDS"] ?? "0") ?? 0))
+        let previousPolicy = NSApplication.shared.activationPolicy()
+        NSApplication.shared.setActivationPolicy(.regular)
+        defer { NSApplication.shared.setActivationPolicy(previousPolicy) }
+        for (label, scheme) in [("light", ColorScheme.light), ("dark", .dark)] {
+            let content = AdaptiveAppTheme(accent: SettingsStore.shared.accentColor) {
+                MeetingResultCanvas(session: source, isQuiescent: true, canUndo: false,
+                    onCopyTranscript: { _, _ in }, onExportTranscript: { _, _, _ in },
+                    onReassignSegments: { _, _ in }, onEditTranscriptSegment: { _, _, _ in nil },
+                    onNameUnknownSegment: { _, _ in }, onUndo: { false }, onRenameSession: { _ in },
+                    onAssignSpeakers: { _ in nil }, onClose: nil)
+                .environment(\.locale, Locale(identifier: "ru"))
+                .preferredColorScheme(scheme)
+            }.environment(\.colorScheme, scheme)
+            let host = NSHostingView(rootView: content)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 850),
+                styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.title = "Transcript paragraph audit - \(label)"
+            window.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
+            window.contentView = host
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            defer { window.contentView = nil; window.close() }
+            // The actual view owns its separate cancellable projection. Give its task/run loop
+            // a bounded opportunity to render before retaining this first native view frame.
+            for _ in 0..<20 {
+                try await Task.sleep(for: .milliseconds(100))
+                host.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+            }
+            let image = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: image)
+            try XCTUnwrap(image.representation(using: .png, properties: [:]))
+                .write(to: directory.appendingPathComponent("\(label)-native.png"), options: .atomic)
+            try JSONSerialization.data(withJSONObject: ["phase": label, "pid": ProcessInfo.processInfo.processIdentifier,
+                "window": window.title], options: [.prettyPrinted])
+                .write(to: directory.appendingPathComponent("ready.json"), options: .atomic)
+            if hold > 0 {
+                let deadline = ProcessInfo.processInfo.systemUptime + Double(hold)
+                while window.isVisible, ProcessInfo.processInfo.systemUptime < deadline {
+                    try await Task.sleep(for: .milliseconds(200))
+                }
+            }
+            window.contentView = nil
+            window.close()
+        }
     }
 }

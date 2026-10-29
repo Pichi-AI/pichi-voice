@@ -84,7 +84,9 @@ nonisolated enum MeetingTranscriptExporter {
         let title = Self.markdownHeading(session.title)
         let segments = session.transcriptSegments
             .filter { includeEchoes || !$0.isEcho }
-            .sorted { $0.start.seconds < $1.start.seconds }
+            .enumerated().sorted {
+                ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+            }.map(\.element)
         var blocks = ["# \(title)", "## Transcript"]
         for paragraph in self.displayParagraphs(for: segments, in: session) {
             let speaker = Self.captionLabel(for: paragraph, in: session, speakerNames: speakerNames)

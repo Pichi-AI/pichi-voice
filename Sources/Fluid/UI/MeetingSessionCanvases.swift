@@ -371,6 +371,24 @@ nonisolated struct MeetingResultTranscriptProjection: Equatable, Sendable {
     private let readingRows: [Row]
     private let rowsIncludingEchoes: [Row]
 
+    /// Row construction also walks the complete source. Keep it off the UI actor
+    /// with contextual grouping, and join cancellation before returning.
+    static func make(for session: MeetingSession) async throws -> Self {
+        try Task.checkCancellation()
+        let work = Task.detached(priority: .userInitiated) {
+            let paragraphs = try await MeetingTranscriptExporter.readingParagraphs(for: session)
+            try Task.checkCancellation()
+            let value = Self(session: session, paragraphs: paragraphs)
+            try Task.checkCancellation()
+            return value
+        }
+        return try await withTaskCancellationHandler {
+            let value = try await work.value
+            try Task.checkCancellation()
+            return value
+        } onCancel: { work.cancel() }
+    }
+
     init(session: MeetingSession, paragraphs: [MeetingTranscriptExporter.DisplayParagraph]) {
         self.source = MeetingTranscriptExporter.ReadingInput(session)
         let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
@@ -541,7 +559,8 @@ struct MeetingResultCanvas: View {
                             detail: warning,
                             isSubtle: true
                         )
-                    } else if self.session.events.contains(where: { $0.kind == .transcriptCoverageIncomplete }) {
+                    }
+                    if self.session.events.contains(where: { $0.kind == .transcriptCoverageIncomplete }) {
                         MeetingAudioTranscriptNotice(text: "Some recorded audio was not transcribed.",
                             visibleDetail: MeetingTranscriptExporter.coverageDescription(in: self.session,
                                 language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language))
@@ -626,9 +645,7 @@ struct MeetingResultCanvas: View {
         .task(id: readingInput) {
             self.readingProjection = nil
             do {
-                let paragraphs = try await MeetingTranscriptExporter.readingParagraphs(for: self.session)
-                try Task.checkCancellation()
-                let projection = MeetingResultTranscriptProjection(session: self.session, paragraphs: paragraphs)
+                let projection = try await MeetingResultTranscriptProjection.make(for: self.session)
                 try Task.checkCancellation()
                 self.readingProjection = projection
             } catch is CancellationError {
