@@ -91,12 +91,12 @@ final class MeetingLiveReplayTests: XCTestCase {
             let lock = NSLock()
             var latest: MeetingLiveTranscriptSnapshot = .empty
             var log: [(elapsed: TimeInterval, snapshot: MeetingLiveTranscriptSnapshot)] = []
-            let start = Date()
+            let start = ProcessInfo.processInfo.systemUptime
             func record(_ snapshot: MeetingLiveTranscriptSnapshot) {
                 self.lock.lock()
                 defer { self.lock.unlock() }
                 self.latest = snapshot
-                self.log.append((Date().timeIntervalSince(self.start), snapshot))
+                self.log.append((ProcessInfo.processInfo.systemUptime - self.start, snapshot))
             }
         }
         let box = SnapshotBox()
@@ -159,7 +159,7 @@ final class MeetingLiveReplayTests: XCTestCase {
                     sampleBufferFailures += 1
                     continue
                 }
-                if firstOfferElapsed == nil { firstOfferElapsed = Date().timeIntervalSince(harnessStart) }
+                if firstOfferElapsed == nil { firstOfferElapsed = ProcessInfo.processInfo.systemUptime - box.start }
                 coordinator.offer(kind: event.kind, sampleBuffer: sampleBuffer)
                 offeredCount += 1
                 let ptsSeconds = Double(event.ptsSamples) / Self.sampleRate
@@ -226,6 +226,7 @@ final class MeetingLiveReplayTests: XCTestCase {
                 let readyElapsed = try XCTUnwrap(firstReady)
                 let offerElapsed = try XCTUnwrap(firstOfferElapsed)
                 print("[cold-replay] first-offer-seconds=\(offerElapsed)")
+                print("[cold-replay] ready-after-first-offer-seconds=\(readyElapsed - offerElapsed)")
                 XCTAssertGreaterThan(readyElapsed, offerElapsed, "Input must begin while the cold provider is still preparing")
                 let openingIssues = Self.coldOpeningIssues(final, fixture: fixture)
                 XCTAssertTrue(openingIssues.isEmpty, openingIssues.joined(separator: "\n"))
