@@ -1039,6 +1039,9 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 continuation.resume()
             }
         }
+        // A retiring rebuild can enqueue a final guarded recovery fallback after the first
+        // drain. Join it before finalizing writers, once no rebuild can enqueue more work.
+        await self.routeProtectionTasks.drain()
         if let pending = self.stateLock.withLock({ self.pendingStream }) {
             let result = await Self.stopStream(pending)
             switch result {
