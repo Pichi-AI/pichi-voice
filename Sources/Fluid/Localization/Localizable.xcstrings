@@ -60072,19 +60072,19 @@
         }
       }
     },
-    "The published quantized GigaAM model uses the same file on GPU and CPU. Compact INT8 remains the automatic CPU profile on memory-constrained devices. Library percentages are relative product ratings, not measured accuracy.": {
+    "The published quantized GigaAM model uses the same file on every device. GPU is preferred; CPU is used when GPU execution is unavailable, fails or cannot fit the available memory budget. Library percentages are relative product ratings, not measured accuracy.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The published quantized GigaAM model uses the same file on GPU and CPU. Compact INT8 remains the automatic CPU profile on memory-constrained devices. Library percentages are relative product ratings, not measured accuracy."
+            "value": "The published quantized GigaAM model uses the same file on every device. GPU is preferred; CPU is used when GPU execution is unavailable, fails or cannot fit the available memory budget. Library percentages are relative product ratings, not measured accuracy."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Опубликованная квантизированная модель GigaAM использует один файл для GPU и CPU. На устройствах с ограниченной памятью автоматически сохраняется компактный CPU-профиль INT8. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+            "value": "Опубликованная квантизированная модель GigaAM использует один файл на всех устройствах. GPU используется по умолчанию; CPU используется, если GPU недоступен, произошла ошибка запуска или не хватает доступной памяти. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
           }
         }
       }
@@ -60106,36 +60106,36 @@
         }
       }
     },
-    "Not enough memory is available for this GigaAM export. Select the compact model.": {
+    "Not enough memory is available for this GigaAM export. Close other apps and try again.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not enough memory is available for this GigaAM export. Select the compact model."
+            "value": "Not enough memory is available for this GigaAM export. Close other apps and try again."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Для этого экспорта GigaAM недостаточно доступной памяти. Выберите компактную модель."
+            "value": "Для этого экспорта GigaAM недостаточно доступной памяти. Закройте другие приложения и повторите попытку."
           }
         }
       }
     },
-    "CPU fallback: CPU execution was selected for the available memory budget.": {
+    "CPU fallback: Not enough available memory to prepare GPU execution.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "CPU fallback: CPU execution was selected for the available memory budget."
+            "value": "CPU fallback: Not enough available memory to prepare GPU execution."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Резервный CPU: для доступного объёма памяти выбран CPU-профиль."
+            "value": "Резервный CPU: недостаточно доступной памяти для запуска на GPU."
           }
         }
       }

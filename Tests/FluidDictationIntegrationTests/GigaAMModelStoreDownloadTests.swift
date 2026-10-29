@@ -5,24 +5,26 @@ import PichiGigaAM
 import XCTest
 
 final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
-    func testPinnedAutomaticCompactProfileKeepsReasonWithoutMisclassifyingImports() throws {
+    func testPinnedUniversalCPUFallbackKeepsReasonWithoutMisclassifyingImports() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let compact = GigaAMModelCatalog.compactONNXModel
-        let canonical = PichiGigaAMModelStore.defaultDirectory.appendingPathComponent(compact.id, isDirectory: true)
+        let model = GigaAMModelCatalog.downloadableModel
+        let canonical = PichiGigaAMModelStore.defaultDirectory.appendingPathComponent(model.id, isDirectory: true)
         let store = PichiGigaAMModelStore(directory: canonical, preferences: fixture.preferences, environment: [:],
-                                         resourcePolicy: .init(hasGPU: true, physicalMemory: 4_166_696_960))
-        XCTAssertEqual(store.automaticCPUReason(forFingerprint: compact.fingerprint, directory: canonical), .memoryBudget)
-        XCTAssertNil(store.automaticCPUReason(forFingerprint: compact.fingerprint, directory: fixture.directory))
-        XCTAssertNil(store.automaticCPUReason(forFingerprint: GigaAMModelCatalog.downloadableModel.fingerprint, directory: canonical))
-        fixture.preferences.set(compact.id, forKey: "pichiGigaAMImportedModelID")
-        XCTAssertNil(store.automaticCPUReason(forFingerprint: compact.fingerprint, directory: canonical))
+                                         resourcePolicy: .init(hasGPU: false, physicalMemory: 2_000_000_000))
+        XCTAssertEqual(store.automaticCPUReason(forFingerprint: model.fingerprint, directory: canonical), .gpuUnavailable)
+        XCTAssertNil(store.automaticCPUReason(forFingerprint: model.fingerprint, directory: fixture.directory))
+        XCTAssertNil(store.automaticCPUReason(forFingerprint: GigaAMModelCatalog.compactONNXModel.fingerprint, directory: canonical))
+        fixture.preferences.set(model.id, forKey: "pichiGigaAMImportedModelID")
+        XCTAssertNil(store.automaticCPUReason(forFingerprint: model.fingerprint, directory: canonical))
     }
 
-    func testAutomaticArtifactIsSelectedBeforeAnyDownloadAndNeverFetchesFP16() async throws {
+    func testEveryAutomaticDownloadRequestsOnlyTheSameGGUFRegardlessOfRAMOrGPU() async throws {
         let profiles = [GigaAMResourcePolicy(hasGPU: true, physicalMemory: 16_000_000_000),
                         GigaAMResourcePolicy(hasGPU: true, physicalMemory: 4_166_696_960),
-                        GigaAMResourcePolicy(hasGPU: false, physicalMemory: 16_000_000_000)]
+                        GigaAMResourcePolicy(hasGPU: true, physicalMemory: 2_000_000_000),
+                        GigaAMResourcePolicy(hasGPU: true, physicalMemory: 2_000_000_000, availableProcessMemory: 0),
+                        GigaAMResourcePolicy(hasGPU: false, physicalMemory: 2_000_000_000)]
         for profile in profiles {
             let fixture = try Fixture()
             defer { fixture.remove() }
@@ -33,16 +35,41 @@ final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
                 throw URLError(.notConnectedToInternet)
             }
             let selection = try store.selectedArtifact()
-            XCTAssertEqual(selection.descriptor, profile.preferredDownload)
+            XCTAssertEqual(selection.descriptor, GigaAMModelCatalog.downloadableModel)
+            XCTAssertEqual(selection.descriptor.format, .gguf)
             XCTAssertEqual(selection.fallbackReason, profile.defaultCPUReason)
             do { _ = try await store.ensureInstalled(selection: selection); XCTFail("Fixture must not access the network") }
             catch let error as URLError { XCTAssertEqual(error.code, .notConnectedToInternet) }
             let urls = await requests.urls
             XCTAssertEqual(urls.count, 1)
-            XCTAssertTrue(urls[0].path.hasSuffix(profile.preferredDownload.artifacts[0].path))
-            XCTAssertFalse(urls[0].path.contains(".mlpackage"))
+            XCTAssertEqual(urls[0].absoluteString, "https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/59717de63d50dd9dd93b3249da6ad3f2f1c4ad6b/gigaam-v3-e2e-ctc-Q8_0.gguf")
             XCTAssertEqual(try store.selectedArtifact().descriptor, selection.descriptor)
             XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: fixture.directory.path).isEmpty)
+        }
+    }
+
+    func testOldAutomaticONNXRemainsAvailableOnlyToExplicitImportsAndPinnedJobs() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let old = GigaAMModelCatalog.compactONNXModel
+        let oldDirectory = fixture.directory.appendingPathComponent(old.id, isDirectory: true)
+        try FileManager.default.createDirectory(at: oldDirectory, withIntermediateDirectories: true)
+        let bytes = Data("synthetic legacy artifact presence; inference is not run".utf8)
+        for artifact in old.artifacts { try bytes.write(to: oldDirectory.appendingPathComponent(artifact.path)) }
+        let store = PichiGigaAMModelStore(directory: fixture.directory, preferences: fixture.preferences, environment: [:],
+                                         resourcePolicy: .init(hasGPU: true, physicalMemory: 2_000_000_000))
+        XCTAssertEqual(try store.selectedArtifact().descriptor, GigaAMModelCatalog.downloadableModel)
+        XCTAssertFalse(store.modelsExistOnDisk(), "Legacy ONNX must not satisfy GGUF readiness")
+        XCTAssertFalse(store.usesImportedModelSource)
+        XCTAssertEqual(try store.installedModel(matchingFingerprint: old.fingerprint).directory, oldDirectory)
+        let pinned = PichiGigaAMModelStore(directory: oldDirectory, preferences: fixture.preferences, environment: [:])
+        XCTAssertEqual(try pinned.installedModelFingerprint(), old.fingerprint)
+        fixture.preferences.set(old.id, forKey: "pichiGigaAMImportedModelID")
+        XCTAssertEqual(try store.installedModel().descriptor, old)
+        try await store.restoreDefaultModelSource()
+        XCTAssertEqual(try store.selectedArtifact().descriptor, GigaAMModelCatalog.downloadableModel)
+        for artifact in old.artifacts {
+            XCTAssertEqual(try Data(contentsOf: oldDirectory.appendingPathComponent(artifact.path)), bytes)
         }
     }
 

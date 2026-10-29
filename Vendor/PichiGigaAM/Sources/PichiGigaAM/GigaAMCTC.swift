@@ -199,7 +199,7 @@ public enum GigaAMError: LocalizedError {
         case .checksumMismatch(let file): return "GigaAM checksum verification failed for \(file)."
         case .notPrepared: return "GigaAM is not loaded."
         case .incompatibleModel: return "This export is not a supported GigaAM v3 CTC model."
-        case .memoryBudgetExceeded: return "Not enough memory is available for this GigaAM export. Select the compact model."
+        case .memoryBudgetExceeded: return "Not enough memory is available for this GigaAM export. Close other apps and try again."
         }
     }
 }

@@ -2,8 +2,8 @@ import Foundation
 import Metal
 import os
 
-/// Capacity admission is a conservative policy, not a claim that a file's
-/// byte count equals runtime RAM or that every GPU below this limit fails.
+/// One public artifact serves every device. Native preparation checks current
+/// process headroom separately from total device RAM and model file size.
 public struct GigaAMResourcePolicy: Sendable, Equatable {
     public let hasGPU: Bool
     public let physicalMemory: UInt64
@@ -29,25 +29,17 @@ public struct GigaAMResourcePolicy: Sendable, Equatable {
                     availableProcessMemory: headroom)
     }
 
-    /// Preserve the existing compact CPU route on nominal 4 GB tablets.
-    /// This stable hardware decision may be cached by the model store; volatile
-    /// process headroom is rechecked only at native preparation boundaries.
-    public var automaticGPUProfileAllowed: Bool {
-        self.hasGPU && self.physicalMemory >= 8_000_000_000
-    }
-
     public var gpuAdmissionReason: GigaAMExecutionStatus.FallbackReason? {
         guard self.hasGPU else { return .gpuUnavailable }
-        guard self.automaticGPUProfileAllowed else { return .memoryBudget }
         if let bytes = self.availableProcessMemory, bytes < 768 * 1_024 * 1_024 { return .memoryBudget }
         return nil
     }
 
     public var preferredDownload: GigaAMModelDescriptor {
-        self.automaticGPUProfileAllowed ? GigaAMModelCatalog.downloadableModel : GigaAMModelCatalog.compactONNXModel
+        GigaAMModelCatalog.downloadableModel
     }
 
     public var defaultCPUReason: GigaAMExecutionStatus.FallbackReason? {
-        self.automaticGPUProfileAllowed ? nil : (self.hasGPU ? .memoryBudget : .gpuUnavailable)
+        self.hasGPU ? nil : .gpuUnavailable
     }
 }

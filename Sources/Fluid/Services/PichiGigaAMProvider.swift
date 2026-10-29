@@ -9,10 +9,10 @@ extension GigaAMModelDescriptor {
             return SpeechModelLibraryMetadata(
                 size: String(format: "~%.1f MiB", Double(self.modelByteCount ?? 0) / 1_048_576),
                 processor: "GPU preferred; CPU fallback",
-                recommendedMemory: "8 GB+ RAM recommended",
+                recommendedMemory: "4 GB+ RAM recommended",
                 features: "Punctuation, capitalization and text normalization. Quantized Q8 model for GPU and CPU.",
                 performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
-                performanceExplanation: "The published quantized GigaAM model uses the same file on GPU and CPU. Compact INT8 remains the automatic CPU profile on memory-constrained devices. Library percentages are relative product ratings, not measured accuracy."
+                performanceExplanation: "The published quantized GigaAM model uses the same file on every device. GPU is preferred; CPU is used when GPU execution is unavailable, fails or cannot fit the available memory budget. Library percentages are relative product ratings, not measured accuracy."
             )
         }
         if case .coreML = self.format {
@@ -525,7 +525,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         case .explicitCPU: reason = "CPU was explicitly selected for diagnostics."
         case .unsupportedInputShape: reason = "CPU fallback: the GPU export does not support this input shape."
         case .incompatibleExport: reason = "CPU fallback: this imported export does not support GPU execution."
-        case .memoryBudget: reason = "CPU fallback: CPU execution was selected for the available memory budget."
+        case .memoryBudget: reason = "CPU fallback: Not enough available memory to prepare GPU execution."
         case nil: reason = nil
         }
         let next = TranscriptionExecutionStatus(backend: backend, fallbackReason: reason)

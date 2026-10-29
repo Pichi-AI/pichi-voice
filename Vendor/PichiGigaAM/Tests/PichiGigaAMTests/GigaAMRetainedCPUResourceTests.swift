@@ -12,6 +12,39 @@ final class GigaAMRetainedCPUResourceTests: XCTestCase {
         func set(_ value: GigaAMResourcePolicy) { self.lock.withLock { self.value = value } }
     }
 
+    func testUniversalGGUFUsesGPUOnSmallDeviceProfileAndTheSameFileForCPUFallback() async throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_GIGAAM_Q8_MODEL_DIR"],
+              MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("Set a verified local Q8 GGUF path on a Metal host for the universal artifact check.")
+        }
+        let profiles: [(GigaAMResourcePolicy, GigaAMExecutionStatus.Backend, GigaAMExecutionStatus.FallbackReason?)] = [
+            (.init(hasGPU: true, physicalMemory: 2_000_000_000, availableProcessMemory: 2_000_000_000), .gpu, nil),
+            (.init(hasGPU: false, physicalMemory: 2_000_000_000, availableProcessMemory: 2_000_000_000), .cpu, .gpuUnavailable),
+            (.init(hasGPU: true, physicalMemory: 2_000_000_000, availableProcessMemory: 600 * 1_024 * 1_024), .cpu, .memoryBudget),
+        ]
+        for (profile, backend, reason) in profiles {
+            let resources = Resources()
+            resources.set(profile)
+            let runtime = try GigaAMRuntime(resources: { resources.read() })
+            do {
+                try await runtime.load(descriptor: profile.preferredDownload, directory: URL(fileURLWithPath: path))
+                let status = await runtime.executionStatus
+                XCTAssertEqual(status?.backend, backend)
+                XCTAssertEqual(status?.fallbackReason, reason)
+                let silence = try await runtime.transcribe([Float](repeating: 0, count: 16_000))
+                XCTAssertTrue(silence.text.isEmpty)
+                resources.set(.init(hasGPU: true, physicalMemory: 2_000_000_000, availableProcessMemory: 2_000_000_000))
+                try await runtime.beginAttempt()
+                let recovered = await runtime.executionStatus
+                XCTAssertEqual(recovered?.backend, .gpu)
+                XCTAssertNil(recovered?.fallbackReason)
+                await runtime.unload()
+                let ready = await runtime.isReady
+                XCTAssertFalse(ready)
+            } catch { await runtime.unload(); throw error }
+        }
+    }
+
     func testLowHeadroomDefersGPURetryWithoutDiscardingPreparedCPU() async throws {
         guard let path = ProcessInfo.processInfo.environment["PICHI_GIGAAM_COREML_MEMORY_MODEL_DIR"],
               MTLCreateSystemDefaultDevice() != nil else {
