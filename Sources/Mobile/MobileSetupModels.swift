@@ -175,6 +175,8 @@ final class MobilePrivacyActivation: ObservableObject {
     private let prepare: (@escaping @Sendable (Double) -> Void) async throws -> Void
     private let canPrepare: () -> Bool
     private var operation: Task<Void, Never>?
+    private var isTransitioningPrivateProfile = false
+    private var preparationProfile: PrivateProfileSnapshot?
     private var generation = UUID()
     private var waiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     var isRequested: Bool { settings.meetingPIIRedactionRequested }
@@ -187,12 +189,38 @@ final class MobilePrivacyActivation: ObservableObject {
     }
 
     func restore() {
-        if settings.meetingPIIRedactionRequested { setEnabled(true) }
+        if let scoped = settings.defaults as? PrivateProfileDefaults,
+           !PrivateProfileStorage.isReadable(scoped.selectedProfile) { return }
+        let requested = settings.meetingPIIRedactionRequested
+        let profile = (settings.defaults as? PrivateProfileDefaults)?.selectedProfile
+        // Activation belongs to the selected profile, even if the model is cached.
+        // A previous profile's active phase is not proof of this profile's choice.
+        if isTransitioningPrivateProfile || preparationProfile != profile { state = .off }
+        isTransitioningPrivateProfile = false
+        setEnabled(requested)
+    }
+
+    func prepareForPrivateProfileTransition() async {
+        isTransitioningPrivateProfile = true
+        generation = UUID()
+        let retiredGeneration = generation
+        let previous = operation
+        previous?.cancel()
+        downloadProgress = nil
+        state = .off
+        finishWaiters(.failure(CancellationError()))
+        // Preserve the old profile's saved choice and join its preparation before
+        // selection changes. Late progress/completion cannot commit into a new scope.
+        await previous?.value
+        if generation == retiredGeneration { operation = nil; preparationProfile = nil }
     }
 
     func setEnabled(_ enabled: Bool) {
-        if enabled, state == .active { return }
-        if enabled, isRequested, state == .enabling, operation != nil { return }
+        guard !isTransitioningPrivateProfile else { return }
+        let profile = (settings.defaults as? PrivateProfileDefaults)?.selectedProfile
+        if enabled, preparationProfile == profile, isRequested,
+           settings.meetingPIIRedactionEnabled, state == .active { return }
+        if enabled, preparationProfile == profile, isRequested, state == .enabling, operation != nil { return }
         finishWaiters(.failure(CancellationError()))
         settings.meetingPIIRedactionRequested = enabled
         settings.meetingPIIRedactionEnabled = false
@@ -200,6 +228,7 @@ final class MobilePrivacyActivation: ObservableObject {
         previous?.cancel()
         generation = UUID()
         let selected = generation
+        preparationProfile = profile
         downloadProgress = nil
         state = enabled ? .enabling : .off
         let prepare = self.prepare
@@ -237,6 +266,7 @@ final class MobilePrivacyActivation: ObservableObject {
 
     func waitUntilReadyIfRequested() async throws {
         try Task.checkCancellation()
+        guard !isTransitioningPrivateProfile else { throw CancellationError() }
         guard isRequested else { return }
         if operation == nil, state != .active { setEnabled(true) }
         if state == .active { return }
