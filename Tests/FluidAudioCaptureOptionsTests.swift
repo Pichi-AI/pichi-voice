@@ -71,6 +71,7 @@ nonisolated struct PronunciationDictionaryProfile {
     var hasOriginalAudio = false
     var hasTemporalRecordings: Bool { enrollments.count >= 3 && enrollments.prefix(3).allSatisfy { $0.inspectionID != nil } }
     var enrollments = Array(repeating: PronunciationEnrollmentCapture(), count: 3)
+    var matchingEnrollments: [PronunciationEnrollmentCapture] { Array(enrollments.prefix(3)) }
 }
 nonisolated struct PronunciationEmbedding { let values: [Float]; let sourceFrameCount: Int }
 nonisolated enum PronunciationEmbeddingMatcher {
@@ -85,10 +86,14 @@ nonisolated enum PronunciationDictionaryStoreError: Error { case staleEvidence, 
         var active = true
         var profiles: [PronunciationDictionaryProfile] { active ? [.init(automaticMatchingEnabled: true)] : [] }
         func close(leaseID: UUID) { active = false }
+        func matchingEnrollments(for profile: PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] {
+            active ? profile.matchingEnrollments : []
+        }
         func inspection(for id: UUID) throws -> DictionaryAudioInspection { .init() }
         func originalAudioSamples(for capture: PronunciationEnrollmentCapture, entryID: UUID) throws -> [Float] { [1] }
     }
-    func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, includingSharedFamilies: Bool = false) throws -> CaptureRead { .init() }
+    func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>, includingSharedFamilies: Bool = false,
+        referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead { .init() }
     static func selectSharedProfiles(_ profiles: [PronunciationDictionaryProfile], modelKey: String, hiddenSize: Int?) -> [PronunciationDictionaryProfile] {
         profiles.filter { $0.modelKey == modelKey && (hiddenSize == nil || $0.hiddenSize == hiddenSize) }
     }
@@ -136,9 +141,26 @@ nonisolated final class GigaAMPreferences: @unchecked Sendable {
 }
 nonisolated struct GigaAMModelDescriptor: Sendable {
     let id: String
+    var fingerprint: String { "synthetic/" + id }
     func filesExist(in root: URL) -> Bool { root.lastPathComponent == id }
 }
 nonisolated enum GigaAMError: Error { case incompatibleModel }
+// Inert acoustic neighbor. The runner projects the actual provider admission
+// methods, while this probe never extracts features or opens a model.
+nonisolated enum GigaAMDictionaryAcoustics {
+    struct Snapshot {
+        let modelKey: String
+        let generation: String
+        let enabled: Bool
+        let entries: [SettingsStore.CustomDictionaryEntry]
+        let pronunciation: PronunciationDictionaryStore.CaptureRead?
+        let negatives: DictionaryNegativeExampleStore.CaptureRead?
+    }
+    static func modelKey(fingerprint: String) -> String { "synthetic-dictionary/" + fingerprint }
+    static func activeCaptures(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
+        Array(captures.prefix(3))
+    }
+}
 
 // ACTUAL_PROVIDER_CAPTURE_SOURCE
 
@@ -237,17 +259,33 @@ actor TestGate {
         check(analyzer.selectedSpeechLocale().identifier == "ru-RU", "stale analyzer end cannot clear locale")
         await analyzer.endAdmittedTranscription(leaseID: analyzerLease)
         check(analyzer.selectedSpeechLocale().identifier == "en-US", "analyzer future capture resolves its own locale")
+        SettingsStore.shared.customDictionaryEntries = [.init(id: UUID(), replacement: "GigaAM dictionary A")]
+        DictionaryMatcherExperiment.sharedFeaturesEnabled = true
+        DictionaryMatcherExperiment.generation = "GigaAM-A"
+        DictionaryMatcherExperiment.compareNegatives = true
         let gigaamStore = PichiGigaAMModelStore(), gigaamLease = UUID()
         let gigaam = PichiGigaAMProvider(store: gigaamStore)
         try gigaam.beginAdmittedTranscription(leaseID: gigaamLease)
         check(gigaam.admittedSource?.selection?.descriptor.id == "private", "GigaAM admits original imported artifact")
+        let gigaamDictionary = gigaam.dictionarySnapshot!
+        check(gigaamDictionary.enabled && gigaamDictionary.entries.map(\.replacement) == ["GigaAM dictionary A"], "GigaAM admits the selected dictionary with its artifact")
+        check(gigaamDictionary.pronunciation?.profiles.count == 1 && gigaamDictionary.negatives?.frames(entryID: UUID(), profileKey: "A", modelKey: "A").count == 1, "GigaAM admits pronunciation and negative read capabilities")
+        check(gigaam.executionAttemptPending, "GigaAM admission schedules the next execution attempt")
         gigaamStore.preferences.importedID = nil
+        SettingsStore.shared.customDictionaryEntries = []
+        DictionaryMatcherExperiment.sharedFeaturesEnabled = false
+        DictionaryMatcherExperiment.generation = "GigaAM-B"
+        DictionaryMatcherExperiment.compareNegatives = false
         check(try gigaamStore.selectedArtifact().descriptor.id == "public", "ordinary GigaAM source follows current defaults")
         check(gigaam.admittedSource?.selection?.descriptor.id == "private", "cold GigaAM keeps admitted imported artifact after conceal")
+        check(gigaam.dictionarySnapshot?.generation == "GigaAM-A" && gigaam.dictionarySnapshot?.entries.map(\.replacement) == ["GigaAM dictionary A"], "later preferences cannot replace the admitted GigaAM dictionary")
         gigaam.endAdmittedTranscription(leaseID: UUID())
         check(gigaam.admittedSource?.selection?.descriptor.id == "private", "stale GigaAM end cannot change artifact")
+        check(gigaamDictionary.pronunciation?.profiles.count == 1, "stale GigaAM end cannot close dictionary capabilities")
         gigaam.endAdmittedTranscription(leaseID: gigaamLease)
         check(gigaam.admittedSource == nil, "matching GigaAM end releases source")
+        check(gigaam.dictionarySnapshot == nil && !gigaam.executionAttemptPending, "matching GigaAM end releases dictionary and attempt state")
+        check(gigaamDictionary.pronunciation?.profiles.isEmpty == true && gigaamDictionary.negatives?.frames(entryID: UUID(), profileKey: "A", modelKey: "A").isEmpty == true, "matching GigaAM end closes both private evidence capabilities")
         print("FluidAudio capture configuration: \(checks) assertions passed")
     }
 }
