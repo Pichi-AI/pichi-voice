@@ -326,6 +326,57 @@ final class MobileSetupTransactionTests: XCTestCase {
         XCTAssertEqual(activation.state, .active)
     }
 
+    func testRepeatedPrivacyRestoreKeepsSameProfilePreparationAndItsWaiter() async throws {
+        let fixture = try profileScopedSettings()
+        var loader: CheckedContinuation<Void, Never>?
+        var calls = 0
+        var canPrepare = true
+        let activation = MobilePrivacyActivation(settings: fixture.settings, canPrepare: { canPrepare }) { _ in
+            calls += 1
+            if calls == 1 { await withCheckedContinuation { loader = $0 } }
+        }
+        activation.setEnabled(true)
+        for _ in 0..<1_000 where loader == nil { await Task.yield() }
+        let preparation = try XCTUnwrap(loader)
+        let waiter = Task { () -> Bool in
+            do { try await activation.waitUntilReadyIfRequested(); return true }
+            catch { return false }
+        }
+        for _ in 0..<10 { await Task.yield() }
+        activation.restore()
+        activation.restore()
+        XCTAssertEqual(activation.state, .enabling)
+        XCTAssertEqual(calls, 1)
+        preparation.resume()
+        let waiterSucceeded = await waiter.value
+        XCTAssertTrue(waiterSucceeded, "A late startup restore must not cancel the first recording's waiter")
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(activation.state, .active)
+
+        canPrepare = false // Recording now owns the model resources.
+        activation.restore()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(activation.state, .active)
+        XCTAssertTrue(fixture.settings.meetingPIIRedactionEnabled)
+        XCTAssertEqual(calls, 1, "Same-profile restore must not prepare again during capture")
+    }
+
+    func testPrivacyEnableRepairsActivePhaseWithAnOffSavedRequest() async throws {
+        let settings = try settings()
+        var calls = 0
+        let activation = MobilePrivacyActivation(settings: settings) { _ in calls += 1 }
+        activation.setEnabled(true)
+        try await activation.waitUntilReadyIfRequested()
+        settings.meetingPIIRedactionRequested = false
+        settings.meetingPIIRedactionEnabled = false
+        activation.setEnabled(true)
+        try await activation.waitUntilReadyIfRequested()
+        XCTAssertTrue(activation.isRequested)
+        XCTAssertTrue(settings.meetingPIIRedactionEnabled)
+        XCTAssertEqual(activation.state, .active)
+        XCTAssertEqual(calls, 2)
+    }
+
     private func captureNativePrivacyControls(_ activation: MobilePrivacyActivation, name: String) async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first(where: \.isKeyWindow)
