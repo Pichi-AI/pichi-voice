@@ -824,36 +824,9 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             }
             throw error
         }
-        let filter: SCContentFilter
-        let scope: MeetingCaptureScope
-        switch audioSource {
-        case .systemAudio:
-            guard let display = content.displays.first else { throw MeetingCaptureError.noCaptureDisplay }
-            filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
-            scope = .systemAudio
-        case let .application(application):
-            let byProcessID = application.processID.flatMap { processID in
-                content.applications.first(where: { $0.processID == processID && $0.bundleIdentifier == application.bundleIdentifier })
-            }
-            // The saved PID goes stale when the app relaunches; the bundle match keeps rebuilds working.
-            guard let runningApplication = byProcessID ?? content.applications.first(where: {
-                $0.bundleIdentifier == application.bundleIdentifier
-            }) else {
-                throw MeetingCaptureError.applicationUnavailable(application.displayName)
-            }
-
-            if let window = Self.selectWindow(for: runningApplication, in: content, preferredWindowID: application.windowID) {
-                filter = SCContentFilter(desktopIndependentWindow: window)
-                scope = .window
-            } else {
-                let display = application.displayID.flatMap { displayID in
-                    content.displays.first(where: { $0.displayID == displayID })
-                } ?? content.displays.first
-                guard let display else { throw MeetingCaptureError.noCaptureDisplay }
-                filter = SCContentFilter(display: display, including: [runningApplication], exceptingWindows: [])
-                scope = .display
-            }
-        }
+        let (filter, scope) = try MeetingScreenCaptureAudioSettings.contentFilter(
+            for: audioSource, applications: content.applications, displays: content.displays
+        )
 
         let configuration = SCStreamConfiguration()
         configuration.width = 2
@@ -866,30 +839,6 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         let delegateProxy = ScreenCaptureRuntimeDelegateProxy()
         let stream = SCStream(filter: filter, configuration: configuration, delegate: delegateProxy)
         return BuiltStream(stream: stream, delegateProxy: delegateProxy, scope: scope)
-    }
-
-    /// Maps the app's own windows to selection candidates and picks one via `MeetingWindowSelector`.
-    /// Deliberately does not require `isOnScreen` (unreliable for other-Space/hidden windows).
-    /// Window titles are PII and must never be logged or persisted.
-    private static func selectWindow(
-        for runningApplication: SCRunningApplication,
-        in content: SCShareableContent,
-        preferredWindowID: UInt32? = nil
-    ) -> SCWindow? {
-        let ownedWindows = content.windows.enumerated().filter { _, window in
-            window.owningApplication?.processID == runningApplication.processID
-        }
-        let candidates = ownedWindows.map { index, window in
-            MeetingWindowCandidate(
-                windowID: window.windowID,
-                title: window.title,
-                frame: window.frame,
-                layer: window.windowLayer,
-                zOrderIndex: index
-            )
-        }
-        guard let winner = MeetingWindowSelector.selectWindow(from: candidates, preferredWindowID: preferredWindowID) else { return nil }
-        return ownedWindows.first(where: { _, window in window.windowID == winner.windowID })?.element
     }
 
     private func attachOutputs(to stream: SCStream) throws {
@@ -3478,6 +3427,35 @@ nonisolated enum MeetingCapturePathDecider {
 }
 
 nonisolated enum MeetingScreenCaptureAudioSettings {
+    /// Selected-application audio follows the resolved process across its window transitions.
+    /// A display hosts the filter; it does not authorize audio from other applications.
+    static func contentFilter(
+        for source: MeetingApplicationAudioSource,
+        applications: [SCRunningApplication],
+        displays: [SCDisplay]
+    ) throws -> (filter: SCContentFilter, scope: MeetingCaptureScope) {
+        switch source {
+        case .systemAudio:
+            guard let display = displays.first else { throw MeetingCaptureError.noCaptureDisplay }
+            return (SCContentFilter(display: display, excludingApplications: [], exceptingWindows: []), .systemAudio)
+        case let .application(application):
+            let byProcessID = application.processID.flatMap { processID in
+                applications.first(where: { $0.processID == processID && $0.bundleIdentifier == application.bundleIdentifier })
+            }
+            // Rebuilds may find a new process after relaunch, but must retain the selected bundle.
+            guard let runningApplication = byProcessID ?? applications.first(where: {
+                $0.bundleIdentifier == application.bundleIdentifier
+            }) else {
+                throw MeetingCaptureError.applicationUnavailable(application.displayName)
+            }
+            let display = application.displayID.flatMap { displayID in
+                displays.first(where: { $0.displayID == displayID })
+            } ?? displays.first
+            guard let display else { throw MeetingCaptureError.noCaptureDisplay }
+            return (SCContentFilter(display: display, including: [runningApplication], exceptingWindows: []), .display)
+        }
+    }
+
     static func apply(
         to configuration: SCStreamConfiguration,
         microphone: MeetingMicrophoneIdentity,
