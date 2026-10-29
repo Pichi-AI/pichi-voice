@@ -12,7 +12,9 @@ extension GigaAMModelDescriptor {
                 recommendedMemory: "4 GB+ RAM recommended",
                 features: "Punctuation, capitalization and text normalization. Quantized Q8 model for GPU and CPU.",
                 performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
-                performanceExplanation: "The published quantized GigaAM model uses the same file on every device. GPU is preferred; CPU is used when GPU execution is unavailable, fails or cannot fit the available memory budget. Library percentages are relative product ratings, not measured accuracy."
+                performanceExplanation: "The published quantized GigaAM model uses the same file on every device. GPU is preferred; CPU is used when GPU execution is unavailable, fails or cannot fit the available memory budget. Library percentages are relative product ratings, not measured accuracy.",
+                cardDescription: "Compact Russian speech recognition with automatic punctuation and text normalization. Runs locally on Apple Silicon and Intel Macs.",
+                hardwareLabel: "Apple Silicon"
             )
         }
         if case .coreML = self.format {
@@ -22,7 +24,9 @@ extension GigaAMModelDescriptor {
                 recommendedMemory: "8 GB+ RAM recommended",
                 features: "Punctuation, capitalization and text normalization. Published Core ML model.",
                 performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
-                performanceExplanation: "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy."
+                performanceExplanation: "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy.",
+                cardDescription: "Russian speech recognition with automatic punctuation and text normalization. Runs locally using Core ML.",
+                hardwareLabel: "Apple Silicon"
             )
         }
         if let modelBytes = self.modelByteCount, let vocabularyBytes = self.vocabularyByteCount {
@@ -32,7 +36,9 @@ extension GigaAMModelDescriptor {
                 recommendedMemory: "4 GB+ RAM recommended",
                 features: "Punctuation, capitalization and text normalization. Compact INT8 model.",
                 performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
-                performanceExplanation: "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. This compact INT8 export has not been evaluated for WER or benchmarked for CPU speed."
+                performanceExplanation: "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. This compact INT8 export has not been evaluated for WER or benchmarked for CPU speed.",
+                cardDescription: "Compact Russian speech recognition with automatic punctuation and text normalization. Runs locally on Apple Silicon and Intel Macs.",
+                hardwareLabel: "Apple Silicon / Intel CPU"
             )
         }
         let formatted = self.vocabularyFile != nil
@@ -46,7 +52,11 @@ extension GigaAMModelDescriptor {
             performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
             performanceExplanation: self.id == "gigaam-v3-e2e-eou-v5"
                 ? "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
-                : "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
+                : "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets.",
+            cardDescription: formatted
+                ? "Compact Russian speech recognition with automatic punctuation and text normalization. Runs locally on Apple Silicon and Intel Macs."
+                : "Local Russian speech recognition on Apple Silicon and Intel CPUs.",
+            hardwareLabel: "Apple Silicon / Intel CPU"
         )
     }
 }

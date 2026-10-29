@@ -60260,6 +60260,40 @@
           }
         }
       }
+    },
+    "Compact Russian speech recognition with automatic punctuation and text normalization. Runs locally on Apple Silicon and Intel Macs.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact Russian speech recognition with automatic punctuation and text normalization. Runs locally on Apple Silicon and Intel Macs."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Компактная модель для русской речи с автоматической пунктуацией и нормализацией текста. Работает локально на Apple Silicon и Intel."
+          }
+        }
+      }
+    },
+    "Russian speech recognition with automatic punctuation and text normalization. Runs locally using Core ML.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Russian speech recognition with automatic punctuation and text normalization. Runs locally using Core ML."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание русской речи с автоматической пунктуацией и нормализацией текста. Работает локально через Core ML."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
