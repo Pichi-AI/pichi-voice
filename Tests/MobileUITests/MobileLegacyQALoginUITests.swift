@@ -41,10 +41,29 @@ final class MobileLegacyQALoginUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [transitioned], timeout: 45), .completed)
         openAccount(app)
         XCTAssertTrue(app.descendants(matching: .any)["account.displayName"].firstMatch.waitForExistence(timeout: 15))
-        XCTAssertFalse(app.buttons["account.signIn"].exists); capture("fresh-account")
+        XCTAssertFalse(app.buttons["account.signIn"].exists)
+        let workspace = app.buttons["account.workspace.selector"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 10), "Fresh sign-in selects a verified workspace without another tap")
+        let selectedWorkspace = workspace.value as? String
+        XCTAssertNotNil(selectedWorkspace)
+        XCTAssertFalse(selectedWorkspace?.isEmpty ?? true)
+        XCTAssertNotEqual(selectedWorkspace, "Choose a workspace")
+        let automatic = app.switches["cloud.sync.toggle"]
+        XCTAssertTrue(automatic.waitForExistence(timeout: 10))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == YES"), object: automatic)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
+        XCTAssertEqual(automatic.value as? String, "0", "Workspace selection never grants upload consent")
+        capture("fresh-account-automatic-workspace")
         app.terminate(); app.launch(); openAccount(app)
         XCTAssertTrue(app.descendants(matching: .any)["account.displayName"].firstMatch.waitForExistence(timeout: 45))
-        XCTAssertFalse(app.buttons["account.signIn"].exists); capture("restored")
+        XCTAssertFalse(app.buttons["account.signIn"].exists)
+        XCTAssertTrue(workspace.waitForExistence(timeout: 10))
+        XCTAssertEqual(workspace.value as? String, selectedWorkspace, "Restoration preserves the committed workspace")
+        XCTAssertEqual(automatic.value as? String, "0")
+        capture("restored")
+        let actions = app.buttons["account.actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 5) && actions.isHittable)
+        actions.tap()
         let change = app.buttons["account.switchPerson"]
         for _ in 0..<6 where !change.isHittable { app.collectionViews.firstMatch.swipeUp() }
         XCTAssertTrue(change.isHittable); change.tap()
