@@ -59765,6 +59765,176 @@
           }
         }
       }
+    },
+    "account.actions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account actions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Действия с аккаунтом"
+          }
+        }
+      }
+    },
+    "cloud.automatic.compactTitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send to account"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправлять в аккаунт"
+          }
+        }
+      }
+    },
+    "cloud.automatic.summary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New protected transcripts, names and timing. Audio is not retained."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новые защищённые расшифровки, имена и время. Аудио не сохраняется."
+          }
+        }
+      }
+    },
+    "cloud.summary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protected transcripts and metadata from new recordings. Audio is not sent."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Защищённые расшифровки и метаданные новых записей. Аудио не отправляется."
+          }
+        }
+      }
+    },
+    "cloud.details": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Details"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подробнее"
+          }
+        }
+      }
+    },
+    "cloud.protectionSettings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording protection settings are in Privacy."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки защиты записей находятся в разделе «Приватность»."
+          }
+        }
+      }
+    },
+    "cloud.workspaceUnavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No workspace is available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет доступных рабочих пространств."
+          }
+        }
+      }
+    },
+    "cloud.automatic.off": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic sending is off."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматическая отправка выключена."
+          }
+        }
+      }
+    },
+    "cloud.automatic.details": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New completed protected transcripts, participant names and timing are sent to this account and workspace automatically. Metadata may contain personal information. Audio is not retained in this mode. Enable sensitive-data redaction in Privacy before recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новые завершённые защищённые расшифровки, имена участников и время автоматически отправляются в этот аккаунт и рабочее пространство. Метаданные могут содержать персональные сведения. В этом режиме аудио не сохраняется. Перед записью включите обезличивание в разделе «Приватность»."
+          }
+        }
+      }
+    },
+    "cloud.preparing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing sync…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовка синхронизации…"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -64,7 +64,7 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
             let prefix = "automatic-\(language)-\(appearance)"
             XCTAssertTrue(app.descendants(matching: .any)["automatic.review.ready"].firstMatch.waitForExistence(timeout: 15))
             XCTAssertFalse(app.descendants(matching: .any)["automatic.review.failed"].firstMatch.exists)
-            XCTAssertTrue(app.buttons["account.workspace.17.9"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["account.workspace.selector"].waitForExistence(timeout: 5))
             capture(prefix + "-account")
             let automatic = app.switches["cloud.sync.toggle"]
             expose(automatic, in: app, step: prefix + "-automatic")
@@ -121,6 +121,68 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
             capture(prefix + "-closed")
             app.terminate()
         }
+    }
+
+    /// The default account screen exposes its selected scope and consent without
+    /// a wall of implementation details; those details remain reachable on demand.
+    func testCompactAccountShowsSelectedWorkspaceAndExpandableDetails() throws {
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        XCUIDevice.shared.orientation = .portrait
+        for (language, appearance) in [("en", "light"), ("en", "dark"), ("ru", "light"), ("ru", "dark")] {
+            app.launchEnvironment["PICHI_UI_AUTOMATIC_SETTINGS_REVIEW"] = "1"
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launch()
+            let prefix = "compact-\(language)-\(appearance)"
+            XCTAssertTrue(app.descendants(matching: .any)["automatic.review.ready"].firstMatch.waitForExistence(timeout: 15))
+            let workspace = app.buttons["account.workspace.selector"]
+            XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+            XCTAssertEqual(workspace.value as? String, "Synthetic workspace Ёё")
+            let automatic = app.switches["cloud.sync.toggle"]
+            XCTAssertTrue(automatic.isHittable && automatic.isEnabled)
+            XCTAssertEqual(automatic.value as? String, "0")
+            XCTAssertTrue(app.staticTexts["cloud.sync.summary"].exists)
+            let destination = app.descendants(matching: .any)["cloud.automatic.destination"].firstMatch
+            XCTAssertFalse(destination.exists, "The technical server row is collapsed by default")
+            XCTAssertFalse(app.buttons["account.switchPerson"].exists)
+            XCTAssertFalse(app.buttons["account.signOut"].exists)
+            capture(prefix + "-default")
+
+            XCTAssertTrue(workspace.isHittable)
+            workspace.tap()
+            XCTAssertTrue(app.buttons["account.workspace.17.9"].waitForExistence(timeout: 5))
+            capture(prefix + "-workspace-options")
+            dismissMenu(app)
+            XCTAssertTrue(workspace.isHittable)
+
+            let details = app.descendants(matching: .any)["cloud.sync.details.toggle"].firstMatch
+            expose(details, in: app, step: prefix + "-details-visible")
+            details.tap()
+            XCTAssertTrue(destination.waitForExistence(timeout: 5))
+            capture(prefix + "-details-open")
+            details.tap()
+            XCTAssertFalse(destination.exists)
+            XCTAssertEqual(automatic.value as? String, "0", "Reading details must not enable sending")
+
+            let actions = app.buttons["account.actions"]
+            expose(actions, in: app, step: prefix + "-actions-visible")
+            actions.tap()
+            XCTAssertTrue(app.buttons["account.switchPerson"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["account.signOut"].exists)
+            capture(prefix + "-actions")
+            dismissMenu(app)
+            let close = app.buttons["automatic.review.close"]
+            XCTAssertTrue(close.isHittable)
+            close.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["automatic.review.closed"].firstMatch.waitForExistence(timeout: 10))
+            app.terminate()
+        }
+    }
+
+    private func dismissMenu(_ app: XCUIApplication) {
+        // The navigation title is outside both compact native menus and does not
+        // change settings, account ownership or publication consent.
+        app.navigationBars.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
     private func expose(_ element: XCUIElement, in app: XCUIApplication, step: String) {
