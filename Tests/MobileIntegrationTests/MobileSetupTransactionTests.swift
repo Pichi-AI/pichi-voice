@@ -10,6 +10,36 @@ final class MobileSetupTransactionTests: XCTestCase {
         return SettingsStore(defaults: defaults)
     }
 
+    private func profileScopedSettings() throws -> (settings: SettingsStore,
+                                                    guest: PrivateProfileSnapshot,
+                                                    account: PrivateProfileSnapshot) {
+        let original = PrivateProfileStorage.current
+        let originalAdmission = PrivateProfileStorage.acceptsNewWork
+        let identifier = UUID().uuidString
+        let guestName = "MobileSetupTransactionTests.guest.\(identifier)"
+        let guestDefaults = try XCTUnwrap(UserDefaults(suiteName: guestName))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(identifier)
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(),
+            legacyRootDirectory: root)
+        let account = try PrivateProfileStorage.proposed(context: .init(identity: .init(
+            issuer: "https://synthetic.invalid", subject: identifier, internalUserID: identifier),
+            organizationID: "synthetic-org", workspaceID: "synthetic-workspace", generation: UUID()),
+            generation: UUID(), legacyRootDirectory: root)
+        let domains = [guestName, AppBrand.storageNamespace + ".private-profile." + account.id]
+        addTeardownBlock {
+            await MainActor.run {
+                PrivateProfileStorage.select(original)
+                if !originalAdmission { PrivateProfileStorage.closeAdmission() }
+            }
+            for name in domains {
+                UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
+            }
+        }
+        PrivateProfileStorage.select(guest)
+        return (SettingsStore(defaults: PrivateProfileDefaults(guestDefaults: guestDefaults),
+            initializeDesktop: false), guest, account)
+    }
+
     func testLocationConsentDefaultsOffAndPersistsWithoutReopeningSetup() throws {
         let value = try settings()
         value.migrateMobileSetup()
@@ -185,6 +215,73 @@ final class MobileSetupTransactionTests: XCTestCase {
         XCTAssertFalse(settings.meetingPIIRedactionRequested)
         XCTAssertFalse(settings.meetingPIIRedactionEnabled)
         XCTAssertEqual(activation.state, .off)
+    }
+
+    func testPrivacyRestoreClearsPreviousProfileActiveStateAndCanEnableNewProfile() async throws {
+        let fixture = try profileScopedSettings()
+        let settings = fixture.settings
+        var preparedProfiles: [String] = []
+        let activation = MobilePrivacyActivation(settings: settings) { _ in
+            preparedProfiles.append(PrivateProfileStorage.current.id)
+        }
+        activation.setEnabled(true)
+        try await activation.waitUntilReadyIfRequested()
+        XCTAssertEqual(activation.state, .active)
+        XCTAssertEqual(preparedProfiles, [fixture.guest.id])
+
+        PrivateProfileStorage.select(fixture.account)
+        XCTAssertFalse(settings.meetingPIIRedactionRequested,
+            "A new account must not inherit the guest's privacy choice")
+        XCTAssertFalse(settings.meetingPIIRedactionEnabled)
+        activation.restore()
+
+        XCTAssertEqual(activation.state, .off,
+            "An active footer from the previous profile must not survive an off preference")
+        XCTAssertFalse(activation.isRequested)
+        XCTAssertFalse(settings.meetingPIIRedactionEnabled)
+        XCTAssertEqual(preparedProfiles, [fixture.guest.id],
+            "Restoring an off preference must not download or activate anything")
+
+        activation.setEnabled(true)
+        try await activation.waitUntilReadyIfRequested()
+        XCTAssertEqual(preparedProfiles, [fixture.guest.id, fixture.account.id])
+        XCTAssertTrue(activation.isRequested)
+        XCTAssertTrue(settings.meetingPIIRedactionEnabled)
+        XCTAssertEqual(activation.state, .active)
+    }
+
+    func testPrivacyRestorePreparesRequestedTargetProfileInsteadOfTrustingPreviousActiveState() async throws {
+        let fixture = try profileScopedSettings()
+        let settings = fixture.settings
+        var preparedProfiles: [String] = []
+        var targetPreparation: CheckedContinuation<Void, Never>?
+        let activation = MobilePrivacyActivation(settings: settings) { _ in
+            preparedProfiles.append(PrivateProfileStorage.current.id)
+            if preparedProfiles.count == 2 {
+                await withCheckedContinuation { targetPreparation = $0 }
+            }
+        }
+        activation.setEnabled(true)
+        try await activation.waitUntilReadyIfRequested()
+        XCTAssertEqual(activation.state, .active)
+
+        PrivateProfileStorage.select(fixture.account)
+        settings.meetingPIIRedactionRequested = true
+        settings.meetingPIIRedactionEnabled = true
+        activation.restore()
+        for _ in 0..<1_000 where targetPreparation == nil { await Task.yield() }
+
+        XCTAssertEqual(activation.state, .enabling,
+            "A saved enabled flag is not current-profile model readiness")
+        XCTAssertTrue(activation.isRequested)
+        XCTAssertFalse(settings.meetingPIIRedactionEnabled,
+            "Target protection must not commit before its own preparation completes")
+        XCTAssertEqual(preparedProfiles, [fixture.guest.id, fixture.account.id])
+        let preparation = try XCTUnwrap(targetPreparation)
+        preparation.resume()
+        try await activation.waitUntilReadyIfRequested()
+        XCTAssertEqual(activation.state, .active)
+        XCTAssertTrue(settings.meetingPIIRedactionEnabled)
     }
 
     func testCancellingFinalSetupWaitDoesNotWaitForOrCancelSharedPrivacyLoader() async throws {
