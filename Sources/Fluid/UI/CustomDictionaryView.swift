@@ -161,11 +161,17 @@ struct CustomDictionaryView: View {
     }
 
     private var trainingFinalOutputIsReady: Bool {
-        if self.trainingAcousticCorrection {
+        if self.acousticOnlyTraining {
             return self.trainingProgress.pronunciationReady ||
                 (!self.manualTrainingSpellings.isEmpty && self.trainingProgress.spellingReady)
         }
         return self.trainingProgress.spellingReady || self.trainingProgress.pronunciationReady
+    }
+
+    /// Recording a pronunciation authorizes an acoustic template, not a global
+    /// replacement of every spelling the recognizer happened to produce.
+    private var acousticOnlyTraining: Bool {
+        self.trainingAcousticCorrection || self.activePronunciationMatching
     }
 
     private var trainingAlreadyCorrectWithoutReplacement: Bool {
@@ -214,7 +220,7 @@ struct CustomDictionaryView: View {
     }
 
     private var canAddTrainedReplacement: Bool {
-        if self.trainingAcousticCorrection && !self.trainingProgress.pronunciationReady && self.manualTrainingSpellings.isEmpty { return false }
+        if self.acousticOnlyTraining && !self.trainingProgress.pronunciationReady && self.manualTrainingSpellings.isEmpty { return false }
         return !self.normalizedTrainingReplacement.isEmpty &&
             (!self.trainingVariants.isEmpty || self.trainingProgress.pronunciationReady) &&
             !self.isTrainingRecording &&
@@ -667,7 +673,7 @@ struct CustomDictionaryView: View {
                         .foregroundStyle(self.theme.palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if self.trainingAcousticCorrection {
+                if self.acousticOnlyTraining {
                     Text("Pronunciation examples do not create fixed text replacements. Add a spelling manually to request one.")
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
@@ -2694,7 +2700,7 @@ struct CustomDictionaryView: View {
         let filtered = await VoiceTrainingAliasFilter.filter(self.trainingVariants, manuallyConfirmed: self.manualTrainingSpellings)
         let exactTriggers = DictionaryTrainingSpellingPolicy.exactTriggers(
             accepted: filtered.accepted, manuallyConfirmed: self.manualTrainingSpellings,
-            acousticCorrection: self.trainingAcousticCorrection
+            acousticCorrection: self.acousticOnlyTraining
         )
         guard selectionIsCurrent() else { return }
         DebugLogger.shared.info(
@@ -2802,7 +2808,7 @@ struct CustomDictionaryView: View {
         guard normalized.count <= 160 else { return "Use 160 characters or fewer." }
         guard normalized.caseInsensitiveCompare(self.normalizedTrainingReplacement) != .orderedSame else { return "That is already the correct spelling." }
         if let existing = self.trainingVariants.first(where: { $0.caseInsensitiveCompare(normalized) == .orderedSame }) {
-            if self.trainingAcousticCorrection {
+            if self.acousticOnlyTraining {
                 self.manualTrainingSpellings.insert(existing)
                 return nil
             }
