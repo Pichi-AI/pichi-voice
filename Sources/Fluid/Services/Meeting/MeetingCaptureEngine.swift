@@ -648,8 +648,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
 {
     private let comparisonProbe: MeetingAudioComparisonProbe?
     private let microphonePCMNormalizer = MeetingMicrophonePCMNormalizer()
-    /// HAL notifications can arrive while the default input/output pair is still converging.
-    /// Admission stays closed until the latest route revision has settled.
+    /// Echo setup may wait for a stable route; valid captured speech continues as unfiltered.
     private static let rawRouteSettleSeconds: Double = 0.75
 
     private struct BuiltStream {
@@ -701,13 +700,16 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private var pendingStreamFailed = false
     private var pendingStreamFailure: Error?
     private var outputRouteListener: MeetingOutputRouteListener?
-    /// Sticky: once a required CoreAudio listener is gone, later route observations are unreliable
-    /// for the rest of the session, so admission and AEC stay fail-closed.
+    /// A missing listener prevents trusted echo protection; valid raw capture remains available.
     private var routeListenerDegraded = false
     private var outputRouteRevision: UInt64 = 0
     private var streamGeneration: UInt64 = 1
     private var aecActivation = MeetingAECActivationController()
     private var aecPipeline: MeetingAECPipeline?
+    /// Callback-queue owned. Raw, armed and active AEC use the same writer/gate authority.
+    private var microphoneCommitter: MeetingAECOutputCommitter?
+    private var microphoneCommitterOwnership: MeetingCaptureStreamOwnership?
+    private var microphoneCommitterGateEpoch: UInt64?
     private var retiredAECCommitters: [MeetingAECOutputCommitter] = []
     private var routeDisposition: MeetingAECOutputRouteDisposition = .ambiguous
     private var captureStarted = false
@@ -936,7 +938,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         if let stalePipeline {
             let boundary = self.microphoneTranscriptGate.invalidate()
             self.performOnCallbackQueueSynchronously {
-                stalePipeline.invalidate(reason: .streamChanged, boundary: boundary)
+                stalePipeline.invalidate(reason: .streamChanged, boundary: boundary, preservingCapturedSpeech: true)
+                self.retireCurrentMicrophoneCommitter()
                 self.retainRetiredCommitterIfPending(stalePipeline.committer)
             }
         }
@@ -1003,6 +1006,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             }
         }
         var stoppedPipeline: MeetingAECPipeline?
+        var stoppedCommitter: MeetingAECOutputCommitter?
         self.performOnCallbackQueueSynchronously {
             stoppedPipeline = self.stateLock.withLock { () -> MeetingAECPipeline? in
                 defer {
@@ -1012,10 +1016,15 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 return self.aecPipeline
             }
             stoppedPipeline?.stop(boundary: boundary)
+            stoppedCommitter = self.microphoneCommitter ?? stoppedPipeline?.committer
+            stoppedCommitter?.finish()
+            self.microphoneCommitter = nil
+            self.microphoneCommitterOwnership = nil
+            self.microphoneCommitterGateEpoch = nil
         }
         let committers = self.stateLock.withLock { () -> [MeetingAECOutputCommitter] in
             defer { self.retiredAECCommitters.removeAll() }
-            return self.retiredAECCommitters + (stoppedPipeline.map { [$0.committer] } ?? [])
+            return self.retiredAECCommitters + (stoppedCommitter.map { [$0] } ?? [])
         }
         for committer in committers {
             await committer.waitForPendingCommits()
@@ -1097,9 +1106,9 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                     stream: stream,
                     token: streamToken
                 )
-                self.emitDirectRawMicrophone(sampleBuffer, producerEpoch: streamToken.generation)
+                self.emitDirectRawMicrophone(sampleBuffer, producer: streamToken)
             case .raw, .constructing, .ready:
-                self.emitDirectRawMicrophone(sampleBuffer, producerEpoch: streamToken.generation)
+                self.emitDirectRawMicrophone(sampleBuffer, producer: streamToken)
             }
         case .screen:
             break
@@ -1114,11 +1123,67 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         MeetingDirectAEC3Availability.isAvailable()
     }
 
-    private func emitDirectRawMicrophone(_ sampleBuffer: CMSampleBuffer, producerEpoch: UInt64) {
-        guard self.microphoneWriter.enqueue(sampleBuffer, producerEpoch: producerEpoch) else { return }
-        if self.microphoneTranscriptGate.observeAndAdmit(sampleBuffer) {
-            self.liveAudioHandler?(.microphone, sampleBuffer)
+    private func emitDirectRawMicrophone(_ sampleBuffer: CMSampleBuffer, producer: MeetingAECStreamToken) {
+        // Validation above may have detached an armed pipeline. Resolve current ownership again
+        // rather than offering the callback through its pre-validation pipeline snapshot.
+        guard let (committer, protection) = self.ownedMicrophoneCommitter(producer: producer) else {
+            let stillCaptured = self.stateLock.withLock {
+                let owner = self.currentStreamOwnershipLocked()
+                return MeetingCaptureOwnershipGate.mayResumeMicrophone(
+                    reserved: owner, current: owner, stopping: self.stopping,
+                    rebuilding: self.rebuilding, currentStreamStopped: self.currentStreamStopped
+                ) && owner.streamGeneration == producer.generation && owner.streamIdentity == producer.identity
+            }
+            if stillCaptured { _ = self.microphoneWriter.enqueue(sampleBuffer, producerEpoch: producer.generation) }
+            return
         }
+        committer.commitCaptured(sampleBuffer, protection: protection)
+    }
+
+    /// Called only on callbackQueue. One immutable authority owns raw and filtered writer commands
+    /// for this producer/route/gate epoch; constructing AEC never starts a second promotion owner.
+    private func ownedMicrophoneCommitter(
+        producer: MeetingAECStreamToken? = nil,
+        expectedOwnership: MeetingCaptureStreamOwnership? = nil
+    ) -> (MeetingAECOutputCommitter, MeetingMicrophoneEchoProtection)? {
+        let snapshot = self.stateLock.withLock { () -> (MeetingCaptureStreamOwnership, MeetingMicrophoneEchoProtection)? in
+            let owner = self.currentStreamOwnershipLocked()
+            guard MeetingCaptureOwnershipGate.mayResumeMicrophone(
+                reserved: expectedOwnership ?? owner, current: owner, stopping: self.stopping,
+                rebuilding: self.rebuilding, currentStreamStopped: self.currentStreamStopped
+            ), producer == nil || (producer?.generation == owner.streamGeneration && producer?.identity == owner.streamIdentity)
+            else { return nil }
+            return (owner, self.routeDisposition == .physicallyClosed ? .acousticallyClosed : .unfiltered)
+        }
+        guard let (ownership, protection) = snapshot else { return nil }
+        let epoch = self.microphoneTranscriptGate.invalidationEpoch
+        guard self.stateLock.withLock({ self.currentStreamOwnershipLocked() == ownership && !self.stopping && !self.rebuilding && !self.currentStreamStopped }),
+              self.microphoneTranscriptGate.invalidationEpoch == epoch else { return nil }
+        if let committer = self.microphoneCommitter,
+           self.microphoneCommitterOwnership == ownership, self.microphoneCommitterGateEpoch == epoch {
+            return (committer, protection)
+        }
+        self.retireCurrentMicrophoneCommitter()
+        let committer = MeetingAECOutputCommitter(
+            writer: self.microphoneWriter, producerEpoch: ownership.streamGeneration, expectedGateEpoch: epoch,
+            transcriptGate: self.microphoneTranscriptGate, liveAudioHandler: self.liveAudioHandler,
+            protectionChanged: { [eventHandler = self.eventHandler] in eventHandler(.microphoneEchoProtectionChanged($0)) },
+            terminalFailure: { [weak self] in self?.handleAECTerminalFailure($0) }
+        )
+        self.microphoneCommitter = committer
+        self.microphoneCommitterOwnership = ownership
+        self.microphoneCommitterGateEpoch = epoch
+        return (committer, protection)
+    }
+
+    private func retireCurrentMicrophoneCommitter() {
+        if let committer = self.microphoneCommitter {
+            committer.retire()
+            self.retainRetiredCommitterIfPending(committer)
+        }
+        self.microphoneCommitter = nil
+        self.microphoneCommitterOwnership = nil
+        self.microphoneCommitterGateEpoch = nil
     }
 
     /// Armed validation callbacks stay on the raw path. Only a later callback can observe active,
@@ -1153,23 +1218,12 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             "aec_fallback reason=\(reason.rawValue) route=speaker targetProtection=unfiltered",
             source: "MeetingCaptureEngine"
         )
-        let boundary = self.microphoneTranscriptGate.invalidate()
         let detached = self.stateLock.withLock { () -> MeetingAECPipeline? in
             self.aecActivation.invalidate()
             defer { self.aecPipeline = nil }
             return self.aecPipeline
         }
-        detached?.invalidate(reason: reason, boundary: boundary)
-        if let detached { self.retainRetiredCommitterIfPending(detached.committer) }
-        let revision = self.stateLock.withLock { self.outputRouteRevision }
-        self.routeProtectionTasks.enqueue { [weak self] in
-            guard let self, self.isCurrentRouteRevision(revision) else { return }
-            do {
-                try await self.resumeDirectMicrophone(.unfiltered, revision: revision)
-            } catch {
-                self.handleAECTerminalFailure(.metadataPersistence)
-            }
-        }
+        detached?.retireForEchoChange(retainOnly: false)
     }
 
     private func applySettledRouteDisposition(
@@ -1191,16 +1245,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         case .physicallyClosed:
             try await self.resumeDirectMicrophone(.acousticallyClosed, revision: revision)
         case .supportedSpeaker:
-            let start = self.microphoneTranscriptGate.latestObservedSeconds()
-            try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
-                MeetingAECOutputCommitter.applyEra(
-                    to: &track,
-                    protection: .unprotected,
-                    provenance: nil,
-                    startSeconds: start
-                )
-            }
-            _ = self.microphoneTranscriptGate.invalidate()
+            try await self.resumeDirectMicrophone(.unfiltered, revision: revision)
             do {
                 try await self.installAECForSupportedSpeaker(revision: revision)
             } catch {
@@ -1238,10 +1283,13 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         }
         guard let ownership else { return false }
         let gateEpoch = expectedGateEpoch ?? self.microphoneTranscriptGate.invalidationEpoch
-        let resumed = try await MeetingAECOutputCommitter.resumeMicrophone(
-            protection, writer: self.microphoneWriter,
-            transcriptGate: self.microphoneTranscriptGate, expectedGateEpoch: gateEpoch
-        ) {
+        var committer: MeetingAECOutputCommitter?
+        self.performOnCallbackQueueSynchronously {
+            guard self.microphoneTranscriptGate.invalidationEpoch == gateEpoch else { return }
+            committer = self.ownedMicrophoneCommitter(expectedOwnership: ownership)?.0
+        }
+        guard let committer else { return false }
+        let resumed = try await committer.resumeProtection(protection) {
             self.stateLock.withLock {
                 MeetingCaptureOwnershipGate.mayResumeMicrophone(
                     reserved: ownership, current: self.currentStreamOwnershipLocked(),
@@ -1287,47 +1335,33 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             )
             throw error
         }
-        let committer = MeetingAECOutputCommitter(
-            writer: self.microphoneWriter,
-            producerEpoch: reserved.ownership.streamGeneration,
-            transcriptGate: self.microphoneTranscriptGate,
-            liveAudioHandler: self.liveAudioHandler,
-            protectionChanged: { [eventHandler = self.eventHandler] protection in
-                eventHandler(.microphoneEchoProtectionChanged(protection))
+        var committed = false
+        self.performOnCallbackQueueSynchronously {
+            guard let (committer, _) = self.ownedMicrophoneCommitter(expectedOwnership: reserved.ownership) else {
+                self.stateLock.withLock { self.aecActivation.abandonConstruction(reserved.token) }
+                return
             }
-        ) { [weak self] failure in
-            self?.handleAECTerminalFailure(failure)
-        }
-        let candidate = MeetingAECPipeline(
-            processor: processor,
-            committer: committer,
-            diagnosticObserver: self.comparisonProbe.map { probe in
-                { frame, output, statistics in
-                    probe.recordAECFrame(frame, output: output, statistics: statistics)
+            let candidate = MeetingAECPipeline(
+                processor: processor, committer: committer,
+                diagnosticObserver: self.comparisonProbe.map { probe in
+                    { frame, output, statistics in probe.recordAECFrame(frame, output: output, statistics: statistics) }
                 }
-            }
-        )
-
-        let committed = self.stateLock.withLock { () -> Bool in
-            let mayCommit = MeetingCaptureOwnershipGate.mayCommitAEC(
-                reserved: reserved.ownership,
-                current: self.currentStreamOwnershipLocked(),
-                stopping: self.stopping,
-                rebuilding: self.rebuilding,
-                currentStreamStopped: self.currentStreamStopped,
-                routeListenerDegraded: self.routeListenerDegraded,
-                dispositionIsSupportedSpeaker: self.routeDisposition == .supportedSpeaker,
-                activationGeneration: self.aecActivation.generation,
-                reservationToken: reserved.token
             )
-            guard mayCommit, self.aecActivation.commitCandidate(reserved.token) else {
-                // The producer this engine was bound to is gone. Release the reservation so a
-                // later generation can construct again instead of being stuck `.constructing`.
-                self.aecActivation.abandonConstruction(reserved.token)
-                return false
+            committed = self.stateLock.withLock {
+                let mayCommit = MeetingCaptureOwnershipGate.mayCommitAEC(
+                    reserved: reserved.ownership, current: self.currentStreamOwnershipLocked(),
+                    stopping: self.stopping, rebuilding: self.rebuilding, currentStreamStopped: self.currentStreamStopped,
+                    routeListenerDegraded: self.routeListenerDegraded,
+                    dispositionIsSupportedSpeaker: self.routeDisposition == .supportedSpeaker,
+                    activationGeneration: self.aecActivation.generation, reservationToken: reserved.token
+                )
+                guard mayCommit, self.aecActivation.commitCandidate(reserved.token) else {
+                    self.aecActivation.abandonConstruction(reserved.token)
+                    return false
+                }
+                self.aecPipeline = candidate
+                return true
             }
-            self.aecPipeline = candidate
-            return true
         }
         // The uncommitted candidate is simply dropped: it was never published, never fed a
         // callback, and holds no writer state.
@@ -1463,9 +1497,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
     #endif
 
-    /// Route observation closes the live gate and publishes `.raw` synchronously. The shared SCK
-    /// queue then resets/detaches the old engine and orders the conservative era before later raw
-    /// callbacks. Settling always starts from two fresh snapshots.
+    /// Route observation retires echo authority, not captured speech. Raw admission resumes on
+    /// the next current callback without waiting for route settling or AEC warm-up.
     private func invalidateRawMicrophoneAdmissionAfterRouteChange(
         listenerHealth: MeetingOutputRouteListenerHealth = .healthy
     ) {
@@ -1484,24 +1517,20 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 defer { self.aecPipeline = nil }
                 return self.aecPipeline
             }
-            if let detached {
-                detached.invalidate(reason: .streamChanged, boundary: boundary)
-                self.retainRetiredCommitterIfPending(detached.committer)
-            } else {
-                self.microphoneWriter.enqueueMetadata(
-                    failClosed: true,
-                    mutate: { track in
-                        MeetingAECOutputCommitter.applyEra(
-                            to: &track,
-                            protection: .unprotected,
-                            provenance: nil,
-                            startSeconds: boundary?.unsafeStartSeconds
-                        )
-                    }
-                ) { [weak self] result in
-                    if case .failure = result {
-                        self?.handleAECTerminalFailure(.metadataPersistence)
-                    }
+            self.retireCurrentMicrophoneCommitter()
+            detached?.retireForEchoChange(retainOnly: true)
+            if let detached { self.retainRetiredCommitterIfPending(detached.committer) }
+            self.microphoneWriter.enqueueMetadata(
+                failClosed: true,
+                mutate: { track in
+                    MeetingAECOutputCommitter.applyEra(
+                        to: &track, protection: .unfiltered, provenance: nil,
+                        startSeconds: boundary?.unsafeStartSeconds
+                    )
+                }
+            ) { [weak self] result in
+                if case .failure = result {
+                    self?.handleAECTerminalFailure(.metadataPersistence)
                 }
             }
         }
@@ -1522,7 +1551,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             switch settled.inputTransition {
             case .unavailable:
                 disposition = .ambiguous
-                inputDetail = "The current default microphone could not be resolved; microphone transcript admission remains disabled."
+                inputDetail = "The current default microphone could not be resolved; valid captured microphone speech continues without echo filtering."
                 replacementMicrophone = self.stateLock.withLock {
                     self.currentStreamStopped ? self.activeMicrophone : nil
                 }
@@ -1560,8 +1589,8 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 detail: inputDetail ?? (disposition == .physicallyClosed
                     ? "Microphone transcript admission resumed on a positively identified closed output route."
                     : disposition == .supportedSpeaker
-                    ? "Speaker-route AEC restarted unprotected and is awaiting clock attestation and warm-up."
-                    : "Microphone transcript admission remains disabled because the output route is ambiguous.")
+                    ? "Speaker-route AEC is warming up; microphone speech continues without verified echo filtering."
+                    : "The output route is ambiguous; valid captured microphone speech continues without echo filtering.")
             ))
         }
     }
@@ -1845,10 +1874,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     private func invalidateAECForStreamRebuild() {
-        let shouldInvalidate = self.stateLock.withLock {
-            self.routeDisposition == .supportedSpeaker || self.aecPipeline != nil
-        }
-        guard shouldInvalidate else { return }
+        guard self.includeMicrophone else { return }
         let boundary = self.microphoneTranscriptGate.invalidate()
         self.stateLock.withLock {
             self.aecActivation.invalidate()
@@ -1859,25 +1885,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 return self.aecPipeline
             }
             if let detached {
-                detached.invalidate(reason: .streamChanged, boundary: boundary)
+                detached.invalidate(reason: .streamChanged, boundary: boundary, preservingCapturedSpeech: true)
                 self.retainRetiredCommitterIfPending(detached.committer)
-            } else {
-                self.microphoneWriter.enqueueMetadata(
-                    failClosed: true,
-                    mutate: { track in
-                        MeetingAECOutputCommitter.applyEra(
-                            to: &track,
-                            protection: .unprotected,
-                            provenance: nil,
-                            startSeconds: boundary?.unsafeStartSeconds
-                        )
-                    }
-                ) { [weak self] result in
-                    if case .failure = result {
-                        self?.handleAECTerminalFailure(.metadataPersistence)
-                    }
-                }
             }
+            self.retireCurrentMicrophoneCommitter()
         }
     }
 
@@ -2123,7 +2134,9 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private func retainRetiredCommitterIfPending(_ committer: MeetingAECOutputCommitter) {
         self.stateLock.withLock {
             self.retiredAECCommitters.removeAll { !$0.hasPendingCommits }
-            if committer.hasPendingCommits { self.retiredAECCommitters.append(committer) }
+            if committer.hasPendingCommits, !self.retiredAECCommitters.contains(where: { $0 === committer }) {
+                self.retiredAECCommitters.append(committer)
+            }
         }
     }
 

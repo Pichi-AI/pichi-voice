@@ -42,10 +42,7 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
     }
 
     func consumeCapture(_ sampleBuffer: CMSampleBuffer, stream: MeetingAECStreamToken) {
-        guard !self.stopped else {
-            self.committer.commitRaw(sampleBuffer, failure: .stopped)
-            return
-        }
+        guard !self.stopped else { return }
         if self.fallbackFailure != nil {
             self.committer.commitUnfiltered(sampleBuffer)
             return
@@ -74,18 +71,48 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
 
     func invalidate(
         reason: MeetingAECFailure,
-        boundary: MeetingMicrophoneTranscriptGate.InvalidationBoundary?
+        boundary: MeetingMicrophoneTranscriptGate.InvalidationBoundary?,
+        preservingCapturedSpeech: Bool = false
     ) {
         guard !self.stopped else { return }
-        self.handle(self.joiner.flush(reason: reason), allowFallback: false)
-        self.committer.invalidateForExternalBoundary(boundary)
+        self.flushPendingCapture(reason: reason, admit: false, retainOnly: preservingCapturedSpeech)
+        if preservingCapturedSpeech { self.committer.finish() }
+        else { self.committer.invalidateForExternalBoundary(boundary) }
+        self.stopped = true
+    }
+
+    /// Echo uncertainty does not invalidate already captured speech. Route changes retire local
+    /// authority before this flush; same-owner format validation can keep using its raw committer.
+    func retireForEchoChange(retainOnly: Bool) {
+        guard !self.stopped else { return }
+        self.flushPendingCapture(reason: .streamChanged, admit: true, retainOnly: retainOnly)
+        self.stopped = true
     }
 
     func stop(boundary: MeetingMicrophoneTranscriptGate.InvalidationBoundary?) {
         guard !self.stopped else { return }
-        self.handle(self.joiner.flush(reason: .stopped))
+        self.flushPendingCapture(reason: .stopped, admit: false, retainOnly: true)
         self.committer.finish()
         self.stopped = true
+    }
+
+    private func flushPendingCapture(reason: MeetingAECFailure, admit: Bool, retainOnly: Bool) {
+        for emission in self.joiner.flush(reason: reason) {
+            let samples: [Float]
+            let time: CMTime
+            switch emission {
+            case let .paired(frame): samples = frame.capture.samples; time = frame.capture.presentationTime
+            case let .bypass(slice, _): samples = slice.samples; time = slice.presentationTime
+            case .reset: continue
+            }
+            guard let raw = MeetingAECPCMAdapter.synthesize(samples: samples, presentationTime: time) else {
+                self.committer.failTerminal(.outputSynthesis)
+                continue
+            }
+            if retainOnly { self.committer.retainPendingCapture(raw, unfiltered: true) }
+            else if admit { self.committer.commitUnfiltered(raw) }
+            else { self.committer.commitRaw(raw, failure: reason) }
+        }
     }
 
     private func handleInputFailure(
@@ -140,6 +167,18 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
                 capture: joined.capture.samples
             )
             self.diagnosticObserver?(joined, result.samples, result.statistics)
+            let mayPromote = joined.clockAttested
+                && joined.pairedFrameCount > MeetingAECConstants.attestationFrames
+            if !mayPromote {
+                guard let raw = MeetingAECPCMAdapter.synthesize(
+                    samples: joined.capture.samples, presentationTime: joined.capture.presentationTime
+                ) else {
+                    self.beginFallback(joined.capture, failure: .outputSynthesis, allowFallback: allowFallback)
+                    return false
+                }
+                self.committer.commitUnfiltered(raw)
+                return true
+            }
             guard let output = MeetingAECPCMAdapter.synthesize(
                 samples: result.samples,
                 presentationTime: joined.capture.presentationTime
@@ -147,9 +186,10 @@ final nonisolated class MeetingAECPipeline: @unchecked Sendable {
                 self.beginFallback(joined.capture, failure: .outputSynthesis, allowFallback: allowFallback)
                 return false
             }
-            let mayPromote = joined.clockAttested
-                && joined.pairedFrameCount > MeetingAECConstants.attestationFrames
-            self.committer.commitProcessed(output, mayPromote: mayPromote)
+            let original = MeetingAECPCMAdapter.synthesize(
+                samples: joined.capture.samples, presentationTime: joined.capture.presentationTime
+            )
+            self.committer.commitProcessed(output, mayPromote: mayPromote, originalCapture: original)
             return true
         } catch let failure as MeetingAECFailure {
             self.beginFallback(joined.capture, failure: failure, allowFallback: allowFallback)
