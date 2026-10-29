@@ -8,6 +8,6 @@ xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Persistence/ProtectedDataAccessError.swift Sources/Fluid/Account/Account*.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
-    Sources/Mobile/MobileAccount.swift Sources/Mobile/MobilePresentationDocument.swift \
+    Sources/Mobile/MobileAccount.swift Sources/Mobile/MobilePrivatePublicationTasks.swift \
     Tests/MobileAccountInteractionTests.swift Tests/MobilePrivatePublicationTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"

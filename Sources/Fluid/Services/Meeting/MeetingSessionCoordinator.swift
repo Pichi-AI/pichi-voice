@@ -1688,7 +1688,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         let sessions: [MeetingSession]
         do {
-            sessions = try await self.store.loadHistory()
+            sessions = try await self.store.loadHistoryForMaintenance()
         } catch {
             self.finishRetentionRead()
             DebugLogger.shared.warning(

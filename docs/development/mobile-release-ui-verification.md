@@ -86,7 +86,7 @@ the AUT to inspect hidden UI during the background interval.
 After five minutes it stops the runner's player, returns to the AUT, verifies that
 protected committed caption text has grown and that the latest paragraph is in
 the native viewport. A real scroll gesture pauses following; the existing jump
-button returns to the latest text. It presses Stop & Transcribe, waits for normal
+button returns to the latest text. It presses Stop Recording, waits for normal
 completion, opens the actual JSON export action and verifies the native share
 sheet. There must be no audio-export action for this strict meeting.
 
@@ -104,7 +104,7 @@ ten-second live view, actual background, five-minute live view, follow pause/jum
 Stop, completed transcript, native share sheet and history after relaunch. Logs
 record elapsed time, liveness, counts and the new session UUID, not transcript
 contents. Stop the owned player on every exit. Failure/cancellation requests the
-normal Stop & Transcribe path for only the attempt started by the test and joins a
+normal Stop Recording path for only the attempt started by the test and joins a
 bounded cancellation-independent cleanup task. An unavailable stop or failed join
 is explicitly logged for the parent's safe cleanup; it is never reported as PASS.
 

@@ -16,12 +16,13 @@ public struct GigaAMResourcePolicy: Sendable, Equatable {
     }
 
     public static var current: Self {
-        #if os(iOS)
+        #if os(iOS) && !targetEnvironment(simulator)
         // Zero is meaningful for an iOS app, but the API may report zero for
         // an unmanaged tool. Keep unknown separate from measured exhaustion.
         let headroom: UInt64? = Bundle.main.bundleURL.pathExtension == "app"
             ? UInt64(os_proc_available_memory()) : nil
         #else
+        // The simulator enforces no per-process limit and always reports zero.
         let headroom: UInt64? = nil
         #endif
         return Self(hasGPU: MTLCreateSystemDefaultDevice() != nil,

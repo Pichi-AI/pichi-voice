@@ -159,28 +159,27 @@ extension VoiceEngineSettingsView {
                                     .foregroundStyle(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accentText : self.theme.palette.readableText(self.theme.palette.warning))
                             }
 
+                            Button {
+                                self.isShowingSpeechModelDetails = true
+                            } label: {
+                                Image(systemName: "info.circle")
+                                    .font(self.theme.typography.bodySmall)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(self.voiceEngineSecondaryText)
+                            .help(PichiLocalization.text("Model details"))
+                            .accessibilityLabel(PichiLocalization.text("Model details"))
+                            .popover(isPresented: self.$isShowingSpeechModelDetails) {
+                                self.speechModelDetails(for: model)
+                            }
+
                             Spacer()
                         }
 
-                        Text(LocalizedStringKey(model.cardDescription))
+                        Text(PichiLocalization.text(metadata?.cardDescription ?? model.cardDescription))
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
                             .lineLimit(2)
-
-                        if let creditLine = model.creditLine {
-                            Text(PichiLocalization.text(creditLine))
-                                .font(self.theme.typography.caption)
-                                .foregroundStyle(self.voiceEngineSecondaryText)
-                                // A fixed vertical size here can push the page above the toolbar.
-                                .lineLimit(2)
-                        }
-
-                        if let metadata {
-                            Text(PichiLocalization.text(metadata.features))
-                                .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(self.voiceEngineSecondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
                     }
 
                     HStack(spacing: 8) {
@@ -188,13 +187,14 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
 
-                        if let processor = metadata?.processor ?? (model.requiresAppleSilicon ? "Apple Silicon" : nil) {
-                            Text(PichiLocalization.text(processor))
+                        if let hardware = metadata?.hardwareLabel ?? (model.requiresAppleSilicon ? "Apple Silicon" : nil) {
+                            Text(PichiLocalization.text(hardware))
                                 .font(self.theme.typography.bodySmallStrong)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(Capsule().fill(self.theme.palette.elevatedCardBackground))
                                 .foregroundStyle(self.theme.palette.accentText)
+                                .help(PichiLocalization.text(metadata?.cardDescription ?? model.cardDescription))
                         }
 
                         Text(LocalizedStringKey(model.languageSupport))
@@ -203,48 +203,16 @@ extension VoiceEngineSettingsView {
                             .padding(.vertical, 2)
                             .background(Capsule().fill(.quaternary))
                             .foregroundStyle(self.voiceEngineSecondaryText)
+                            .help(model.supportedLanguageNames ?? model.supportedLanguageCodes ?? PichiLocalization.text(model.languageSupport))
 
                         Spacer()
                     }
 
-                    if let execution = self.viewModel.speechModelExecutionStatus(model) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label(
-                                PichiLocalization.format("Configured execution: %@", PichiLocalization.text(execution.backend.label)),
-                                systemImage: "cpu"
-                            )
-                            .font(self.theme.typography.bodySmallStrong)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
-                            .help("The configured execution device is not a live utilization measurement.")
-
-                            if let reason = execution.fallbackReason {
-                                Text(PichiLocalization.text(reason))
-                                    .font(self.theme.typography.bodySmall)
-                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-
-                    if let supportedLanguageCodes = model.supportedLanguageCodes {
-                        Text(supportedLanguageCodes)
+                    if let reason = self.viewModel.speechModelExecutionStatus(model)?.fallbackReason {
+                        Label(PichiLocalization.text(reason), systemImage: "exclamationmark.triangle.fill")
                             .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
-                            .lineLimit(2)
-                            .help(model.supportedLanguageNames ?? supportedLanguageCodes)
-                    }
-
-                    if let metadata {
-                        Label(PichiLocalization.text(metadata.recommendedMemory), systemImage: "memorychip")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
-                            .help("Recommended system RAM, not measured model memory usage. The size above is disk space.")
-                    }
-
-                    if let source = model.modelFolderSourceLabel {
-                        Label(PichiLocalization.format("Model source: %@", PichiLocalization.text(source)), systemImage: "internaldrive")
-                            .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(self.voiceEngineSecondaryText)
+                            .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     // Memory warning for large models
@@ -298,6 +266,52 @@ extension VoiceEngineSettingsView {
             }
         }
         .padding(.vertical, 6)
+    }
+
+    private func speechModelDetails(for model: SettingsStore.SpeechModel) -> some View {
+        let metadata = self.viewModel.speechModelLibraryMetadata(model)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(model.displayName)
+                .font(self.theme.typography.sectionTitle)
+
+            Text(PichiLocalization.text(metadata?.cardDescription ?? model.cardDescription))
+
+            if let creditLine = model.creditLine {
+                Text(PichiLocalization.text(creditLine))
+                    .font(self.theme.typography.caption)
+            }
+
+            if let metadata {
+                Text(PichiLocalization.text(metadata.features))
+                Label(PichiLocalization.text(metadata.processor), systemImage: "cpu")
+                Label(PichiLocalization.text(metadata.recommendedMemory), systemImage: "memorychip")
+                    .help("Recommended system RAM, not measured model memory usage. The size above is disk space.")
+            }
+
+            if let execution = self.viewModel.speechModelExecutionStatus(model) {
+                Label(
+                    PichiLocalization.format("Configured execution: %@", PichiLocalization.text(execution.backend.label)),
+                    systemImage: "cpu"
+                )
+                .help("The configured execution device is not a live utilization measurement.")
+            }
+
+            Text(LocalizedStringKey(model.languageSupport))
+            if let codes = model.supportedLanguageCodes {
+                Text(codes)
+                    .help(model.supportedLanguageNames ?? codes)
+            }
+
+            if let source = model.modelFolderSourceLabel {
+                Label(PichiLocalization.format("Model source: %@", PichiLocalization.text(source)), systemImage: "internaldrive")
+            }
+        }
+        .font(self.theme.typography.bodySmall)
+        .foregroundStyle(self.voiceEngineSecondaryText)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 360, alignment: .leading)
+        .padding(16)
     }
 
     func speechModelCard(for model: SettingsStore.SpeechModel) -> some View {

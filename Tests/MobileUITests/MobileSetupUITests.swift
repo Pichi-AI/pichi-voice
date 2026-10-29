@@ -105,19 +105,19 @@ final class MobileSetupUITests: XCTestCase {
         app.buttons["onboarding.next"].tap()
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["Начните первую встречу"].firstMatch.waitForExistence(timeout: 10),
-                      "Completing actual first setup must arm the tip without the screenshot-only launch flag")
+                      "A completed first setup opens the empty Meetings list with its first-meeting hint")
         capture("flow-09-normal-app")
         app.terminate()
         app.launch()
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
         XCTAssertFalse(app.buttons["onboarding.next"].exists)
         capture("flow-10-restart")
-        try assertFirstMeetingTipLayoutInBothLanguagesAndAppearances(app)
+        try assertFirstMeetingHintLayoutInBothLanguagesAndAppearances(app)
     }
 
-    /// Reuses the tip armed by real setup, including its persisted state across launches.
-    /// The native bottom safe area protects the note in tab and split navigation layouts.
-    private func assertFirstMeetingTipLayoutInBothLanguagesAndAppearances(_ app: XCUIApplication) throws {
+    /// The empty Meetings list is the first meeting's hint after a real setup and every relaunch.
+    /// Start and the next recording's settings stay above the tab bar in both orientations.
+    private func assertFirstMeetingHintLayoutInBothLanguagesAndAppearances(_ app: XCUIApplication) throws {
         defer { XCUIDevice.shared.orientation = .portrait; app.terminate() }
         for language in ["en", "ru"] {
             for appearance in ["light", "dark"] {
@@ -133,16 +133,16 @@ final class MobileSetupUITests: XCTestCase {
                         return orientation == .portrait ? frame.height > frame.width : frame.width > frame.height
                     }
                     XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: 10), .completed)
-                    XCTAssertTrue(app.buttons["meeting.start"].isHittable, "Start must remain reachable above the native footer")
-                    let caption = app.descendants(matching: .any)["meeting.storageNote"].firstMatch
-                    XCTAssertTrue(caption.waitForExistence(timeout: 5))
-                    XCTAssertTrue(caption.isHittable)
-                    XCTAssertTrue(app.windows.firstMatch.frame.contains(caption.frame), "The whole note must remain visible")
+                    XCTAssertTrue(app.buttons["meeting.start"].isHittable, "Start must remain reachable above the tab bar")
+                    let settings = app.buttons["meeting.settings"]
+                    XCTAssertTrue(settings.waitForExistence(timeout: 5))
+                    XCTAssertTrue(settings.isHittable)
+                    XCTAssertTrue(app.windows.firstMatch.frame.contains(settings.frame), "The whole line must remain visible")
                     if app.tabBars.firstMatch.exists {
-                        XCTAssertTrue(caption.frame.intersection(app.tabBars.firstMatch.frame).isEmpty,
-                                      "The floating tab bar must not cover the first-meeting storage caption")
+                        XCTAssertTrue(settings.frame.intersection(app.tabBars.firstMatch.frame).isEmpty,
+                                      "The floating tab bar must not cover the next recording's settings")
                     }
-                    capture("first-tip-\(language)-\(appearance)-\(name)")
+                    capture("first-hint-\(language)-\(appearance)-\(name)")
                 }
             }
         }
