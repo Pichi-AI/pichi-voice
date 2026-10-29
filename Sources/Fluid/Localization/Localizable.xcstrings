@@ -60326,6 +60326,227 @@
           }
         }
       }
+    },
+    "Continue in dictionary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue in dictionary"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Продолжить в словаре"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Correct word in dictionary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correct word in dictionary"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправить слово в словаре"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Correct word in dictionary…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correct word in dictionary…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исправить слово в словаре…"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "No original pronunciation sample is linked to this selection. Record three new examples.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No original pronunciation sample is linked to this selection. Record three new examples."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "К выбранному фрагменту не привязан образец произношения. Запишите три новых примера."
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Pronunciation examples do not create fixed text replacements. Add a spelling manually to request one.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pronunciation examples do not create fixed text replacements. Add a spelling manually to request one."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Примеры произношения не создают постоянных текстовых замен. Чтобы добавить такую замену, укажите написание вручную."
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Pronunciation matching is off or unavailable. Add an exact spelling manually, or enable pronunciation matching.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pronunciation matching is off or unavailable. Add an exact spelling manually, or enable pronunciation matching."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сопоставление произношения отключено или недоступно. Добавьте точную замену вручную или включите сопоставление произношения."
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Record pronunciation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record pronunciation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записать произношение"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Record pronunciation examples in the dictionary. The history text stays unchanged.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record pronunciation examples in the dictionary. The history text stays unchanged."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запишите примеры произношения в словаре. Текст в истории останется прежним."
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Saved voice examples: %lld. New examples: %lld.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved voice examples: %lld. New examples: %lld."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранено голосовых примеров: %lld. Новых примеров: %lld."
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "The original audio could not be used. Record three new pronunciation examples.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The original audio could not be used. Record three new pronunciation examples."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось использовать исходную запись. Запишите три новых примера произношения."
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "The original speech fragment is included. Record more examples to finish pronunciation learning.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The original speech fragment is included. Record more examples to finish pronunciation learning."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Исходный фрагмент речи добавлен. Запишите дополнительные примеры, чтобы завершить настройку произношения."
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "The speech model changed. Start pronunciation learning again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The speech model changed. Start pronunciation learning again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель распознавания изменилась. Начните настройку произношения заново."
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "This transcription changed. Select the word again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This transcription changed. Select the word again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта расшифровка изменилась. Выберите слово ещё раз."
+          }
+        }
+      },
+      "extractionState": "manual"
     }
   },
   "version": "1.0"

@@ -155,6 +155,7 @@ Sources/Fluid/Services/ParakeetRealtimeProvider.swift
 Sources/Fluid/Services/ParakeetSpeechModelBackend.swift
 Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift
 Sources/Fluid/Services/ParakeetVocabularyStore.swift
+Sources/Fluid/Services/GigaAMDictionaryAcoustics.swift
 Sources/Fluid/Services/PichiGigaAMProvider.swift
 Sources/Fluid/Services/Privacy/PichiTranscriptPrivacyService.swift
 Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift
