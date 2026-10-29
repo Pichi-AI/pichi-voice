@@ -64,7 +64,8 @@ final class MobileLegacyQALoginUITests: XCTestCase {
         let actions = app.buttons["account.actions"]
         XCTAssertTrue(actions.waitForExistence(timeout: 5) && actions.isHittable)
         actions.tap()
-        let change = app.buttons["account.switchPerson"]
+        // Native UIMenu exposes the localized action title, not its SwiftUI identifier.
+        let change = app.buttons["Switch account"]
         for _ in 0..<6 where !change.isHittable { app.collectionViews.firstMatch.swipeUp() }
         XCTAssertTrue(change.isHittable); change.tap()
         let retired = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in

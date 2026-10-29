@@ -151,8 +151,9 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
             XCTAssertTrue(workspace.isHittable)
             workspace.tap()
             capture(prefix + "-workspace-opened")
-            XCTAssertTrue(app.buttons["account.workspace.17.9"].waitForExistence(timeout: 5))
-            capture(prefix + "-workspace-options")
+            // Native UIMenu actions expose their visible title rather than
+            // forwarding the SwiftUI Button's accessibility identifier.
+            XCTAssertTrue(app.buttons["Synthetic workspace Ёё"].waitForExistence(timeout: 5))
             dismissMenu(app)
             XCTAssertTrue(workspace.isHittable)
 
@@ -168,9 +169,11 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
             let actions = app.buttons["account.actions"]
             expose(actions, in: app, step: prefix + "-actions-visible")
             actions.tap()
-            XCTAssertTrue(app.buttons["account.switchPerson"].waitForExistence(timeout: 5))
-            XCTAssertTrue(app.buttons["account.signOut"].exists)
             capture(prefix + "-actions")
+            let switchTitle = language == "ru" ? "Сменить аккаунт" : "Switch account"
+            let signOutTitle = language == "ru" ? "Выйти" : "Sign out"
+            XCTAssertTrue(app.buttons[switchTitle].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons[signOutTitle].exists)
             dismissMenu(app)
             let close = app.buttons["automatic.review.close"]
             XCTAssertTrue(close.isHittable)
