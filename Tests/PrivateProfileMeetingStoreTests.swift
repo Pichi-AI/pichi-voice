@@ -297,10 +297,25 @@ extension MeetingSessionStoreCheckpointTests {
         try await writer.create(source)
         let manifest = guest.directory("Meetings").appendingPathComponent(source.id.uuidString).appendingPathComponent("session.json")
         let bytes = try Data(contentsOf: manifest)
+        var plainGuest = source
+        plainGuest.id = UUID(); plainGuest.requiresEncryptedPersistence = nil; plainGuest.profileOwnership = nil
+        plainGuest.title = "Ordinary guest next to unavailable ciphertext"
+        try await writer.create(plainGuest)
+        var own = plainGuest
+        own.id = UUID(); own.profileOwnership = .init(profile: a); own.title = "Ordinary account meeting"
+        let accountWriter = MeetingSessionStore(rootDirectory: a.directory("Meetings"))
+        try await accountWriter.create(own)
         PrivateProfileStorage.select(a)
         let noKey = PrivateProfileMeetingStore()
         do { _ = try await noKey.loadTranscript(id: source.id); check(false, "Missing guest key cannot become plaintext or successful absent history") }
         catch { check(true, "Missing guest-key shared reads fail without inventing a replacement") }
+        check(try await noKey.loadTranscript(id: plainGuest.id)?.title == plainGuest.title,
+            "An unavailable encrypted guest sibling cannot block an ordinary guest transcript")
+        check(Set(try await noKey.loadHistory().map(\.id)) == [plainGuest.id, own.id],
+            "An unavailable guest key preserves healthy account and ordinary guest catalog rows")
+        try await writer.delete(id: plainGuest.id)
+        check(try await noKey.loadHistory().map(\.id) == [own.id],
+            "An entirely locked guest catalog cannot hide healthy account history")
         let wrong = try MeetingRecordingCipher(profileID: b.id, key: Data(repeating: 0x43, count: 32))
         let wrongOwner = PrivateProfileMeetingStore(sharedGuestCipherProvider: { wrong })
         do { _ = try await wrongOwner.loadTranscript(id: source.id); check(false, "Another profile key cannot open guest data") }

@@ -297,18 +297,22 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     private func sharedGuestStore(for reader: PrivateProfileSnapshot) async throws -> (PrivateProfileSnapshot, MeetingSessionStore) {
         let guest = guestProfile(for: reader)
         let target = store(for: guest)
-        if preparedGuestReaderGeneration != reader.generation {
-            let encrypted = try await target.hasEncryptedPersistenceData()
-            try checkReadable(reader)
-            if encrypted {
-                guard let provider = sharedGuestCipherProvider,
-                      let cipher = try await provider(), cipher.profileID == guest.id
-                else { throw MeetingRecordingCipher.Failure.unavailableKey }
+        if preparedGuestReaderGeneration != reader.generation, let provider = sharedGuestCipherProvider {
+            do {
+                let cipher = try await provider()
                 try checkReadable(reader)
-                try await target.installEncryptionCipher(cipher)
+                if let cipher {
+                    guard cipher.profileID == guest.id else { throw MeetingRecordingCipher.Failure.unavailableKey }
+                    try await target.installEncryptionCipher(cipher)
+                    try checkReadable(reader)
+                    preparedGuestReaderGeneration = reader.generation
+                }
+            } catch {
                 try checkReadable(reader)
+                // Each manifest enforces its own encryption. An unavailable protected sibling
+                // must not make unrelated plaintext guest or account meetings disappear.
+                DebugLogger.shared.warning("Shared guest recording key unavailable", source: "PrivateProfileMeetingStore")
             }
-            preparedGuestReaderGeneration = reader.generation
         }
         return (guest, target)
     }
@@ -350,22 +354,38 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     private func visibleCatalog(transcriptOnly: Bool) async throws -> [MeetingSession] {
         let reader = try readableProfile()
         let primary = store(for: reader)
-        let own = try await transcriptOnly ? primary.loadHistory() : primary.loadAll()
-        try checkReadable(reader)
-        var sessions = own.filter { permits($0, in: reader) }
-        guard !reader.isGuest else { return sessions }
+        let own = try await catalog(from: primary, reader: reader, transcriptOnly: transcriptOnly)
+        var sessions = (own ?? []).filter { permits($0, in: reader) }
+        guard !reader.isGuest else {
+            guard own != nil else { throw MeetingSessionStoreError.historyUnavailable }
+            return sessions
+        }
         let (guest, shared) = try await sharedGuestStore(for: reader)
-        let guests = try await transcriptOnly ? shared.loadHistory() : shared.loadAll()
-        try checkReadable(reader)
-        let ownIDs = Set(own.map(\.id))
-        for session in guests where !ownIDs.contains(session.id) && permits(session, in: guest) {
+        let guests = try await catalog(from: shared, reader: reader, transcriptOnly: transcriptOnly)
+        let ownIDs = Set((own ?? []).map(\.id))
+        for session in guests ?? [] where !ownIDs.contains(session.id) && permits(session, in: guest) {
             let ownDirectory = try await primary.existingSessionDirectory(for: session.id)
             try checkReadable(reader)
             guard ownDirectory == nil else { continue }
             sessions.append(projected(session, source: guest, reader: reader))
         }
+        guard !sessions.isEmpty || (own != nil && guests != nil) else {
+            throw MeetingSessionStoreError.historyUnavailable
+        }
         return sessions.sorted {
             $0.startedAt == $1.startedAt ? $0.id.uuidString < $1.id.uuidString : $0.startedAt > $1.startedAt
+        }
+    }
+
+    private func catalog(from source: MeetingSessionStore, reader: PrivateProfileSnapshot,
+                         transcriptOnly: Bool) async throws -> [MeetingSession]? {
+        do {
+            let sessions = try await transcriptOnly ? source.loadHistory() : source.loadAll()
+            try checkReadable(reader)
+            return sessions
+        } catch MeetingSessionStoreError.historyUnavailable {
+            try checkReadable(reader)
+            return nil
         }
     }
 
