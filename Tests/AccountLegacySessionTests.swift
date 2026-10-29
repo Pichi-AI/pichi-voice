@@ -7,19 +7,27 @@ private actor LegacyFixture: LegacyAccountTransporting {
     var hold = false
     var holdClear = false
     var clearGate: CheckedContinuation<Void, Never>?
+    var catalog: [AccountSnapshot.Organization]?
+    var cookie: LegacyAccountCookie?
     func snapshot() -> AccountSnapshot {
         .init(schemaVersion: 1, account: .init(id: userID, displayName: "Synthetic", email: nil),
             identity: .init(issuer: "", subject: "", legacyOrigin: "https://legacy.example"),
-            organizations: [.init(id: "7", name: "Demo", workspaces: editable ? [.init(id: "9", name: "Demo", capabilities: ["recordings:import"])] : [])],
+            organizations: catalog ?? [.init(id: "7", name: "Demo", workspaces: editable ? [.init(id: "9", name: "Demo", capabilities: ["recordings:import"])] : [])],
             activeOrganizationID: "7")
     }
-    func login(email: String, password: String, captchaToken: String?) -> AccountSnapshot { snapshot() }
+    func login(email: String, password: String, captchaToken: String?) -> AccountSnapshot {
+        cookie = .init(value: "synthetic-fixture-cookie", receivedAt: Date(), expiresAt: Date().addingTimeInterval(3600))
+        return snapshot()
+    }
     func account() async -> AccountSnapshot { if hold { await withCheckedContinuation { gate = $0 } }; return snapshot() }
     func switchOrganization(_ id: String) -> AccountSnapshot { snapshot() }
     func perform(_ request: URLRequest) -> LegacyAccountHTTPResponse { uploads += 1; return .init(status: 202, body: Data("{}".utf8), retryAfter: nil) }
     func logout() { logouts += 1 }
-    func clearSession() async { if holdClear { await withCheckedContinuation { clearGate = $0 } } }
+    func clearSession() async { if holdClear { await withCheckedContinuation { clearGate = $0 } }; cookie = nil }
     func shutdown() {}
+    func sessionCookie() -> LegacyAccountCookie? { cookie }
+    func restoreSession(_ value: LegacyAccountCookie) { cookie = value }
+    func setCatalog(_ value: [AccountSnapshot.Organization]) { catalog = value }
     func holdAccount() { hold = true }
     var waiting: Bool { gate != nil }
     func releaseAccount() { hold = false; gate?.resume(); gate = nil }
@@ -51,9 +59,10 @@ private nonisolated struct LegacyUnusedOIDC: AccountTransporting {
     var isAccountIsolationReady = true
     var transitions = 0
     var activatedIdentities: [AccountIdentity] = []
+    var activatedContexts: [AccountContext] = []
     func transition(from: AccountContext?, to: AccountContext?, generation: UUID) {
         transitions += 1
-        if let to { activatedIdentities.append(to.identity) }
+        if let to { activatedIdentities.append(to.identity); activatedContexts.append(to) }
     }
 }
 
@@ -273,6 +282,71 @@ private actor LegacyMemorySessionStore: LegacyAccountSessionStoring {
 }
 
 extension AccountLegacySessionChecks {
+    static func initialWorkspaceSelection() async throws -> Int {
+        var checks = 0
+        func expect(_ value: Bool, _ label: String) { precondition(value, label); checks += 1 }
+        let config = LegacyAccountConfiguration(apiBaseURL: URL(string: "https://legacy.example")!, bundleIdentifier: "ai.example.voice")
+        let first = AccountSnapshot.Workspace(id: "9", name: "First", capabilities: ["recordings:import"])
+        let second = AccountSnapshot.Workspace(id: "10", name: "Second", capabilities: ["recordings:import"])
+        let other = AccountSnapshot.Organization(id: "8", name: "Other", workspaces: [second])
+        let catalog = [other, AccountSnapshot.Organization(id: "7", name: "Active", workspaces: [first, second])]
+        func make(_ transport: LegacyFixture, store: LegacyMemorySessionStore = LegacyMemorySessionStore(),
+                  lifecycle: LegacyLifecycle = LegacyLifecycle()) -> AccountSessionService {
+            AccountSessionService(configuration: nil, browser: LegacyUnusedBrowser(), transport: LegacyUnusedOIDC(),
+                credentials: LegacyUnusedCredentials(), lifecycle: lifecycle, legacyConfiguration: config,
+                legacyTransport: transport, legacyCredentials: store)
+        }
+        let fixture = LegacyFixture(), store = LegacyMemorySessionStore(), lifecycle = LegacyLifecycle()
+        await fixture.setCatalog(catalog)
+        let service = make(fixture, store: store, lifecycle: lifecycle)
+        await service.signIn(email: "synthetic@example.invalid", password: "synthetic-only")
+        expect(service.context?.organizationID == "7" && service.context?.workspaceID == "9",
+               "legacy fresh login chooses first workspace within verified active organization")
+        expect(lifecycle.transitions == 1 && lifecycle.activatedContexts.first == service.context,
+               "legacy default is admitted in one selected-profile transition")
+        let initialSaved = await store.session
+        expect(initialSaved?.organizationID == "7" && initialSaved?.workspaceID == "9",
+               "legacy login persists its selected destination without a later UI command")
+        expect(await fixture.uploads == 0, "automatic workspace selection does not upload anything")
+        try await service.selectWorkspace(organizationID: "7", workspaceID: "10")
+        await service.shutdown()
+        let selected = await store.session!
+        let restoreFixture = LegacyFixture()
+        await restoreFixture.setCatalog(catalog)
+        let restored = make(restoreFixture, store: store)
+        await restored.restore()
+        expect(restored.context?.workspaceID == "10", "legacy valid saved user choice survives restart instead of selecting first")
+        await restored.shutdown()
+
+        let revokedFixture = LegacyFixture(), revokedStore = LegacyMemorySessionStore(selected)
+        await revokedFixture.setCatalog([.init(id: "7", name: "Active", workspaces: [first])])
+        let revoked = make(revokedFixture, store: revokedStore)
+        await revoked.restore()
+        expect(revoked.context == nil && revoked.state == .reauthenticationRequired,
+               "revoked saved workspace fails closed instead of automatically choosing another owner scope")
+        expect(await revokedStore.session == nil, "revoked workspace still clears durable admission")
+        await revoked.shutdown()
+
+        let emptyFixture = LegacyFixture()
+        await emptyFixture.setCatalog([other, .init(id: "7", name: "Active", workspaces: [])])
+        let empty = make(emptyFixture)
+        await empty.signIn(email: "synthetic@example.invalid", password: "synthetic-only")
+        expect(empty.state == .signedIn && empty.context?.organizationID == nil && empty.context?.workspaceID == nil,
+               "empty active organization never silently switches to another organization's workspace")
+        expect(await emptyFixture.uploads == 0, "empty destination does not start a transfer")
+        await empty.shutdown()
+
+        let invalidFixture = LegacyFixture(), invalidLifecycle = LegacyLifecycle()
+        await invalidFixture.setCatalog([.init(id: "7", name: "Active", workspaces: [first, first])])
+        let invalid = make(invalidFixture, lifecycle: invalidLifecycle)
+        await invalid.signIn(email: "synthetic@example.invalid", password: "synthetic-only")
+        expect(invalid.state == .signedOut && invalid.context == nil && invalid.presentationError == .invalidAccount,
+               "malformed legacy workspace catalog is rejected before automatic selection")
+        expect(invalidLifecycle.activatedContexts.isEmpty, "unvalidated workspace cannot activate a private profile")
+        await invalid.shutdown()
+        return checks
+    }
+
     static func persistence() async throws -> Int {
         var checks = 0
         func expect(_ value: Bool, _ label: String) { precondition(value, label); checks += 1 }
