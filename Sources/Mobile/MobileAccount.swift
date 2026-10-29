@@ -809,7 +809,8 @@ struct MobileCloudSyncSettings: View {
             }
             return PichiLocalization.text("cloud.preparing", defaultValue: "Preparing sync…")
         }
-        if service.snapshot.availability == .ready && !service.snapshot.cloudSyncEnabled {
+        if !service.snapshot.cloudSyncEnabled,
+           service.snapshot.availability == .ready || service.snapshot.availability == .paused {
             return PichiLocalization.text("cloud.automatic.off", defaultValue: "Automatic sending is off.")
         }
         return MobileCloudCopy.availability(service.snapshot.availability)

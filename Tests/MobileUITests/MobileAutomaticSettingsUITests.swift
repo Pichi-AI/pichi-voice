@@ -150,6 +150,7 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
 
             XCTAssertTrue(workspace.isHittable)
             workspace.tap()
+            capture(prefix + "-workspace-opened")
             XCTAssertTrue(app.buttons["account.workspace.17.9"].waitForExistence(timeout: 5))
             capture(prefix + "-workspace-options")
             dismissMenu(app)
