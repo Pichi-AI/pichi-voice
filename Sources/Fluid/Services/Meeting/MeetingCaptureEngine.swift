@@ -1185,6 +1185,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     /// Must be called on `callbackQueue`; it clears the shared state before touching/destroying the
     /// detached engine, so no later callback can acquire an object pending reset.
     private func deactivateAECOnCallbackQueue(reason: MeetingAECFailure) {
+        DebugLogger.shared.warning(
+            "aec_fallback reason=\(reason.rawValue) route=speaker targetProtection=unfiltered",
+            source: "MeetingCaptureEngine"
+        )
         let boundary = self.microphoneTranscriptGate.invalidate()
         let detached = self.stateLock.withLock { () -> MeetingAECPipeline? in
             self.aecActivation.invalidate()
@@ -1214,6 +1218,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             return true
         }
         guard stillCurrent else { return }
+        DebugLogger.shared.log(
+            "aec_route disposition=\(disposition.rawValue)",
+            source: "MeetingCaptureEngine"
+        )
 
         switch disposition {
         case .physicallyClosed:
@@ -1232,6 +1240,11 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             do {
                 try await self.installAECForSupportedSpeaker(revision: revision)
             } catch {
+                let failure = (error as? MeetingAECFailure) ?? .bridgeInitialization
+                DebugLogger.shared.warning(
+                    "aec_fallback reason=\(failure.rawValue) route=speaker targetProtection=unfiltered",
+                    source: "MeetingCaptureEngine"
+                )
                 try await self.resumeDirectMicrophone(.unfiltered, revision: revision)
             }
         case .ambiguous:
@@ -1289,6 +1302,11 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             self.stateLock.withLock {
                 self.aecActivation.abandonConstruction(reserved.token)
             }
+            let failure = (error as? MeetingAECFailure) ?? .bridgeInitialization
+            DebugLogger.shared.warning(
+                "aec_activation_failed reason=\(failure.rawValue) route=speaker",
+                source: "MeetingCaptureEngine"
+            )
             throw error
         }
         let committer = MeetingAECOutputCommitter(

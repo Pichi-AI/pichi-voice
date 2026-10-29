@@ -27,7 +27,10 @@ final class MeetingAEC3Tests: XCTestCase {
         )
         let processor = AECFakeProcessor()
         processor.failNext = true
-        let pipeline = MeetingAECPipeline(processor: processor, committer: committer)
+        let fallbacks = AECTerminalRecorder()
+        let pipeline = MeetingAECPipeline(
+            processor: processor, committer: committer, fallbackObserver: { fallbacks.append($0) }
+        )
         for frame in 0..<25 {
             if frame == 1 { processor.failNext = true }
             let pts = CMTime(value: Int64(frame * 480), timescale: 48_000)
@@ -38,6 +41,7 @@ final class MeetingAEC3Tests: XCTestCase {
         }
         await committer.waitForPendingCommits()
         XCTAssertEqual(live.count, 25)
+        XCTAssertEqual(fallbacks.values, [.bridgeProcessing], "one failed route must produce one support diagnostic")
         XCTAssertTrue(processor.failNext, "the failed route must not repeatedly restart AEC and withhold speech")
         XCTAssertTrue(failures.values.isEmpty)
         let current = await writer.snapshot()
@@ -46,6 +50,7 @@ final class MeetingAEC3Tests: XCTestCase {
         pipeline.stop(boundary: gate.invalidate())
         await committer.waitForPendingCommits()
         let stopped = await writer.stop()
+        XCTAssertEqual(fallbacks.values, [.bridgeProcessing], "Stop must not add a filtering-failure diagnostic")
         XCTAssertFalse(gate.admitsTranscript(), "Stop must leave live delivery closed")
         let chunk = try XCTUnwrap(stopped.chunks.first)
         let audio = try AVAudioFile(forReading: chunk.fileURL(relativeTo: directory))
@@ -54,6 +59,63 @@ final class MeetingAEC3Tests: XCTestCase {
         try audio.read(into: buffer)
         let channel = try XCTUnwrap(buffer.floatChannelData?[0])
         XCTAssertTrue((0..<Int(buffer.frameLength)).allSatisfy { abs(channel[$0] - 0.125) < 0.000_001 })
+    }
+
+    func testInputFormatFailureReportsItsSpecificReasonOnlyOnce() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-input-diagnostic-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingAudioChunkWriter(
+            track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+        )
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let committer = MeetingAECOutputCommitter(
+            writer: writer, transcriptGate: gate, liveAudioHandler: nil, terminalFailure: { _ in }
+        )
+        let fallbacks = AECTerminalRecorder()
+        let pipeline = MeetingAECPipeline(
+            processor: AECFakeProcessor(), committer: committer, fallbackObserver: { fallbacks.append($0) }
+        )
+        let wrongRate = try XCTUnwrap(Self.interleavedBuffer(
+            left: [0.1, 0.2], right: [0.1, 0.2], pts: .zero, sampleRate: 44_100
+        ))
+        pipeline.consumeRender(wrongRate, stream: self.token)
+        pipeline.consumeRender(wrongRate, stream: self.token)
+        XCTAssertEqual(fallbacks.values, [.unsupportedSampleRate])
+        pipeline.stop(boundary: gate.invalidate())
+        await committer.waitForPendingCommits()
+        _ = await writer.stop()
+        XCTAssertEqual(fallbacks.values, [.unsupportedSampleRate])
+    }
+
+    func testLifecycleFlushesDoNotReportFilteringFailure() async throws {
+        for stopping in [false, true] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-lifecycle-diagnostic-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let writer = try MeetingAudioChunkWriter(
+                track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+            )
+            let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+            let committer = MeetingAECOutputCommitter(
+                writer: writer, transcriptGate: gate, liveAudioHandler: nil, terminalFailure: { _ in }
+            )
+            let fallbacks = AECTerminalRecorder()
+            let pipeline = MeetingAECPipeline(
+                processor: AECFakeProcessor(), committer: committer, fallbackObserver: { fallbacks.append($0) }
+            )
+            let capture = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+                samples: [Float](repeating: 0.1, count: 480), presentationTime: .zero
+            ))
+            pipeline.consumeCapture(capture, stream: self.token)
+            if stopping {
+                pipeline.stop(boundary: gate.invalidate())
+            } else {
+                pipeline.invalidate(reason: .streamChanged, boundary: gate.invalidate())
+                pipeline.stop(boundary: gate.invalidate())
+            }
+            await committer.waitForPendingCommits()
+            _ = await writer.stop()
+            XCTAssertTrue(fallbacks.values.isEmpty, "normal lifecycle boundaries must not be labelled as AEC failures")
+        }
     }
 
     func testFallbackCannotReopenAfterExternalInvalidation() async throws {
