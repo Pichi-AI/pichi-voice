@@ -366,7 +366,7 @@ extension SettingsStore {
             }
         }
 
-        /// Credit for the model's original publisher, shown with the card description on every model surface.
+        /// Credit for the model's original publisher, available to model surfaces and details.
         var creditLine: String? {
             switch self {
             case .gigaam: return "Built on GigaAM-v3 by SaluteDevices."

@@ -6,6 +6,7 @@ struct VoiceEngineSettingsView: View {
     @Environment(\.colorScheme) var colorScheme
     @State var isShowingNemotronLanguagePicker = false
     @State var isShowingWhisperLanguagePicker = false
+    @State var isShowingSpeechModelDetails = false
     @State var whisperLanguageSearchText = ""
     let theme: AppTheme
 
