@@ -70,9 +70,10 @@ struct MeetingSession { let id: MeetingSessionID }
 
         state.selectedHistorySessionID = MeetingSessionID(value: 1)
         state.resumedSummarySession = MeetingSession(id: MeetingSessionID(value: 1))
-        state.pendingDeleteSessionID = MeetingSessionID(value: 2)
-        state.pendingDeleteAudioSessionID = MeetingSessionID(value: 3)
+        state.pendingDeleteSession = MeetingSession(id: MeetingSessionID(value: 2))
+        state.pendingDeleteAudioSession = MeetingSession(id: MeetingSessionID(value: 3))
         state.renameSessionID = MeetingSessionID(value: 4)
+        state.renameSource = MeetingSession(id: MeetingSessionID(value: 4))
         state.renameDraft = "Private title"; state.searchText = "Private speaker"
         state.setupDraft.title = "Private draft"; state.setupDraft.titleWasEdited = true
         state.setupDraftBeforeEditing.title = "Private original"
@@ -96,8 +97,8 @@ struct MeetingSession { let id: MeetingSessionID }
         while state.selectedHistorySessionID != nil { await Task.yield() }
         check(!joined && !finished, "transition waits for cancellation-ignoring owned work")
         check(state.resumedSummarySession == nil, "resumed session cleared before join")
-        check(state.pendingDeleteSessionID == nil && state.pendingDeleteAudioSessionID == nil, "delete payloads cleared")
-        check(state.renameSessionID == nil && state.renameDraft.isEmpty && state.searchText.isEmpty, "rename/search payloads cleared")
+        check(state.pendingDeleteSession == nil && state.pendingDeleteAudioSession == nil, "delete payloads cleared")
+        check(state.renameSessionID == nil && state.renameSource == nil && state.renameDraft.isEmpty && state.searchText.isEmpty, "rename/search payloads cleared")
         check(state.actionErrorMessage == nil && !state.isShowingMeetingSettings, "error and sheet cleared")
         check(state.setupDraft.title == "New meeting" && !state.setupDraft.titleWasEdited, "private edited title cleared")
         check(state.setupDraftBeforeEditing.title == "New meeting" && !state.pendingBackupSetupRefresh, "private original/restore state cleared")

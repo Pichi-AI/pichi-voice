@@ -1658,7 +1658,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Manifest-first: cleared manifest saved before file removal, so a crash between the two
     /// leaves a leftover `tracks/` that the sweep heals. Undo stack survives (audio-independent).
     @discardableResult
-    func deleteAudio(sessionID: MeetingSessionID) async throws -> MeetingSession {
+    func deleteAudio(sessionID: MeetingSessionID, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
         self.isMutatingSession = true
         defer { self.releaseMutationGate() }
@@ -1669,8 +1669,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         var target = try await self.resolveSession(sessionID)
 
         try self.assertSafeToMutate(sessionID: sessionID)
+        try Self.validateCorrectionOwnership(target, expected: expectedOwnership)
 
-        target = try await self.applyAudioDeletion(to: target)
+        target = try await self.applyAudioDeletion(to: target, expectedOwnership: expectedOwnership)
 
         self.refreshSlots(with: target)
         return target
@@ -1678,7 +1679,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     /// Shared by deleteAudio and the sweep — the sweep already holds the gate, so it must not
     /// call the public guard-throwing API.
-    private func applyAudioDeletion(to inputTarget: MeetingSession) async throws -> MeetingSession {
+    private func applyAudioDeletion(to inputTarget: MeetingSession, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
         var target = inputTarget
         guard target.retention.audioDeletedAt == nil else { return target }
         for index in target.audioTracks.indices {
@@ -1692,7 +1693,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         try await self.store.save(target)
         do {
-            try await self.store.deleteAudioFiles(for: target.id)
+            if let owner = expectedOwnership ?? target.profileOwnership {
+                try await self.store.deleteAudioFiles(for: target.id, expectedOwnership: owner)
+            } else {
+                try await self.store.deleteAudioFiles(for: target.id)
+            }
         } catch {
             DebugLogger.shared.warning(
                 "Failed to remove audio files for \(target.id) after save; sweep will heal it later: \(error)",
@@ -1734,9 +1739,14 @@ final class MeetingSessionCoordinator: ObservableObject {
             )
             return
         }
-        var leftovers: [(id: MeetingSessionID, leftover: LeftoverAudio)] = []
+        let maintenanceOwners = Dictionary(sessions.compactMap { session in
+            session.profileOwnership.map { (session.id, $0) }
+        }, uniquingKeysWith: { first, _ in first })
+        var leftovers: [(id: MeetingSessionID, ownership: MeetingProfileOwnership?, leftover: LeftoverAudio)] = []
         for session in sessions {
-            if let leftover = await self.leftoverAudio(for: session) { leftovers.append((session.id, leftover)) }
+            if let leftover = await self.leftoverAudio(for: session) {
+                leftovers.append((session.id, session.profileOwnership, leftover))
+            }
         }
         self.isReadingRetentionSessions = false
         let policy = self.settings.meetingAudioRetentionPolicy
@@ -1773,10 +1783,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         // A queued tail save landing after our deletes would resurrect the audio manifest.
         await self.flushQueuedPersistence()
 
-        for (id, leftover) in leftovers where self.isSafeToSweep(sessionID: id) {
+        for (id, ownership, leftover) in leftovers where self.isSafeToSweep(sessionID: id) {
             switch leftover {
             case let .workingState(directory): try? MeetingRetainedProcessingCheckpoint.remove(in: directory)
-            case .audioFiles: try? await self.store.deleteAudioFiles(for: id)
+            case .audioFiles:
+                if let ownership { try? await self.store.deleteAudioFiles(for: id, expectedOwnership: ownership) }
+                else { try? await self.store.deleteAudioFiles(for: id) }
             }
         }
 
@@ -1790,6 +1802,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             // The decoded snapshot predates the gate. Delete only what is still expired now.
             let currentPolicy = self.settings.meetingAudioRetentionPolicy
             guard let session = try? await self.resolveSession(id),
+                  maintenanceOwners[id].map({ $0.matchesPersistedOwner(session.profileOwnership) }) ?? true,
                   session.retention.audioDeletedAt == nil, Self.isSweepEligible(session),
                   let deadline = currentPolicy.deadline(endedAt: session.endedAt, startedAt: session.startedAt)
             else { continue }
@@ -1799,7 +1812,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
 
             do {
-                let target = try await self.applyAudioDeletion(to: session)
+                let target = try await self.applyAudioDeletion(to: session, expectedOwnership: maintenanceOwners[id])
                 self.refreshSlots(with: target)
                 deletedAudio = true
             } catch {
@@ -1835,9 +1848,12 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// files can outlive tracks after interruption and must also trigger the existing cleanup.
     private func leftoverAudio(for session: MeetingSession) async -> LeftoverAudio? {
         let fullyCompleted = session.state == .completed && session.transcriptIsComplete == true
-        guard session.retention.audioDeletedAt != nil || fullyCompleted,
-              let directory = try? await self.store.existingSessionDirectory(for: session.id)
-        else { return nil }
+        guard session.retention.audioDeletedAt != nil || fullyCompleted else { return nil }
+        let directory: URL?
+        if let owner = session.profileOwnership {
+            directory = try? await self.store.loadExistingSource(id: session.id, expectedOwnership: owner)?.directory
+        } else { directory = try? await self.store.existingSessionDirectory(for: session.id) }
+        guard let directory else { return nil }
         let hasWorkingState = (try? MeetingRetainedProcessingCheckpoint.hasWorkingState(in: directory)) ?? false
         if session.retention.audioDeletedAt == nil {
             // Completion is already durable. A crash before cache removal must not retain

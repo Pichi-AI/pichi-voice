@@ -132,6 +132,12 @@ extension MeetingSessionStoreCheckpointTests {
         let accountStore = MeetingSessionStore(rootDirectory: account.directory("Meetings"))
         try await guestStore.create(legacy)
         let guestDirectory = guest.directory("Meetings").appendingPathComponent(legacy.id.uuidString)
+        let concrete = try await guestStore.loadExistingSource(id: legacy.id, expectedOwnership: .guest)
+        let existential: any MeetingSessionStoring = guestStore
+        let protocolRead = try await existential.loadExistingSource(id: legacy.id, expectedOwnership: .guest)
+        check(concrete?.session.id == legacy.id && protocolRead?.session.id == legacy.id
+              && concrete?.directory == protocolRead?.directory,
+            "Concrete and protocol calls use the actual async atomic source witness, never the unsupported default")
         let originalBytes = try Data(contentsOf: guestDirectory.appendingPathComponent("session.json"))
         PrivateProfileStorage.select(account)
         let initial = PrivateProfileMeetingStore()
@@ -164,6 +170,17 @@ extension MeetingSessionStoreCheckpointTests {
         check(current?.session.title == replacement.title
               && current?.directory.standardizedFileURL == independentlyResolved?.standardizedFileURL,
             "A freshly displayed account source still reads its own matching directory")
+        let guestMarker = guestDirectory.appendingPathComponent("tracks/source-marker.bin")
+        let accountMarker = account.directory("Meetings").appendingPathComponent(legacy.id.uuidString)
+            .appendingPathComponent("tracks/source-marker.bin")
+        let guestAudio = Data("synthetic guest audio".utf8), accountAudio = Data("synthetic private audio".utf8)
+        try guestAudio.write(to: guestMarker); try accountAudio.write(to: accountMarker)
+        do {
+            try await racing.deleteAudioFiles(for: displayed.id, expectedOwnership: .guest)
+            check(false, "A stale guest audio deletion cannot select the account directory")
+        } catch { check(true, "Pinned guest audio deletion rejects a colliding current source") }
+        check(try Data(contentsOf: guestMarker) == guestAudio && Data(contentsOf: accountMarker) == accountAudio,
+            "Rejected owner-bound audio removal preserves both roots' original bytes")
         check(try Data(contentsOf: guestDirectory.appendingPathComponent("session.json")) == originalBytes,
             "Owner-bound playback resolution never rewrites the original legacy guest manifest")
     }

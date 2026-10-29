@@ -28,6 +28,7 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     /// Removes the `tracks/` directory and any processing checkpoint, leaving the manifest and
     /// transcript untouched. Idempotent — missing paths are not an error.
     func deleteAudioFiles(for id: MeetingSessionID) async throws
+    func deleteAudioFiles(for id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws
 }
 
 // Test/custom stores retain their existing behavior unless they provide the lighter reads.
@@ -57,6 +58,10 @@ nonisolated extension MeetingSessionStoring {
     }
     func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership, validating: @Sendable (MeetingSession) throws -> Void) async throws {
         // A custom store must provide an atomic implementation, not a load/await/delete approximation.
+        throw CocoaError(.featureUnsupported)
+    }
+
+    func deleteAudioFiles(for id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
         throw CocoaError(.featureUnsupported)
     }
 
@@ -247,7 +252,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
         return migrated
     }
 
-    func loadExistingSource(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) throws -> (session: MeetingSession, directory: URL)? {
+    func loadExistingSource(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws -> (session: MeetingSession, directory: URL)? {
         guard let session = try self.load(id: id) else { return nil }
         guard expectedOwnership.matchesPersistedOwner(session.profileOwnership) else {
             throw CocoaError(.fileReadNoPermission)
@@ -401,6 +406,15 @@ actor MeetingSessionStore: MeetingSessionStoring {
             try self.fileSystem.manager.removeItem(at: checkpointURL)
         }
         try MeetingRetainedProcessingCheckpoint.remove(in: directory)
+    }
+
+    func deleteAudioFiles(for id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
+        if let session = try self.load(id: id) {
+            guard expectedOwnership.matchesPersistedOwner(session.profileOwnership) else {
+                throw CocoaError(.fileWriteNoPermission)
+            }
+        }
+        try self.deleteAudioFiles(for: id)
     }
 
     private func requiresEncryption(for id: MeetingSessionID) -> Bool {

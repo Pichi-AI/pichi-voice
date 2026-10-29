@@ -222,7 +222,13 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
         let profile = try readableProfile()
         let sessions = try await store(for: profile).loadHistory()
         try checkReadable(profile)
-        return sessions.filter { permits($0, in: profile) }
+        return sessions.filter { permits($0, in: profile) }.map { session in
+            var value = session
+            // Maintenance can outlive this catalog read. Give legacy guest snapshots the
+            // same explicit source pin as shared reads, without rewriting their manifests.
+            if profile.isGuest, value.profileOwnership == nil { value.profileOwnership = .guest }
+            return value
+        }
     }
 
     func loadRecoverable() async throws -> [MeetingSession] {
@@ -282,7 +288,14 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     func deleteAudioFiles(for id: MeetingSessionID) async throws {
         let reader = try readableProfile()
         guard let resolved = try await visibleSession(id: id, reader: reader, transcriptOnly: false) else { return }
-        try await store(for: resolved.profile).deleteAudioFiles(for: id)
+        try await deleteAudioFiles(for: id, expectedOwnership: .init(profile: resolved.profile))
+        try checkReadable(reader)
+    }
+
+    func deleteAudioFiles(for id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
+        let reader = try readableProfile()
+        let profile = try await deletionProfile(id: id, expectedOwnership: expectedOwnership, reader: reader)
+        try await store(for: profile).deleteAudioFiles(for: id, expectedOwnership: expectedOwnership)
         try checkReadable(reader)
     }
 

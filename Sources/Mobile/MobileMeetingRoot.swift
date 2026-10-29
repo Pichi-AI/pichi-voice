@@ -244,13 +244,13 @@ struct MobileMeetingRoot: View {
                     switch item {
                     case .meeting(let session):
                         guard canPresent(session) else { return }
-                        try await coordinator.deleteSession(id: session.id)
+                        try await coordinator.deleteSession(id: session.id, expectedOwnership: session.profileOwnership ?? .guest)
                         guard canPresent(session) else { return }
                         if historyPath.contains(session.id) { historyPath.removeAll() }
                         await refreshHistory()
                     case .audio(let session):
                         guard canPresent(session) else { return }
-                        acceptCommittedSession(try await coordinator.deleteAudio(sessionID: session.id))
+                        acceptCommittedSession(try await coordinator.deleteAudio(sessionID: session.id, expectedOwnership: session.profileOwnership ?? .guest))
                     }
                 }
             }
@@ -1141,11 +1141,14 @@ struct MobileMeetingRoot: View {
     private func exportAudio(_ session: MeetingSession) {
         guard canPresent(session) else { return }
         runPrivate { admission in
-            guard let fresh = try await store.load(id: session.id), canPresent(fresh),
+            guard let source = try await store.loadExistingSource(id: session.id,
+                expectedOwnership: session.profileOwnership ?? .guest) else { throw CocoaError(.fileNoSuchFile) }
+            let fresh = source.session
+            guard canPresent(fresh),
                   fresh.retention.audioDeletedAt == nil, fresh.hasFinalizedAudio
             else { throw CocoaError(.fileNoSuchFile) }
             guard privatePresentation.publications.canPublish(admission) else { return }
-            guard let directory = try await store.existingSessionDirectory(for: fresh.id) else { throw CocoaError(.fileNoSuchFile) }
+            let directory = source.directory
             guard privatePresentation.publications.canPublish(admission) else { return }
             let payload = try await MeetingSharePayload.audio(session: fresh, directory: directory)
             guard privatePresentation.publications.canPublish(admission) else { payload.cleanup(); return }

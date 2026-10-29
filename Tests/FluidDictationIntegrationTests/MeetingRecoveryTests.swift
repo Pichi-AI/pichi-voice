@@ -4703,6 +4703,10 @@ final class MeetingRecoveryTests: XCTestCase {
         try await accountStore.create(replacement)
         let guestURL = guest.directory("Meetings").appendingPathComponent(legacy.id.uuidString).appendingPathComponent("session.json")
         let accountURL = account.directory("Meetings").appendingPathComponent(legacy.id.uuidString).appendingPathComponent("session.json")
+        let guestMarker = guestURL.deletingLastPathComponent().appendingPathComponent("tracks/source-marker.bin")
+        let accountMarker = accountURL.deletingLastPathComponent().appendingPathComponent("tracks/source-marker.bin")
+        let guestAudio = Data("synthetic guest audio".utf8), accountAudio = Data("synthetic private audio".utf8)
+        try guestAudio.write(to: guestMarker); try accountAudio.write(to: accountMarker)
         let guestBefore = try Data(contentsOf: guestURL), accountBefore = try Data(contentsOf: accountURL)
         // Even a compatibility caller without a displayed-owner argument cannot replay a
         // guest inverse into an account source with matching member IDs and revisions.
@@ -4718,12 +4722,17 @@ final class MeetingRecoveryTests: XCTestCase {
             { try await coordinator.nameUnknownSegment(sessionID: legacy.id, segmentID: memberID, displayName: "Stale new participant", expectedOwnership: .guest) },
             { try await coordinator.editSpeakers(sessionID: legacy.id, edits: .init(names: [speakerA: "Stale roster"]), expectedOwnership: .guest) },
             { try await coordinator.setLocalUserSpeaker(sessionID: legacy.id, speakerID: speakerA, expectedOwnership: .guest) },
-            { try await coordinator.renameSession(sessionID: legacy.id, to: "Stale title", expectedOwnership: .guest) }
+            { try await coordinator.renameSession(sessionID: legacy.id, to: "Stale title", expectedOwnership: .guest) },
+            { try await coordinator.deleteAudio(sessionID: legacy.id, expectedOwnership: .guest) }
         ]
         for operation in operations {
             do { _ = try await operation(); XCTFail("Displayed guest commands cannot enter the account source") }
             catch { XCTAssertEqual(error as? AccountError, .staleOperation) }
         }
+        do { try await coordinator.deleteSession(id: legacy.id, expectedOwnership: .guest); XCTFail("Stale guest confirmation cannot delete the account source") }
+        catch { XCTAssertEqual(error as? AccountError, .staleOperation) }
+        XCTAssertEqual(try Data(contentsOf: guestMarker), guestAudio)
+        XCTAssertEqual(try Data(contentsOf: accountMarker), accountAudio)
         XCTAssertEqual(try Data(contentsOf: guestURL), guestBefore)
         XCTAssertEqual(try Data(contentsOf: accountURL), accountBefore)
         try await accountStore.delete(id: legacy.id)
@@ -6671,6 +6680,49 @@ final class MeetingRecoveryTests: XCTestCase {
 
     /// Recording admission preempts maintenance: a sweep whose read finishes during a pending Start
     /// leaves the gate to Start and re-arms itself instead of failing Start as maintenance.
+    func testRetentionCatalogCannotHealAudioInAFallbackGuestWithTheSameUUID() async throws {
+        let originalProfile = PrivateProfileStorage.current
+        let dir = self.makeTempDirectory()
+        defer { PrivateProfileStorage.select(originalProfile); try? FileManager.default.removeItem(at: dir) }
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: dir)
+        let account = try PrivateProfileStorage.proposed(context: .init(identity: .init(
+            issuer: "https://identity.invalid/maintenance", subject: "source", internalUserID: "source"),
+            organizationID: "organization", workspaceID: "workspace", generation: UUID()),
+            generation: UUID(), legacyRootDirectory: dir)
+        let guestStore = MeetingSessionStore(rootDirectory: guest.directory("Meetings"))
+        let accountStore = MeetingSessionStore(rootDirectory: account.directory("Meetings"))
+        let legacy = self.makeCorrectionSession(state: .completed).session
+        try await guestStore.create(legacy)
+        var owned = legacy
+        owned.profileOwnership = .init(profile: account); owned.retention.audioDeletedAt = Date()
+        owned.audioTracks[0].chunks = []
+        try await accountStore.create(owned)
+        let guestDirectory = guest.directory("Meetings").appendingPathComponent(legacy.id.uuidString)
+        let marker = guestDirectory.appendingPathComponent("tracks/source-marker.bin")
+        let bytes = Data("preserve original guest audio".utf8)
+        try bytes.write(to: marker)
+        let originalManifest = try Data(contentsOf: guestDirectory.appendingPathComponent("session.json"))
+        PrivateProfileStorage.select(account)
+        let facade = PrivateProfileMeetingStore()
+        let entered = self.expectation(description: "Owned maintenance catalog captured")
+        let store = GatedLoadAllStore(inner: facade, readsBeforeHolding: true) { index in
+            if index == 1 { entered.fulfill() }
+        }
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        self.addTeardownBlock { @MainActor in await store.openAllGates(); await coordinator.shutdownForTermination() }
+        let sweep = Task { await coordinator.sweepExpiredAudio() }
+        await self.fulfillment(of: [entered], timeout: 2)
+        try await accountStore.delete(id: owned.id)
+        await store.openGate(1)
+        await sweep.value
+        XCTAssertEqual(try Data(contentsOf: marker), bytes)
+        XCTAssertEqual(try Data(contentsOf: guestDirectory.appendingPathComponent("session.json")), originalManifest,
+                       "A removed account source cannot send its stale cleanup into shared guest data")
+        await coordinator.shutdownForTermination()
+        await facade.finishProfileTransition()
+    }
+
     func testPendingStartPreemptsRetentionSweepAndReArmsIt() async throws {
         let dir = self.makeTempDirectory()
         let realStore = MeetingSessionStore(rootDirectory: dir)
@@ -8665,7 +8717,7 @@ private actor GatedRecoverableStore: MeetingSessionStoring {
 /// Other storage operations remain real, so capture and audio handback can finish while held.
 /// `readsBeforeHolding` returns the snapshot taken when the call entered, as a slow decode would.
 private actor GatedLoadAllStore: MeetingSessionStoring {
-    private let inner: MeetingSessionStore
+    private let inner: any MeetingSessionStoring
     private let entered: @Sendable (Int) -> Void
     private let readsBeforeHolding: Bool
     private var nextIndex = 0
@@ -8673,7 +8725,7 @@ private actor GatedLoadAllStore: MeetingSessionStoring {
     private var allOpen = false
     private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
 
-    init(inner: MeetingSessionStore, readsBeforeHolding: Bool = false, entered: @escaping @Sendable (Int) -> Void) {
+    init(inner: any MeetingSessionStoring, readsBeforeHolding: Bool = false, entered: @escaping @Sendable (Int) -> Void) {
         self.inner = inner; self.readsBeforeHolding = readsBeforeHolding; self.entered = entered
     }
 
@@ -8689,10 +8741,16 @@ private actor GatedLoadAllStore: MeetingSessionStoring {
         for continuation in pending { continuation.resume() }
     }
 
-    func loadAll() async throws -> [MeetingSession] {
+    func loadAll() async throws -> [MeetingSession] { try await readCatalog(maintenance: false) }
+    func loadHistoryForMaintenance() async throws -> [MeetingSession] { try await readCatalog(maintenance: true) }
+    private func readCatalog(maintenance: Bool) async throws -> [MeetingSession] {
         self.nextIndex += 1
         let index = self.nextIndex
-        let snapshot = self.readsBeforeHolding ? try await self.inner.loadAll() : nil
+        let snapshot: [MeetingSession]?
+        if self.readsBeforeHolding {
+            if maintenance { snapshot = try await self.inner.loadHistoryForMaintenance() }
+            else { snapshot = try await self.inner.loadAll() }
+        } else { snapshot = nil }
         if !self.allOpen, !self.openIndices.contains(index) {
             await withCheckedContinuation { continuation in
                 self.continuations[index] = continuation
@@ -8700,9 +8758,16 @@ private actor GatedLoadAllStore: MeetingSessionStoring {
             }
         }
         if let snapshot { return snapshot }
+        if maintenance { return try await self.inner.loadHistoryForMaintenance() }
         return try await self.inner.loadAll()
     }
 
+    func loadExistingSource(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws -> (session: MeetingSession, directory: URL)? {
+        try await inner.loadExistingSource(id: id, expectedOwnership: expectedOwnership)
+    }
+    func deleteAudioFiles(for id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
+        try await inner.deleteAudioFiles(for: id, expectedOwnership: expectedOwnership)
+    }
     func create(_ session: MeetingSession) async throws { try await self.inner.create(session) }
     func save(_ session: MeetingSession) async throws { try await self.inner.save(session) }
     func load(id: MeetingSessionID) async throws -> MeetingSession? { try await self.inner.load(id: id) }

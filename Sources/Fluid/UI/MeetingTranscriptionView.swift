@@ -270,8 +270,8 @@ private final class MeetingViewPrivateProjection: ObservableObject, PrivateProfi
     @Published var actionErrorMessage: String?
     @Published var selectedHistorySessionID: MeetingSessionID?
     @Published var resumedSummarySession: MeetingSession?
-    @Published var pendingDeleteSessionID: MeetingSessionID?
-    @Published var pendingDeleteAudioSessionID: MeetingSessionID?
+    @Published var pendingDeleteSession: MeetingSession?
+    @Published var pendingDeleteAudioSession: MeetingSession?
     @Published var renameSessionID: MeetingSessionID?
     @Published var renameSource: MeetingSession?
     @Published var renameDraft = ""
@@ -330,7 +330,7 @@ private final class MeetingViewPrivateProjection: ObservableObject, PrivateProfi
 
     func clearPayloads() {
         selectedHistorySessionID = nil; resumedSummarySession = nil
-        pendingDeleteSessionID = nil; pendingDeleteAudioSessionID = nil
+        pendingDeleteSession = nil; pendingDeleteAudioSession = nil
         renameSessionID = nil; renameSource = nil; renameDraft = ""; searchText = ""; actionErrorMessage = nil
         isShowingMeetingSettings = false; pendingBackupSetupRefresh = false
         draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
@@ -501,8 +501,8 @@ struct MeetingTranscriptionView: View {
             onRevealAudio: { if self.privateState.accepts(projection) { self.revealCapturedAudio($0) } },
             onExportAudio: { if self.privateState.accepts(projection) { self.exportAudio($0) } },
             onExportTranscript: { if self.privateState.accepts(projection) { self.exportTranscript($0, format: $1, includeEchoes: false) } },
-            onDeleteAudioRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteAudioSessionID = $0 } },
-            onDeleteRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteSessionID = $0 } },
+            onDeleteAudioRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteAudioSession = $0 } },
+            onDeleteRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteSession = $0 } },
             onRename: { if self.privateState.accepts(projection) { self.renameMeetingSession(source: $0, to: $1) } },
             onRecordAgain: { if self.privateState.accepts(projection) { self.recordAgain($0) } },
             onOpenIntegrations: self.openMeetingIntegrations
@@ -649,31 +649,31 @@ struct MeetingTranscriptionView: View {
 
     private var deleteMeetingIsPresented: Binding<Bool> {
         Binding(
-                        get: { self.privateState.pendingDeleteSessionID != nil },
-                        set: { if !$0 { self.privateState.pendingDeleteSessionID = nil } }
+                        get: { self.privateState.pendingDeleteSession != nil },
+                        set: { if !$0 { self.privateState.pendingDeleteSession = nil } }
                     )
     }
 
     private var deleteAudioIsPresented: Binding<Bool> {
         Binding(
-                        get: { self.privateState.pendingDeleteAudioSessionID != nil },
-                        set: { if !$0 { self.privateState.pendingDeleteAudioSessionID = nil } }
+                        get: { self.privateState.pendingDeleteAudioSession != nil },
+                        set: { if !$0 { self.privateState.pendingDeleteAudioSession = nil } }
                     )
     }
 
     @ViewBuilder
     private func deleteMeetingActions(projection: MeetingViewPrivateProjection.Stamp?) -> some View {
-        Button("Cancel", role: .cancel) { self.privateState.pendingDeleteSessionID = nil }
+        Button("Cancel", role: .cancel) { self.privateState.pendingDeleteSession = nil }
         Button("Delete", role: .destructive) {
-            if self.privateState.accepts(projection), let id = self.privateState.pendingDeleteSessionID { self.deleteSession(id: id) }
+            if self.privateState.accepts(projection), let source = self.privateState.pendingDeleteSession { self.deleteSession(source: source) }
         }
     }
 
     @ViewBuilder
     private func deleteAudioActions(projection: MeetingViewPrivateProjection.Stamp?) -> some View {
-        Button("Cancel", role: .cancel) { self.privateState.pendingDeleteAudioSessionID = nil }
+        Button("Cancel", role: .cancel) { self.privateState.pendingDeleteAudioSession = nil }
         Button("Delete Audio", role: .destructive) {
-            if self.privateState.accepts(projection), let id = self.privateState.pendingDeleteAudioSessionID { self.deleteAudio(id: id) }
+            if self.privateState.accepts(projection), let source = self.privateState.pendingDeleteAudioSession { self.deleteAudio(source: source) }
         }
     }
 
@@ -1247,15 +1247,15 @@ struct MeetingTranscriptionView: View {
         } ?? false
     }
 
-    private func deleteSession(id: MeetingSessionID) {
+    private func deleteSession(source: MeetingSession) {
         guard self.summaryActivity.selectionLock == nil else { return }
-        self.privateState.pendingDeleteSessionID = nil
+        self.privateState.pendingDeleteSession = nil
         self.privateState.actionErrorMessage = nil
         self.privateState.run { stamp in
             do {
-                try await self.coordinator.deleteSession(id: id)
+                try await self.coordinator.deleteSession(id: source.id, expectedOwnership: source.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return }
-                if self.privateState.selectedHistorySessionID == id { self.privateState.selectedHistorySessionID = nil }
+                if self.privateState.selectedHistorySessionID == source.id { self.privateState.selectedHistorySessionID = nil }
             } catch {
                 guard self.privateState.accepts(stamp) else { return }
                 self.privateState.actionErrorMessage = error.localizedDescription
@@ -1265,13 +1265,13 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func deleteAudio(id: MeetingSessionID) {
+    private func deleteAudio(source: MeetingSession) {
         guard self.summaryActivity.selectionLock == nil else { return }
-        self.privateState.pendingDeleteAudioSessionID = nil
+        self.privateState.pendingDeleteAudioSession = nil
         self.privateState.actionErrorMessage = nil
         self.privateState.run { stamp in
             do {
-                _ = try await self.coordinator.deleteAudio(sessionID: id)
+                _ = try await self.coordinator.deleteAudio(sessionID: source.id, expectedOwnership: source.profileOwnership ?? .guest)
             } catch {
                 guard self.privateState.accepts(stamp) else { return }
                 self.privateState.actionErrorMessage = error.localizedDescription
@@ -1350,12 +1350,14 @@ struct MeetingTranscriptionView: View {
         self.privateState.run { stamp in
             do {
                 // Reload fresh: the passed-in session may predate a since-completed audio deletion.
-                let loaded = try await MeetingSessionStore.shared.load(id: session.id)
+                let loaded = try await MeetingSessionStore.shared.loadExistingSource(id: session.id,
+                    expectedOwnership: session.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return }
-                guard let freshSession = loaded else {
+                guard let source = loaded else {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
                     return
                 }
+                let freshSession = source.session
                 guard !freshSession.isLocalContentConcealed,
                       freshSession.retention.audioDeletedAt == nil,
                       freshSession.hasFinalizedAudio
@@ -1363,12 +1365,7 @@ struct MeetingTranscriptionView: View {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: audio for this recording has been deleted.")
                     return
                 }
-                let resolvedDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id)
-                guard self.privateState.accepts(stamp) else { return }
-                guard let directory = resolvedDirectory else {
-                    self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
-                    return
-                }
+                let directory = source.directory
                 guard let firstAudioURL = MeetingAudioPresentation.firstPlaybackURL(
                     in: freshSession,
                     directory: directory
@@ -1400,12 +1397,14 @@ struct MeetingTranscriptionView: View {
         self.privateState.run { stamp in
             do {
                 // Reload fresh: the passed-in session may predate a since-completed audio deletion.
-                let loaded = try await MeetingSessionStore.shared.load(id: session.id)
+                let loaded = try await MeetingSessionStore.shared.loadExistingSource(id: session.id,
+                    expectedOwnership: session.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return }
-                guard let freshSession = loaded else {
+                guard let source = loaded else {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
                     return
                 }
+                let freshSession = source.session
                 guard !freshSession.isLocalContentConcealed,
                       freshSession.retention.audioDeletedAt == nil,
                       freshSession.hasFinalizedAudio
@@ -1413,12 +1412,7 @@ struct MeetingTranscriptionView: View {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: audio for this recording has been deleted.")
                     return
                 }
-                let resolvedDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id)
-                guard self.privateState.accepts(stamp) else { return }
-                guard let sourceDirectory = resolvedDirectory else {
-                    self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
-                    return
-                }
+                let sourceDirectory = source.directory
                 let profile = stamp.profile
                 // The shared exporter is joined, including its detached worker. Its final move
                 // currently has no cancellation gate; per-file reads still refuse a concealed owner.
@@ -1999,8 +1993,8 @@ private struct MeetingHistoryInspector: View {
     let onRevealAudio: (MeetingSession) -> Void
     let onExportAudio: (MeetingSession) -> Void
     let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat) -> Void
-    let onDeleteAudioRequest: (MeetingSessionID) -> Void
-    let onDeleteRequest: (MeetingSessionID) -> Void
+    let onDeleteAudioRequest: (MeetingSession) -> Void
+    let onDeleteRequest: (MeetingSession) -> Void
     let onRename: (MeetingSession, String) -> Void
     let onRecordAgain: (MeetingSession) -> Void
     var onOpenIntegrations: (() -> Void)? = nil
@@ -2237,7 +2231,7 @@ private struct MeetingHistoryInspector: View {
         .disabled(session.transcriptSegments.isEmpty)
         if session.hasFinalizedAudio, session.retention.audioDeletedAt == nil, session.state == .completed {
             Button("Delete Audio (Keep Transcript)…", systemImage: "waveform.slash") {
-                self.onDeleteAudioRequest(session.id)
+                self.onDeleteAudioRequest(session)
             }
             .disabled(!self.isQuiescent)
         }
@@ -2247,7 +2241,7 @@ private struct MeetingHistoryInspector: View {
         }
         Divider()
         Button("Delete Meeting…", systemImage: "trash", role: .destructive) {
-            self.onDeleteRequest(session.id)
+            self.onDeleteRequest(session)
         }
         .disabled(!self.isQuiescent)
     }
