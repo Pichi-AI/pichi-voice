@@ -269,17 +269,24 @@ actor MeetingSessionStore: MeetingSessionStoring {
         let allIDs = Array(Set(indexedIDs).union(discoveredIDs))
 
         var sessions: [MeetingSession] = []
+        var hadReadFailure = false
         sessions.reserveCapacity(allIDs.count)
         for id in allIDs {
             do {
                 let session = try reconcileAudio ? self.load(id: id) : self.readTranscript(id: id)
                 if let session { sessions.append(session) }
             } catch {
+                hadReadFailure = true
                 DebugLogger.shared.error(
                     "Failed to load meeting session \(id): \(error.localizedDescription)",
                     source: "MeetingSessionStore"
                 )
             }
+        }
+        // Missing indexed files are ordinary stale membership, but unreadable manifests
+        // must not replace the window's last snapshot with a successful empty history.
+        guard !sessions.isEmpty || !hadReadFailure else {
+            throw MeetingSessionStoreError.historyUnavailable
         }
         return sessions.sorted { $0.startedAt > $1.startedAt }
     }
@@ -886,6 +893,7 @@ enum MeetingSessionStoreError: LocalizedError {
     case sessionAlreadyExists
     case unsupportedSchema(Int)
     case sessionDeleted
+    case historyUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -895,6 +903,8 @@ enum MeetingSessionStoreError: LocalizedError {
             return "This meeting was created with unsupported schema version \(version)."
         case .sessionDeleted:
             return "This meeting has been deleted."
+        case .historyUnavailable:
+            return PichiLocalization.text("Meeting history could not be loaded.")
         }
     }
 }

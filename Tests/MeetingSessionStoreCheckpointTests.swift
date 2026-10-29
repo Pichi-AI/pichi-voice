@@ -248,6 +248,7 @@ struct MeetingSessionStoreCheckpointTests {
         try await Self.checkPrivateProfileLifecycle(root: root.appendingPathComponent("profile-lifecycle"), check: check)
         try await Self.checkPrivateProfileOperationOwner(root: root.appendingPathComponent("profile-operation"), check: check)
         try await Self.checkRecordingEncryption(root: root.appendingPathComponent("recording-encryption"), check: check)
+        try await Self.checkCatalogReadFailures(root: root.appendingPathComponent("catalog-read-failures"), check: check)
         try await Self.checkLocalReaderDates(root: root.appendingPathComponent("local-reader-dates"), check: check)
 
         let nativePresentation = MeetingTranscriptExporter.speakerPresentation(
@@ -604,6 +605,47 @@ struct MeetingSessionStoreCheckpointTests {
         print("Meeting session checkpoint tests passed: \(checks) checks; \(segmentCount) segments; "
             + "compactBytes=\(compact.count) legacyBytes=\(legacy.count) "
             + "createSeconds=\(createSeconds) saveSeconds=\(saveSeconds) legacyEncodeSeconds=\(legacyEncodeSeconds)")
+    }
+
+    private static func checkCatalogReadFailures(root: URL, check: (Bool, String) -> Void) async throws {
+        let manager = FileManager.default
+        let store = MeetingSessionStore(rootDirectory: root)
+        check(try await store.loadHistory().isEmpty, "A genuinely empty catalog remains a successful empty history")
+        let id = UUID()
+        let directory = root.appendingPathComponent(id.uuidString, isDirectory: true)
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let manifest = directory.appendingPathComponent("session.json")
+        let damagedBytes = Data("unreadable synthetic manifest".utf8)
+        try damagedBytes.write(to: manifest)
+        let index = root.appendingPathComponent("index.json")
+        let staleID = UUID()
+        let indexBytes = try JSONSerialization.data(withJSONObject: ["schemaVersion": 1,
+            "sessionIDs": [id.uuidString, staleID.uuidString], "updatedAt": 0])
+        try indexBytes.write(to: index)
+        for fullRead in [false, true] {
+            do {
+                _ = try await (fullRead ? store.loadAll() : store.loadHistory())
+                check(false, "An entirely unreadable catalog must not appear empty")
+            } catch MeetingSessionStoreError.historyUnavailable {
+                check(true, "Manifest read failures report an unavailable catalog for history and full reads")
+            }
+        }
+        check(try Data(contentsOf: manifest) == damagedBytes && Data(contentsOf: index) == indexBytes,
+              "Failed history loading leaves the manifest and index byte-identical")
+
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil)
+        let healthy = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic readable sibling",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture")),
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000), timebase: timebase)
+        try await store.create(healthy)
+        check(try await MeetingSessionStore(rootDirectory: root).loadHistory() == [healthy],
+              "A fresh reader preserves healthy siblings beside an unreadable manifest")
+        check(try Data(contentsOf: manifest) == damagedBytes, "Partial loading never rewrites the unreadable sibling")
+        try manager.removeItem(at: manifest)
+        try manager.removeItem(at: root.appendingPathComponent(healthy.id.uuidString))
+        check(try await MeetingSessionStore(rootDirectory: root).loadHistory().isEmpty,
+              "Stale index entries and a missing manifest do not manufacture a catalog failure")
     }
 
     /// Exercise the real shared live/history/export renderer and correction operations using

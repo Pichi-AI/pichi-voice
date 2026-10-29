@@ -147,7 +147,8 @@ private actor SyntheticAccountTransport: AccountTransporting {
         expect(fixture.ui.action == nil, "Joined guest action releases UI ownership")
 
         fixture.ui.signIn(); await fixture.ui.waitUntilIdle()
-        expect(fixture.session.state == .signedIn && fixture.session.context?.workspaceID == nil, "Sign-in never selects a default workspace")
+        expect(fixture.session.state == .signedIn && fixture.session.context?.organizationID == "org-a"
+               && fixture.session.context?.workspaceID == "same-id", "Sign-in selects the first complete workspace destination")
         fixture.lifecycle.explicitTransitionsAllowed = false
         let admitted = fixture.session.context!
         let browserStarts = fixture.browser.starts

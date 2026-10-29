@@ -17,13 +17,19 @@ struct PrivateProfileRoot<Content: View>: View {
 
     var body: some View {
         ZStack {
-            content()
-                .id(profiles.sourceRevision)
-                .opacity(profiles.isPrivateDataVisible && services.hasRestoredAccount ? 1 : 0)
-                .allowsHitTesting(profiles.isPrivateDataVisible && services.hasRestoredAccount)
-                .disabled(!profiles.isPrivateDataVisible || !services.hasRestoredAccount)
-                .accessibilityHidden(!profiles.isPrivateDataVisible || !services.hasRestoredAccount)
-                .background(PrivateProfileFocusBoundary(isVisible: profiles.isPrivateDataVisible && services.hasRestoredAccount))
+            // A hidden SwiftUI child still runs its tasks. Mount its private readers only
+            // after initial admission/key restoration, so a guest launch cannot consume
+            // the one history refresh while access is closed. Later concealment keeps
+            // this subtree mounted to retain the admitted capture's owner.
+            if services.hasRestoredAccount {
+                content()
+                    .id(profiles.sourceRevision)
+                    .opacity(profiles.isPrivateDataVisible ? 1 : 0)
+                    .allowsHitTesting(profiles.isPrivateDataVisible)
+                    .disabled(!profiles.isPrivateDataVisible)
+                    .accessibilityHidden(!profiles.isPrivateDataVisible)
+                    .background(PrivateProfileFocusBoundary(isVisible: profiles.isPrivateDataVisible))
+            }
             if !profiles.isPrivateDataVisible || !services.hasRestoredAccount {
                 theme.palette.windowBackground.ignoresSafeArea()
                 VStack(spacing: theme.metrics.spacing.lg) {
