@@ -1864,7 +1864,7 @@ final class MeetingRecoveryTests: XCTestCase {
                         onRecordAgain: { _ in action() },
                         onCopyTranscript: { _, _ in action() },
                         onExportTranscript: { _, _, _ in action() },
-                        onReassignSegment: { _, _, _ in action() },
+                        onReassignSegments: { _, _, _ in action() },
                         onNameUnknownSegment: { _, _, _ in action() },
                         onUndoCorrection: { _ in action(); return false },
                         onRenameSession: { _, _ in action() },
@@ -2402,7 +2402,7 @@ final class MeetingRecoveryTests: XCTestCase {
             onRecordAgain: { _ in actions.record() },
             onCopyTranscript: { _, _ in actions.record() },
             onExportTranscript: { _, _, _ in actions.record() },
-            onReassignSegment: { _, _, _ in actions.record() },
+            onReassignSegments: { _, _, _ in actions.record() },
             onNameUnknownSegment: { _, _, _ in actions.record() },
             onUndoCorrection: { _ in actions.record(); return false },
             onRenameSession: { _, _ in actions.record() },
@@ -4660,6 +4660,54 @@ final class MeetingRecoveryTests: XCTestCase {
                        "Successful undo durably restores both custom aliases and their exact number provenance")
         XCTAssertEqual(restoredDisk?.transcriptSegments, session.transcriptSegments)
         XCTAssertEqual(restoredDisk?.audioTracks, session.audioTracks)
+    }
+
+    func testDesktopParagraphActionsKeepMemberEditsAndBatchSpeakerUndo() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let disk = MeetingSessionStore(rootDirectory: dir)
+        var (session, _, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = ["Первое", "второе", "третье", "слово."].enumerated().map { index, text in
+            var member = template
+            member.id = UUID(); member.text = text
+            member.start = .init(value: Int64(index * 500), timescale: 1000)
+            member.end = .init(value: Int64(index * 500 + 400), timescale: 1000)
+            member.nativePrecision = .word; member.nativeUnitID = "synthetic-desktop-word-\(index)"
+            member.nativeTiming = .init(start: Double(index) / 2, end: Double(index) / 2 + 0.4)
+            return member
+        }
+        try await disk.create(session)
+        let store = GatedThrowingSaveStore(inner: disk, recorder: EventRecorder())
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let paragraphs = try await MeetingTranscriptExporter.readingParagraphs(for: session)
+        let projection = MeetingResultTranscriptProjection(session: session, paragraphs: paragraphs)
+        let row = try XCTUnwrap(projection.rows(matching: .init(session), includeEchoes: false).first)
+        XCTAssertEqual(row.memberIDs, session.transcriptSegments.map(\.id))
+        let selection = MeetingTranscriptMemberSelection(paragraph: row.paragraph, purpose: .editText)
+        let member = try XCTUnwrap(selection.members(matching: "второе").first)
+        let unchanged = try await disk.load(id: session.id)
+        XCTAssertEqual(unchanged?.transcriptSegments, session.transcriptSegments)
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id), "Abandoning the picker creates no correction")
+        let edited = try await coordinator.editTranscriptText(sessionID: session.id, segmentID: member.id,
+            text: "Исправлено", expectedRevision: member.revision)
+        XCTAssertEqual(edited.transcriptSegments[0], session.transcriptSegments[0])
+        XCTAssertEqual(edited.transcriptSegments[2], session.transcriptSegments[2])
+        XCTAssertEqual(edited.transcriptSegments[1].text, "Исправлено")
+        XCTAssertEqual(edited.transcriptSegments[1].nativeTiming, member.nativeTiming)
+        XCTAssertEqual(edited.transcriptSegments[1].nativeUnitID, member.nativeUnitID)
+        let restored = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        XCTAssertEqual(restored.transcriptSegments, session.transcriptSegments)
+        let savesBeforeBatch = await store.savedEventCounts.count
+        let assigned = try await coordinator.reassignSegments(sessionID: session.id, segmentIDs: row.memberIDs, to: speakerB)
+        let savesAfterBatch = await store.savedEventCounts.count
+        XCTAssertEqual(savesAfterBatch, savesBeforeBatch + 1)
+        XCTAssertTrue(assigned.transcriptSegments.allSatisfy { $0.speakerID == speakerB })
+        XCTAssertEqual(assigned.transcriptSegments.map(\.nativeTiming), session.transcriptSegments.map(\.nativeTiming))
+        let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id), "The paragraph assignment is exactly one undo")
     }
 
     func testBatchSpeakerCorrectionIsOneSaveAndUndoIncludingOwnerAndManualProvenance() async throws {

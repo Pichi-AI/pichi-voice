@@ -450,7 +450,7 @@ struct MeetingTranscriptionView: View {
             onRecordAgain: { if self.privateState.accepts(projection) { self.recordAgain($0) } },
             onCopyTranscript: { if self.privateState.accepts(projection) { self.copyTranscript($0, includeEchoes: $1) } },
             onExportTranscript: { if self.privateState.accepts(projection) { self.exportTranscript($0, format: $1, includeEchoes: $2) } },
-            onReassignSegment: { if self.privateState.accepts(projection) { self.reassignSegment(sessionID: $0, segmentID: $1, to: $2) } },
+            onReassignSegments: { if self.privateState.accepts(projection) { self.reassignSegments(sessionID: $0, segmentIDs: $1, to: $2) } },
             onEditTranscriptSegment: { sessionID, segmentID, text, revision in
                 guard self.privateState.accepts(projection) else { return nil }
                 return await self.editTranscriptSegment(sessionID: sessionID, segmentID: segmentID, text: text, revision: revision)
@@ -1139,11 +1139,11 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func reassignSegment(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, to speakerID: SessionSpeakerID) {
+    private func reassignSegments(sessionID: MeetingSessionID, segmentIDs: [MeetingTranscriptSegmentID], to speakerID: SessionSpeakerID) {
         self.privateState.actionErrorMessage = nil
         self.privateState.run { stamp in
             do {
-                let saved = try await self.coordinator.reassignSegment(sessionID: sessionID, segmentID: segmentID, to: speakerID)
+                let saved = try await self.coordinator.reassignSegments(sessionID: sessionID, segmentIDs: segmentIDs, to: speakerID)
                 guard self.privateState.accepts(stamp) else { return }
                 self.historySnapshot.applyCommitted(saved)
             } catch {
@@ -1736,7 +1736,7 @@ struct MeetingTranscriptionCanvas: View {
     let onRecordAgain: (MeetingSession) -> Void
     let onCopyTranscript: (MeetingSession, Bool) -> Void
     let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat, Bool) -> Void
-    let onReassignSegment: (MeetingSessionID, MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
+    let onReassignSegments: (MeetingSessionID, [MeetingTranscriptSegmentID], SessionSpeakerID) -> Void
     var onEditTranscriptSegment: (MeetingSessionID, MeetingTranscriptSegmentID, String, Int) async -> String? = { _, _, _, _ in PichiLocalization.text("Transcript editing is unavailable.") }
     let onNameUnknownSegment: (MeetingSessionID, MeetingTranscriptSegmentID, String) -> Void
     let onUndoCorrection: (MeetingSessionID) async -> Bool
@@ -1862,8 +1862,8 @@ struct MeetingTranscriptionCanvas: View {
                             canUndo: self.canUndoCorrection(session.id),
                             onCopyTranscript: self.onCopyTranscript,
                             onExportTranscript: self.onExportTranscript,
-                            onReassignSegment: { segmentID, speakerID in
-                                self.onReassignSegment(session.id, segmentID, speakerID)
+                            onReassignSegments: { segmentIDs, speakerID in
+                                self.onReassignSegments(session.id, segmentIDs, speakerID)
                             },
                             onEditTranscriptSegment: { segmentID, text, revision in
                                 await self.onEditTranscriptSegment(session.id, segmentID, text, revision)
