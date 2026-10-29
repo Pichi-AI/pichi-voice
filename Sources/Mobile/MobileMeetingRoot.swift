@@ -271,8 +271,8 @@ struct MobileMeetingRoot: View {
             guard isEnabled else { return }
             await coordinator.ensureRestored()
             await refreshHistory()
-            openRestoredRecovery()
             await refreshMicrophones()
+            await openRestoredRecovery()
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: capturingSession?.id)
         // iOS mutes haptics while the microphone records, so they mark the Start tap and the end of
@@ -1077,8 +1077,12 @@ struct MobileMeetingRoot: View {
         await withTaskCancellationHandler { await job?.value } onCancel: { job?.cancel() }
     }
     /// A meeting restored as interrupted or failed is the coordinator's open recovery offer.
-    /// Its page opens once on launch, so Retry is the first thing seen, as before.
-    private func openRestoredRecovery() {
+    /// Its page opens once on launch, so Retry is the first thing seen, as before. The launch
+    /// retention sweep can keep the coordinator busy for a moment; the page waits up to 15 s.
+    private func openRestoredRecovery() async {
+        for _ in 0..<60 where !coordinator.isQuiescent {
+            guard (try? await Task.sleep(nanoseconds: 250_000_000)) != nil else { return }
+        }
         // An Account page reopened across its own sign-in keeps priority over the restored offer.
         guard historyPath.isEmpty, settingsPath.last != .account, coordinator.isQuiescent, let session = coordinator.activeSession,
               session.state == .interrupted || session.state == .failed, canPresent(session) else { return }
