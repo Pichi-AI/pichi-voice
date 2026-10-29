@@ -767,7 +767,9 @@ struct MobileCloudSyncSettings: View {
                     Text(PichiLocalization.text("cloud.details", defaultValue: "Details"))
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                         .accessibilityIdentifier("cloud.sync.details.toggle")
-                }.font(theme.typography.bodySmall).accessibilityIdentifier("cloud.sync.details")
+                }
+                .disclosureGroupStyle(FluidDisclosureGroupStyle())
+                .font(theme.typography.bodySmall).accessibilityIdentifier("cloud.sync.details")
             }
             .foregroundStyle(theme.palette.primaryText)
             .accessibilityElement(children: .contain)

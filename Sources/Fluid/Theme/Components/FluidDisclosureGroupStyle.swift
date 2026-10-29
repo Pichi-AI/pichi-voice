@@ -32,8 +32,8 @@ struct FluidDisclosureGroupStyle: DisclosureGroupStyle {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
-            .accessibilityHint("Show or hide details")
+            .accessibilityValue(Text(PichiLocalization.text(configuration.isExpanded ? "Expanded" : "Collapsed")))
+            .accessibilityHint(Text(PichiLocalization.text("Show or hide details")))
 
             if configuration.isExpanded {
                 configuration.content
