@@ -264,10 +264,29 @@ final class MeetingDesktopTranscriptParagraphTests: XCTestCase {
             host.cacheDisplay(in: host.bounds, to: image)
             try XCTUnwrap(image.representation(using: .png, properties: [:]))
                 .write(to: directory.appendingPathComponent("\(label)-native.png"), options: .atomic)
+            let reviewToken = UUID().uuidString
             try JSONSerialization.data(withJSONObject: ["phase": label, "pid": ProcessInfo.processInfo.processIdentifier,
-                "window": window.title], options: [.prettyPrinted])
+                "window": window.title, "reviewToken": reviewToken], options: [.prettyPrinted])
                 .write(to: directory.appendingPathComponent("ready.json"), options: .atomic)
-            if hold > 0 {
+            if environment["PICHI_TRANSCRIPT_READING_REVIEW"] == "1" {
+                // Native capture/review is external to this test. Only an acknowledgement
+                // for this exact window generation may advance the light/dark sequence.
+                let acknowledgement = directory.appendingPathComponent("\(label)-reviewed.json")
+                let deadline = ProcessInfo.processInfo.systemUptime + 600
+                var accepted = false
+                while window.isVisible, ProcessInfo.processInfo.systemUptime < deadline {
+                    if let data = try? Data(contentsOf: acknowledgement),
+                       let review = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                       review["reviewToken"] == reviewToken, review["phase"] == label,
+                       let frameHash = review["frameSHA256"], frameHash.count == 64,
+                       frameHash.allSatisfy({ $0.isHexDigit }) {
+                        accepted = true
+                        break
+                    }
+                    try await Task.sleep(for: .milliseconds(200))
+                }
+                XCTAssertTrue(accepted, "Native frame must be captured and reviewed before advancing")
+            } else if hold > 0 {
                 let deadline = ProcessInfo.processInfo.systemUptime + Double(hold)
                 while window.isVisible, ProcessInfo.processInfo.systemUptime < deadline {
                     try await Task.sleep(for: .milliseconds(200))
