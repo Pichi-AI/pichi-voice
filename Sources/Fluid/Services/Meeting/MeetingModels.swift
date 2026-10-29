@@ -1241,8 +1241,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 
     var displayTitle: String { self.displayTitle(language: PichiLocalization.language) }
 
+    /// A default in-room title is composed with its start time, so lists need not repeat the date.
+    var displayTitleIncludesStart: Bool { self.defaultTitleBase != nil && self.mode == .inRoom }
+
     func displayTitle(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
-        guard self.defaultTitleBase != nil, self.mode == .inRoom else { return self.title }
+        guard self.displayTitleIncludesStart else { return self.title }
         let base = self.location?.address(for: language)
             ?? PichiLocalization.text("In-room meeting", language: language, bundle: bundle)
         let date = self.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened)

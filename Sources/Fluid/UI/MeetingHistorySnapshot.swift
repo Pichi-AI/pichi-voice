@@ -8,13 +8,16 @@ final class MeetingHistorySnapshot: ObservableObject, PrivateProfileTransitionPa
     @Published private(set) var errorMessage: String?
     @Published private(set) var hasLoaded = false
     private let load: @Sendable () async throws -> [MeetingSession]
+    /// A list that shows encrypted meetings as locked rows keeps them; others never receive them.
+    private let keepsConcealed: Bool
     private var refreshTask: Task<Void, Never>?
     private var refreshRequested = false
     private let profile = PrivateProfileStorage.current
 
-    init(load: @escaping @Sendable () async throws -> [MeetingSession] = {
+    init(keepsConcealed: Bool = false, load: @escaping @Sendable () async throws -> [MeetingSession] = {
         try await MeetingSessionStore.shared.loadHistory()
     }) {
+        self.keepsConcealed = keepsConcealed
         self.load = load
         PrivateProfileService.shared.register(self)
     }
@@ -23,7 +26,7 @@ final class MeetingHistorySnapshot: ObservableObject, PrivateProfileTransitionPa
     /// Corrections do not require decoding every other meeting before updating UI.
     func applyCommitted(_ session: MeetingSession) {
         guard PrivateProfileStorage.isReadable(self.profile) else { return }
-        guard !session.isLocalContentConcealed else {
+        guard self.keepsConcealed || !session.isLocalContentConcealed else {
             self.sessions.removeAll { $0.id == session.id }
             self.errorMessage = nil; self.hasLoaded = true
             if self.refreshTask != nil { self.refreshRequested = true }
@@ -57,7 +60,7 @@ final class MeetingHistorySnapshot: ObservableObject, PrivateProfileTransitionPa
                     let sessions = try await self.load()
                     guard !Task.isCancelled, PrivateProfileStorage.isReadable(self.profile) else { break }
                     guard !self.refreshRequested else { continue }
-                    self.sessions = sessions.filter { !$0.isLocalContentConcealed }
+                    self.sessions = self.keepsConcealed ? sessions : sessions.filter { !$0.isLocalContentConcealed }
                     self.errorMessage = nil
                     self.hasLoaded = true
                 } catch {

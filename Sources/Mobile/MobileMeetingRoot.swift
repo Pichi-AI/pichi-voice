@@ -1,8 +1,6 @@
 import AVFoundation
 import Combine
-import UniformTypeIdentifiers
 import SwiftUI
-import TipKit
 import UIKit
 
 /// Platform navigation and transient view state only. The shared coordinator owns every meeting.
@@ -25,6 +23,13 @@ struct MobileMeetingRoot: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The private profile root keeps this tree disabled until the account and its storage are
+    /// restored. History can only be read after that, so the first read follows this value.
+    @Environment(\.isEnabled) private var isEnabled
+    /// When this window showed Account as its profile switched; the rebuilt window reopens it.
+    /// A switch that fails leaves no rebuild, and the value expires instead of reopening later.
+    @SceneStorage("mobile.accountRouteBeforeProfileSwitch") private var accountRouteRecordedAt: Double = 0
     private var destination: Destination {
         get { privatePresentation.destination }
         nonmutating set { privatePresentation.destination = newValue }
@@ -36,7 +41,7 @@ struct MobileMeetingRoot: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @StateObject private var historySnapshot: MeetingHistorySnapshot
     private var sessions: [MeetingSession] { historySnapshot.sessions }
-    // The snapshot owns committed sessions; History's own path keeps only pushed identities.
+    // The snapshot owns committed sessions; the Meetings stack keeps only pushed identities.
     private var historyPath: [MeetingSessionID] {
         get { privatePresentation.historyPath }
         nonmutating set { privatePresentation.historyPath = newValue }
@@ -68,6 +73,7 @@ struct MobileMeetingRoot: View {
         nonmutating set { privatePresentation.showRecordingSettings = newValue }
     }
     @State private var startFeedback = 0
+    @State private var isStarting = false
     @State private var microphoneSnapshot = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
     private var edit: MeetingEditDraft? {
         get { privatePresentation.edit }
@@ -89,15 +95,6 @@ struct MobileMeetingRoot: View {
         get { privatePresentation.share }
         nonmutating set { privatePresentation.share = newValue }
     }
-    private var showPresentationPicker: Bool {
-        get { privatePresentation.showPresentationPicker }
-        nonmutating set { privatePresentation.showPresentationPicker = newValue }
-    }
-    private var presentation: MobilePresentationDocument? {
-        get { privatePresentation.presentation }
-        nonmutating set { privatePresentation.presentation = newValue }
-    }
-    private var presentationLoader: MobilePresentationLoader { privatePresentation.presentationLoader }
     @State private var recordingScreenAwakeToken: UUID?
     @StateObject private var playback = MeetingSegmentPlayback()
     // Projection is independent of microphone meters, pending audio, playback progress
@@ -124,30 +121,51 @@ struct MobileMeetingRoot: View {
         self.required = required; self.privacyActivation = privacyActivation
         self.cloudPublication = cloudPublication
         self._cloudInteraction = StateObject(wrappedValue: MobileCloudInteraction(session: accountSession ?? AppServices.shared.accountSession))
-        self._historySnapshot = StateObject(wrappedValue: MeetingHistorySnapshot(load: { try await store.loadHistory() }))
+        // Encrypted meetings stay in the Meetings list as locked rows.
+        self._historySnapshot = StateObject(wrappedValue: MeetingHistorySnapshot(keepsConcealed: true, load: { try await store.loadHistory() }))
         self._accountInteraction = StateObject(wrappedValue: MobileAccountInteraction(
             session: accountSession ?? AppServices.shared.accountSession,
             requireTransitionAdmission: { try PrivateProfileService.shared.requireTransitionAdmission() }))
     }
 
+    /// Meetings lists every meeting and starts the next one; a recording itself is not a section.
     enum Destination: String, CaseIterable, Identifiable {
-        case meetings, history, settings
+        case meetings, settings
         var id: String { rawValue }
         var title: String {
-            switch self { case .meetings: return "Meetings"; case .history: return "History"; case .settings: return "Settings" }
+            switch self { case .meetings: return "Meetings"; case .settings: return "Settings" }
         }
         // The same symbols as the desktop sidebar sections.
         var symbol: String {
-            switch self { case .meetings: return "person.2.fill"; case .history: return "clock.arrow.circlepath"; case .settings: return "gearshape" }
+            switch self { case .meetings: return "person.2.fill"; case .settings: return "gearshape" }
         }
     }
 
     /// Destructive actions share one confirmation, as on the desktop.
     private typealias Deletion = MobilePrivatePresentationState.Deletion
 
+    /// The meeting whose audio is being captured. It owns the whole window until capture ends:
+    /// no sections, Settings or other meetings, as in restricted mode, but with its live text.
+    private var capturingSession: MeetingSession? {
+        Self.captureSessionID(coordinator.state).flatMap { id in
+            coordinator.currentSession?.id == id ? coordinator.currentSession : nil
+        }
+    }
+
+    private static func captureSessionID(_ state: MeetingCoordinatorState) -> MeetingSessionID? {
+        switch state {
+        case .preparing(let id), .recording(let id), .recordingDegraded(let id), .stopping(let id): return id
+        default: return nil
+        }
+    }
+
     var body: some View {
-        Group {
-            if UIDevice.current.userInterfaceIdiom == .pad && horizontalSizeClass == .regular {
+        // A stable container: its task, appearance and cleanup modifiers belong to the window,
+        // not to whichever of the recording or the sections is currently shown inside it.
+        ZStack {
+            if let session = capturingSession {
+                recording(session)
+            } else if UIDevice.current.userInterfaceIdiom == .pad && horizontalSizeClass == .regular {
                 NavigationSplitView(columnVisibility: $columnVisibility) {
                     sidebar.navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
                 } detail: {
@@ -216,32 +234,6 @@ struct MobileMeetingRoot: View {
             }
             .disabled(!coordinator.isQuiescent || isBusy)
         }
-        .fileImporter(isPresented: $privatePresentation.showPresentationPicker, allowedContentTypes: [.pdf]) { result in
-            let admission = privatePresentation.presentationPickerAdmission
-            privatePresentation.presentationPickerAdmission = nil
-            showPresentationPicker = false
-            guard let admission, privatePresentation.publications.canPublish(admission) else { return }
-            switch result {
-            case .success(let url):
-                presentationLoader.load(url: url, canPublish: { privatePresentation.publications.canPublish(admission) }) { result in
-                    guard privatePresentation.publications.canPublish(admission) else { return }
-                    switch result {
-                    case .success(let document): presentation = document
-                    case .failure:
-                        report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
-                            "The PDF presentation could not be opened. Choose a readable PDF file."]))
-                    }
-                }
-            case .failure(let error):
-                if (error as NSError).code != NSUserCancelledError {
-                    report(CocoaError(.fileReadUnknown, userInfo: [NSLocalizedDescriptionKey:
-                    "The PDF presentation could not be opened. Choose a readable PDF file."]))
-                }
-            }
-        }
-        .fullScreenCover(item: $privatePresentation.presentation) { document in
-            PDFPresentation(document: document, coordinator: coordinator) { presentation = nil }
-        }
         .confirmationDialog(PichiLocalization.text(deletion?.title ?? ""), isPresented: Binding(
             get: { deletion != nil }, set: { if !$0 { deletion = nil } }
         ), titleVisibility: .visible, presenting: deletion) { item in
@@ -263,11 +255,25 @@ struct MobileMeetingRoot: View {
                 }
             }
         } message: { item in Text(PichiLocalization.text(item.message)) }
-        .task {
+        .onAppear {
+            // Only the scene's storage is captured, never this view and its own state object.
+            let route = $accountRouteRecordedAt
+            privatePresentation.recordAccountRoute = { showsAccount in
+                route.wrappedValue = showsAccount ? Date().timeIntervalSince1970 : 0
+            }
+            if accountRouteRecordedAt > 0 {
+                if Date().timeIntervalSince1970 - accountRouteRecordedAt < 30 { destination = .settings; settingsPath = [.account] }
+                accountRouteRecordedAt = 0
+            }
+        }
+        .task(id: isEnabled) {
+            guard isEnabled else { return }
             await coordinator.ensureRestored()
             await refreshHistory()
+            openRestoredRecovery()
             await refreshMicrophones()
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: capturingSession?.id)
         // iOS mutes haptics while the microphone records, so they mark the Start tap and the end of
         // capture rather than the recording states themselves. `.start` and `.stop` play on watchOS only.
         .sensoryFeedback(.impact(weight: .medium), trigger: startFeedback)
@@ -277,9 +283,15 @@ struct MobileMeetingRoot: View {
         }
         // The app's UI-ready signal owns the launch sweep; its committed deletions reload History.
         .onChange(of: coordinator.retentionSweepRevision) { _, _ in Task { await refreshHistory() } }
-        .onChange(of: coordinator.state) { _, state in
-            if coordinator.isRecording { playback.stop() }
+        .onChange(of: coordinator.state) { previous, state in
+            if coordinator.isRecording { playback.stop(); participantEdit = nil }
             updateRecordingScreenAwake()
+            // When capture ends, its meeting opens in Meetings: progress, transcript or recovery.
+            if let id = Self.captureSessionID(previous), Self.captureSessionID(state) == nil, state != .idle,
+               privateProfile.isPrivateDataVisible {
+                destination = .meetings
+                historyPath = [id]
+            }
             Task { await refreshHistory() }
         }
         .onAppear { updateRecordingScreenAwake() }
@@ -288,18 +300,18 @@ struct MobileMeetingRoot: View {
             if previous == .settings, selected != .settings, settingsPath.last == .account {
                 accountInteraction.cancelOwnedSignInOnDisappear()
             }
-            playback.stop(); presentationLoader.cancel(); participantEdit = nil
+            playback.stop(); participantEdit = nil
         }
         .onChange(of: settingsPath) { previous, selected in
             if previous.last == .account, selected.last != .account {
                 accountInteraction.cancelOwnedSignInOnDisappear()
             }
         }
-        .onChange(of: historyPath) { _, _ in playback.stop(); presentationLoader.cancel(); participantEdit = nil }
+        .onChange(of: historyPath) { _, _ in playback.stop(); participantEdit = nil }
         .onDisappear {
-            // A PDF full-screen cover can temporarily hide its presenting root.
             // Retire pending work without dismissing a valid same-profile payload.
             privatePresentation.retirePendingWork()
+            privatePresentation.recordAccountRoute = nil
             updateRecordingScreenAwake(isVisible: false)
         }
         .onChange(of: settings.meetingAudioRetentionPolicy) { _, _ in
@@ -307,45 +319,15 @@ struct MobileMeetingRoot: View {
         }
     }
 
-    /// The active recording screen and an active PDF window share one process
-    /// timer. Scene/background transitions release only this view's own token.
+    /// The recording screen and restricted mode share one process idle timer.
+    /// Scene/background transitions release only this view's own token.
     private func updateRecordingScreenAwake(isVisible: Bool = true) {
         let shouldStayAwake = isVisible && scenePhase == .active && coordinator.isRecording
         if shouldStayAwake && recordingScreenAwakeToken == nil {
-            recordingScreenAwakeToken = MobilePresentationAwakeRegistry.shared.acquire()
+            recordingScreenAwakeToken = MobileScreenAwakeRegistry.shared.acquire()
         } else if !shouldStayAwake, let token = recordingScreenAwakeToken {
             recordingScreenAwakeToken = nil
-            MobilePresentationAwakeRegistry.shared.release(token)
-        }
-    }
-
-    // Observe the coordinator inside the presented subtree as well, so Stop or
-    // failure releases screen ownership even while the recording screen is covered.
-    private struct PDFPresentation: View {
-        let document: MobilePresentationDocument
-        @ObservedObject var coordinator: MeetingSessionCoordinator
-        @Environment(\.scenePhase) private var scenePhase
-        @ObservedObject private var privateProfile = PrivateProfileService.shared
-        let close: () -> Void
-
-        var body: some View {
-            NavigationStack {
-                Group {
-                    if privateProfile.isPrivateDataVisible {
-                        MobilePresentationPDFView(document: document, isRecording: coordinator.isRecording,
-                                                  isSceneActive: scenePhase == .active)
-                    } else {
-                        Text(PichiLocalization.text("account.profile.unavailable"))
-                    }
-                }
-                    .ignoresSafeArea(edges: .bottom)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button(PichiLocalization.text("Done"), action: close)
-                                .accessibilityIdentifier("meeting.presentation.close")
-                        }
-                    }
-            }
+            MobileScreenAwakeRegistry.shared.release(token)
         }
     }
 
@@ -377,8 +359,7 @@ struct MobileMeetingRoot: View {
         if destination == item {
             switch item {
             case .settings: settingsPath.removeAll()
-            case .history: historyPath.removeAll()
-            case .meetings: break // Its root is the current meeting, including an active recording.
+            case .meetings: historyPath.removeAll()
             }
         } else {
             destination = item
@@ -386,7 +367,7 @@ struct MobileMeetingRoot: View {
     }
 
     @ViewBuilder private func navigation(for item: Destination) -> some View {
-        // Each section owns its stack. A settings or history push must never cover another
+        // Each section owns its stack. A settings or meeting push must never cover another
         // section, and its explicit path survives switching sections or the adaptive layout.
         switch item {
         case .settings:
@@ -394,8 +375,6 @@ struct MobileMeetingRoot: View {
                 sectionRoot(for: item)
             }
         case .meetings:
-            NavigationStack { sectionRoot(for: item) }
-        case .history:
             NavigationStack(path: $privatePresentation.historyPath) { sectionRoot(for: item) }
         }
     }
@@ -403,9 +382,8 @@ struct MobileMeetingRoot: View {
     private func sectionRoot(for item: Destination) -> some View {
         Group {
             switch item {
-            case .meetings: currentMeeting
-            case .history:
-                if privateProfile.isPrivateDataVisible { history } else { concealedPrivateData }
+            case .meetings:
+                if privateProfile.isPrivateDataVisible { meetingList } else { concealedPrivateData }
             case .settings:
                 MobileSettingsRoot(accountSession: accountInteraction.session, accountInteraction: accountInteraction,
                     cloudPublication: cloudPublication, cloudInteraction: cloudInteraction,
@@ -417,53 +395,8 @@ struct MobileMeetingRoot: View {
                     reportError: report)
             }
         }
-        .navigationTitle(item == .meetings ? AppBrand.meetingName : PichiLocalization.text(item.title))
+        .navigationTitle(PichiLocalization.text(item.title))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if privateProfile.isPrivateDataVisible, item == .meetings, coordinator.isRecording || coordinator.isQuiescent {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        guard let admission = privatePresentation.publications.admit() else { return }
-                        privatePresentation.presentationPickerAdmission = admission
-                        showPresentationPicker = true
-                    } label: {
-                        HStack {
-                            if presentationLoader.isLoading { ProgressView() }
-                            Label(PichiLocalization.text("PDF Presentation"), systemImage: "doc.richtext")
-                        }
-                    }
-                    .disabled(presentationLoader.isLoading)
-                    .accessibilityIdentifier("meeting.presentation")
-                    .accessibilityHint(PichiLocalization.text("Open a PDF in this app while recording continues."))
-                }
-            }
-            if privateProfile.isPrivateDataVisible, item == .meetings, coordinator.isQuiescent, !coordinator.isRecording, !isShowingStart {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { newMeeting() } label: { Label(PichiLocalization.text("New Meeting"), systemImage: "plus") }
-                        .accessibilityIdentifier("meeting.new")
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private var currentMeeting: some View {
-        if let session = coordinator.currentSession {
-            switch coordinator.state {
-            case .preparing, .recording, .recordingDegraded, .stopping:
-                recording(session)
-            case .processing(_, let stage): processing(session, stage: stage)
-            case .completed:
-                if canPresent(session) { transcript(session) }
-                else if canAccessOwner(session), session.isLocalContentConcealed { concealedRecording(session) }
-                else { concealedPrivateData }
-            case .interrupted, .failed:
-                if canPresent(session) { recovery(session) }
-                else if canAccessOwner(session), session.isLocalContentConcealed { concealedRecording(session) }
-                else { concealedPrivateData }
-            case .idle:
-                if privateProfile.isPrivateDataVisible { start } else { concealedPrivateData }
-            }
-        } else if privateProfile.isPrivateDataVisible { start } else { concealedPrivateData }
     }
 
     private var concealedPrivateData: some View {
@@ -494,123 +427,94 @@ struct MobileMeetingRoot: View {
         return session.profileOwnership?.matches(profile) ?? profile.isGuest
     }
 
-    private var isShowingStart: Bool { coordinator.currentSession == nil || coordinator.state == .idle }
     private var compactHeight: Bool { verticalSizeClass == .compact }
 
-    private var start: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: compactHeight ? theme.metrics.spacing.sm : theme.metrics.spacing.xl) {
-                Text(PichiLocalization.text("Be in the conversation.")).font(compactHeight ? theme.typography.title : theme.typography.displayTitle)
-                Text(PichiLocalization.text("Record your meeting. Come back to every word."))
-                    .font(compactHeight ? theme.typography.body : theme.typography.statement).foregroundStyle(theme.palette.secondaryText)
-                VStack(alignment: .leading, spacing: compactHeight ? 8 : 12) {
-                    Text(PichiLocalization.text("No call open.")).font(theme.typography.sectionTitle)
-                    Text(PichiLocalization.text("Your mic will record the room."))
-                        .foregroundStyle(theme.palette.secondaryText)
-                    HStack {
-                        Button { beginMeeting() } label: {
-                            Label(PichiLocalization.text(isBusy ? "Preparing recording…" : "Start Recording"), systemImage: "record.circle")
-                                .foregroundStyle(theme.palette.accentForeground)
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                        }.buttonStyle(.borderedProminent).disabled(isBusy || !coordinator.isQuiescent)
-                            .accessibilityIdentifier("meeting.start")
-                        Button { showRecordingSettings = true } label: {
-                            Image(systemName: "slider.horizontal.3").frame(minWidth: 44, minHeight: 44)
-                        }.accessibilityLabel(PichiLocalization.text("Recording settings"))
-                            .accessibilityIdentifier("meeting.settings")
-                    }
-                    if isBusy { ProgressView().accessibilityIdentifier("meeting.preparing") }
-                    if FirstMeetingTip.setupFinished {
-                        TipView(FirstMeetingTip()).tint(theme.palette.accent)
-                    }
-                }.padding(compactHeight ? 12 : 20).background(theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: theme.metrics.corners.lg))
-            }.padding(compactHeight ? 12 : 24).frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
-        }
-        .accessibilityIdentifier("meeting.ready")
-        // Like the recording controls, this footer belongs to the native navigation safe area.
-        // A long first-meeting tip scrolls above it instead of pushing the note under the tab bar.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            Label(PichiLocalization.text("Stored on this device. Place the microphone where everyone can be heard."), systemImage: "lock")
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("meeting.storageNote")
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
-                .padding(.horizontal, 24).padding(.vertical, 12)
-                .background(theme.palette.toolbarBackground)
-        }
-    }
-
+    /// The whole window while capture runs. A red status band and a red Stop make the recording
+    /// unmistakable; the live text is the only other content, without sections or Settings.
     private func recording(_ session: MeetingSession) -> some View {
-                VStack(alignment: .leading, spacing: compactHeight ? 8 : 16) {
-            HStack {
-                Label(PichiLocalization.text(coordinator.state == .stopping(session.id) ? "Stopping..." : "Recording"),
-                      systemImage: coordinator.state == .stopping(session.id) ? "stop.circle" : "record.circle")
-                    .foregroundStyle(theme.palette.accent)
-                Spacer()
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))
-                        .monospacedDigit().accessibilityIdentifier("meeting.timer")
-                }
-            }
+        VStack(alignment: .leading, spacing: compactHeight ? 8 : 16) {
+            recordingStatus(session)
             if !compactHeight, canPresent(session) {
-                Text(session.displayTitle).font(theme.typography.title).lineLimit(2)
+                Text(session.displayTitle).font(theme.typography.sectionTitle).lineLimit(2)
             }
-            HStack {
-                Label(PichiLocalization.text("Microphone"), systemImage: "mic")
-                AudioWaveformBars(color: theme.palette.accent, barCount: 7, barWidth: 3, barSpacing: 3,
-                    minHeight: 3, maxHeight: 24,
-                    level: { CGFloat(coordinator.trackHealth[.microphone]?.level ?? 0) }, noiseThreshold: 0.02,
-                    isAnimating: coordinator.isRecording, isIdleWaveEnabled: false)
-                    .foregroundStyle(theme.palette.accent).frame(width: 45, height: 26).accessibilityHidden(true)
-            }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             if canPresent(session) {
-            if !compactHeight {
-                Divider()
-                Text(PichiLocalization.text("Live transcript")).font(theme.typography.sectionTitle)
-            }
-            switch coordinator.liveTranscript.availability {
-            case .unavailable(let reason), .degraded(let reason):
-                Text(MeetingUILocalization.captionAvailability(reason)).font(theme.typography.caption)
-                    .foregroundStyle(theme.palette.secondaryText)
-                    .accessibilityIdentifier("meeting.liveAvailability")
-            case .available: EmptyView()
-            }
-            MeetingLiveTranscriptScrollList(snapshot: coordinator.liveTranscript,
-                                           pending: coordinator.pendingSpeech, documentStyle: true)
-                .id(session.id)
-                // This is the recording screen's only vertical scroll owner. Its viewport
-                // fills the remaining space; controls never compete for the same gesture.
-                .frame(maxHeight: .infinity)
-                .layoutPriority(1)
-                .accessibilityIdentifier("meeting.liveTranscript")
-            if !compactHeight, session.speakerLabelsEnabled != false {
-                Text(PichiLocalization.text(session.effectiveSpeakerProcessingMode == .streaming
-                    ? "Speaker labels appear after enough speech has been collected."
-                    : "Speaker labels are added after recording."))
-                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-            }
+                switch coordinator.liveTranscript.availability {
+                case .unavailable(let reason), .degraded(let reason):
+                    Text(MeetingUILocalization.captionAvailability(reason)).font(theme.typography.caption)
+                        .foregroundStyle(theme.palette.secondaryText)
+                        .accessibilityIdentifier("meeting.liveAvailability")
+                case .available: EmptyView()
+                }
+                MeetingLiveTranscriptScrollList(snapshot: coordinator.liveTranscript,
+                                               pending: coordinator.pendingSpeech, documentStyle: true)
+                    .id(session.id)
+                    // This is the recording screen's only vertical scroll owner. Its viewport
+                    // fills the remaining space; controls never compete for the same gesture.
+                    .frame(maxHeight: .infinity)
+                    .layoutPriority(1)
+                    .accessibilityIdentifier("meeting.liveTranscript")
+                if !compactHeight, session.speakerLabelsEnabled != false {
+                    Text(PichiLocalization.text(session.effectiveSpeakerProcessingMode == .streaming
+                        ? "Speaker labels appear after enough speech has been collected."
+                        : "Speaker labels are added after recording."))
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        .lineLimit(2)
+                }
             } else if canAccessOwner(session), session.isLocalContentConcealed {
                 MeetingLocalContentConcealmentView()
                 Spacer()
             } else {
                 concealedPrivateData
             }
-                }.padding(compactHeight ? 12 : 24)
-                    .frame(maxWidth: 1000, maxHeight: .infinity, alignment: .topLeading)
-                    .frame(maxWidth: .infinity)
+        }
+        .padding(compactHeight ? 12 : 24)
+        .frame(maxWidth: 1000, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity)
+        .background(theme.palette.windowBackground)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("meeting.recording")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button { run(requiresVisibleProfile: false) { _ = try await coordinator.stopAndTranscribe() } } label: {
-                Label(PichiLocalization.text("Stop & Transcribe"), systemImage: "stop.fill")
-                    .foregroundStyle(theme.palette.accentForeground)
+                Label(PichiLocalization.text("Stop Recording"), systemImage: "stop.fill")
+                    .foregroundStyle(theme.palette.foreground(on: .red))
                     .frame(maxWidth: .infinity, minHeight: 48)
-            }.buttonStyle(.borderedProminent).disabled(isDomainBusy || !coordinator.isRecording)
+            }.buttonStyle(.borderedProminent).tint(.red)
+                .disabled(isDomainBusy || !coordinator.isRecording)
                 .accessibilityIdentifier("meeting.stop")
                 .padding(.horizontal, 24).padding(.vertical, 12)
+                .frame(maxWidth: 560).frame(maxWidth: .infinity)
                 .background(theme.palette.toolbarBackground)
         }
+    }
+
+    /// A live red dot, the state, the microphone level and the elapsed time on a red band.
+    private func recordingStatus(_ session: MeetingSession) -> some View {
+        let isStopping = coordinator.state == .stopping(session.id)
+        let red = theme.palette.readableText(.red)
+        return HStack(spacing: theme.metrics.spacing.md) {
+            Image(systemName: isStopping ? "stop.circle.fill" : "record.circle.fill")
+                .font(theme.typography.sectionTitle)
+                .symbolEffect(.pulse, options: .repeating, isActive: coordinator.isRecording && !reduceMotion)
+                .accessibilityHidden(true)
+            Text(PichiLocalization.text(isStopping ? "Stopping..." : "Recording"))
+                .font(theme.typography.bodyStrong)
+            AudioWaveformBars(color: red, barCount: 7, barWidth: 3, barSpacing: 3, minHeight: 3, maxHeight: 24,
+                level: { CGFloat(coordinator.trackHealth[.microphone]?.level ?? 0) }, noiseThreshold: 0.02,
+                isAnimating: coordinator.isRecording, isIdleWaveEnabled: false)
+                .frame(width: 45, height: 26).accessibilityHidden(true)
+            Spacer(minLength: theme.metrics.spacing.sm)
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                Text(MeetingTranscriptExporter.timestampText(coordinator.elapsedTime))
+                    .font(theme.typography.title).monospacedDigit()
+                    .accessibilityIdentifier("meeting.timer")
+            }
+        }
+        .foregroundStyle(red)
+        .padding(.horizontal, 20).padding(.vertical, compactHeight ? 8 : 14)
+        .background(Color.red.opacity(colorScheme == .dark ? 0.22 : 0.08),
+                    in: RoundedRectangle(cornerRadius: theme.metrics.corners.lg, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("meeting.recordingStatus")
     }
 
     private func processing(_ session: MeetingSession, stage: MeetingProcessingStage) -> some View {
@@ -688,58 +592,145 @@ struct MobileMeetingRoot: View {
         }
     }
 
-    private var history: some View {
+    /// Every meeting, newest first, with Start Recording always below it. A new user sees one place
+    /// for meetings and one obvious action; search appears once there is something to search.
+    private var meetingList: some View {
         let matches = sessions.filter { session in
-            !session.isLocalContentConcealed && (search.isEmpty || session.displayTitle.localizedCaseInsensitiveContains(search)
+            // An encrypted meeting stays listed without its content, which search cannot match.
+            if session.isLocalContentConcealed { return search.isEmpty && canAccessOwner(session) }
+            return search.isEmpty || session.displayTitle.localizedCaseInsensitiveContains(search)
                 || session.readableSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
-                || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true)
+                || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
         }
         return List(matches) { session in
             Button { historyPath = [session.id] } label: {
                 VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
-                    Text(session.displayTitle).font(theme.typography.bodyStrong)
-                    Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    if session.isLocalContentConcealed {
+                        Label(PichiLocalization.text("recording.protection.concealed.title"), systemImage: "lock.fill")
+                            .font(theme.typography.bodyStrong)
+                        Text(concealedSummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    } else {
+                        Text(session.displayTitle).font(theme.typography.bodyStrong)
+                        Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    }
                     if let cloudPublication {
                         MobileCloudRecordingStatus(service: cloudPublication, interaction: cloudInteraction, recordingID: session.id)
                     }
                 }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
-                .swipeActions { Button(PichiLocalization.text("Delete"), role: .destructive) { deletion = .meeting(session) } }
+                .swipeActions {
+                    // Deletion needs a presentable meeting, so an encrypted one offers no Delete here.
+                    if !session.isLocalContentConcealed {
+                        Button(PichiLocalization.text("Delete"), role: .destructive) { deletion = .meeting(session) }
+                    }
+                }
         }
         .overlay {
-            // The desktop history's empty states and copy.
             if matches.isEmpty, historySnapshot.hasLoaded, historySnapshot.errorMessage == nil {
-                ContentUnavailableView(
-                    PichiLocalization.text(search.isEmpty ? "No meetings yet" : "No matching meetings"),
-                    systemImage: search.isEmpty ? "person.2.wave.2" : "magnifyingglass",
-                    description: Text(PichiLocalization.text(search.isEmpty
-                        ? "Completed meetings will appear here." : "Try a different title, app, or speaker.")))
+                if search.isEmpty {
+                    // The first meeting's hint is the empty list itself.
+                    ContentUnavailableView(PichiLocalization.text("Start your first meeting"), systemImage: "waveform",
+                        description: Text(PichiLocalization.text("Record a meeting and return to its transcript.")))
+                        .accessibilityIdentifier("meetings.empty")
+                } else {
+                    ContentUnavailableView(PichiLocalization.text("No matching meetings"), systemImage: "magnifyingglass",
+                        description: Text(PichiLocalization.text("Try a different title, app, or speaker.")))
+                }
             }
         }
-        .searchable(text: $privatePresentation.search, prompt: PichiLocalization.text("Search meetings"))
+        // A query stays editable after its last meeting is deleted, so it never hides the next one.
+        .modifier(MeetingSearch(isAvailable: !sessions.isEmpty || !search.isEmpty, text: $privatePresentation.search))
         .refreshable { await refreshHistory() }.accessibilityIdentifier("history.list")
-        .navigationDestination(for: MeetingSessionID.self) { id in
-            if let session = sessions.first(where: { $0.id == id }), canPresent(session) {
-                Group {
-                    if session.state == .failed || session.state == .interrupted { recovery(session) } else { transcript(session) }
-                }
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbarBackground(theme.palette.toolbarBackground, for: .navigationBar)
-                .toolbarBackground(.visible, for: .navigationBar)
+        .mobileReadableColumn()
+        .safeAreaInset(edge: .bottom, spacing: 0) { startBar }
+        .navigationDestination(for: MeetingSessionID.self) { id in meetingPage(id) }
+    }
+
+    /// Start stays in the same place on every screen size. Below it, what the next recording uses;
+    /// the line opens the same settings as Settings > Recording.
+    private var startBar: some View {
+        let preparing = isStarting && coordinator.isQuiescent
+        return VStack(spacing: 0) {
+            Button { beginMeeting() } label: {
+                Label(PichiLocalization.text(preparing ? "Preparing recording…" : "Start Recording"), systemImage: "record.circle")
+                    .foregroundStyle(theme.palette.accentForeground)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .animation(nil, value: preparing)
+            }.buttonStyle(.borderedProminent)
+                .disabled(isBusy || !coordinator.isQuiescent)
+                .accessibilityIdentifier("meeting.start")
+            if coordinator.isProcessing {
+                Label(PichiLocalization.text("Preparing your transcript"), systemImage: "text.alignleft")
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    .frame(minHeight: 44)
+            } else {
+                Button { showRecordingSettings = true } label: {
+                    HStack(spacing: theme.metrics.spacing.xs) {
+                        Image(systemName: "mic")
+                        Text(verbatim: nextRecordingSummary.joined(separator: " · "))
+                        Image(systemName: "chevron.right").imageScale(.small)
+                    }
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }.buttonStyle(.plain).disabled(isBusy)
+                    .accessibilityLabel(PichiLocalization.text("Recording settings"))
+                    .accessibilityValue(nextRecordingSummary.joined(separator: ", "))
+                    .accessibilityIdentifier("meeting.settings")
             }
+        }
+        .padding(.horizontal, 24).padding(.top, 12)
+        .frame(maxWidth: 560).frame(maxWidth: .infinity)
+        .background(theme.palette.toolbarBackground)
+    }
+
+    /// The microphone and transcript language the next recording uses.
+    private var nextRecordingSummary: [String] {
+        let defaults = settings.meetingRecordingDefaults
+        let uid = defaults.microphoneCoreAudioUID ?? microphoneSnapshot.defaultCoreAudioUID
+        let microphone = microphoneSnapshot.identities.first { $0.coreAudioUID == uid }?.displayName
+            ?? PichiLocalization.text("System Default")
+        return [microphone, MobileRecordingSettings.languageTitle(settings: settings)]
+    }
+
+    /// A meeting's own page: its progress while processing, then its transcript or recovery.
+    @ViewBuilder private func meetingPage(_ id: MeetingSessionID) -> some View {
+        // The coordinator's own meeting is newer than the list, which may not have read it yet.
+        if let session = coordinator.currentSession.flatMap({ $0.id == id ? $0 : nil })
+            ?? sessions.first(where: { $0.id == id }) {
+            Group {
+                if case .processing(id, let stage) = coordinator.state { processing(session, stage: stage) }
+                else if canPresent(session) {
+                    if session.state == .failed || session.state == .interrupted { recovery(session) } else { transcript(session) }
+                } else if canAccessOwner(session), session.isLocalContentConcealed { concealedRecording(session) }
+                else { concealedPrivateData }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(theme.palette.toolbarBackground, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
         }
     }
 
-    /// One secondary line: date, duration, participants and any unfinished state.
+    /// One secondary line: duration, participants and any unfinished state. A default title
+    /// already carries the date, so the date appears here only for a renamed meeting.
     private func historySummary(_ session: MeetingSession) -> String {
-        var parts = [session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)),
-                     MeetingTranscriptExporter.timestampText(session.duration)]
+        var parts: [String] = []
+        if !session.displayTitleIncludesStart {
+            parts.append(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
+        }
+        parts.append(MeetingTranscriptExporter.timestampText(session.duration))
         if !session.readableSpeakers.isEmpty {
             parts.append(PichiLocalization.format("%lld speakers", Int64(session.readableSpeakers.count)))
         }
         if session.state != .completed { parts.append(PichiLocalization.text(sessionStatus(session.state))) }
         return parts.joined(separator: " · ")
+    }
+
+    /// An encrypted meeting shows only when it started and how long it ran; its title stays hidden.
+    private func concealedSummary(_ session: MeetingSession) -> String {
+        [session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)),
+         MeetingTranscriptExporter.timestampText(session.duration)].joined(separator: " · ")
     }
 
     private func transcript(_ session: MeetingSession) -> some View {
@@ -801,12 +792,6 @@ struct MobileMeetingRoot: View {
                             .accessibilityIdentifier("transcript.more")
                         Spacer()
                     }
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
-                        if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
-                            Text(PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls."))
-                        }
-                    }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     Text(PichiLocalization.text("Transcript")).font(theme.typography.sectionTitle)
                     Divider()
                     if !session.readableSpeakers.isEmpty {
@@ -845,6 +830,14 @@ struct MobileMeetingRoot: View {
                             transcriptParagraph(paragraph, session: session, names: names)
                         }
                     }
+                    // Export cautions follow the text instead of standing between the title and it.
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
+                        if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
+                            Text(PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls."))
+                        }
+                    }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        .padding(.top, theme.metrics.spacing.lg)
                 }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
             }.accessibilityIdentifier("meeting.transcript")
                 .scrollDismissesKeyboard(.interactively)
@@ -1006,8 +999,13 @@ struct MobileMeetingRoot: View {
         guard privateProfile.isPrivateDataVisible, PrivateProfileStorage.acceptsNewWork,
               let admission = privatePresentation.publications.admit() else { return }
         startFeedback += 1
-        FirstMeetingTip().invalidate(reason: .actionPerformed)
+        playback.stop()
         run {
+            isStarting = true
+            defer { isStarting = false }
+            // The previous completed meeting stays in the list. A recovery offer is not resolved
+            // here: the start resolves it once capture runs and restores it if the start fails.
+            if case .completed = coordinator.state { try coordinator.resetForNewMeeting() }
             await refreshMicrophones()
             // Both surfaces use the same preparation, while retaining their original
             // profile admission across every suspension before capture.
@@ -1016,12 +1014,6 @@ struct MobileMeetingRoot: View {
                     privatePresentation.publications.canPublish(admission)
                 })
         }
-    }
-
-    private func newMeeting() {
-        guard privateProfile.isPrivateDataVisible, PrivateProfileStorage.acceptsNewWork else { return }
-        playback.stop()
-        do { try coordinator.resetForNewMeeting(); destination = .meetings } catch { report(error) }
     }
 
     private func run(session: MeetingSession? = nil, requiresVisibleProfile: Bool = true,
@@ -1070,10 +1062,21 @@ struct MobileMeetingRoot: View {
             await historySnapshot.refresh()
             guard privatePresentation.publications.canPublish(admission) else { return }
             if let message = historySnapshot.errorMessage { error = message; showError = true; return }
-            if let id = historyPath.last, !sessions.contains(where: { $0.id == id }) { historyPath.removeAll() }
+            if let id = historyPath.last, !sessions.contains(where: { $0.id == id }),
+               coordinator.currentSession?.id != id { historyPath.removeAll() }
         }
         await withTaskCancellationHandler { await job?.value } onCancel: { job?.cancel() }
     }
+    /// A meeting restored as interrupted or failed is the coordinator's open recovery offer.
+    /// Its page opens once on launch, so Retry is the first thing seen, as before.
+    private func openRestoredRecovery() {
+        // An Account page reopened across its own sign-in keeps priority over the restored offer.
+        guard historyPath.isEmpty, settingsPath.last != .account, coordinator.isQuiescent, let session = coordinator.activeSession,
+              session.state == .interrupted || session.state == .failed, canPresent(session) else { return }
+        destination = .meetings
+        historyPath = [session.id]
+    }
+
     private func refreshMicrophones() async {
         do { microphoneSnapshot = try await microphones() } catch { report(error) }
     }
@@ -1167,8 +1170,6 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
     @Published var speakerAssignment: MeetingSpeakerAssignmentDraft?
     @Published var deletion: Deletion?
     @Published var share: MeetingSharePayload?
-    @Published var showPresentationPicker: Bool = false
-    @Published var presentation: MobilePresentationDocument?
     @Published var transcriptReadingSource: MeetingTranscriptExporter.ReadingInput?
     @Published var transcriptReading: [MeetingTranscriptExporter.DisplayParagraph] = []
     enum Deletion {
@@ -1181,9 +1182,10 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
         }
     }
 
-    let presentationLoader = MobilePresentationLoader()
     let publications: MobilePrivatePublicationTasks
-    var presentationPickerAdmission: MobilePrivatePublicationTasks.Admission?
+    /// Signing in or choosing a workspace from Account switches the private profile, which rebuilds
+    /// this window's tree. The window's own scene storage carries only that route across it.
+    var recordAccountRoute: ((Bool) -> Void)?
     private var cleanupTask: Task<Void, Never>?
     private var clearAfterJoin = false
     private var observers = Set<AnyCancellable>()
@@ -1209,8 +1211,6 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
             .store(in: &observers)
         publications.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &observers)
-        presentationLoader.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
-            .store(in: &observers)
     }
 
     func invalidate() {
@@ -1220,12 +1220,11 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
     }
 
     func retirePendingWork() {
-        publications.cancel(); presentationLoader.cancel()
+        publications.cancel()
         copiedSessionID = nil
         guard cleanupTask == nil else { return }
         cleanupTask = Task { @MainActor in
             await self.publications.cancelAndJoin()
-            await self.presentationLoader.waitUntilFinished()
             if self.clearAfterJoin { self.clear() }
             self.clearAfterJoin = false
             self.cleanupTask = nil
@@ -1234,6 +1233,7 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
     }
 
     func prepareForPrivateProfileTransition() async throws {
+        recordAccountRoute?(destination == .settings && settingsPath.last == .account)
         invalidate()
         await cleanupTask?.value
     }
@@ -1248,9 +1248,19 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
         historyPath = []; search = ""
         copiedSessionID = nil; edit = nil; participantEdit = nil; speakerAssignment = nil; deletion = nil
         share?.cleanup(); share = nil
-        presentationPickerAdmission = nil; showPresentationPicker = false; presentation = nil
         transcriptReadingSource = nil; transcriptReading = []
         error = nil; showError = false; showMicrophoneSettings = false; showRecordingSettings = false
+    }
+}
+
+/// Search appears once there is something to search; an empty first list shows only its hint.
+private struct MeetingSearch: ViewModifier {
+    let isAvailable: Bool
+    @Binding var text: String
+
+    func body(content: Content) -> some View {
+        if isAvailable { content.searchable(text: $text, prompt: PichiLocalization.text("Search meetings")) }
+        else { content }
     }
 }
 

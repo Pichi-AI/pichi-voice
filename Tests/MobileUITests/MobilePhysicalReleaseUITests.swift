@@ -54,7 +54,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             capture("history-\(phase)-final", revision: revision)
         }
         capture("history-\(phase)-initial", revision: revision)
-        try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
+        try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
         historyNavigationCompleted = true
         let deadline = ProcessInfo.processInfo.systemUptime + 10
         for id in expectedIDs.sorted() {
@@ -66,7 +66,6 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try require(app.state == .runningForeground && app.alerts.count == 0
                     && !app.buttons["meeting.stop"].exists
                     && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
-                    && !app.descendants(matching: .any)["meeting.preparing"].firstMatch.exists
                     && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
                     "History observation must remain idle without starting or interrupting an attempt")
         loadedWithoutRefresh = true
@@ -102,14 +101,14 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     "Use a bounded ASCII JSON basename with a fresh random 32-hex suffix; no paths or overwrite")
         let app = try attachReadOnlyPhysicalApp(revision: revision)
         let starts = app.buttons.matching(identifier: "meeting.start")
-        let ready = app.descendants(matching: .any)["meeting.ready"].firstMatch.exists
+        let ready = app.descendants(matching: .any)["history.list"].firstMatch.exists
             && starts.count == 1 && starts.firstMatch.isHittable && starts.firstMatch.isEnabled
         try require(!app.otherElements["ActivityListView"].exists
                     && !app.otherElements["Browse View (Picker)"].exists
                     && (ready || completedReadOnlyTranscriptVisible(in: app, title: title)),
                     "Begin ready or on the exact owned completed transcript, without pre-existing native export UI")
         captureProtectedExportStep("root-export-01-idle-entry", app: app, revision: revision)
-        try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
+        try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
         captureProtectedExportStep("root-export-02-owned-history-list", app: app, revision: revision)
         let rows = app.buttons.matching(identifier: "history.session.\(sessionID)")
         try require(rows.firstMatch.waitForExistence(timeout: 10) && rows.count == 1
@@ -298,7 +297,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try require(completedReadOnlyTranscriptVisible(in: app, title: title),
                     "Begin on the exact parent-verified completed transcript, with no active attempt")
         capture("share-observation-01-owned-completed-current", revision: revision)
-        try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
+        try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
         let row = app.buttons["history.session.\(sessionID)"]
         try require(row.waitForExistence(timeout: 10) && row.isEnabled && row.isHittable,
                     "Only the exact owned history session may be selected; no search or other row is opened")
@@ -341,81 +340,6 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         #endif
     }
 
-    /// Fixture staging preflight only. No recording is started and the PDF is not
-    /// selected or rendered. Exact Files location/folder admission avoids Recents
-    /// and global search finding an unrelated file with the same basename.
-    @MainActor
-    func testPhysicalReadySyntheticPDFFixturePreflight() throws {
-        #if targetEnvironment(simulator)
-        throw XCTSkip("Requires an explicitly authorized ready physical-device app")
-        #else
-        let environment = ProcessInfo.processInfo.environment
-        guard environment["PICHI_PHYSICAL_PDF_FIXTURE_PREFLIGHT"] == "1" else {
-            throw XCTSkip("Enable read-only inspection of an explicitly staged synthetic PDF")
-        }
-        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
-        let filename = try XCTUnwrap(environment["PICHI_PRESENTATION_FIXTURE_NAME"])
-        let location = try XCTUnwrap(environment["PICHI_PRESENTATION_FIXTURE_LOCATION"])
-        let folder = try XCTUnwrap(environment["PICHI_PRESENTATION_FIXTURE_FOLDER"])
-        try require(filename == "SyntheticDemoPresentation.pdf" && !location.isEmpty
-                    && folder == "Codex-Pichi-Demo-20261018",
-                    "Only the approved synthetic PDF in its explicit staged location/folder may be inspected")
-        let app = try attachReadOnlyPhysicalApp(revision: revision)
-        try require(app.descendants(matching: .any)["meeting.ready"].firstMatch.exists
-                    && app.buttons["meeting.start"].exists && app.alerts.count == 0,
-                    "Begin in ready state; this selector never uses New Meeting or Start")
-        capture("pdf-preflight-01-ready-no-recording", revision: revision)
-        try tap(app.buttons["meeting.presentation"], "Open only the ready toolbar's native PDF picker")
-        capture("pdf-preflight-02-native-picker", revision: revision)
-        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Отмена", "Отменить"]))
-        var ownsPicker = true
-        defer {
-            if ownsPicker && app.state == .runningForeground && app.alerts.count == 0
-                && cancel.count == 1 && cancel.firstMatch.isHittable {
-                cancel.firstMatch.tap()
-                capture("pdf-preflight-cleanup-native-cancel", revision: revision)
-            }
-        }
-        let locationCell = app.cells.matching(NSPredicate(format: "label == %@", location))
-        for step in 0..<5 where !locationCell.firstMatch.isHittable {
-            let browse = app.buttons.matching(NSPredicate(format: "label IN %@", ["Browse", "Обзор"]))
-            let back = app.buttons["BackButton"]
-            if browse.count == 1 && browse.firstMatch.isHittable { browse.firstMatch.tap() }
-            else if back.exists && back.isHittable { back.tap() }
-            else { break }
-            capture("pdf-preflight-03-location-navigation-\(step)", revision: revision)
-        }
-        try require(locationCell.count == 1, "The explicit native Files location must be unique")
-        try tap(locationCell.firstMatch, "Open only the explicitly staged native Files location")
-        capture("pdf-preflight-04-known-location", revision: revision)
-        let folderText = app.staticTexts.matching(NSPredicate(format: "label == %@", folder))
-        try require(folderText.firstMatch.waitForExistence(timeout: 15) && folderText.count == 1,
-                    "The exact owned fixture folder must exist and be unambiguous")
-        try tap(folderText.firstMatch, "Inspect only the existing owned synthetic fixture folder")
-        capture("pdf-preflight-05-owned-folder", revision: revision)
-        let stem = (filename as NSString).deletingPathExtension
-        let file = app.staticTexts.matching(NSPredicate(format: "label IN %@", [filename, stem]))
-        try require(file.firstMatch.waitForExistence(timeout: 10) && file.count == 1
-                    && file.firstMatch.isEnabled && file.firstMatch.isHittable,
-                    "The exact approved synthetic PDF must be visible and selectable in its owned folder")
-        let accessibility = XCTAttachment(string: app.debugDescription)
-        accessibility.name = "synthetic-pdf-preflight-accessibility-\(revision)"
-        accessibility.lifetime = .keepAlways
-        add(accessibility)
-        capture("pdf-preflight-06-exact-fixture-visible-not-selected", revision: revision)
-        try require(cancel.count == 1, "The native fixture picker must expose one unambiguous Cancel")
-        try tap(cancel.firstMatch, "Cancel fixture inspection without selecting the PDF")
-        try require(cancel.firstMatch.waitForNonExistence(timeout: 10)
-                    && app.buttons["meeting.start"].waitForExistence(timeout: 10)
-                    && app.descendants(matching: .any)["meeting.ready"].firstMatch.exists
-                    && !app.buttons["meeting.stop"].exists && app.alerts.count == 0,
-                    "Fixture inspection must return to ready state without starting capture")
-        ownsPicker = false
-        capture("pdf-preflight-07-ready-after-native-cancel", revision: revision)
-        print("[PHYSICAL_PDF_FIXTURE_PREFLIGHT] exact_fixture_visible selected=false recording_started=false")
-        #endif
-    }
-
     @MainActor private func attachReadOnlyPhysicalApp(revision: String) throws -> XCUIApplication {
         continueAfterFailure = false
         try require(revision.count == 40 && revision.allSatisfy { "0123456789abcdef".contains($0) }
@@ -435,7 +359,6 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try require(app.state == .runningForeground && app.alerts.count == 0
                     && !app.buttons["meeting.stop"].exists
                     && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
-                    && !app.descendants(matching: .any)["meeting.preparing"].firstMatch.exists
                     && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
                     "Read-only observation requires the parent's idle process, never an active attempt")
         return app
@@ -448,7 +371,6 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             && !app.buttons["meeting.stop"].exists && !app.buttons["meeting.retry"].exists
             && !app.buttons["meeting.restartProcessing"].exists
             && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
-            && !app.descendants(matching: .any)["meeting.preparing"].firstMatch.exists
             && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
             && !app.staticTexts.matching(NSPredicate(format: "label IN %@",
                 ["Meeting transcription was interrupted", "Расшифровка встречи прервана",
@@ -456,7 +378,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
     }
 
     @MainActor
-    func testPhysicalOwnerVoiceSampleCanBeCheckedAndDiscardedWithoutSaving() async throws {
+    func testPhysicalOwnerVoiceSampleIsSavedWhenCheckedAndCanBeDeleted() async throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("Requires an explicitly authorized physical-device audio lease")
         #else
@@ -518,6 +440,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         var changedPlaybackCategory = false
         var ownsPlaybackSession = false
         var ownsEnrollment = false
+        var savedSyntheticProfile = false
         defer {
             player.stop()
             if ownsPlaybackSession { try? audioSession.setActive(false, options: .notifyOthersOnDeactivation) }
@@ -551,34 +474,53 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(stop.waitForNonExistence(timeout: 10), "Microphone capture must join before checking the sample")
             player.stop()
             capture("owner-03-sample-checking", revision: revision)
-            let save = app.buttons["ownerVoice.save"]
+            // A checked sample is saved without a separate step; the synthetic profile is then removed.
+            let delete = app.buttons["ownerVoice.delete"]
             let deadline = ProcessInfo.processInfo.systemUptime + 120
-            while !save.exists && ProcessInfo.processInfo.systemUptime < deadline {
+            while !delete.exists && ProcessInfo.processInfo.systemUptime < deadline {
                 try require(!app.staticTexts["ownerVoice.error"].exists, "The actual single-voice microphone sample must pass checking")
                 try await Task.sleep(nanoseconds: 500_000_000)
             }
-            try reveal(save, in: app, revision: revision)
-            try require(save.exists && save.isEnabled, "A checked draft must expose the explicit Save action")
-            try require(!app.buttons["ownerVoice.delete"].exists, "Checking alone must not persist a voice profile")
-            capture("owner-04-checked-draft-unsaved", revision: revision)
-            try tap(app.buttons["ownerVoice.cancel"], "Discard the synthetic draft without saving it")
-            try require(save.waitForNonExistence(timeout: 5), "Discard must remove the ready draft")
+            savedSyntheticProfile = delete.exists
+            try require(delete.exists && ["Your voice is saved", "Ваш голос сохранён"].contains(status.label),
+                        "A checked sample must be saved without a separate Save action")
+            try require(!app.buttons["ownerVoice.save"].exists, "Saving needs no separate action")
+            capture("owner-04-checked-sample-saved", revision: revision)
+            try reveal(delete, in: app, revision: revision)
+            try tap(delete, "Remove the synthetic owner profile")
+            let confirm = app.buttons.matching(NSPredicate(format: "label IN %@", ["Delete", "Удалить"])).firstMatch
+            try require(confirm.waitForExistence(timeout: 5), "Deleting the voice profile asks first")
+            try tap(confirm, "Confirm removing the synthetic owner profile")
+            try require(delete.waitForNonExistence(timeout: 15), "Delete must remove the saved profile")
+            savedSyntheticProfile = false
             ownsEnrollment = false
-            try require(!app.buttons["ownerVoice.delete"].exists, "Discard must leave no persistent owner profile")
             try require(["Your voice is not set up", "Ваш голос ещё не настроен"].contains(status.label),
-                        "The owner profile must remain unset after discarding the draft")
-            capture("owner-05-draft-discarded", revision: revision)
-            try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
+                        "The owner profile must be unset after deleting the synthetic profile")
+            capture("owner-05-profile-deleted", revision: revision)
+            try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
             try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
             try require(!app.buttons["meeting.stop"].exists, "Owner checking must release capture without starting a meeting")
             try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
             try tap(app.buttons["settings.participants"], "Reopen participant settings after capture cleanup")
             try reveal(start, in: app, revision: revision)
-            try require(start.isEnabled && !app.buttons["ownerVoice.delete"].exists && !save.exists,
-                        "Navigation must remain responsive and the discarded draft must not return")
+            try require(start.isEnabled && !app.buttons["ownerVoice.delete"].exists,
+                        "Navigation must remain responsive and the deleted profile must not return")
             capture("owner-06-clean-settings-reopened", revision: revision)
         } catch {
             player.stop()
+            // The precondition proved no human profile existed, so a saved one is the synthetic sample.
+            if savedSyntheticProfile || (app.buttons["ownerVoice.delete"].exists && ownsEnrollment) {
+                app.activate()
+                let delete = app.buttons["ownerVoice.delete"]
+                if delete.exists && delete.isHittable { delete.tap() }
+                let confirm = app.buttons.matching(NSPredicate(format: "label IN %@", ["Delete", "Удалить"])).firstMatch
+                if confirm.waitForExistence(timeout: 5) { confirm.tap() }
+                if !delete.waitForNonExistence(timeout: 15) {
+                    print("[PHYSICAL_OWNER_UI] synthetic_profile_cleanup_requires_parent_inspection revision=\(revision)")
+                }
+                self.capture("owner-failure-synthetic-profile-cleanup", revision: revision)
+                ownsEnrollment = false
+            }
             if ownsEnrollment {
                 let cleanup = Task { @MainActor in
                     app.activate()
@@ -638,7 +580,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
                     "The app must be idle; an existing recording is not owned by this test")
         capture("01-installed-app", revision: revision)
-        try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
+        try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
         let previousSessionIDs = historyIDs(in: app)
         try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
         if !app.buttons["settings.models"].exists {
@@ -664,7 +606,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         capture("05-speaker-settings", revision: revision)
         try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
         if !app.buttons["meeting.start"].exists {
-            try tap(app.buttons["meeting.new"], "Reset the completed current view without deleting history")
+            try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
             capture("06-new-meeting", revision: revision)
         }
         try require(app.buttons["meeting.start"].waitForExistence(timeout: 15), "The real Start action must be ready")
@@ -778,7 +720,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             }
             try require(app.buttons["transcript.more"].isHittable, "The share sheet must close safely")
             capture("18-share-dismissed", revision: revision)
-            try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
+            try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
             let newIDs = historyIDs(in: app).subtracting(previousSessionIDs)
             try require(newIDs.count == 1, "History must show exactly one new meeting from this attempt")
             let sessionID = try XCTUnwrap(newIDs.first)
@@ -787,7 +729,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             app.terminate()
             app.launch()
             capture("20-normal-relaunch", revision: revision)
-            try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
+            try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
             try tap(app.buttons["history.session.\(sessionID)"], "Reopen the persisted meeting after normal relaunch")
             try require(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 10),
                         "The persisted transcript must reopen")
@@ -890,7 +832,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                         && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
                         "An existing recording or processing attempt is not owned by this test")
             if !app.buttons["meeting.start"].exists {
-                try tap(app.buttons["meeting.new"], "Create a fresh meeting view without deleting history")
+                try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
                 try await visibleCheckpoint("02-new-meeting", app: app, revision: revision, directory: checkpoints)
             }
             try require(app.buttons["meeting.start"].waitForExistence(timeout: 15)
@@ -1077,7 +1019,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                         && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
                         "The relaunched DEBUG AUT must remain idle before this test starts recording")
             if !app.buttons["meeting.start"].exists {
-                try tap(app.buttons["meeting.new"], "Create a fresh meeting without deleting history")
+                try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
                 try saveVisibleCheckpoint("02-new-meeting", app: app, revision: revision, directory: checkpoints)
             }
             try require(app.alerts.count == 0, "Resolve ordinary readiness prompts before silent capture")

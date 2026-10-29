@@ -341,6 +341,9 @@ struct MobileAccountSettings: View {
             }
         }
             .navigationTitle(PichiLocalization.text("account.title", defaultValue: "Account"))
+            // Explicit like the section roots: after a profile switch the rebuilt stack starts on
+            // this page, where an inherited title would resolve large and cover the first row.
+            .navigationBarTitleDisplayMode(.inline)
             .accessibilityIdentifier("account.settings")
     }
 }
@@ -1020,7 +1023,9 @@ struct MobileCloudRecordingStatus: View {
                         }
                         if showsActions { actions(status) }
                     } else {
-                        Text(MobileCloudCopy.text(projection.loadFailed ? "status.unavailable" : "status.loading"))
+                        // Without a configured workspace nothing is checked; the meeting is simply on this device.
+                        Text(MobileCloudCopy.text(isLocalOnly ? "status.localOnly"
+                            : projection.loadFailed ? "status.unavailable" : "status.loading"))
                             .font(theme.typography.caption).fixedSize(horizontal: false, vertical: true)
                         if showsActions && projection.loadFailed && canLoad {
                             Button(MobileCloudCopy.text("action.refresh")) { _ = loadStatus() }
@@ -1058,6 +1063,9 @@ struct MobileCloudRecordingStatus: View {
         case .unconfigured, .signedOut, .profileUnavailable, .pausing, .protectedDataUnavailable: return false
         default: return true
         }
+    }
+    private var isLocalOnly: Bool {
+        service.snapshot.availability == .unconfigured || service.snapshot.availability == .signedOut
     }
     private func currentLoaded(_ context: MobilePrivatePublicationContext) -> PichiCloudPublicationStatus? {
         projection.loaded?.context == context ? projection.loaded?.status : nil

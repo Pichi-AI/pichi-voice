@@ -1,5 +1,4 @@
 import Foundation
-import PDFKit
 
 // In-memory scope metadata only. No real profile is selected or configured.
 @MainActor private final class SyntheticPublicationScope {
@@ -19,24 +18,6 @@ import PDFKit
     var allowsSource = true
     var waits = 0
     var validations = 0
-}
-
-nonisolated private final class SyntheticPDFParseGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var enteredValue = false
-    private var releaseValue = 0
-    let semaphore = DispatchSemaphore(value: 0)
-    var entered: Bool { lock.lock(); defer { lock.unlock() }; return enteredValue }
-    var releases: Int { lock.lock(); defer { lock.unlock() }; return releaseValue }
-    func recordRelease() { lock.lock(); releaseValue += 1; lock.unlock() }
-    func parse(_ url: URL) throws -> MobilePresentationDocument {
-        try MobilePresentationDocument(url: url, startAccess: { _ in true }, stopAccess: { _ in self.recordRelease() },
-            isReadablePDF: { _ in true }, loadPDF: { _ in
-                self.lock.lock(); self.enteredValue = true; self.lock.unlock()
-                self.semaphore.wait() // The native parser intentionally ignores cancellation.
-                let pdf = PDFDocument(); pdf.insert(PDFPage(), at: 0); return pdf
-            })
-    }
 }
 
 extension MobileAccountInteractionTests {
@@ -106,20 +87,6 @@ extension MobileAccountInteractionTests {
         delayGate!.resume(); await confirmationJoin.value
         expect(!confirmation, "A cancelled delayed confirmation cannot mutate a new presentation")
 
-        let loader = MobilePresentationLoader(), parser = SyntheticPDFParseGate()
-        var pdfPublications = 0
-        let pdfContext = scope.context
-        expect(loader.load(url: URL(fileURLWithPath: "/synthetic.pdf"), parse: { try parser.parse($0) },
-            canPublish: { scope.current(pdfContext) }, completion: { _ in pdfPublications += 1 }), "Current PDF request is admitted")
-        await until { parser.entered }
-        scope.conceal()
-        // Deliberately omit loader.cancel: the actual completion fence must reject it.
-        parser.semaphore.signal(); await loader.waitUntilFinished()
-        expect(pdfPublications == 0 && parser.releases == 1, "Changed profile/revision rejects parsed PDF and releases its security scope")
-        expect(!loader.isLoading, "A rejected PDF still joins its native worker")
-        expect(!loader.load(url: URL(fileURLWithPath: "/synthetic.pdf"), canPublish: { false }, completion: { _ in
-            preconditionFailure("Concealed PDF request was published")
-        }), "Concealed PDF admission never starts parsing")
         await owner.cancelAndJoin()
         await cloudCommandTests()
         await cloudStatusReadinessTests()
