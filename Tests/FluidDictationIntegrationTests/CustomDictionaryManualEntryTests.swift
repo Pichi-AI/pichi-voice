@@ -9,6 +9,24 @@ import FluidAudio
 
 @MainActor
 final class CustomDictionaryManualEntryTests: XCTestCase {
+    func testAcousticCorrectionDoesNotGloballyReplaceAnotherValidTerm() {
+        let triggers = DictionaryTrainingSpellingPolicy.exactTriggers(
+            accepted: ["BIMCheck"], manuallyConfirmed: [], acousticCorrection: true
+        )
+        let entries = CustomDictionaryTrainingMerge.mergedEntries(
+            current: [], replacement: "AI Enablement", triggers: triggers, savePronunciation: true
+        )
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries[0].triggers, ["ai enablement"])
+        self.withRestoredDictionary(entries) {
+            XCTAssertEqual(ASRService.applyCustomDictionary("Review BIMCheck and AI Enablement."), "Review BIMCheck and AI Enablement.")
+        }
+        let explicit = DictionaryTrainingSpellingPolicy.exactTriggers(
+            accepted: ["BIMCheck"], manuallyConfirmed: ["BIMCheck"], acousticCorrection: true
+        )
+        XCTAssertEqual(explicit, ["BIMCheck"])
+    }
+
     // Keep these tests independent of a saved pronunciation preference.
     private var priorSharedFeaturesFlag: Any?
 

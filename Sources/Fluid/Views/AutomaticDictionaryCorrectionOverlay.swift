@@ -34,6 +34,7 @@ final class DictionaryCorrectionOverlayController {
         generation &+= 1
         dismissTask?.cancel(); dismissTask = nil
         session?.onInteraction = nil; session?.onSuccess = nil
+        session?.onOpenDictionary = nil
         outcomeHandler = nil
         sessionCancellable?.cancel(); sessionCancellable = nil
         languageCancellable?.cancel(); languageCancellable = nil
@@ -72,6 +73,11 @@ final class DictionaryCorrectionOverlayController {
         session.onSuccess = { [weak self] in
             self?.reportOutcome(.accepted)
             self?.scheduleSuccessDismissal()
+        }
+        session.onOpenDictionary = { [weak self] in
+            // Opening the editor is not yet acceptance or successful persistence.
+            self?.outcomeHandler = nil
+            self?.hide()
         }
         self.session = session
 
@@ -781,11 +787,11 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 } else {
                     if self.pronunciationEnabled {
                         CorrectionOverlayActionButton(
-                            title: "Train by Voice",
+                            title: "Record pronunciation",
                             systemImage: "mic.fill",
                             style: .secondary,
                             accent: self.accent,
-                            action: self.session.beginTraining
+                            action: self.session.continueInDictionary
                         )
                     }
 

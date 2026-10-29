@@ -33,6 +33,7 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
 
     var onInteraction: (() -> Void)?
     var onSuccess: (() -> Void)?
+    var onOpenDictionary: (() -> Void)?
 
     private let profile = PrivateProfileStorage.current
     private var privateCapture: PrivateDirectDictationCapture?
@@ -150,6 +151,16 @@ final class AutomaticDictionaryTrainingSession: ObservableObject {
             guard self.isProfileVisible, DictionaryMatcherExperiment.sharedFeaturesEnabled, generation == DictionaryMatcherExperiment.generation, !self.isCancelled else { return }
             await DictionaryTrainingEndpointMonitor.shared.prepare()
         }
+    }
+
+    /// The full dictionary wizard owns all new pronunciation recordings.
+    func continueInDictionary() {
+        guard self.isProfileVisible, !self.isCancelled, self.capturePhase == .idle,
+              self.candidate.negativeCorrection == nil,
+              let request = DictionaryWordTrainingRequest(candidate: self.candidate, profile: self.profile) else { return }
+        self.onInteraction?()
+        NotificationCenter.default.post(name: .openDictionaryWordTraining, object: request)
+        self.onOpenDictionary?()
     }
 
     func returnToChoice() {

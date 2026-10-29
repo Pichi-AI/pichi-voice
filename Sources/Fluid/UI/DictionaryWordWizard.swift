@@ -48,6 +48,7 @@ struct DictionaryWordWizard: View {
     var pronunciationIncomplete = false
     /// What each try transcribed, oldest first.
     var attempts: [String] = []
+    var savedPronunciationCount = 0
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -197,6 +198,12 @@ struct DictionaryWordWizard: View {
                 audioLevels: self.audioLevels
             )
             DictionaryCaptureSlots(word: self.word, attempts: self.attempts, pendingStatus: self.pendingSlotStatus)
+            if self.voiceSupported && self.savedPronunciationCount > 0 {
+                Text(PichiLocalization.format("Saved voice examples: %lld. New examples: %lld.", self.savedPronunciationCount, self.count))
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             self.captureControls
                 .padding(.top, self.theme.metrics.spacing.sm)
         }
