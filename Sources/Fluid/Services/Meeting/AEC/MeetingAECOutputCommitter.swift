@@ -71,6 +71,30 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         self.commitAdmitted(sampleBuffer, protection: .unfiltered)
     }
 
+    /// The runtime's route/recovery path has no processed frame to promote. It still uses the
+    /// same durable-era-before-admission contract, bound to its frozen producer and gate epoch.
+    static func resumeMicrophone(
+        _ protection: MeetingMicrophoneEchoProtection,
+        writer: MeetingAudioChunkWriter,
+        transcriptGate: MeetingMicrophoneTranscriptGate,
+        expectedGateEpoch: UInt64,
+        mayResume: @Sendable () -> Bool
+    ) async throws -> Bool {
+        guard mayResume(), transcriptGate.invalidationEpoch == expectedGateEpoch else { return false }
+        let start = transcriptGate.latestObservedSeconds()
+        try await writer.updateTrackMetadataFailClosed { track in
+            Self.applyEra(to: &track, protection: protection, provenance: nil, startSeconds: start)
+        }
+        if mayResume(), transcriptGate.updateIfNotInvalidated(protection, since: expectedGateEpoch) {
+            return true
+        }
+        let unsafeStart = transcriptGate.invalidate()?.unsafeStartSeconds
+        try await writer.updateTrackMetadataFailClosed { track in
+            Self.applyEra(to: &track, protection: .unprotected, provenance: nil, startSeconds: unsafeStart)
+        }
+        return false
+    }
+
     private func commitAdmitted(_ sampleBuffer: CMSampleBuffer, protection: MeetingMicrophoneEchoProtection) {
         let sampleBox = SampleBox(sampleBuffer)
         let startSeconds = Self.seconds(of: sampleBuffer)

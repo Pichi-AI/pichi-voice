@@ -136,6 +136,111 @@ final class MeetingAEC3Tests: XCTestCase {
         XCTAssertEqual(track.captureEras?.last?.echoProtection, .unprotected)
     }
 
+    func testRecoveredProducerResumesAdmittedRawSpeechAfterAECSetupFailure() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-recovered-raw-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingAudioChunkWriter(
+            track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+        )
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let ownership = MeetingCaptureStreamOwnership(streamIdentity: 11, streamGeneration: 8, routeRevision: 4)
+        let epoch = gate.invalidationEpoch
+        let resumed = try await MeetingAECOutputCommitter.resumeMicrophone(
+            .unfiltered, writer: writer, transcriptGate: gate, expectedGateEpoch: epoch
+        ) {
+            MeetingCaptureOwnershipGate.mayResumeMicrophone(
+                reserved: ownership, current: ownership,
+                stopping: false, rebuilding: false, currentStreamStopped: false
+            )
+        }
+        XCTAssertTrue(resumed)
+        let capture = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+            samples: [Float](repeating: 0.125, count: 480), presentationTime: .zero
+        ))
+        XCTAssertTrue(writer.enqueue(capture, producerEpoch: 8))
+        XCTAssertTrue(gate.observeAndAdmit(capture, since: epoch), "raw recovered speech must reach live ASR")
+        let track = await writer.stop()
+        XCTAssertEqual(track.captureEras?.last?.echoProtection, .unfiltered)
+        XCTAssertNil(track.captureEras?.last?.aecProvenance, "fallback must not claim successful echo filtering")
+        let chunk = try XCTUnwrap(track.chunks.first)
+        let audio = try AVAudioFile(forReading: chunk.fileURL(relativeTo: directory))
+        XCTAssertEqual(audio.length, 480)
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 480))
+        try audio.read(into: buffer)
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        XCTAssertTrue((0..<Int(buffer.frameLength)).allSatisfy { abs(channel[$0] - 0.125) < 0.000_001 })
+    }
+
+    func testMicrophoneResumeRequiresExactLiveRecoveredOwnership() {
+        let reserved = MeetingCaptureStreamOwnership(streamIdentity: 11, streamGeneration: 8, routeRevision: 4)
+        let replacements = [
+            MeetingCaptureStreamOwnership(streamIdentity: 12, streamGeneration: 8, routeRevision: 4),
+            MeetingCaptureStreamOwnership(streamIdentity: 11, streamGeneration: 9, routeRevision: 4),
+            MeetingCaptureStreamOwnership(streamIdentity: 11, streamGeneration: 8, routeRevision: 5),
+        ]
+        for replacement in replacements {
+            XCTAssertFalse(MeetingCaptureOwnershipGate.mayResumeMicrophone(
+                reserved: reserved, current: replacement,
+                stopping: false, rebuilding: false, currentStreamStopped: false
+            ))
+        }
+        for stopping in [false, true] {
+            for rebuilding in [false, true] {
+                for stopped in [false, true] {
+                    XCTAssertEqual(MeetingCaptureOwnershipGate.mayResumeMicrophone(
+                        reserved: reserved, current: reserved,
+                        stopping: stopping, rebuilding: rebuilding, currentStreamStopped: stopped
+                    ), !stopping && !rebuilding && !stopped)
+                }
+            }
+        }
+    }
+
+    func testMicrophoneResumeCannotReopenAnAlreadyInvalidatedGate() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-resume-stale-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingAudioChunkWriter(
+            track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+        )
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let epoch = gate.invalidationEpoch
+        _ = gate.invalidate()
+        let resumed = try await MeetingAECOutputCommitter.resumeMicrophone(
+            .unfiltered, writer: writer, transcriptGate: gate, expectedGateEpoch: epoch, mayResume: { true }
+        )
+        XCTAssertFalse(resumed)
+        XCTAssertFalse(gate.admitsTranscript())
+        let track = await writer.stop()
+        XCTAssertEqual(track.captureEras?.last?.echoProtection, .unprotected)
+    }
+
+    func testMicrophoneResumeCompensatesWhenOwnershipOrGateChangesDuringPersistence() async throws {
+        for invalidateGate in [false, true] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-resume-race-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let writer = try MeetingAudioChunkWriter(
+                track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+            )
+            let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+            let checks = AECValidationCounter()
+            let resumed = try await MeetingAECOutputCommitter.resumeMicrophone(
+                .unfiltered, writer: writer, transcriptGate: gate, expectedGateEpoch: gate.invalidationEpoch
+            ) {
+                let firstCheck = checks.next() == 1
+                if invalidateGate {
+                    if !firstCheck { _ = gate.invalidate() }
+                    return true
+                }
+                return firstCheck
+            }
+            XCTAssertFalse(resumed)
+            XCTAssertFalse(gate.admitsTranscript())
+            let track = await writer.stop()
+            XCTAssertEqual(track.captureEras?.last?.echoProtection, .unprotected,
+                           "an optimistic durable era must be compensated when its authority is lost")
+        }
+    }
+
     private func block(
         _ kind: MeetingAECInputKind,
         start: Int64,
@@ -1617,6 +1722,17 @@ private final nonisolated class AECTerminalRecorder: @unchecked Sendable {
     private var storage: [MeetingAECFailure] = []
     var values: [MeetingAECFailure] { self.lock.withLock { self.storage } }
     func append(_ failure: MeetingAECFailure) { self.lock.withLock { self.storage.append(failure) } }
+}
+
+private final nonisolated class AECValidationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func next() -> Int {
+        self.lock.withLock {
+            self.value += 1
+            return self.value
+        }
+    }
 }
 
 private extension XCTestCase {

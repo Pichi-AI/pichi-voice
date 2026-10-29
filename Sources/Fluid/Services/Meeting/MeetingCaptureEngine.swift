@@ -614,6 +614,18 @@ nonisolated enum MeetingCaptureOwnershipGate {
         guard activationGeneration == reservationToken else { return false }
         return reserved == current
     }
+
+    /// A failed AEC restart may resume raw speech only for the exact recovered producer.
+    /// A route revision alone is insufficient when a second recovery replaces that stream.
+    static func mayResumeMicrophone(
+        reserved: MeetingCaptureStreamOwnership,
+        current: MeetingCaptureStreamOwnership,
+        stopping: Bool,
+        rebuilding: Bool,
+        currentStreamStopped: Bool
+    ) -> Bool {
+        !stopping && !rebuilding && !currentStreamStopped && reserved == current
+    }
 }
 
 /// Runtime authority for the pre-production direct AEC3 rollout. All build configurations honour
@@ -1254,26 +1266,40 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
 
     /// Echo provenance and live delivery commit together, without changing capture method or
     /// restarting either device. A stale route cannot reopen the gate after a newer invalidation.
-    private func resumeDirectMicrophone(_ protection: MeetingMicrophoneEchoProtection, revision: UInt64) async throws {
-        guard self.stateLock.withLock({
-            self.outputRouteRevision == revision && !self.stopping && !self.rebuilding && !self.currentStreamStopped
-        }) else { return }
-        let gateEpoch = self.microphoneTranscriptGate.invalidationEpoch
-        let start = self.microphoneTranscriptGate.latestObservedSeconds()
-        try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
-            MeetingAECOutputCommitter.applyEra(to: &track, protection: protection, provenance: nil, startSeconds: start)
+    @discardableResult
+    private func resumeDirectMicrophone(
+        _ protection: MeetingMicrophoneEchoProtection,
+        revision: UInt64,
+        expectedOwnership: MeetingCaptureStreamOwnership? = nil,
+        expectedGateEpoch: UInt64? = nil
+    ) async throws -> Bool {
+        let ownership = self.stateLock.withLock { () -> MeetingCaptureStreamOwnership? in
+            let reserved = expectedOwnership ?? self.currentStreamOwnershipLocked()
+            guard reserved.routeRevision == revision,
+                  MeetingCaptureOwnershipGate.mayResumeMicrophone(
+                    reserved: reserved, current: self.currentStreamOwnershipLocked(),
+                    stopping: self.stopping, rebuilding: self.rebuilding,
+                    currentStreamStopped: self.currentStreamStopped
+                  )
+            else { return nil }
+            return reserved
         }
-        let mayOpen = self.stateLock.withLock {
-            self.outputRouteRevision == revision && !self.stopping && !self.rebuilding && !self.currentStreamStopped
-        }
-        if mayOpen, self.microphoneTranscriptGate.updateIfNotInvalidated(protection, since: gateEpoch) {
-            self.eventHandler(.microphoneEchoProtectionChanged(protection))
-        } else {
-            let unsafeStart = self.microphoneTranscriptGate.invalidate()?.unsafeStartSeconds
-            try await self.microphoneWriter.updateTrackMetadataFailClosed { track in
-                MeetingAECOutputCommitter.applyEra(to: &track, protection: .unprotected, provenance: nil, startSeconds: unsafeStart)
+        guard let ownership else { return false }
+        let gateEpoch = expectedGateEpoch ?? self.microphoneTranscriptGate.invalidationEpoch
+        let resumed = try await MeetingAECOutputCommitter.resumeMicrophone(
+            protection, writer: self.microphoneWriter,
+            transcriptGate: self.microphoneTranscriptGate, expectedGateEpoch: gateEpoch
+        ) {
+            self.stateLock.withLock {
+                MeetingCaptureOwnershipGate.mayResumeMicrophone(
+                    reserved: ownership, current: self.currentStreamOwnershipLocked(),
+                    stopping: self.stopping, rebuilding: self.rebuilding,
+                    currentStreamStopped: self.currentStreamStopped
+                )
             }
         }
+        if resumed { self.eventHandler(.microphoneEchoProtectionChanged(protection)) }
+        return resumed
     }
 
     private func installAECForSupportedSpeaker(revision: UInt64) async throws {
@@ -2058,14 +2084,27 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                                 && self.currentStreamOwnershipLocked() == committedOwnership
                         }
                         if shouldRearmAEC {
+                            let rearmGateEpoch = self.microphoneTranscriptGate.invalidationEpoch
                             do {
                                 try await self.installAECForSupportedSpeaker(revision: committedOwnership.routeRevision)
                             } catch {
-                                self.eventHandler(.interrupted(
-                                    kind: .microphoneChanged,
-                                    trackID: self.microphoneWriter.trackID,
-                                    detail: "Speaker-route AEC could not restart after stream recovery; microphone remains unprotected."
-                                ))
+                                do {
+                                    if try await self.resumeDirectMicrophone(
+                                        .unfiltered,
+                                        revision: committedOwnership.routeRevision,
+                                        expectedOwnership: committedOwnership,
+                                        expectedGateEpoch: rearmGateEpoch
+                                    ) {
+                                        self.eventHandler(.interrupted(
+                                            kind: .microphoneChanged,
+                                            trackID: self.microphoneWriter.trackID,
+                                            detail: "Speaker-route AEC could not restart after stream recovery; microphone speech continues without echo filtering."
+                                        ))
+                                    }
+                                } catch {
+                                    self.handleAECTerminalFailure(.metadataPersistence)
+                                    return
+                                }
                             }
                         }
                         let stillRecovered = self.stateLock.withLock {
