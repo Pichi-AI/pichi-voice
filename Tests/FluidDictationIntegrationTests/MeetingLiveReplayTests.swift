@@ -179,11 +179,13 @@ final class MeetingLiveReplayTests: XCTestCase {
             // changing.
             var lastSnapshot = box.lock.withLock { box.latest }
             var stableCount = 0
-            let settleDeadline = Date().addingTimeInterval(60)
+            let settleDeadline = Date().addingTimeInterval(coldStart ? 120 : 60)
             while Date() < settleDeadline, stableCount < 10 {
                 try await Task.sleep(nanoseconds: 300_000_000)
                 let current = box.lock.withLock { box.latest }
-                if current == lastSnapshot {
+                let bothColdTracksPublished = current.utterances.contains { $0.speaker == .you }
+                    && current.utterances.contains { $0.speaker == .them }
+                if current == lastSnapshot, !coldStart || bothColdTracksPublished {
                     stableCount += 1
                 } else {
                     stableCount = 0

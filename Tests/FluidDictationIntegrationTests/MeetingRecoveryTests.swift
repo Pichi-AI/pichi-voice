@@ -1064,7 +1064,7 @@ final class MeetingRecoveryTests: XCTestCase {
         capture.emitLive(kind: .microphone, sampleBuffer: tee)
         try await Task.sleep(for: .milliseconds(20))
         XCTAssertEqual(coordinator.liveTranscript, beforeTee,
-            "Memory-only capture has no optional caption producer or disk FIFO")
+            "Memory-only tee audio must not publish optional captions")
         let first = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1), end: .init(value: 1, timescale: 1),
             sourceTrackID: track.id, speakerID: nil, text: "Already durable", revision: 0, status: .final, overlap: .none, completeness: .complete)
         let tail = MeetingTranscriptSegment(id: UUID(), start: .init(value: 1, timescale: 1), end: .init(value: 2, timescale: 1),

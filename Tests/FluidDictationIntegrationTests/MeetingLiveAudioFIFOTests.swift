@@ -93,7 +93,9 @@ final class MeetingLiveAudioFIFOTests: XCTestCase {
     func testPCMFormatLayoutBytesTimestampsAndEpochRoundTripExactly() async throws {
         let (fifo, _) = try fixture()
         let surround = try XCTUnwrap(AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_MPEG_5_1_A))
-        let originals = [try input(3), try input(4, channels: 2, interleaved: true), try input(5, channels: 6, layout: surround)]
+        let wide = try XCTUnwrap(AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | 16))
+        let originals = [try input(3), try input(4, channels: 2, interleaved: true),
+            try input(5, channels: 6, layout: surround), try input(6, channels: 16, layout: wide)]
         for value in originals { XCTAssertTrue(fifo.enqueue(value)) }
         let decoded = try await fifo.drainBatch()
         XCTAssertEqual(decoded.count, originals.count)

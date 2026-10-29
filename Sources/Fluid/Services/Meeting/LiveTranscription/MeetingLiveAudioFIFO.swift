@@ -64,6 +64,7 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
     }
 
     private static let maximumHeaderBytes = 16 * 1024
+    private static let maximumChannels = 64
     private let lock = NSLock()
     private let ioQueue: DispatchQueue
     private let limits: Limits
@@ -187,8 +188,9 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
     private static func packet(_ input: Input, maximumRecordBytes: Int) throws -> Packet {
         let sample = input.sample, buffer = sample.buffer
         let frames = Int(buffer.frameLength), channels = Int(buffer.format.channelCount)
-        guard frames > 0, frames <= 65_536, buffer.frameLength <= buffer.frameCapacity,
-              buffer.frameCapacity <= 65_536, (1...8).contains(channels),
+        guard frames > 0, frames <= maximumRecordBytes / 4, buffer.frameLength <= buffer.frameCapacity,
+              (1...Self.maximumChannels).contains(channels),
+              UInt64(buffer.frameCapacity) * UInt64(channels) * 4 <= 8 * 1024 * 1024,
               sample.pts.isValid, sample.pts.isNumeric, sample.pts.seconds.isFinite,
               sample.duration.isValid, sample.duration.isNumeric, sample.duration.seconds.isFinite,
               sample.duration > .zero else { throw Failure.invalidInput }
@@ -300,19 +302,21 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
 
     private static func decode(_ header: Header, payload: Data) throws -> Input {
         guard header.version == 1, header.asbd.count == MemoryLayout<AudioStreamBasicDescription>.size,
-              header.frames > 0, header.frames <= 65_536, !header.bufferBytes.isEmpty,
-              header.bufferBytes.count <= 8, header.bufferBytes.count == header.bufferChannels.count,
+              header.frames > 0, !header.bufferBytes.isEmpty,
+              header.bufferBytes.count <= Self.maximumChannels, header.bufferBytes.count == header.bufferChannels.count,
               header.bufferBytes.reduce(UInt64(0), { $0 + UInt64($1) }) == UInt64(payload.count)
         else { throw Failure.corruptRecord }
         var asbd = header.asbd.withUnsafeBytes { $0.loadUnaligned(as: AudioStreamBasicDescription.self) }
-        guard (1...8).contains(asbd.mChannelsPerFrame) else { throw Failure.corruptRecord }
+        guard (1...UInt32(Self.maximumChannels)).contains(asbd.mChannelsPerFrame),
+              UInt64(header.frames) * UInt64(asbd.mChannelsPerFrame) * 4 == UInt64(payload.count)
+        else { throw Failure.corruptRecord }
         _ = try MeetingPCMFormatContract(asbd: asbd, layoutData: header.layout)
         let layout: AVAudioChannelLayout?
         if let data = header.layout {
             guard data.count >= 12, data.count <= 4096 else { throw Failure.corruptRecord }
             let descriptions = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 8, as: UInt32.self) }
             let tag = data.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
-            guard descriptions <= 8,
+            guard descriptions <= UInt32(Self.maximumChannels),
                   data.count == (tag == kAudioChannelLayoutTag_UseChannelDescriptions ? 12 + Int(descriptions) * MemoryLayout<AudioChannelDescription>.stride : 12)
             else { throw Failure.corruptRecord }
             let bytes = UnsafeMutableRawPointer.allocate(byteCount: max(data.count, MemoryLayout<AudioChannelLayout>.size), alignment: MemoryLayout<AudioChannelLayout>.alignment)

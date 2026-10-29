@@ -366,6 +366,9 @@ actor PichiMeetingBufferedTrackEngine {
                 batch = try await self.queue.drainBatch()
             } catch {
                 guard !Task.isCancelled, !self.isStopped else { return }
+                let reason = (error as? MeetingLiveAudioFIFO.Failure)?.rawValue ?? "storageUnavailable"
+                DebugLogger.shared.warning("Caption input paused; reason=\(reason); track=\(self.kind.rawValue)",
+                    source: "PichiMeetingBufferedTrackEngine")
                 self.onDegraded?(self.kind, "Live caption buffering failed. The recording is preserved.")
                 await self.queue.close()
                 return
@@ -581,6 +584,7 @@ actor PichiMeetingBufferedTrackEngine {
         await self.consume(Input(sample: sample, epoch: epoch))
     }
     func bufferedSampleCountForTesting() -> Int { self.samples.count }
+    func inputStateForTesting() async -> MeetingLiveAudioFIFO.TestingState { await self.queue.testingState() }
     #endif
 }
 

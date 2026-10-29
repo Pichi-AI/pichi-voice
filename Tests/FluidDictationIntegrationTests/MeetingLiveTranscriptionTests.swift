@@ -857,14 +857,20 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
     }
 
     private actor ColdRecognizer: PichiMeetingCaptionRecognizing {
+        private enum FixtureError: Error { case preparation }
+        private let failPreparation: Bool
         private let onPrepare: @Sendable () -> Void
         private var preparation: CheckedContinuation<Void, Never>?
         private var released = false
         var inputs: [[Float]] = []
-        init(onPrepare: @escaping @Sendable () -> Void) { self.onPrepare = onPrepare }
-        func prepare() async {
+        init(failPreparation: Bool = false, onPrepare: @escaping @Sendable () -> Void) {
+            self.failPreparation = failPreparation
+            self.onPrepare = onPrepare
+        }
+        func prepare() async throws {
             self.onPrepare()
             if !self.released { await withCheckedContinuation { self.preparation = $0 } }
+            if self.failPreparation { throw FixtureError.preparation }
         }
         func releasePreparation() {
             self.released = true
@@ -962,6 +968,49 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
         XCTAssertTrue(events.partials.isEmpty)
         XCTAssertTrue(events.utterances.isEmpty)
         XCTAssertTrue(events.degraded.isEmpty)
+    }
+
+    func testFailedColdPreparationClosesItsBacklogAndPublishesNoText() async throws {
+        let preparing = expectation(description: "cold preparation parked")
+        let degraded = expectation(description: "failed preparation reported")
+        let noReady = expectation(description: "failed worker must not become ready")
+        noReady.isInverted = true
+        let recognizer = ColdRecognizer(failPreparation: true, onPrepare: { preparing.fulfill() })
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let events = Events()
+        self.addTeardownBlock { await recognizer.releasePreparation(); await engine.stop(); await recognizer.unload() }
+        await engine.configure(onPartial: { _, id, text, _, _ in events.partial(id, text) },
+            onUtterance: { kind, id, text, start, end in events.utterance(kind, id, text, start, end) },
+            onDegraded: { _, reason in events.degraded(reason); degraded.fulfill() }, onReady: { _ in noReady.fulfill() })
+        await engine.start()
+        await fulfillment(of: [preparing], timeout: 2)
+        try self.offer(engine, start: 0, packets: 20, value: 0.1)
+        await recognizer.releasePreparation()
+        await fulfillment(of: [degraded], timeout: 2)
+        let state = await engine.inputStateForTesting()
+        XCTAssertEqual(state.pendingPackets, 0)
+        XCTAssertEqual(state.pendingBytes, 0)
+        XCTAssertEqual(state.diskBytes, 0)
+        XCTAssertEqual(state.links, 0)
+        await fulfillment(of: [noReady], timeout: 0.1)
+        XCTAssertTrue(events.partials.isEmpty)
+        XCTAssertTrue(events.utterances.isEmpty)
+        XCTAssertEqual(events.degraded.count, 1)
+    }
+
+    func testStopBeforeBufferedLaunchRejectsQueuedInputAndDoesNotPrepareModel() async throws {
+        let noPrepare = expectation(description: "stopped input must not construct or prepare a provider")
+        noPrepare.isInverted = true
+        let recognizer = ColdRecognizer(onPrepare: { noPrepare.fulfill() })
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        self.addTeardownBlock { await recognizer.releasePreparation(); await engine.stop(); await recognizer.unload() }
+        engine.offer(try self.sample(start: 0, seconds: 0.1, value: 0.1))
+        await engine.stop()
+        await engine.start()
+        await fulfillment(of: [noPrepare], timeout: 0.1)
+        let state = await engine.inputStateForTesting()
+        XCTAssertEqual(state.pendingPackets, 0)
+        XCTAssertEqual(state.diskBytes, 0)
     }
 
     func testQueuedBacklogSuppressesObsoletePrefixesButPreservesBothFinalTurns() async throws {
