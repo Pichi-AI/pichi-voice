@@ -142,7 +142,7 @@ final class MobileAutomaticSettingsUITests: XCTestCase {
             XCTAssertTrue(automatic.isHittable && automatic.isEnabled)
             XCTAssertEqual(automatic.value as? String, "0")
             XCTAssertTrue(app.staticTexts["cloud.sync.summary"].exists)
-            let destination = app.staticTexts["automatic-settings.example"]
+            let destination = app.descendants(matching: .any)["cloud.automatic.destination"].firstMatch
             XCTAssertFalse(destination.exists, "The technical server row is collapsed by default")
             XCTAssertFalse(app.buttons["account.switchPerson"].exists)
             XCTAssertFalse(app.buttons["account.signOut"].exists)
