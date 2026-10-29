@@ -72,8 +72,8 @@ extension PichiPublicationOutboxTests {
         let guestBytes = try Data(contentsOf: guestFile)
         check(MeetingRecordingCipher.isEncryptedEnvelope(guestBytes)
             && guestBytes.range(of: Data("Guest confidential".utf8)) == nil, "Guest transcript/title reaches disk only as authenticated ciphertext")
-        check(try await meetings.loadTranscript(id: guestSource.id)?.isLocalContentConcealed == true,
-              "Trusted local reads retain a per-record concealed-content marker")
+        check(try await meetings.loadTranscript(id: guestSource.id)?.isLocalContentConcealed == false,
+              "Guest encryption protects stored bytes while keeping device-owned guest history readable")
         check(!manager.fileExists(atPath: guest.rootDirectory.appendingPathComponent("CloudPublication").path),
               "Guest encryption creates no account queue, receipt or upload consent")
         await service.shutdown(); meetings = makeMeetings(); cleanup.store = meetings
@@ -127,8 +127,9 @@ extension PichiPublicationOutboxTests {
         let sharedEncryptedGuest = try await meetings.loadTranscript(id: guestSource.id)
         check(sharedEncryptedGuest?.title == guestSource.title
             && sharedEncryptedGuest?.profileOwnership?.matches(guest) == true
-            && sharedEncryptedGuest?.isLocalContentConcealed == true,
-              "An account can read shared guest ciphertext through its original guest key while retaining its protected presentation policy")
+            && sharedEncryptedGuest?.requiresEncryptedPersistence == true
+            && sharedEncryptedGuest?.isLocalContentConcealed == false,
+              "An account can view device guest history through its original guest key without downgrading stored encryption")
         check(try Data(contentsOf: guestFile) == guestBytes,
               "An account read neither copies nor rewrites the shared encrypted guest source")
         do { try await service.refresh(); check(false, "An unselected publication workspace remains an explicit configuration error") }

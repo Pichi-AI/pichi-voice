@@ -8,6 +8,20 @@ import XCTest
 /// encrypted content, while ordinary meetings from before opt-in stay visible.
 @MainActor
 final class MobileEncryptedPresentationTests: XCTestCase {
+    func testEncryptedGuestHistoryIsVisibleWhileAccountProtectionStaysConcealed() async {
+        var guest = session(title: "Encrypted device guest", concealed: true)
+        guest.profileOwnership = .guest
+        var account = session(title: "Protected account recording", concealed: true)
+        account.profileOwnership = .init(profileID: "synthetic-account", issuer: "https://identity.invalid",
+            subject: "synthetic", internalUserID: "synthetic", organizationID: "org", workspaceID: "workspace")
+        let history = MeetingHistorySnapshot { [guest, account] }
+        await history.refresh()
+        XCTAssertEqual(history.sessions.map(\.id), [guest.id])
+        XCTAssertTrue(guest.requiresEncryptedPersistence == true)
+        XCTAssertFalse(guest.isLocalContentConcealed)
+        XCTAssertTrue(account.isLocalContentConcealed)
+    }
+
     func testSharedGuestHistorySurvivesAccountChangesAndFreshSnapshots() async throws {
         #if !targetEnvironment(simulator)
         throw XCTSkip("Synthetic profile history regression requires an owned simulator")

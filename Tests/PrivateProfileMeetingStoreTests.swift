@@ -339,8 +339,8 @@ extension MeetingSessionStoreCheckpointTests {
         catch { check(true, "Shared key completion revalidates the original reader generation") }
         await store.finishProfileTransition()
         let restored = try await store.loadTranscript(id: source.id)
-        check(restored == source && restored?.isLocalContentConcealed == true,
-            "A fresh account read restores the original guest cipher while retaining its immutable concealment policy")
+        check(restored == source && restored?.requiresEncryptedPersistence == true && restored?.isLocalContentConcealed == false,
+            "A fresh account read restores viewable guest history through the original cipher without changing encryption")
         check(try Data(contentsOf: manifest) == bytes,
             "Missing, wrong and late key attempts preserve the original guest ciphertext")
     }

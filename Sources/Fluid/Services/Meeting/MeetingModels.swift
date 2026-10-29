@@ -1188,9 +1188,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var piiRedactionEnabled: Bool? = nil
     /// New protected captures persist local transcript data as ciphertext.
     var requiresEncryptedPersistence: Bool? = nil
-    /// Local display/export controls consume this immutable per-record policy. Trusted
-    /// processing and publication owners retain their existing store read operations.
-    var isLocalContentConcealed: Bool { requiresEncryptedPersistence == true }
+    /// Device guest meetings are shared local history, including encrypted-at-rest recordings.
+    /// Account-protected captures retain their existing local display/export restrictions.
+    var isLocalContentConcealed: Bool {
+        requiresEncryptedPersistence == true && profileOwnership != MeetingProfileOwnership.guest
+    }
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil
