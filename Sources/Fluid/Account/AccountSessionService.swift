@@ -151,11 +151,14 @@ import Foundation
                 if let previousIdentity, snapshot.identity.issuer == previousIdentity.issuer,
                    snapshot.identity.subject == previousIdentity.subject { throw AccountError.previousAccountReturned }
                 try self.check(captured)
+                let workspace = self.initialWorkspace(in: snapshot)
                 let next = AccountGrant(identity: snapshot.stableIdentity, accessToken: token.accessToken,
-                    refreshToken: token.refreshToken, expiresAt: token.expiresAt, nonce: attempt.nonce)
+                    refreshToken: token.refreshToken, expiresAt: token.expiresAt, nonce: attempt.nonce,
+                    organizationID: workspace?.organizationID, workspaceID: workspace?.workspaceID)
                 try await self.credentials.save(next)
                 try self.check(captured)
-                let nextContext = AccountContext(identity: next.identity, organizationID: nil, workspaceID: nil, generation: captured)
+                let nextContext = AccountContext(identity: next.identity, organizationID: next.organizationID,
+                    workspaceID: next.workspaceID, generation: captured)
                 try await self.lifecycle?.transition(from: nil, to: nextContext, generation: captured)
                 try self.check(captured)
                 try self.restoration.permit()
@@ -452,6 +455,17 @@ import Foundation
         AccountGrant(identity: prior.identity, accessToken: token.accessToken, refreshToken: token.refreshToken,
             expiresAt: token.expiresAt, nonce: prior.nonce, organizationID: prior.organizationID, workspaceID: prior.workspaceID)
     }
+    /// Fresh sign-in starts in the first destination from the verified catalog, before
+    /// activating its private profile. Legacy workspaces belong to the server's active
+    /// organization; choosing another organization remains an explicit server command.
+    /// Restoration and later workspace changes retain their own validated selection.
+    private func initialWorkspace(in snapshot: AccountSnapshot) -> (organizationID: String, workspaceID: String)? {
+        let organization = isLegacySession
+            ? snapshot.organizations.first { $0.id == snapshot.activeOrganizationID }
+            : snapshot.organizations.first { !$0.workspaces.isEmpty }
+        guard let organization, let workspace = organization.workspaces.first else { return nil }
+        return (organization.id, workspace.id)
+    }
     private func check(_ expected: UUID) throws {
         try Task.checkCancellation()
         guard generation == expected else { throw AccountError.staleOperation }
@@ -491,7 +505,9 @@ extension AccountSessionService {
                     let snapshot = try await legacyTransport.login(email: email, password: password, captchaToken: captchaToken)
                     try snapshot.validateLegacy(origin: legacyConfiguration.apiBaseURL)
                     try self.check(captured)
-                    let next = AccountContext(identity: snapshot.stableIdentity, organizationID: nil, workspaceID: nil, generation: captured)
+                    let workspace = self.initialWorkspace(in: snapshot)
+                    let next = AccountContext(identity: snapshot.stableIdentity, organizationID: workspace?.organizationID,
+                        workspaceID: workspace?.workspaceID, generation: captured)
                     self.pendingLegacySession = try await self.legacySessionEnvelope(snapshot: snapshot, context: next)
                     try await self.transitionLegacyProfile(from: nil, to: next, generation: captured)
                     try self.check(captured)

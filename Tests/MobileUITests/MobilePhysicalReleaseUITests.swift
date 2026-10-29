@@ -5,6 +5,74 @@ import UIKit
 /// Opt-in tests of the installed app through its public UI. Audible fixtures belong
 /// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
+    /// Observes an already running frozen Release after the parent preserves its data.
+    /// The parent owns normal launch, reboot, unlock and continuous native capture.
+    @MainActor
+    func testPhysicalReadOnlyMeetingHistoryAfterColdStart() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Saved physical history observation requires the explicitly selected device")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_HISTORY_READ_ONLY"] == "1" else {
+            throw XCTSkip("Explicitly enable read-only observation of existing physical History")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let phase = try XCTUnwrap(environment["PICHI_PHYSICAL_HISTORY_PHASE"])
+        let sourceIDs = try XCTUnwrap(environment["PICHI_PHYSICAL_HISTORY_EXPECTED_IDS"])
+        try require(["before-reboot", "after-reboot"].contains(phase) && sourceIDs.count <= 1024,
+                    "Supply a known reboot phase and one through ten existing visible session UUIDs")
+        let values = sourceIDs.split(separator: ",", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        let parsed = values.compactMap { UUID(uuidString: $0)?.uuidString }
+        let expectedIDs = Set(parsed)
+        try require((1...10).contains(values.count) && parsed.count == values.count
+                    && expectedIDs.count == values.count,
+                    "Expected History IDs must be distinct valid UUIDs from the preserved device data")
+        let app = try attachReadOnlyPhysicalApp(revision: revision)
+        var historyNavigationCompleted = false
+        var loadedWithoutRefresh = false
+        defer {
+            let observedIDs = historyIDs(in: app).sorted()
+            let report: [String: Any] = [
+                "phase": phase, "revision": revision,
+                "expectedSessionIDs": expectedIDs.sorted(),
+                "observedSessionIDs": observedIDs, "observedRowCount": observedIDs.count,
+                "expectedRowsLoadedWithoutRefresh": loadedWithoutRefresh,
+                "historyNavigationCompleted": historyNavigationCompleted, "manualRefreshActions": 0,
+                "scope": "Attach-only observation of existing saved History; no app launch, transcript opening, scrolling, search, settings or recording actions"
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys, .prettyPrinted]) {
+                let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+                attachment.name = "physical-history-\(phase)-\(revision).json"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            let accessibility = XCTAttachment(string: app.debugDescription)
+            accessibility.name = "physical-history-\(phase)-\(revision)-accessibility"
+            accessibility.lifetime = .keepAlways
+            add(accessibility)
+            capture("history-\(phase)-final", revision: revision)
+        }
+        capture("history-\(phase)-initial", revision: revision)
+        try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
+        historyNavigationCompleted = true
+        let deadline = ProcessInfo.processInfo.systemUptime + 10
+        for id in expectedIDs.sorted() {
+            let remaining = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+            let rows = app.buttons.matching(identifier: "history.session.\(id)")
+            try require(rows.firstMatch.waitForExistence(timeout: remaining) && rows.count == 1,
+                        "Existing saved History must load its expected unique rows without manual refresh")
+        }
+        try require(app.state == .runningForeground && app.alerts.count == 0
+                    && !app.buttons["meeting.stop"].exists
+                    && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                    && !app.descendants(matching: .any)["meeting.preparing"].firstMatch.exists
+                    && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                    "History observation must remain idle without starting or interrupting an attempt")
+        loadedWithoutRefresh = true
+        #endif
+    }
+
     /// Opt in with PICHI_PHYSICAL_PROTECTED_EXPORT_ICLOUD_ROOT=1, the existing
     /// PICHI_PHYSICAL_READ_ONLY_IDLE_PREFLIGHT=1 / SESSION_ID / SESSION_TITLE /
     /// SESSION_STATE=completed contract, plus
