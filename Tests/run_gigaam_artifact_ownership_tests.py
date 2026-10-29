@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as t
         "xcrun", "swiftc", "-swift-version", "5", "-parse-as-library", "-emit-module", "-emit-library",
         "-module-name", "PichiGigaAM", "-module-cache-path", str(temporary / "ModuleCache"),
         "-emit-module-path", str(temporary / "PichiGigaAM.swiftmodule"),
-        str(catalog), str(runtime), "-o", str(library),
+        str(catalog), str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMResourcePolicy.swift"), str(runtime), "-o", str(library),
     ], check=True, cwd=repo)
     progress_source = temporary / "PreparationProgress.swift"
     progress_source.write_text("import Foundation\n" + progress + "\n" + execution_status)

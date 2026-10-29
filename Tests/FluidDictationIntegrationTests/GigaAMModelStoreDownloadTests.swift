@@ -5,6 +5,38 @@ import PichiGigaAM
 import XCTest
 
 final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
+    func testAutomaticArtifactIsSelectedBeforeAnyDownloadAndNeverFetchesFP16() async throws {
+        let profiles = [GigaAMResourcePolicy(hasGPU: true, physicalMemory: 16_000_000_000),
+                        GigaAMResourcePolicy(hasGPU: true, physicalMemory: 4_166_696_960),
+                        GigaAMResourcePolicy(hasGPU: false, physicalMemory: 16_000_000_000)]
+        for profile in profiles {
+            let fixture = try Fixture()
+            defer { fixture.remove() }
+            let requests = DownloadRequests()
+            let store = PichiGigaAMModelStore(directory: fixture.directory, preferences: fixture.preferences,
+                                             environment: [:], resourcePolicy: profile) { url, _, _ in
+                await requests.add(url)
+                throw URLError(.notConnectedToInternet)
+            }
+            let selection = try store.selectedArtifact()
+            XCTAssertEqual(selection.descriptor, profile.preferredDownload)
+            XCTAssertEqual(selection.fallbackReason, profile.defaultCPUReason)
+            do { _ = try await store.ensureInstalled(selection: selection); XCTFail("Fixture must not access the network") }
+            catch let error as URLError { XCTAssertEqual(error.code, .notConnectedToInternet) }
+            let urls = await requests.urls
+            XCTAssertEqual(urls.count, 1)
+            XCTAssertTrue(urls[0].path.hasSuffix(profile.preferredDownload.artifacts[0].path))
+            XCTAssertFalse(urls[0].path.contains(".mlpackage"))
+            XCTAssertEqual(try store.selectedArtifact().descriptor, selection.descriptor)
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: fixture.directory.path).isEmpty)
+        }
+    }
+
+    private actor DownloadRequests {
+        private(set) var urls: [URL] = []
+        func add(_ url: URL) { self.urls.append(url) }
+    }
+
     func testNestedCoreMLArtifactsUseTheSameVerifiedInstallationOperation() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

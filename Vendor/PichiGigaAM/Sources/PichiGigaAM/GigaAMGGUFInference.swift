@@ -5,12 +5,16 @@ import TranscribeCpp
 /// Its owning GigaAMRuntime actor serializes loading, prediction and teardown.
 final class GigaAMGGUFInference {
     private let modelURL: URL
+    private let modelSHA256: String
     private var model: Model?
     private var session: Session?
     private(set) var usesGPU = false
     var isLoaded: Bool { self.session != nil }
 
-    init(modelURL: URL) { self.modelURL = modelURL }
+    init(modelURL: URL, modelSHA256: String) {
+        self.modelURL = modelURL
+        self.modelSHA256 = modelSHA256
+    }
 
     deinit { self.unload() }
 
@@ -18,6 +22,11 @@ final class GigaAMGGUFInference {
         self.unload()
         try autoreleasepool {
             try Task.checkCancellation()
+            // Backend recovery must never reopen a different external file
+            // under the frozen attempt's fingerprint.
+            guard try GigaAMModelDescriptor.sha256(of: self.modelURL) == self.modelSHA256 else {
+                throw GigaAMError.checksumMismatch(self.modelURL.lastPathComponent)
+            }
             let model = try Model(path: self.modelURL.path, options: .init(backend: gpu ? .metal : .cpu))
             let capabilities = model.capabilities
             let device = try model.device

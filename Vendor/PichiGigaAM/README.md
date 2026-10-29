@@ -1,16 +1,17 @@
 # Pichi GigaAM native runtime
 
-This package runs the ready-made [Inhum GigaAM v3 Core ML conversion](https://huggingface.co/inhum/gigaam-v3-coreml), pinned to revision `43dc96918bc232deafa7b7d0600fb499806f7ac1`, and retains existing ONNX imports. No graph rewriting, model conversion, Python installation or server is needed by the application.
+This package uses published GigaAM v3 artifacts without model conversion or graph rewriting. GPU-capable devices with the qualified capacity profile download the ready-made [Handy Q8_0 GGUF](https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf), pinned to `59717de63d50dd9dd93b3249da6ad3f2f1c4ad6b`, and run it through the already bundled transcribe.cpp v0.1.2. One quantized file serves both Metal and CPU. No Python or inference server is needed.
 
-Native Core ML prefers GPU using `cpuAndGPU` on every supported device. CPU is the reserve path when GPU preparation or execution fails; its concrete reason is shown in the existing settings. Both paths use the same unchanged package. Cancellation, invalid audio and failed source verification remain errors. Configured execution is distinct from measured hardware utilization. Pinned ONNX jobs keep their exact content identity and CPU compatibility.
+GPU is preferred whenever admitted. The stable download decision is made before fetching files: devices with a GPU and at least 8 decimal GB physical memory select Q8_0; nominal 4 GB tablets and devices without a GPU keep the existing compact ONNX INT8 CPU profile. This is a conservative qualification policy, not proof that every smaller device cannot use a GPU. It preserves the previous tablet route until physical qualification. Q8 CPU is also slower than the existing ONNX CPU route in the local measurement. Volatile iOS process headroom is checked again before preparing GPU resources, without changing the frozen artifact or making UI metadata oscillate. CPU fallback uses the same Q8 file and reports its reason; a later admitted operation retries GPU. Cancellation, invalid audio and integrity failures remain errors.
 
 ## Models and installation
 
-The default download is the published Core ML package plus its required window, filterbank and vocabulary, totaling 442,427,628 bytes. All six files are pinned by SHA-256. Existing files do not change the selected source; folder imports become selected after explicit import and verification:
+The GPU-profile download is one 272,151,136-byte Q8_0 GGUF with embedded frontend and vocabulary. The compact CPU profile is the original 224,895,354-byte INT8 ONNX/vocabulary pair. Only the selected profile is downloaded. Imported Core ML FP16 remains registered, but is never an automatic fallback download and is capacity-checked before compilation. Existing pins and explicit imports retain their exact identity:
 
 | Export | Decoder | EOU threshold |
 | --- | --- | --- |
-| `gigaam_v3_e2e.mlpackage` | BPE with punctuation, digits and Latin | No EOU head |
+| `gigaam-v3-e2e-ctc-Q8_0.gguf` | Embedded BPE, punctuation and normalization | No EOU head |
+| `gigaam_v3_e2e.mlpackage` (optional import) | BPE with punctuation, digits and Latin | No EOU head |
 | `v3_e2e_ctc_eou_v5.fp16.onnx` | BPE with punctuation, digits and Latin | 0.48 |
 | `v3_ctc_eou_v3.fp16.onnx` | Russian characters | 0.44 |
 | `v3_ctc_eou.fp16.onnx` | Russian characters | 0.5 |
@@ -26,19 +27,13 @@ Pichi's optimized EOU weights retain their verified local import path; their dis
 
 ### Default download and optional folder import
 
-In Speech Recognition, choose GigaAM and click Download, then Activate. The application fetches and verifies the published Core ML package and its three preprocessing/decoding files. No external application or manually supplied file is required.
+In Speech Recognition, choose GigaAM and click Download, then Activate. The shared installer fetches only the device-selected profile from its immutable Hugging Face revision and verifies size and SHA-256. No external application or manually supplied file is required.
 
-For a local model, use GigaAM's Other options menu, then Import model folder. Choose a folder containing one supported export. For the same public model downloaded manually, the folder is:
+For a local model, use GigaAM's Other options menu, then Import model folder. Choose a folder containing one supported export. For a manually downloaded Q8 GPU/CPU model, the folder is:
 
 ```text
 gigaam-local/
-  gigaam_v3_e2e.mlpackage/
-    Manifest.json
-    Data/com.apple.CoreML/model.mlmodel
-    Data/com.apple.CoreML/weights/weight.bin
-  gigaam-window.f32
-  gigaam-melfb.f32
-  gigaam-vocab.txt
+  gigaam-v3-e2e-ctc-Q8_0.gguf
 ```
 
 For our existing custom E2E v5 model, the folder is:
@@ -59,7 +54,7 @@ The developer `PICHI_GIGAAM_MODEL_DIR` override and descriptor-named artifact di
 
 ## Library characteristics
 
-The default published Core ML files occupy 421.9 MiB. The imported E2E v5 ONNX export and vocabulary occupy 435.2 MiB; older character exports occupy about 428.8 MiB. The existing 4 GB system-RAM recommendation is not a model RAM measurement. The Core ML route prefers GPU on Apple Silicon and Intel; actual compatibility and measured performance remain device-specific.
+The Q8 GPU/CPU profile occupies 259.5 MiB; the existing ONNX INT8 CPU profile occupies 214.5 MiB. Optional Core ML FP16 occupies 421.9 MiB. The imported E2E v5 ONNX export and vocabulary occupy 435.2 MiB; older character exports occupy about 428.8 MiB. The existing 4 GB system-RAM recommendation is not a model RAM measurement. Disk size is not peak RAM. Standalone native Mac measurements found lower Q8 CPU/Metal footprint than the smaller ONNX file; this does not qualify the whole meeting process or a physical tablet. Actual compatibility, memory headroom and speed remain device-specific.
 
 E2E output includes punctuation, capitalization and text normalization. The FP16 conversion reduces weight storage, and Pichi's trained EOU head detects phrase completion using the shared speech encoder. The native provider does not include the browser/server domain-term spotter or a separate grammar-correction model. Older character exports do not produce the E2E formatting features. The installation snapshot supplies the imported descriptor's characteristics to the common library card without filesystem reads during rendering.
 

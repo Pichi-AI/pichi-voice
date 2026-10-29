@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import OnnxRuntimeBindings
+import TranscribeCpp
 
 public enum GigaAMExecutionProvider: String, Sendable {
     case automatic
@@ -18,12 +19,13 @@ public actor GigaAMRuntime {
     private var loadedURL: URL?
     private var frontend: GigaAMFrontend
     private var coreML: GigaAMCoreMLInference?
+    private var gguf: GigaAMGGUFInference?
     private var loadedIdentity: String?
     public private(set) var executionStatus: GigaAMExecutionStatus?
 
     public init() throws { self.frontend = try GigaAMFrontend() }
 
-    public var isReady: Bool { self.session != nil || self.coreML?.isLoaded == true }
+    public var isReady: Bool { self.session != nil || self.coreML?.isLoaded == true || self.gguf?.isLoaded == true }
 
     public func load(descriptor: GigaAMModelDescriptor, directory: URL, executionProvider: GigaAMExecutionProvider = .automatic) throws {
         try autoreleasepool {
@@ -36,6 +38,16 @@ public actor GigaAMRuntime {
                 // Integrity and vocabulary errors are outside execution fallback.
                 try descriptor.verify(in: directory)
                 switch descriptor.format {
+                case .gguf:
+                    let native = GigaAMGGUFInference(modelURL: modelURL, modelSHA256: descriptor.modelSHA256)
+                    self.gguf = native
+                    if executionProvider == .cpu {
+                        try self.loadGGUFCPU(native, reason: .explicitCPU)
+                    } else if let reason = GigaAMResourcePolicy.current.gpuAdmissionReason {
+                        try self.loadGGUFCPU(native, reason: reason)
+                    } else {
+                        try self.loadGGUFGPUOrFallback(native)
+                    }
                 case .onnx:
                     if let file = descriptor.vocabularyFile {
                         self.vocabulary = try GigaAMVocabulary(contents: String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8))
@@ -46,6 +58,14 @@ public actor GigaAMRuntime {
                         ? .init(backend: .gpu, fallbackReason: nil)
                         : .init(backend: .cpu, fallbackReason: executionProvider == .cpu ? .explicitCPU : .incompatibleExport)
                 case .coreML(let configuration):
+                    // Explicit legacy imports do not bypass capacity admission.
+                    // In particular, do not compile the FP16 package on a 4 GB
+                    // device before finding out that its GPU route is unsuitable.
+                    let resources = GigaAMResourcePolicy.current
+                    guard resources.physicalMemory >= 8_000_000_000,
+                          resources.availableProcessMemory.map({ $0 >= 1_536 * 1_024 * 1_024 }) ?? true else {
+                        throw GigaAMError.memoryBudgetExceeded
+                    }
                     guard let vocabularyFile = descriptor.vocabularyFile else { throw GigaAMError.invalidVocabulary }
                     let pieces = try String(contentsOf: directory.appendingPathComponent(vocabularyFile), encoding: .utf8)
                         .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -119,7 +139,34 @@ public actor GigaAMRuntime {
             if case .invalidOutput = error { return true }
             return false
         }
+        if let error = error as? TranscribeError {
+            switch error {
+            case .backend, .outOfMemory, .notImplemented: return true
+            default: return false
+            }
+        }
         return true
+    }
+
+    private func loadGGUFCPU(_ native: GigaAMGGUFInference, reason: GigaAMExecutionStatus.FallbackReason) throws {
+        if let bytes = GigaAMResourcePolicy.current.availableProcessMemory, bytes < 512 * 1_024 * 1_024 {
+            throw GigaAMError.memoryBudgetExceeded
+        }
+        try native.load(gpu: false)
+        self.executionStatus = .init(backend: .cpu, fallbackReason: reason)
+    }
+
+    private func loadGGUFGPUOrFallback(_ native: GigaAMGGUFInference) throws {
+        do {
+            try native.load(gpu: true)
+            _ = try native.predict([Float](repeating: 0, count: 16_000))
+            self.executionStatus = .init(backend: .gpu, fallbackReason: nil)
+        } catch {
+            try Task.checkCancellation()
+            guard Self.permitsExecutionFallback(error) else { throw error }
+            native.unload()
+            try self.loadGGUFCPU(native, reason: .acceleratorLoadFailed)
+        }
     }
 
     /// A transient fallback is sticky within an admitted operation. A later
@@ -127,6 +174,14 @@ public actor GigaAMRuntime {
     public func beginAttempt() throws {
         try autoreleasepool {
             try Task.checkCancellation()
+            if let native = self.gguf {
+                guard self.executionStatus?.backend == .cpu,
+                      let reason = self.executionStatus?.fallbackReason,
+                      [.gpuUnavailable, .memoryBudget, .acceleratorLoadFailed, .acceleratorInferenceFailed].contains(reason),
+                      GigaAMResourcePolicy.current.gpuAdmissionReason == nil else { return }
+                try self.loadGGUFGPUOrFallback(native)
+                return
+            }
             guard let native = self.coreML, self.executionStatus?.backend == .cpu,
                   let reason = self.executionStatus?.fallbackReason,
                   [.gpuUnavailable, .acceleratorLoadFailed, .acceleratorInferenceFailed].contains(reason),
@@ -149,6 +204,8 @@ public actor GigaAMRuntime {
 
     public func unload() {
         autoreleasepool {
+            self.gguf?.unload()
+            self.gguf = nil
             self.coreML?.unloadModel()
             self.coreML = nil
             self.session = nil
@@ -163,11 +220,32 @@ public actor GigaAMRuntime {
 
     /// Audio is 16 kHz mono float PCM. Long inputs use overlapping, bounded windows.
     /// Every word keeps its CTC-derived timing; midpoint ownership avoids duplicated overlap.
-    public func transcribe(_ samples: [Float]) throws -> GigaAMTranscript {
+    public func transcribe(_ samples: [Float]) async throws -> GigaAMTranscript {
+        try Task.checkCancellation()
+        let cancellation = TranscribeCpp.CancellationToken()
+        return try await withTaskCancellationHandler {
+            try self.transcribeWithFallback(samples, cancellation: cancellation)
+        } onCancel: { cancellation.cancel() }
+    }
+
+    private func transcribeWithFallback(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken) throws -> GigaAMTranscript {
         let start = ProcessInfo.processInfo.systemUptime
-        do { return try self.transcribeAttempt(samples) }
+        do { return try self.transcribeAttempt(samples, cancellation: cancellation) }
         catch {
             try Task.checkCancellation()
+            if samples.allSatisfy(\.isFinite), Self.permitsExecutionFallback(error),
+               self.executionStatus?.backend == .gpu, let native = self.gguf {
+                do {
+                    try autoreleasepool {
+                        native.unload()
+                        try self.loadGGUFCPU(native, reason: .acceleratorInferenceFailed)
+                    }
+                } catch { self.unload(); throw error }
+                let result = try self.transcribeAttempt(samples, cancellation: cancellation)
+                return GigaAMTranscript(text: result.text, confidence: result.confidence, words: result.words,
+                                        endOfUtteranceProbability: result.endOfUtteranceProbability,
+                                        processingDuration: ProcessInfo.processInfo.systemUptime - start)
+            }
             guard samples.allSatisfy(\.isFinite), Self.permitsExecutionFallback(error),
                   self.executionStatus?.backend == .gpu, let native = self.coreML else { throw error }
             // The failed synchronous prediction has joined. Retire its GPU model
@@ -184,14 +262,14 @@ public actor GigaAMRuntime {
             }
             self.executionStatus = .init(backend: .cpu, fallbackReason: .acceleratorInferenceFailed)
             // Re-run the complete input to avoid mixing internal window backends.
-            let result = try self.transcribeAttempt(samples)
+            let result = try self.transcribeAttempt(samples, cancellation: cancellation)
             return GigaAMTranscript(text: result.text, confidence: result.confidence, words: result.words,
                                     endOfUtteranceProbability: result.endOfUtteranceProbability,
                                     processingDuration: ProcessInfo.processInfo.systemUptime - start)
         }
     }
 
-    private func transcribeAttempt(_ samples: [Float]) throws -> GigaAMTranscript {
+    private func transcribeAttempt(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken) throws -> GigaAMTranscript {
         try Task.checkCancellation()
         guard samples.allSatisfy(\.isFinite) else { throw GigaAMError.invalidAudio }
         guard self.isReady else { throw GigaAMError.notPrepared }
@@ -206,7 +284,7 @@ public actor GigaAMRuntime {
             let coreEnd = min(samples.count, coreStart + coreSamples)
             let windowStart = max(0, coreStart - overlapSamples)
             let windowEnd = min(samples.count, coreEnd + overlapSamples)
-            let output = try self.infer(Array(samples[windowStart..<windowEnd]))
+            let output = try self.infer(Array(samples[windowStart..<windowEnd]), cancellation: cancellation)
             let offset = Double(windowStart) / Double(GigaAMFrontend.sampleRate)
             let lower = Double(coreStart) / Double(GigaAMFrontend.sampleRate)
             let upper = Double(coreEnd) / Double(GigaAMFrontend.sampleRate)
@@ -228,12 +306,20 @@ public actor GigaAMRuntime {
         )
     }
 
-    private func infer(_ samples: [Float]) throws -> GigaAMTranscript {
+    private func infer(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken) throws -> GigaAMTranscript {
         // A model call can create autoreleased Objective-C tensors and backing buffers.
         // Only the Swift transcript escapes this bounded window.
         try autoreleasepool {
-            guard self.isReady, let vocabulary = self.vocabulary else { throw GigaAMError.notPrepared }
+            guard self.isReady else { throw GigaAMError.notPrepared }
             let start = ProcessInfo.processInfo.systemUptime
+            if let native = self.gguf {
+                let words = try native.predict(samples, cancellationToken: cancellation)
+                try Task.checkCancellation()
+                return GigaAMTranscript(text: words.map(\.text).joined(separator: " "), confidence: 0,
+                                        words: words, endOfUtteranceProbability: nil,
+                                        processingDuration: ProcessInfo.processInfo.systemUptime - start)
+            }
+            guard let vocabulary = self.vocabulary else { throw GigaAMError.notPrepared }
             let features = self.frontend.features(samples)
             let values: [Float]
             let frameCount: Int

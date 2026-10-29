@@ -60037,6 +60037,91 @@
           }
         }
       }
+    },
+    "CPU fallback: the compact model was selected for this device's memory budget.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU fallback: the compact model was selected for this device's memory budget."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервный CPU: для этого объёма памяти выбран компактный CPU-профиль."
+          }
+        }
+      }
+    },
+    "Punctuation, capitalization and text normalization. Quantized Q8 model for GPU and CPU.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punctuation, capitalization and text normalization. Quantized Q8 model for GPU and CPU."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пунктуация, заглавные буквы и нормализация текста. Квантизированная модель Q8 для GPU и CPU."
+          }
+        }
+      }
+    },
+    "The published quantized GigaAM model uses the same file on GPU and CPU. Compact INT8 remains the automatic CPU profile on memory-constrained devices. Library percentages are relative product ratings, not measured accuracy.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The published quantized GigaAM model uses the same file on GPU and CPU. Compact INT8 remains the automatic CPU profile on memory-constrained devices. Library percentages are relative product ratings, not measured accuracy."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Опубликованная квантизированная модель GigaAM использует один файл для GPU и CPU. На устройствах с ограниченной памятью автоматически сохраняется компактный CPU-профиль INT8. Проценты в библиотеке являются относительными оценками, а не измеренной точностью."
+          }
+        }
+      }
+    },
+    "This export is not a supported GigaAM v3 CTC model.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This export is not a supported GigaAM v3 CTC model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот экспорт не является поддерживаемой моделью GigaAM v3 CTC."
+          }
+        }
+      }
+    },
+    "Not enough memory is available for this GigaAM export. Select the compact model.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not enough memory is available for this GigaAM export. Select the compact model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этого экспорта GigaAM недостаточно доступной памяти. Выберите компактную модель."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -115,8 +115,8 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
     func testPublicDownloadMetadataDoesNotInheritPrivateExportCapabilities() {
         let descriptor = GigaAMModelCatalog.downloadableModel
         let metadata = descriptor.libraryMetadata
-        XCTAssertEqual(metadata.size, "~421.9 MiB")
-        XCTAssertTrue(metadata.features.contains("Core ML"))
+        XCTAssertEqual(metadata.size, "~259.5 MiB")
+        XCTAssertTrue(metadata.features.contains("Q8"))
         XCTAssertEqual(metadata.processor, "GPU preferred; CPU fallback")
         XCTAssertTrue(metadata.features.contains("Punctuation"))
         XCTAssertFalse(metadata.features.contains("FP16"))

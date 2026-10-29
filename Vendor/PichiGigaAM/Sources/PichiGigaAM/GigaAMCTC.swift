@@ -187,6 +187,7 @@ public enum GigaAMError: LocalizedError {
     case checksumMismatch(String)
     case notPrepared
     case incompatibleModel
+    case memoryBudgetExceeded
 
     public var errorDescription: String? {
         switch self {
@@ -197,7 +198,8 @@ public enum GigaAMError: LocalizedError {
         case .missingModels(let directory): return "Import the GigaAM model folder in Settings. Expected model files in \(directory.path)."
         case .checksumMismatch(let file): return "GigaAM checksum verification failed for \(file)."
         case .notPrepared: return "GigaAM is not loaded."
-        case .incompatibleModel: return "This ONNX export is not a supported GigaAM v3 CTC model."
+        case .incompatibleModel: return "This export is not a supported GigaAM v3 CTC model."
+        case .memoryBudgetExceeded: return "Not enough memory is available for this GigaAM export. Select the compact model."
         }
     }
 }

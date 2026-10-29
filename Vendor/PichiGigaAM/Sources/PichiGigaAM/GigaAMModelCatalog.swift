@@ -10,6 +10,7 @@ public struct GigaAMCoreMLConfiguration: Sendable, Equatable {
 public enum GigaAMModelFormat: Sendable, Equatable {
     case onnx
     case coreML(GigaAMCoreMLConfiguration)
+    case gguf
 }
 
 public struct GigaAMModelArtifact: Sendable, Equatable {
@@ -64,6 +65,7 @@ public struct GigaAMModelDescriptor: Sendable, Equatable {
 
     /// Stable content identity for resumable jobs, independent of local paths.
     public var fingerprint: String {
+        if case .gguf = self.format { return "gigaam-gguf-v1/\(self.id)/\(self.modelSHA256)" }
         if case .coreML = self.format {
             let identity = self.artifacts.sorted { $0.path < $1.path }.map { "\($0.path):\($0.sha256)" }.joined(separator: "\n")
             let digest = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -139,7 +141,7 @@ public enum GigaAMModelCatalog {
     )
 
     /// Ready-made public Core ML package. The app downloads these exact bytes.
-    public static let downloadableModel = GigaAMModelDescriptor(
+    public static let coreMLModel = GigaAMModelDescriptor(
         id: "gigaam-v3-e2e-ctc-coreml",
         modelFile: "gigaam_v3_e2e.mlpackage",
         modelSHA256: "8e0c43329503b3b2fc41f6e594f44d7b35acdd0bd61a91bf5741557d716be957",
@@ -158,6 +160,17 @@ public enum GigaAMModelCatalog {
             .init(path: "gigaam_v3_e2e.mlpackage/Data/com.apple.CoreML/weights/weight.bin", sha256: "706153a1e14e2b26f328f394f3eded2689865eaf2d653c021006a4f3ab3a0ec6", byteCount: 441_914_178),
             .init(path: "gigaam_v3_e2e.mlpackage/Manifest.json", sha256: "cd7840db2ffe56befcbb3e324dc661846ac5706c4a8c3725be56ff67b37e2eb2", byteCount: 617),
         ]
+    )
+
+    /// One published quantized file, with embedded frontend/tokenizer, serves
+    /// both CPU and Metal through the already bundled transcribe.cpp runtime.
+    public static let downloadableModel = GigaAMModelDescriptor(
+        id: "gigaam-v3-e2e-ctc-q8-gguf",
+        modelFile: "gigaam-v3-e2e-ctc-Q8_0.gguf",
+        modelSHA256: "9ccce4750dc813a493d96ca15ee251712bedec15ac9a02fa3d2bd732f08ae5eb",
+        vocabularyFile: nil, vocabularySHA256: nil, endOfUtteranceThreshold: nil,
+        downloadBaseURL: URL(string: "https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/59717de63d50dd9dd93b3249da6ad3f2f1c4ad6b/")!,
+        modelByteCount: 272_151_136, vocabularyByteCount: 0, format: .gguf
     )
 
     /// Imported and pinned ONNX jobs retain their original content identity.
@@ -187,6 +200,7 @@ public enum GigaAMModelCatalog {
             endOfUtteranceThreshold: 0.5
         ),
         compactONNXModel,
+        coreMLModel,
         downloadableModel,
     ]
 

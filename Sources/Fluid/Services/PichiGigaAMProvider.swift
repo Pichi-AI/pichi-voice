@@ -5,11 +5,21 @@ extension GigaAMModelDescriptor {
     /// The E2E tokenizer identifies formatted exports; older character exports do not
     /// inherit their punctuation claims or the measured v5 CPU speed.
     nonisolated var libraryMetadata: SpeechModelLibraryMetadata {
+        if case .gguf = self.format {
+            return SpeechModelLibraryMetadata(
+                size: String(format: "~%.1f MiB", Double(self.modelByteCount ?? 0) / 1_048_576),
+                processor: "GPU preferred; CPU fallback",
+                recommendedMemory: "8 GB+ RAM recommended",
+                features: "Punctuation, capitalization and text normalization. Quantized Q8 model for GPU and CPU.",
+                performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
+                performanceExplanation: "The published quantized GigaAM model uses the same file on GPU and CPU. Compact INT8 remains the automatic CPU profile on memory-constrained devices. Library percentages are relative product ratings, not measured accuracy."
+            )
+        }
         if case .coreML = self.format {
             return SpeechModelLibraryMetadata(
                 size: String(format: "~%.1f MiB", Double(self.artifacts.compactMap(\.byteCount).reduce(0, +)) / 1_048_576),
                 processor: "GPU preferred; CPU fallback",
-                recommendedMemory: "4 GB+ RAM recommended",
+                recommendedMemory: "8 GB+ RAM recommended",
                 features: "Punctuation, capitalization and text normalization. Published Core ML model.",
                 performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
                 performanceExplanation: "The published GigaAM v3 Core ML export runs on GPU by default. CPU is used only if GPU execution is unavailable or fails. Library percentages are relative product ratings, not measured accuracy."
@@ -47,17 +57,19 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     typealias Download = @Sendable (URL, Int64, @escaping @Sendable (Int64, Int64) -> Void) async throws -> (URL, URLResponse)
     static let shared = PichiGigaAMModelStore()
     static var defaultDownloadByteCount: Int64 {
-        let descriptor = GigaAMModelCatalog.downloadableModel
+        let descriptor = self.shared.downloadDescriptor
         return descriptor.artifacts.compactMap(\.byteCount).reduce(0, +)
     }
-    static var supportsDefaultDownload: Bool { GigaAMModelCatalog.downloadableModel.downloadBaseURL != nil }
-    static var preferredLibraryMetadata: SpeechModelLibraryMetadata? { GigaAMModelCatalog.downloadableModel.libraryMetadata }
+    static var supportsDefaultDownload: Bool { self.shared.downloadDescriptor.downloadBaseURL != nil }
+    static var preferredLibraryMetadata: SpeechModelLibraryMetadata? { self.shared.downloadDescriptor.libraryMetadata }
+    var defaultModelFingerprint: String { self.downloadDescriptor.fingerprint }
     private static let directoryPreferenceKey = "pichiGigaAMModelDirectory"
     private static let importedModelPreferenceKey = "pichiGigaAMImportedModelID"
     private let overriddenDirectory: URL?
     private let preferences: UserDefaults
     private let environment: [String: String]
     private let downloadDescriptor: GigaAMModelDescriptor
+    private let defaultCPUReason: GigaAMExecutionStatus.FallbackReason?
     private let importDescriptors: [GigaAMModelDescriptor]
     private let download: Download
 
@@ -67,19 +79,27 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
         let descriptor: GigaAMModelDescriptor
         let root: URL
         let allowsDownload: Bool
+        let fallbackReason: GigaAMExecutionStatus.FallbackReason?
+        init(descriptor: GigaAMModelDescriptor, root: URL, allowsDownload: Bool,
+             fallbackReason: GigaAMExecutionStatus.FallbackReason? = nil) {
+            self.descriptor = descriptor; self.root = root; self.allowsDownload = allowsDownload
+            self.fallbackReason = fallbackReason
+        }
     }
 
-    init(directory: URL? = nil, downloadDescriptor: GigaAMModelDescriptor = GigaAMModelCatalog.downloadableModel,
+    init(directory: URL? = nil, downloadDescriptor: GigaAMModelDescriptor? = nil,
          importDescriptors: [GigaAMModelDescriptor] = GigaAMModelCatalog.models,
          preferences: UserDefaults = PrivateProfileDefaults.shared,
          environment: [String: String] = ProcessInfo.processInfo.environment,
+         resourcePolicy: GigaAMResourcePolicy = .current,
          download: @escaping Download = { source, maximumBytes, progress in
              try await PichiGigaAMModelStore.downloadArtifact(source, maximumBytes: maximumBytes, progress: progress)
          }) {
         self.overriddenDirectory = directory
         self.preferences = preferences
         self.environment = environment
-        self.downloadDescriptor = downloadDescriptor
+        self.downloadDescriptor = downloadDescriptor ?? resourcePolicy.preferredDownload
+        self.defaultCPUReason = downloadDescriptor == nil ? resourcePolicy.defaultCPUReason : nil
         self.importDescriptors = importDescriptors
         self.download = download
     }
@@ -128,7 +148,8 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
             }
             return Selection(descriptor: descriptor, root: root, allowsDownload: false)
         }
-        return Selection(descriptor: self.downloadDescriptor, root: root, allowsDownload: true)
+        return Selection(descriptor: self.downloadDescriptor, root: root, allowsDownload: true,
+                         fallbackReason: self.defaultCPUReason)
     }
 
     private static func locate(_ descriptor: GigaAMModelDescriptor, in root: URL) -> URL? {
@@ -349,6 +370,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     private var preparationTask: Task<Void, Error>?
     private var lifecycleGeneration = 0
     private var executionAttemptPending = false
+    private var preparedDefaultCPUReason: GigaAMExecutionStatus.FallbackReason?
 
     // MARK: - Admitted transcription configuration
 
@@ -391,6 +413,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         }
         let admittedSelection = try self.admittedSource?.selection
             ?? (self.expectedModelFingerprint == nil ? self.modelStore.selectedArtifact() : nil)
+        self.preparedDefaultCPUReason = admittedSelection?.fallbackReason
         let runtime = try GigaAMRuntime()
         self.lifecycleGeneration += 1
         let generation = self.lifecycleGeneration
@@ -478,7 +501,8 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         case .neuralEngine: backend = .neuralEngine
         }
         let reason: String?
-        switch value.fallbackReason {
+        let reportedReason = backend == .cpu ? (self.preparedDefaultCPUReason ?? value.fallbackReason) : value.fallbackReason
+        switch reportedReason {
         case .compatibleExportMissing: reason = "CPU fallback: a compatible GPU export is not installed."
         case .invalidExport: reason = "CPU fallback: the GPU export failed validation."
         case .gpuUnavailable: reason = "CPU fallback: GPU execution is unavailable on this device."
@@ -487,6 +511,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         case .explicitCPU: reason = "CPU was explicitly selected for diagnostics."
         case .unsupportedInputShape: reason = "CPU fallback: the GPU export does not support this input shape."
         case .incompatibleExport: reason = "CPU fallback: this imported export does not support GPU execution."
+        case .memoryBudget: reason = "CPU fallback: the compact model was selected for this device's memory budget."
         case nil: reason = nil
         }
         let next = TranscriptionExecutionStatus(backend: backend, fallbackReason: reason)
