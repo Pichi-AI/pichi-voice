@@ -1,5 +1,6 @@
 import CoreMedia
 import Foundation
+import PichiGigaAM
 @testable import PichiVoiceMobile
 import XCTest
 
@@ -154,6 +155,27 @@ final class MobileFirstUseModelTests: XCTestCase {
             XCTAssertEqual(SettingsStore(defaults: defaults).selectedSpeechModel, model)
         }
         XCTAssertEqual(PichiMeetingProviderFactory.registeredLanguageCodes(for: SettingsStore.SpeechModel.gigaam.rawValue), ["ru"])
+    }
+
+    /// The simulator enforces no per-process memory limit and reports zero headroom, which
+    /// must not read as exhaustion. A physical device keeps measuring it before preparation.
+    func testGigaAMMeasuresProcessHeadroomOnlyOnPhysicalDevices() {
+        let policy = GigaAMResourcePolicy.current
+        #if targetEnvironment(simulator)
+        XCTAssertNil(policy.availableProcessMemory)
+        XCTAssertNotEqual(policy.gpuAdmissionReason, .memoryBudget)
+        #else
+        XCTAssertNotNil(policy.availableProcessMemory)
+        #endif
+    }
+
+    /// Setup renders preparation errors through the catalog. The vendor text is the key,
+    /// so the Russian interface must not fall back to the English GigaAM message.
+    func testGigaAMMemoryErrorResolvesThroughTheInterfaceCatalog() {
+        let message = GigaAMError.memoryBudgetExceeded.localizedDescription
+        XCTAssertEqual(PichiLocalization.text(message, language: .russian, bundle: .main),
+            "Для этого экспорта GigaAM недостаточно доступной памяти. Закройте другие приложения и повторите попытку.")
+        XCTAssertEqual(PichiLocalization.text(message, language: .english, bundle: .main), message)
     }
 
     func testModelChangeDuringConfigurationLookupDoesNotPrepareEitherModel() async throws {
