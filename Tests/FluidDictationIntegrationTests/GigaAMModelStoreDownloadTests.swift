@@ -5,6 +5,110 @@ import PichiGigaAM
 import XCTest
 
 final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
+    func testPinnedUniversalCPUFallbackKeepsReasonWithoutMisclassifyingImports() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let model = GigaAMModelCatalog.downloadableModel
+        let canonical = PichiGigaAMModelStore.defaultDirectory.appendingPathComponent(model.id, isDirectory: true)
+        let store = PichiGigaAMModelStore(directory: canonical, preferences: fixture.preferences, environment: [:],
+                                         resourcePolicy: .init(hasGPU: false, physicalMemory: 2_000_000_000))
+        XCTAssertEqual(store.automaticCPUReason(forFingerprint: model.fingerprint, directory: canonical), .gpuUnavailable)
+        XCTAssertNil(store.automaticCPUReason(forFingerprint: model.fingerprint, directory: fixture.directory))
+        XCTAssertNil(store.automaticCPUReason(forFingerprint: GigaAMModelCatalog.compactONNXModel.fingerprint, directory: canonical))
+        fixture.preferences.set(model.id, forKey: "pichiGigaAMImportedModelID")
+        XCTAssertNil(store.automaticCPUReason(forFingerprint: model.fingerprint, directory: canonical))
+    }
+
+    func testEveryAutomaticDownloadRequestsOnlyTheSameGGUFRegardlessOfRAMOrGPU() async throws {
+        let profiles = [GigaAMResourcePolicy(hasGPU: true, physicalMemory: 16_000_000_000),
+                        GigaAMResourcePolicy(hasGPU: true, physicalMemory: 4_166_696_960),
+                        GigaAMResourcePolicy(hasGPU: true, physicalMemory: 2_000_000_000),
+                        GigaAMResourcePolicy(hasGPU: true, physicalMemory: 2_000_000_000, availableProcessMemory: 0),
+                        GigaAMResourcePolicy(hasGPU: false, physicalMemory: 2_000_000_000)]
+        for profile in profiles {
+            let fixture = try Fixture()
+            defer { fixture.remove() }
+            let requests = DownloadRequests()
+            let store = PichiGigaAMModelStore(directory: fixture.directory, preferences: fixture.preferences,
+                                             environment: [:], resourcePolicy: profile) { url, _, _ in
+                await requests.add(url)
+                throw URLError(.notConnectedToInternet)
+            }
+            let selection = try store.selectedArtifact()
+            XCTAssertEqual(selection.descriptor, GigaAMModelCatalog.downloadableModel)
+            XCTAssertEqual(selection.descriptor.format, .gguf)
+            XCTAssertEqual(selection.fallbackReason, profile.defaultCPUReason)
+            do { _ = try await store.ensureInstalled(selection: selection); XCTFail("Fixture must not access the network") }
+            catch let error as URLError { XCTAssertEqual(error.code, .notConnectedToInternet) }
+            let urls = await requests.urls
+            XCTAssertEqual(urls.count, 1)
+            XCTAssertEqual(urls[0].absoluteString, "https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf/resolve/59717de63d50dd9dd93b3249da6ad3f2f1c4ad6b/gigaam-v3-e2e-ctc-Q8_0.gguf")
+            XCTAssertEqual(try store.selectedArtifact().descriptor, selection.descriptor)
+            XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: fixture.directory.path).isEmpty)
+        }
+    }
+
+    func testOldAutomaticONNXRemainsAvailableOnlyToExplicitImportsAndPinnedJobs() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let old = GigaAMModelCatalog.compactONNXModel
+        let oldDirectory = fixture.directory.appendingPathComponent(old.id, isDirectory: true)
+        try FileManager.default.createDirectory(at: oldDirectory, withIntermediateDirectories: true)
+        let bytes = Data("synthetic legacy artifact presence; inference is not run".utf8)
+        for artifact in old.artifacts { try bytes.write(to: oldDirectory.appendingPathComponent(artifact.path)) }
+        let store = PichiGigaAMModelStore(directory: fixture.directory, preferences: fixture.preferences, environment: [:],
+                                         resourcePolicy: .init(hasGPU: true, physicalMemory: 2_000_000_000))
+        XCTAssertEqual(try store.selectedArtifact().descriptor, GigaAMModelCatalog.downloadableModel)
+        XCTAssertFalse(store.modelsExistOnDisk(), "Legacy ONNX must not satisfy GGUF readiness")
+        XCTAssertFalse(store.usesImportedModelSource)
+        XCTAssertEqual(try store.installedModel(matchingFingerprint: old.fingerprint).directory, oldDirectory)
+        let pinned = PichiGigaAMModelStore(directory: oldDirectory, preferences: fixture.preferences, environment: [:])
+        XCTAssertEqual(try pinned.installedModelFingerprint(), old.fingerprint)
+        fixture.preferences.set(old.id, forKey: "pichiGigaAMImportedModelID")
+        XCTAssertEqual(try store.installedModel().descriptor, old)
+        try await store.restoreDefaultModelSource()
+        XCTAssertEqual(try store.selectedArtifact().descriptor, GigaAMModelCatalog.downloadableModel)
+        for artifact in old.artifacts {
+            XCTAssertEqual(try Data(contentsOf: oldDirectory.appendingPathComponent(artifact.path)), bytes)
+        }
+    }
+
+    private actor DownloadRequests {
+        private(set) var urls: [URL] = []
+        func add(_ url: URL) { self.urls.append(url) }
+    }
+
+    func testNestedCoreMLArtifactsUseTheSameVerifiedInstallationOperation() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let files = ["Ready.mlpackage/Manifest.json": Data("synthetic manifest".utf8),
+                     "Ready.mlpackage/Data/model.mlmodel": Data("synthetic graph".utf8),
+                     "Ready.mlpackage/Data/weights/weight.bin": Data("synthetic weights".utf8),
+                     "vocabulary.txt": fixture.vocabularyBytes]
+        let artifacts = files.keys.sorted().map { name in
+            GigaAMModelArtifact(path: name, sha256: SHA256.hash(data: files[name]!).map { String(format: "%02x", $0) }.joined(),
+                               byteCount: Int64(files[name]!.count))
+        }
+        let descriptor = GigaAMModelDescriptor(id: "synthetic-package", modelFile: "Ready.mlpackage", modelSHA256: artifacts[0].sha256,
+                                               vocabularyFile: "vocabulary.txt", vocabularySHA256: artifacts.last!.sha256,
+                                               endOfUtteranceThreshold: nil, downloadBaseURL: URL(string: "https://fixture.invalid/revision/")!,
+                                               artifacts: artifacts)
+        let store = PichiGigaAMModelStore(directory: fixture.directory, downloadDescriptor: descriptor,
+                                         preferences: fixture.preferences, environment: [:]) { url, limit, progress in
+            let name = String(url.path.dropFirst("/revision/".count))
+            let bytes = try XCTUnwrap(files[name])
+            XCTAssertEqual(limit, Int64(bytes.count))
+            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try bytes.write(to: temporary)
+            progress(Int64(bytes.count), Int64(bytes.count))
+            return (temporary, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let installed = try await store.ensureInstalled()
+        try descriptor.verify(in: installed.directory)
+        for (name, bytes) in files { XCTAssertEqual(try Data(contentsOf: installed.directory.appendingPathComponent(name)), bytes) }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.directory.path), [descriptor.id])
+    }
+
     func testDownloadPublishesCompleteHashVerifiedFolder() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

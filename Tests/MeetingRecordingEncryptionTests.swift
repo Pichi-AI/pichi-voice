@@ -75,6 +75,15 @@ extension MeetingSessionStoreCheckpointTests {
         try indexBytes.write(to: index)
         do { _ = try await unconfigured.load(id: session.id); check(false, "A missing key cannot reveal encrypted history") }
         catch { check(true, "A missing key cannot reveal encrypted history") }
+        do { _ = try await unconfigured.loadHistory(); check(false, "Missing-key history must not appear successfully empty") }
+        catch MeetingSessionStoreError.historyUnavailable {
+            check(true, "Missing-key history reports an unavailable catalog")
+        }
+        check(try Data(contentsOf: manifest) == encryptedBytes,
+              "An unavailable catalog never replaces the encrypted recording")
+        try await unconfigured.installEncryptionCipher(cipher)
+        check(try await unconfigured.loadHistory() == [session],
+              "Retrying with the existing key restores the same history after restart")
         do { try await restarted.installEncryptionCipher(wrongKey); check(false, "A loaded store cannot silently rotate its key") }
         catch { check(true, "A loaded store cannot silently rotate its key") }
 

@@ -22,6 +22,10 @@ final nonisolated class ConcealablePreferences: UserDefaults, @unchecked Sendabl
 nonisolated struct SpeechModelPerformanceRatings { let speedRating: Int; let accuracyRating: Int; let speedPercent: Double; let accuracyPercent: Double }
 nonisolated struct SpeechModelLibraryMetadata { let size: String; let processor: String; let recommendedMemory: String; let features: String; let performanceRatings: SpeechModelPerformanceRatings; let performanceExplanation: String }
 @MainActor protocol TranscriptionProvider {}
+nonisolated final class DebugLogger {
+    static let shared = DebugLogger()
+    func log(_ message: String, source: String) {}
+}
 nonisolated struct ASRTranscriptionResult { let text: String; let confidence: Float; let endOfUtteranceProbability: Float? }
 nonisolated struct ASRWordTiming { let text: String; let start: TimeInterval; let end: TimeInterval }
 nonisolated enum ProgressiveFileDownloader {
@@ -54,13 +58,16 @@ nonisolated enum ProgressiveFileDownloader {
         try markerBytes.write(to: marker)
         func write(_ descriptor: GigaAMModelDescriptor, _ directory: URL) throws {
             try manager.createDirectory(at: directory, withIntermediateDirectories: true)
-            for name in [descriptor.modelFile] + [descriptor.vocabularyFile].compactMap({ $0 }) {
-                try Data("synthetic artifact: \(descriptor.id)/\(name)".utf8).write(to: directory.appendingPathComponent(name))
+            for name in descriptor.artifacts.map(\.path) {
+                let file = directory.appendingPathComponent(name)
+                try manager.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data("synthetic artifact: \(descriptor.id)/\(name)".utf8).write(to: file)
             }
         }
         try write(publicDescriptor, publicRoot)
         try write(importedDescriptor, importedRoot)
-        let publicBytes = try Data(contentsOf: publicRoot.appendingPathComponent(publicDescriptor.modelFile))
+        let publicArtifactPath = publicDescriptor.artifacts[0].path
+        let publicBytes = try Data(contentsOf: publicRoot.appendingPathComponent(publicArtifactPath))
         let preferences = ConcealablePreferences()
         preferences.select(importedDescriptor.id)
         let store = PichiGigaAMModelStore(preferences: preferences, environment: [:]) { _, _, _ in
@@ -91,7 +98,7 @@ nonisolated enum ProgressiveFileDownloader {
         try await provider.clearCache()
         self.expect(!manager.fileExists(atPath: importedRoot.path), "Failed preparation recovery retires the exact imported folder")
         self.expect(publicDescriptor.filesExist(in: publicRoot), "Imported recovery preserves the public fallback")
-        self.expect(try Data(contentsOf: publicRoot.appendingPathComponent(publicDescriptor.modelFile)) == publicBytes,
+        self.expect(try Data(contentsOf: publicRoot.appendingPathComponent(publicArtifactPath)) == publicBytes,
                     "Public artifact bytes survive imported recovery")
         provider.endAdmittedTranscription(leaseID: lease)
 

@@ -24,6 +24,34 @@ final class MobileSettingsReviewUITests: XCTestCase {
         super.tearDown()
     }
 
+    /// Ready-to-download capability is shown without claiming a prepared GPU session.
+    func testGPUPreferenceOnModelPageInRussianLightAndDark() throws {
+        for appearance in ["light", "dark"] {
+            app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
+            app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance,
+                                   "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1"]
+            app.launch()
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
+            capture("gpu-preference-ru-\(appearance)-home")
+            openSettings(title: "Настройки")
+            capture("gpu-preference-ru-\(appearance)-settings")
+            let models = app.buttons["settings.models"]
+            reveal(models)
+            XCTAssertTrue(models.isHittable)
+            models.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["settings.models.detail"].firstMatch.waitForExistence(timeout: 10))
+            let preference = app.staticTexts["model.computePreference.gigaam-v3-eou"]
+            reveal(preference)
+            XCTAssertTrue(preference.exists && preference.isHittable)
+            XCTAssertEqual(preference.label, "Приоритет GPU; резервный CPU")
+            XCTAssertFalse(app.descendants(matching: .any)["model.executionStatus.gigaam-v3-eou"].firstMatch.exists,
+                           "An unprepared provider must not claim GPU execution")
+            settle()
+            capture("gpu-preference-ru-\(appearance)-models")
+            app.terminate()
+        }
+    }
+
     func testEverySettingsPageInBothLanguagesAndThemes() throws {
         for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light")] {
             let settingsTitle = language == "ru" ? "Настройки" : "Settings"

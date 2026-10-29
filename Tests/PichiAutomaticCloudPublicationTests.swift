@@ -109,6 +109,7 @@ extension PichiPublicationOutboxTests {
         keyOwner.localEncryptionEnabled = true; keyOwner.holdNextLoad = true
         let guestBeforeLogin = Task { try await service.prepareCapturePersistencePolicy() }
         try await wait { keyOwner.isHolding }
+        await transport.setWorkspaceAvailable(false)
         let signingIn = Task { await account.signIn(email: "a@synthetic.example", password: "synthetic-only") }
         try await wait { profiles.isTransitioning }
         keyOwner.releaseLoad()
@@ -118,7 +119,7 @@ extension PichiPublicationOutboxTests {
         await signingIn.value
         keyOwner.localEncryptionEnabled = false; keyOwner.loads = 0
         check(try await service.prepareAutomaticCapture() == false && keyOwner.loads == 0,
-              "Signed-in accounts without a selected workspace keep ordinary local recording available")
+              "Signed-in accounts without an available workspace keep ordinary local recording available")
         check(try await meetings.loadTranscript(id: guestSource.id) == nil,
               "A new login cannot adopt or expose an earlier guest's encrypted source")
         do { try await service.refresh(); check(false, "An unselected publication workspace remains an explicit configuration error") }
@@ -132,8 +133,10 @@ extension PichiPublicationOutboxTests {
               "A no-workspace account retires through the existing profile lifecycle without a hidden cleanup failure")
         check(try await service.prepareCapturePersistencePolicy() == .init(),
               "A committed logout reopens ordinary guest capture instead of retaining the old closing latch")
+        await transport.setWorkspaceAvailable(true)
         await account.signIn(email: "a@synthetic.example", password: "synthetic-only")
-        try await account.selectWorkspace(organizationID: "17", workspaceID: "9")
+        check(account.context?.organizationID == "17" && account.context?.workspaceID == "9",
+              "Fresh sign-in selects the first verified workspace without granting automatic publication")
         check(try await service.prepareAutomaticCapture() == false, "Automatic capture is off before explicit future consent")
         try await service.setDeleteLocalAfterAcceptance(true)
         check(keyOwner.loads == 0, "Reading disabled policy or changing retention does not create an encryption key")
@@ -681,6 +684,7 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
     let configuration: LegacyAccountConfiguration
     private var userID = "123", offline = false, loseNext = false, holdNext = false, holding = false
     private var accountThrottled = false
+    private var workspaceAvailable = true
     private var validationGets = 0
     private var accountRetryAfter: String?
     private var nextHTTPFailure: Int?
@@ -715,9 +719,11 @@ private actor AutomaticFixtureTransport: LegacyAccountTransporting {
         if accountThrottled { throw LegacyAccountConnectivityFailure.rateLimited(retryAfter: accountRetryAfter) }
         return .init(schemaVersion: 1, account: .init(id: userID, displayName: "Synthetic", email: nil),
             identity: .init(issuer: "", subject: "", legacyOrigin: configuration.apiBaseURL.absoluteString),
-            organizations: [.init(id: "17", name: "Synthetic", workspaces: [.init(id: "9", name: "Synthetic", capabilities: ["recordings:import"])])],
+            organizations: [.init(id: "17", name: "Synthetic", workspaces: workspaceAvailable
+                ? [.init(id: "9", name: "Synthetic", capabilities: ["recordings:import"])] : [])],
             activeOrganizationID: "17")
     }
+    func setWorkspaceAvailable(_ available: Bool) { workspaceAvailable = available }
     func switchOrganization(_ organizationID: String) async throws -> AccountSnapshot { try await account() }
     func logout() async throws {}
     func clearSession() async {}

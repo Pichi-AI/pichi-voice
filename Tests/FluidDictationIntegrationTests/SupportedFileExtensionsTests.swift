@@ -178,3 +178,70 @@ final class FileTranscriptionBufferedAudioTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class TranscriptionExecutionStatusTests: XCTestCase {
+    private final class LegacyProvider: TranscriptionProvider {
+        let name = "Legacy status control"
+        let isAvailable = true
+        let isReady = true
+        func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {}
+        func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+            ASRTranscriptionResult(text: "", confidence: 0)
+        }
+    }
+
+    private final class FallbackProvider: TranscriptionProvider {
+        let name = "Execution status control"
+        let isAvailable = true
+        private(set) var isReady = false
+        private(set) var executionStatus: TranscriptionExecutionStatus?
+        var onTranscribe: (() -> Void)?
+
+        func modelsExistOnDisk() -> Bool { true }
+        func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
+            self.isReady = true
+            self.executionStatus = .init(backend: .gpu)
+        }
+        func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+            self.onTranscribe?()
+            self.executionStatus = .init(backend: .cpu, fallbackReason: "CPU fallback: GPU execution failed.")
+            return ASRTranscriptionResult(text: "", confidence: 0)
+        }
+        func releaseResidency() async {
+            self.executionStatus = nil
+            self.isReady = false
+        }
+    }
+
+    func testExistingProvidersDoNotClaimAnExecutionDevice() {
+        let provider: any TranscriptionProvider = LegacyProvider()
+        XCTAssertNil(provider.executionStatus)
+    }
+
+    func testPreparedStatusAndInferenceFallbackReachSelectedModelUIOnly() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        settings.selectedSpeechModel = .gigaam
+        defer { settings.selectedSpeechModel = originalModel }
+        let provider = FallbackProvider()
+        let asr = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        asr.modelProvidersForTesting[.gigaam] = provider
+        do {
+            try await asr.ensureAsrReady()
+            XCTAssertEqual(asr.executionStatus(for: .gigaam), .init(backend: .gpu))
+            XCTAssertNil(asr.executionStatus(for: .parakeetTDT))
+            provider.onTranscribe = { [weak asr] in
+                XCTAssertEqual(asr?.executionStatus(for: .gigaam), .init(backend: .gpu))
+            }
+            _ = try await asr.transcribeSamplesForAPI([Float](repeating: 0, count: 16_000))
+            XCTAssertEqual(asr.executionStatus(for: .gigaam), .init(backend: .cpu, fallbackReason: "CPU fallback: GPU execution failed."))
+            XCTAssertNil(asr.executionStatus(for: .parakeetTDT))
+            await asr.shutdownForTermination()
+            XCTAssertNil(asr.executionStatus)
+        } catch {
+            await asr.shutdownForTermination()
+            throw error
+        }
+    }
+}

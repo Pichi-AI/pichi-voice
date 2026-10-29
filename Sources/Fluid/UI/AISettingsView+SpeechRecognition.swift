@@ -207,6 +207,25 @@ extension VoiceEngineSettingsView {
                         Spacer()
                     }
 
+                    if let execution = self.viewModel.speechModelExecutionStatus(model) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(
+                                PichiLocalization.format("Configured execution: %@", PichiLocalization.text(execution.backend.label)),
+                                systemImage: "cpu"
+                            )
+                            .font(self.theme.typography.bodySmallStrong)
+                            .foregroundStyle(self.voiceEngineSecondaryText)
+                            .help("The configured execution device is not a live utilization measurement.")
+
+                            if let reason = execution.fallbackReason {
+                                Text(PichiLocalization.text(reason))
+                                    .font(self.theme.typography.bodySmall)
+                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+
                     if let supportedLanguageCodes = model.supportedLanguageCodes {
                         Text(supportedLanguageCodes)
                             .font(self.theme.typography.bodySmall)

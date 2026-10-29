@@ -535,63 +535,110 @@ private struct MobileAccountPanel: View {
     }
 
     @ViewBuilder private func signedIn(_ account: AccountSnapshot, context: AccountContext) -> some View {
-        VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
-            Text(account.account.displayName).font(theme.typography.bodyStrong)
-                .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("account.displayName")
-            if let email = account.account.email, !email.isEmpty {
-                Text(email).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+        HStack(alignment: .center, spacing: theme.metrics.spacing.sm) {
+            VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                Text(account.account.displayName).font(theme.typography.bodyStrong)
                     .fixedSize(horizontal: false, vertical: true)
+                if let email = account.account.email, !email.isEmpty, email != account.account.displayName {
+                    Text(email).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-        }.accessibilityElement(children: .combine)
+            .accessibilityElement(children: .combine).accessibilityIdentifier("account.displayName")
+            Spacer(minLength: theme.metrics.spacing.sm)
+            Menu {
+                Button(PichiLocalization.text("account.action.switchPerson", defaultValue: "Switch account")) {
+                    guard session.isCurrent(context) else { return }
+                    interaction.switchPerson()
+                }.accessibilityIdentifier("account.switchPerson")
+                Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out"), role: .destructive) {
+                    guard session.isCurrent(context) else { return }
+                    requestLogout()
+                }.accessibilityIdentifier("account.signOut")
+            } label: {
+                Image(systemName: "ellipsis.circle").font(theme.typography.bodyStrong)
+                    .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+            }
+            .accessibilityLabel(PichiLocalization.text("account.actions", defaultValue: "Account actions"))
+            .accessibilityIdentifier("account.actions")
+            .disabled(interaction.action != nil || !session.isSignInAvailable || !session.isCurrent(context))
+            .id(privateProfile.projectionRevision)
+        }
         if session.isAwaitingLegacyServerValidation {
             Text(PichiLocalization.text("account.legacy.offline", defaultValue: "Offline. Your account will be checked again before anything is sent."))
                 .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("account.legacy.offline")
         }
-        Text(PichiLocalization.text("account.workspace.choose", defaultValue: "Choose a workspace"))
-            .font(theme.typography.bodyStrong)
+        if !account.organizations.allSatisfy({ $0.workspaces.isEmpty })
+            || (session.isLegacySession && account.organizations.contains(where: { $0.id != account.activeOrganizationID })) {
+            workspacePicker(account, context: context)
+        }
         if account.organizations.allSatisfy({ $0.workspaces.isEmpty }) {
             Text(PichiLocalization.text("account.workspace.empty", defaultValue: "No workspaces are available for this account. You can continue recording on this device."))
                 .font(theme.typography.bodySmall).accessibilityIdentifier("account.workspaces.empty")
         }
+        if interaction.action != nil {
+            ProgressView(PichiLocalization.text("account.state.updating", defaultValue: "Updating account"))
+                .accessibilityIdentifier("account.updating")
+        }
+    }
+
+    private func workspacePicker(_ account: AccountSnapshot, context: AccountContext) -> some View {
+        let selectedOrganization = account.organizations.first(where: { $0.id == context.organizationID })
+        let selected = selectedOrganization?.workspaces.first(where: { $0.id == context.workspaceID })
+        let name = selected?.name ?? PichiLocalization.text("account.workspace.choose", defaultValue: "Choose a workspace")
+        return Menu {
+            workspaceChoices(account, context: context)
+        } label: {
+            HStack(spacing: theme.metrics.spacing.sm) {
+                VStack(alignment: .leading, spacing: theme.metrics.spacing.xs) {
+                    Text(PichiLocalization.text("account.workspace.title", defaultValue: "Workspace"))
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                    Text(verbatim: name).font(theme.typography.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("account.workspace.selected")
+                }
+                Spacer(minLength: theme.metrics.spacing.sm)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
+            }
+            .foregroundStyle(theme.palette.primaryText)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+        }
+        .accessibilityLabel(PichiLocalization.text("account.workspace.title", defaultValue: "Workspace"))
+        .accessibilityValue(Text(verbatim: name))
+        .accessibilityIdentifier("account.workspace.selector")
+        .disabled(interaction.action != nil || !session.isSignInAvailable || !session.isCurrent(context))
+        .id(privateProfile.projectionRevision)
+    }
+
+    @ViewBuilder private func workspaceChoices(_ account: AccountSnapshot, context: AccountContext) -> some View {
         ForEach(account.organizations, id: \.id) { organization in
-            VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
-                Text(organization.name).font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+            Section {
                 if session.isLegacySession && account.activeOrganizationID != organization.id {
                     Button(PichiLocalization.text("account.legacy.chooseOrganization", defaultValue: "Choose this organization")) {
+                        guard session.isCurrent(context) else { return }
                         interaction.selectLegacyOrganization(organization.id)
                     }.disabled(interaction.action != nil || !session.isCurrent(context))
                         .accessibilityIdentifier("account.organization.\(organization.id)")
                 }
                 ForEach(organization.workspaces, id: \.id) { workspace in
                     let selected = context.organizationID == organization.id && context.workspaceID == workspace.id
-                    Button { interaction.selectWorkspace(organizationID: organization.id, workspaceID: workspace.id) } label: {
-                        HStack {
-                            Text(workspace.name).font(theme.typography.body).fixedSize(horizontal: false, vertical: true)
-                            Spacer()
-                            if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(theme.palette.accent) }
-                        }.frame(minHeight: 44).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
-                        .disabled(interaction.action != nil || !session.isSignInAvailable || !session.isCurrent(context))
+                    Button {
+                        guard session.isCurrent(context) else { return }
+                        interaction.selectWorkspace(organizationID: organization.id, workspaceID: workspace.id)
+                    } label: {
+                        if selected {
+                            Label { Text(verbatim: workspace.name) } icon: { Image(systemName: "checkmark") }
+                        } else { Text(verbatim: workspace.name) }
+                    }
+                        .disabled(interaction.action != nil || !session.isSignInAvailable || !session.isCurrent(context)
+                            || (session.isLegacySession && account.activeOrganizationID != organization.id))
                         .accessibilityIdentifier("account.workspace.\(organization.id).\(workspace.id)")
                         .accessibilityAddTraits(selected ? .isSelected : [])
                 }
-            }
+            } header: { Text(verbatim: organization.name) }
         }
-        if interaction.action != nil {
-            ProgressView(PichiLocalization.text("account.state.updating", defaultValue: "Updating account"))
-                .accessibilityIdentifier("account.updating")
-        }
-        Button(PichiLocalization.text("account.action.switchPerson", defaultValue: "Switch account")) {
-            interaction.switchPerson()
-        }
-            .disabled(interaction.action != nil || !session.isSignInAvailable)
-            .accessibilityIdentifier("account.switchPerson")
-        Button(PichiLocalization.text("account.action.signOut", defaultValue: "Sign out"), role: .destructive) {
-            requestLogout()
-        }
-            .disabled(interaction.action != nil).accessibilityIdentifier("account.signOut")
     }
 }
 
@@ -676,6 +723,7 @@ struct MobileCloudSyncSettings: View {
     @ObservedObject var session: AccountSessionService
     @ObservedObject private var profiles = PrivateProfileService.shared
     @StateObject private var interaction: MobileCloudInteraction
+    @State private var showsDetails = false
     @Environment(\.theme) private var theme
 
     init(service: PichiCloudPublicationService, session: AccountSessionService,
@@ -687,30 +735,16 @@ struct MobileCloudSyncSettings: View {
     var body: some View {
         if interaction.publications.admit() != nil {
             VStack(alignment: .leading, spacing: theme.metrics.spacing.md) {
-                if service.isLegacySession, let host = service.legacyDestinationURL?.host {
-                    LabeledContent(MobileCloudCopy.text("automatic.destination")) {
-                        Text(verbatim: host).font(theme.typography.captionStrong)
-                    }.accessibilityIdentifier("cloud.automatic.destination")
-                }
-                Toggle(MobileCloudCopy.text(service.isLegacySession ? "automatic.title" : "title"), isOn: Binding(
+                Toggle(MobileCloudCopy.text(service.isLegacySession ? "automatic.compactTitle" : "title"), isOn: Binding(
                     get: { service.snapshot.cloudSyncEnabled },
                     set: { enabled in command(.toggle(enabled)) { try await service.setCloudSyncEnabled(enabled) } }))
                     .disabled(isBusy || unavailable)
                     .accessibilityIdentifier("cloud.sync.toggle")
-                Text(MobileCloudCopy.text(service.isLegacySession ? "automatic.consent" : "consent"))
-                    .font(theme.typography.bodySmall).fixedSize(horizontal: false, vertical: true)
-                if service.isLegacySession {
-                    Text(PichiLocalization.text("recording.deletion.settingsLocation"))
-                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(MobileCloudCopy.text("automatic.runtime"))
-                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Text(MobileCloudCopy.text("history"))
+                Text(MobileCloudCopy.text(service.isLegacySession ? "automatic.summary" : "summary"))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(MobileCloudCopy.availability(service.snapshot.availability))
+                    .accessibilityIdentifier("cloud.sync.summary")
+                Text(availabilityText)
                     .font(theme.typography.bodySmall).fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("cloud.sync.availability")
                 if isBusy {
@@ -725,16 +759,65 @@ struct MobileCloudSyncSettings: View {
                 } else if service.snapshot.cloudSyncEnabled && service.snapshot.availability == .paused {
                     Button(MobileCloudCopy.text("action.resume")) { command(.resume) { try await service.resume() } }
                         .accessibilityIdentifier("cloud.sync.resume")
-                } else if service.snapshot.cloudSyncEnabled && service.snapshot.availability == .ready {
-                    Button(MobileCloudCopy.text("action.pause")) { command(.pause) { await service.pause() } }
-                        .accessibilityIdentifier("cloud.sync.pause")
                 }
                 if interaction.failed { cloudFailure }
+                DisclosureGroup(isExpanded: $showsDetails) {
+                    syncDetails
+                } label: {
+                    Text(PichiLocalization.text("cloud.details", defaultValue: "Details"))
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+                        .accessibilityIdentifier("cloud.sync.details.toggle")
+                }
+                .font(theme.typography.bodySmall)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("cloud.sync.details")
             }
             .foregroundStyle(theme.palette.primaryText)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("cloud.sync.settings")
+            .onChange(of: profiles.projectionRevision) { _, _ in showsDetails = false }
         }
+    }
+
+    @ViewBuilder private var syncDetails: some View {
+        VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
+            if service.isLegacySession, let host = service.legacyDestinationURL?.host {
+                LabeledContent(MobileCloudCopy.text("automatic.destination")) {
+                    Text(verbatim: host).font(theme.typography.captionStrong)
+                }.accessibilityIdentifier("cloud.automatic.destination")
+            }
+            Text(MobileCloudCopy.text(service.isLegacySession ? "automatic.details" : "consent"))
+            if service.isLegacySession {
+                Text(PichiLocalization.text("cloud.protectionSettings", defaultValue: "Recording protection settings are in Privacy."))
+                Text(MobileCloudCopy.text("automatic.runtime"))
+            }
+            Text(MobileCloudCopy.text("history"))
+            if service.snapshot.cloudSyncEnabled && service.snapshot.availability == .ready {
+                Button(MobileCloudCopy.text("action.pause")) { command(.pause) { await service.pause() } }
+                    .accessibilityIdentifier("cloud.sync.pause")
+            }
+        }
+        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("cloud.sync.details.content")
+    }
+
+    private var availabilityText: String {
+        if service.snapshot.availability == .unconfigured, session.isConfigured, let context = session.context {
+            if context.organizationID == nil || context.workspaceID == nil {
+                if session.account?.organizations.allSatisfy({ $0.workspaces.isEmpty }) == true {
+                    return PichiLocalization.text("cloud.workspaceUnavailable", defaultValue: "No workspace is available.")
+                }
+                return PichiLocalization.text("account.workspace.choose", defaultValue: "Choose a workspace")
+            }
+            return PichiLocalization.text("cloud.preparing", defaultValue: "Preparing sync…")
+        }
+        if !service.snapshot.cloudSyncEnabled,
+           service.snapshot.availability == .ready || service.snapshot.availability == .paused {
+            return PichiLocalization.text("cloud.automatic.off", defaultValue: "Automatic sending is off.")
+        }
+        return MobileCloudCopy.availability(service.snapshot.availability)
     }
 
     private var isBusy: Bool { interaction.action != nil || service.snapshot.availability == .pausing }

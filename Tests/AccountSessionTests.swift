@@ -44,6 +44,7 @@ private actor FakeTransport: AccountTransporting {
         return .init(accessToken: "rotated", refreshToken: "rotated-refresh", expiresAt: refreshExpiry, subject: "subject-a")
     }
     func account(accessToken: String) throws -> AccountSnapshot { if failAccount { throw AccountError.networkUnavailable }; return snapshot }
+    func setSnapshot(_ value: AccountSnapshot) { snapshot = value }
     func setAccountFailure(_ value: Bool) { failAccount = value }
     func revoke(refreshToken: String) { revocations.append(refreshToken) }
     var isAuthorizationWaiting: Bool { authorizationGate != nil }
@@ -99,12 +100,16 @@ private actor FixtureHTTP: AccountHTTPRequesting {
     var failTransition = false
     var blockRollback = false
     var rollbackGate: CheckedContinuation<Void, Never>?
+    var blockAdmission = false
+    var admissionGate: CheckedContinuation<Void, Never>?
     func transition(from: AccountContext?, to: AccountContext?, generation: UUID) async throws {
         transitions.append((from, to))
+        if to != nil && blockAdmission { await withCheckedContinuation { admissionGate = $0 } }
         if to == nil && blockRollback { await withCheckedContinuation { rollbackGate = $0 } }
         if failTransition { throw AccountError.invalidState }
     }
     func releaseRollback() { blockRollback = false; rollbackGate?.resume(); rollbackGate = nil }
+    func releaseAdmission() { blockAdmission = false; admissionGate?.resume(); admissionGate = nil }
 }
 nonisolated private func fixtureSnapshot() -> AccountSnapshot {
     .init(schemaVersion: 1, account: .init(id: "user-a", displayName: "Synthetic", email: nil),
@@ -149,6 +154,8 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         count += try await AccountLegacySessionChecks.http()
         count += try await AccountLegacySessionChecks.persistence()
         count += try await AccountLegacySessionChecks.protectedData()
+        count += try await AccountLegacySessionChecks.initialWorkspaceSelection()
+        try await initialWorkspaceSelectionTests(configuration)
         await commandPreflightCancellationTests(configuration)
         await callerCancellationDuringAdmissionTests(configuration)
         let browser = FakeBrowser(), transport = FakeTransport(), credentials = MemoryCredentials(), lifecycle = Lifecycle()
@@ -158,7 +165,7 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         try service.installLifecycle(lifecycle)
         await service.signIn()
         expect(service.state == .signedIn && service.context?.identity.internalUserID == "user-a", "verified account projected")
-        expect(service.context?.workspaceID == nil, "no default workspace")
+        expect(service.context?.workspaceID == "workspace", "first verified workspace is selected on fresh sign-in")
         let original = service.context!
         await transport.holdRefresh()
         let first = Task { try await service.authorizedAccess(for: original) }
@@ -204,6 +211,78 @@ nonisolated private func fixtureConfiguration(_ bundle: String = "ai.example.voi
         await inactive.restore(); await inactive.signIn()
         expect(inactive.state == .unconfigured && !inactive.isSignInAvailable, "absent config stays inactive")
         print("PASS: \(count) native account synthetic assertions; no real account, browser, Keychain, model or UI access")
+    }
+    @MainActor static func initialWorkspaceSelectionTests(_ configuration: AccountConfiguration) async throws {
+        let original = fixtureSnapshot()
+        let destinations: [AccountSnapshot.Organization] = [
+            .init(id: "empty", name: "Empty", workspaces: []),
+            .init(id: "org", name: "Synthetic", workspaces: [
+                .init(id: "workspace", name: "First", capabilities: ["recordings:create-own"]),
+                .init(id: "second", name: "Second", capabilities: ["recordings:create-own"])
+            ])
+        ]
+        func snapshot(_ organizations: [AccountSnapshot.Organization]) -> AccountSnapshot {
+            .init(schemaVersion: 1, account: original.account, identity: original.identity, organizations: organizations)
+        }
+        let transport = FakeTransport(), credentials = MemoryCredentials(), lifecycle = Lifecycle()
+        await transport.setSnapshot(snapshot(destinations))
+        let service = AccountSessionService(configuration: configuration, browser: FakeBrowser(), transport: transport,
+            credentials: credentials, lifecycle: lifecycle)
+        await service.signIn()
+        expect(service.context?.organizationID == "org" && service.context?.workspaceID == "workspace",
+               "fresh admission chooses first nonempty catalog destination")
+        expect(lifecycle.transitions.count == 1 && lifecycle.transitions[0].1 == service.context,
+               "initial selection belongs to the single joined profile admission")
+        let saved = await credentials.load()
+        expect(saved?.organizationID == "org" && saved?.workspaceID == "workspace",
+               "default destination is persisted before account presentation")
+        try await service.selectWorkspace(organizationID: "org", workspaceID: "second")
+        await service.shutdown()
+        let restartTransport = FakeTransport()
+        await restartTransport.setSnapshot(snapshot(destinations))
+        let restarted = AccountSessionService(configuration: configuration, browser: FakeBrowser(), transport: restartTransport,
+            credentials: credentials, lifecycle: Lifecycle())
+        await restarted.restore()
+        expect(restarted.context?.workspaceID == "second", "valid restored user selection is never replaced by first workspace")
+        await restarted.logout()
+
+        let emptyTransport = FakeTransport()
+        await emptyTransport.setSnapshot(snapshot([destinations[0]]))
+        let empty = AccountSessionService(configuration: configuration, browser: FakeBrowser(), transport: emptyTransport,
+            credentials: MemoryCredentials(), lifecycle: Lifecycle())
+        await empty.signIn()
+        expect(empty.state == .signedIn && empty.context?.organizationID == nil && empty.context?.workspaceID == nil,
+               "empty catalog signs in without inventing a destination")
+        await empty.logout()
+
+        let invalidTransport = FakeTransport(), invalidCredentials = MemoryCredentials(), invalidLifecycle = Lifecycle()
+        await invalidTransport.setSnapshot(snapshot([destinations[1], destinations[1]]))
+        let invalid = AccountSessionService(configuration: configuration, browser: FakeBrowser(), transport: invalidTransport,
+            credentials: invalidCredentials, lifecycle: invalidLifecycle)
+        await invalid.signIn()
+        expect(invalid.state == .signedOut && invalid.context == nil && invalid.presentationError == .invalidAccount,
+               "catalog validation precedes automatic selection")
+        expect(await invalidCredentials.load() == nil && invalidLifecycle.transitions.allSatisfy { $0.1 == nil },
+               "invalid ACL catalog cannot persist or activate an automatic destination")
+
+        let cancelledCredentials = MemoryCredentials(), cancelledLifecycle = Lifecycle()
+        cancelledLifecycle.blockAdmission = true
+        let cancelled = AccountSessionService(configuration: configuration, browser: FakeBrowser(), transport: FakeTransport(),
+            credentials: cancelledCredentials, lifecycle: cancelledLifecycle)
+        var finished = false
+        let command = Task { await cancelled.signIn(); finished = true }
+        await until { cancelledLifecycle.admissionGate != nil }
+        expect(cancelled.context == nil && cancelled.state == .signingIn,
+               "default selection is not published before profile admission completes")
+        command.cancel()
+        for _ in 0..<20 { await Task.yield() }
+        expect(!finished, "cancelled automatic selection joins its in-flight profile admission")
+        cancelledLifecycle.releaseAdmission()
+        await command.value
+        expect(cancelled.state == .signedOut && cancelled.context == nil && cancelled.account == nil,
+               "cancelled default admission never exposes its owner")
+        expect(await cancelledCredentials.load() == nil && cancelledLifecycle.transitions.last?.1 == nil,
+               "cancelled default admission clears the selected grant and returns to guest")
     }
     @MainActor static func commandPreflightCancellationTests(_ configuration: AccountConfiguration) async {
         for reauthentication in [false, true] {

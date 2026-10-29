@@ -82,6 +82,12 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
                 }
             }
             .store(in: &self.cancellables)
+        self.asr.$executionStatus
+            .dropFirst()
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.objectWillChange.send() }
+            }
+            .store(in: &self.cancellables)
         self.installations.objectWillChange
             .sink { [weak self] _ in
                 Task { @MainActor in self?.objectWillChange.send() }
@@ -286,6 +292,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     func speechModelLibraryMetadata(_ model: SettingsStore.SpeechModel) -> SpeechModelLibraryMetadata? {
         self.installations.libraryMetadata[model.id] ?? model.libraryMetadata
+    }
+
+    func speechModelExecutionStatus(_ model: SettingsStore.SpeechModel) -> TranscriptionExecutionStatus? {
+        self.asr.executionStatus(for: model)
     }
 
     var modelDescriptionText: String {
