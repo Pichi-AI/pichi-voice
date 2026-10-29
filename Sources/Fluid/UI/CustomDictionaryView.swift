@@ -171,7 +171,8 @@ struct CustomDictionaryView: View {
     /// Recording a pronunciation authorizes an acoustic template, not a global
     /// replacement of every spelling the recognizer happened to produce.
     private var acousticOnlyTraining: Bool {
-        self.trainingAcousticCorrection || self.activePronunciationMatching
+        (self.trainingAcousticCorrection || self.activePronunciationMatching) &&
+            !self.settings.selectedSpeechModel.learnsDictionarySpellingsAutomatically
     }
 
     private var trainingAlreadyCorrectWithoutReplacement: Bool {

@@ -546,6 +546,17 @@ extension SettingsStore {
             }
         }
 
+        /// Existing encoder-backed providers can learn a spelling after a kept
+        /// voice match. Acoustic-template providers require explicit text rules.
+        var learnsDictionarySpellingsAutomatically: Bool {
+            switch self {
+            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
+                return true
+            default:
+                return false
+            }
+        }
+
         var supportsPronunciationMatching: Bool {
             #if os(macOS)
             if self == .gigaam { return true }
