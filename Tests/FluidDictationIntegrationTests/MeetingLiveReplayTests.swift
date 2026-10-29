@@ -38,6 +38,15 @@ final class MeetingLiveReplayTests: XCTestCase {
         }
 
         let fixture = try ReplayFixture(environment: env)
+        let coldStart = env["FLUIDVOICE_LIVE_REPLAY_COLD_START"] == "1"
+        let modelID = env["FLUIDVOICE_LIVE_REPLAY_MODEL_ID"]
+        let languageCode = env["FLUIDVOICE_LIVE_REPLAY_LANGUAGE"] ?? "en"
+        if coldStart {
+            guard case .buffered = MeetingLiveTranscriptionCoordinator.captionRoute(
+                languageCode: languageCode, modelID: modelID) else {
+                throw Self.invalidReplayInput("Cold replay requires an explicitly registered buffered caption model")
+            }
+        }
 
         let micSamples = try Self.load16kMonoFloatSamples(path: fixture.microphonePath)
         let appSamples = try Self.load16kMonoFloatSamples(path: fixture.applicationPath)
@@ -92,39 +101,44 @@ final class MeetingLiveReplayTests: XCTestCase {
             box.record(snapshot)
         }
 
+        let configuration: MeetingFinalProcessingConfiguration?
+        if let modelID {
+            configuration = try await PichiMeetingProviderFactory.frozenConfiguration(asrModel: modelID, languageCode: languageCode)
+        } else { configuration = nil }
         let harnessStart = Date()
-        coordinator.start(mode: .onlineCall)
+        coordinator.start(mode: .onlineCall, languageCode: languageCode, modelID: modelID, configuration: configuration)
 
         do {
-            // Wait for the pipeline to report ready before hammering it with non-real-time audio: a
-            // capacity-24 (~480ms) bounded queue means feeding faster than real time before the model
-            // is loaded would just drop nearly everything, which would test harness pacing, not the
-            // pipeline's actual transcription/echo-suppression behavior.
-            let readyTimeout: TimeInterval = 300
-            let readyDeadline = Date().addingTimeInterval(readyTimeout)
-            while Date() < readyDeadline {
-                let available = box.lock.withLock { box.latest.availability == .available }
-                if available { break }
-                try await Task.sleep(nanoseconds: 200_000_000)
+            if !coldStart {
+                // The upstream English streaming path has a short in-memory queue. Keep
+                // its existing warm replay; the cold buffered path deliberately skips it.
+                let readyTimeout: TimeInterval = 300
+                let readyDeadline = Date().addingTimeInterval(readyTimeout)
+                while Date() < readyDeadline {
+                    let available = box.lock.withLock { box.latest.availability == .available }
+                    if available { break }
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                }
+                let firstAvailableElapsed = Date().timeIntervalSince(harnessStart)
+                let becameAvailable = box.lock.withLock { box.latest.availability == .available }
+                print("[replay] first-track-ready after \(String(format: "%.1f", firstAvailableElapsed))s (available=\(becameAvailable))")
+                guard becameAvailable else {
+                    XCTFail("Live captions never became available within \(readyTimeout)s")
+                    await coordinator.stop()
+                    return
+                }
+                // Availability is published by the first ready track in the legacy path.
+                try await Task.sleep(nanoseconds: 5_000_000_000)
             }
-            let firstAvailableElapsed = Date().timeIntervalSince(harnessStart)
-            let becameAvailable = box.lock.withLock { box.latest.availability == .available }
-            print("[replay] first-track-ready after \(String(format: "%.1f", firstAvailableElapsed))s (available=\(becameAvailable))")
-            guard becameAvailable else {
-                XCTFail("Live captions never became available within \(readyTimeout)s - model load likely failed.")
-                await coordinator.stop()
-                return
-            }
-            // Both engines load their own model instance in parallel; give the slower one a grace
-            // window since the snapshot only reports "available" on the FIRST track's readiness.
-            try await Task.sleep(nanoseconds: 5_000_000_000)
 
             // The bounded queue holds only ~480ms per track (capacity 24 * 20ms). Blasting all ~19.5k
             // chunks in a tight loop (sub-second) overwhelms it before the drain loop can ever get
             // scheduled, which would test harness timing, not the pipeline. Cap the feed rate at
             // `accelerationFactor`x real time instead - still far from a real 192s sleep, but paced
             // enough for the actor's drain loop to keep up with genuine ASR inference.
-            let accelerationFactor = 1.5
+            // Cold replay feeds from the first packet while preparation is still running.
+            // Keep its native cadence so disk admission is tested independently of ASR speed.
+            let accelerationFactor = coldStart ? 1.0 : 1.5
             let feedStart = Date()
             var bufferFailures = 0
             var sampleBufferFailures = 0
@@ -198,6 +212,12 @@ final class MeetingLiveReplayTests: XCTestCase {
 
             let degradedTransitions = box.lock.withLock {
                 box.log.filter { if case .degraded = $0.snapshot.availability { return true } else { return false } }
+            }
+            if coldStart {
+                let firstReady = box.lock.withLock { box.log.first { $0.snapshot.availability == .available }?.elapsed }
+                print("[cold-replay] first-ready-seconds=\(firstReady.map(String.init(describing:)) ?? "unavailable") feed-began-without-ready-wait=true")
+                XCTAssertNotNil(firstReady)
+                XCTAssertTrue(degradedTransitions.isEmpty, "Cold preparation must retain opening packets without degrading captions")
             }
             print("Degraded-availability updates observed: \(degradedTransitions.count)")
             for transition in degradedTransitions.prefix(20) {

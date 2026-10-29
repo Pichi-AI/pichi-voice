@@ -60,6 +60,36 @@ final class MeetingLiveAudioFIFOTests: XCTestCase {
         XCTAssertEqual(drained.diskBytes, 0, "the fully consumed anonymous spool must truncate")
     }
 
+    func testConsumedPrefixIsReclaimedWithoutWaitingForAnEmptyFIFO() async throws {
+        var limits = MeetingLiveAudioFIFO.Limits()
+        limits.maximumDiskBytes = 64 * 1024
+        limits.maximumBatchPackets = 1
+        let (fifo, _) = try fixture(limits: limits)
+        for index in 0..<20 { XCTAssertTrue(fifo.enqueue(try input(index, frames: 256))) }
+        _ = await fifo.testingState()
+        var observed: [UInt64] = []
+        for round in 0..<10 {
+            // Always retain at least four unread packets. A never-empty FIFO must still
+            // reclaim old physical file bytes rather than fail a long meeting later.
+            for _ in 0..<16 {
+                let batch = try await fifo.drainBatch()
+                observed.append(try XCTUnwrap(batch.first).epoch)
+            }
+            for index in (20 + round * 16)..<(36 + round * 16) {
+                XCTAssertTrue(fifo.enqueue(try input(index, frames: 256)))
+            }
+            let state = await fifo.testingState()
+            XCTAssertLessThanOrEqual(state.diskBytes, limits.maximumDiskBytes)
+        }
+        while true {
+            let batch = try await fifo.drainBatch()
+            if batch.isEmpty { break }
+            observed.append(contentsOf: batch.map(\.epoch))
+        }
+        XCTAssertEqual(observed, (0..<180).map(UInt64.init))
+        XCTAssertEqual(fifo.takeDroppedCount(), 0)
+    }
+
     func testPCMFormatLayoutBytesTimestampsAndEpochRoundTripExactly() async throws {
         let (fifo, _) = try fixture()
         let surround = try XCTUnwrap(AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_MPEG_5_1_A))

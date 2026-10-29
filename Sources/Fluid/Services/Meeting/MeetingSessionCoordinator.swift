@@ -642,6 +642,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         let recordingModelID: String
         let recordingBackendID: MeetingBackendID
         let recordingASRConfiguration: MeetingFinalProcessingConfiguration
+        let recordingLiveModelID: String
+        let recordingLiveConfiguration: MeetingFinalProcessingConfiguration
         let recordingProfileOwnership: MeetingProfileOwnership?
         do {
             try Task.checkCancellation()
@@ -689,6 +691,22 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
             try self.validateFrozenRecordingConfiguration(recordingASRConfiguration)
+            recordingLiveModelID = PichiMeetingProviderFactory.liveModelID(backendID: recordingBackendID,
+                configuration: recordingASRConfiguration, selectedModelID: recordingModelID)
+            if !Self.usesPCMProcessing(configuration),
+               recordingLiveModelID != recordingASRConfiguration.asrModel,
+               case .buffered = MeetingLiveTranscriptionCoordinator.captionRoute(
+                   languageCode: configuration.languageCode, modelID: recordingLiveModelID) {
+                // The compatibility executor may not bind its ASR model. Preserve its existing
+                // selected-model caption route, but freeze that provider before capture too.
+                recordingLiveConfiguration = try await PichiMeetingProviderFactory.frozenConfiguration(
+                    asrModel: recordingLiveModelID, languageCode: configuration.languageCode)
+            } else { recordingLiveConfiguration = recordingASRConfiguration }
+            try Task.checkCancellation()
+            guard self.startReservation == reservation,
+                  self.settings.selectedSpeechModel.rawValue == recordingModelID,
+                  self.settings.meetingTranscriptionBackendID == savedBackendID,
+                  self.terminationTask == nil, !self.isMutatingSession else { throw CancellationError() }
             recordingProfileOwnership = try await self.store.captureOwnership(for: recordingSessionID, configuration: configuration)
             guard self.startReservation == reservation, self.terminationTask == nil,
                   !Task.isCancelled else { throw CancellationError() }
@@ -781,9 +799,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         liveTranscriptionCoordinator.start(
             mode: configuration.mode,
             languageCode: configuration.languageCode,
-            modelID: PichiMeetingProviderFactory.liveModelID(backendID: recordingBackendID,
-                configuration: recordingASRConfiguration, selectedModelID: recordingModelID),
-            artifactFingerprint: session.recordingASRArtifactFingerprint
+            modelID: recordingLiveModelID,
+            artifactFingerprint: recordingLiveConfiguration.asrArtifactFingerprint,
+            configuration: recordingLiveConfiguration
         )
         }
 

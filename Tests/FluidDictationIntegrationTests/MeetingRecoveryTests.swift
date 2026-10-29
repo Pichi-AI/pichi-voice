@@ -1,6 +1,7 @@
 // Existing end-to-end fixture suite is kept together to share its setup and helpers.
 // swiftlint:disable file_length
 import AppKit
+import AVFoundation
 import Combine
 import CoreMedia
 @testable import FluidVoice_Debug
@@ -1052,11 +1053,28 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.audioStorageMode = .memoryOnly
         configuration.languageCode = "en"
         let session = try await coordinator.startRecording(configuration: configuration)
+        // Optional disk-backed captions must never receive memory-only tee audio.
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000, channels: 1, interleaved: false))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600))
+        buffer.frameLength = 1600
+        try XCTUnwrap(buffer.floatChannelData?[0]).update(repeating: 0.1, count: 1600)
+        let tee = try XCTUnwrap(meetingMicrophoneSynthesizeSampleBuffer(from: buffer, presentationTime: .zero))
+        let beforeTee = coordinator.liveTranscript
+        capture.emitLive(kind: .microphone, sampleBuffer: tee)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(coordinator.liveTranscript, beforeTee,
+            "Memory-only capture has no optional caption producer or disk FIFO")
         let first = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1), end: .init(value: 1, timescale: 1),
             sourceTrackID: track.id, speakerID: nil, text: "Already durable", revision: 0, status: .final, overlap: .none, completeness: .complete)
         let tail = MeetingTranscriptSegment(id: UUID(), start: .init(value: 1, timescale: 1), end: .init(value: 2, timescale: 1),
             sourceTrackID: track.id, speakerID: nil, text: "Joined final tail", revision: 0, status: .final, overlap: .none, completeness: .complete)
         try await processing.checkpoint(.init(segments: [first]))
+        let protectedCheckpoint = coordinator.liveTranscript
+        capture.emitLive(kind: .microphone, sampleBuffer: tee)
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(coordinator.liveTranscript, protectedCheckpoint,
+            "Tee audio cannot replace the existing protected PCM projection")
         let speaker = MeetingSessionSpeaker(id: UUID(), displayName: "Synthetic participant",
             diarizationClusterID: "synthetic-voice", trackKind: .microphone, isLocalUser: false, identityCandidates: [])
         var attributedFirst = first
@@ -8080,6 +8098,11 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     private(set) var startCount = 0
     private(set) var stopCount = 0
     private var eventHandler: (@Sendable (MeetingCaptureEvent) -> Void)?
+    private var liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+
+    func emitLive(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
+        self.liveAudioHandler?(kind, sampleBuffer)
+    }
 
     func emit(_ event: MeetingCaptureEvent) { self.eventHandler?(event) }
 
@@ -8098,6 +8121,7 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     ) async throws -> MeetingCaptureStartResult {
         self.startCount += 1
         self.eventHandler = eventHandler
+        self.liveAudioHandler = liveAudioHandler
         for event in self.startupEvents {
             eventHandler(event)
         }

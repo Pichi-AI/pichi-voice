@@ -271,9 +271,31 @@ final nonisolated class MeetingLiveAudioFIFO: @unchecked Sendable {
         if cursor == writeOffset {
             guard Darwin.ftruncate(descriptor, 0) == 0 else { throw Failure.storageUnavailable }
             readOffset = 0; writeOffset = 0
-        } else { readOffset = cursor }
+        } else {
+            readOffset = cursor
+            try reclaimConsumedPrefix()
+        }
         unreadPackets -= output.count
         return output
+    }
+
+    /// Reclaim a consumed prefix even when a busy recognizer never quite empties the FIFO.
+    /// Otherwise a small steady backlog could exhaust the file bound over a long meeting.
+    private func reclaimConsumedPrefix() throws {
+        let threshold = min(8 * 1024 * 1024, max(1, limits.maximumDiskBytes / 4))
+        guard readOffset >= threshold, readOffset >= writeOffset / 2 else { return }
+        let remaining = writeOffset - readOffset
+        var copied = 0
+        while copied < remaining {
+            // Source stays ahead of destination, including with small synthetic limits.
+            let count = min(1024 * 1024, readOffset, remaining - copied)
+            let bytes = try readExact(count, offset: readOffset + copied)
+            try writeAll(bytes, offset: copied)
+            copied += count
+        }
+        guard Darwin.ftruncate(descriptor, off_t(remaining)) == 0 else { throw Failure.storageUnavailable }
+        readOffset = 0
+        writeOffset = remaining
     }
 
     private static func decode(_ header: Header, payload: Data) throws -> Input {

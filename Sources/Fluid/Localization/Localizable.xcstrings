@@ -21741,6 +21741,40 @@
         }
       }
     },
+    "Live caption buffering failed. The recording is preserved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live caption buffering failed. The recording is preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить очередь субтитров. Запись сохраняется."
+          }
+        }
+      }
+    },
+    "Live captions require a matching recording configuration.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live captions require a matching recording configuration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки субтитров не совпадают с настройками записи."
+          }
+        }
+      }
+    },
     "Live captions dropped audio and resynced.": {
       "extractionState": "manual",
       "localizations": {
