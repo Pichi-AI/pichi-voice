@@ -189,18 +189,23 @@ final class MeetingDesktopTranscriptParagraphTests: XCTestCase {
         let directory = URL(fileURLWithPath: output, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
-        let source = try JSONDecoder().decode(MeetingSession.self, from: Data(contentsOf: URL(fileURLWithPath: fixture)))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = MeetingSessionDateCodec.decodingStrategy
+        let source = try decoder.decode(MeetingSession.self, from: Data(contentsOf: URL(fileURLWithPath: fixture)))
         let start = ProcessInfo.processInfo.systemUptime
         let projection = try await MeetingResultTranscriptProjection.make(for: source)
         let elapsed = ProcessInfo.processInfo.systemUptime - start
         let rows = projection.rows(matching: .init(source), includeEchoes: false)
         XCTAssertFalse(rows.isEmpty)
         XCTAssertLessThan(rows.count, source.transcriptSegments.count)
+        let memberIDs = rows.flatMap(\.memberIDs)
+        XCTAssertEqual(memberIDs.count, Set(memberIDs).count, "Reading rows must not duplicate source words")
         XCTAssertEqual(Set(rows.flatMap(\.memberIDs)), Set(MeetingTranscriptExporter.displayParagraphs(
             for: source.transcriptSegments.filter { !$0.isEcho }.sorted { ($0.start, $0.end) < ($1.start, $1.end) },
             in: source).flatMap { $0.segments.map(\.id) }))
         let audit: [String: Any] = ["sessionID": source.id.uuidString, "sourceSegments": source.transcriptSegments.count,
             "readingRows": rows.count, "memberCount": rows.reduce(0) { $0 + $1.memberIDs.count },
+            "singleWordRows": rows.filter { $0.paragraph.text.split(whereSeparator: \.isWhitespace).count == 1 }.count,
             "fullProjectionSeconds": elapsed, "coverageDetails": MeetingTranscriptExporter.coverageDetails(in: source).map {
                 ["seconds": $0.omittedSeconds, "intervals": $0.intervalCount] as [String: Any]
             }]
