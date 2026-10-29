@@ -111,7 +111,7 @@ struct MobileOnboarding: View {
                             VStack(alignment: .leading, spacing: 16) {
                                 content
                                 if let error {
-                                    Text(error).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
+                                    Text(PichiLocalization.text(error)).font(theme.typography.bodySmall).foregroundStyle(theme.palette.warning)
                                         .accessibilityIdentifier("onboarding.error")
                                 }
                             }
@@ -456,7 +456,7 @@ struct MobileRequiredResourcesStatus: View {
             case .ready:
                 Label(PichiLocalization.text("Speech detection and speaker labels are ready"), systemImage: "checkmark.circle.fill")
             case .failed(let message):
-                Text(message)
+                Text(PichiLocalization.text(message))
                 Button(PichiLocalization.text("Try again")) {
                     guard let modelID = resources.modelID else { return }
                     Task { try? await resources.prepare(modelID: modelID) }
@@ -550,7 +550,7 @@ struct MobilePrivacyActivationControls: View {
         case .failed(let message):
             VStack(alignment: .leading, spacing: asFormRows ? 4 : 10) {
                 Text(PichiLocalization.text("Data cleanup is not active")).font(theme.typography.bodyStrong)
-                Text(message).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
+                Text(PichiLocalization.text(message)).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
             }
             Button(PichiLocalization.text("Try again")) { activation.setEnabled(true) }
                 .accessibilityIdentifier("privacy.pii.retry")
