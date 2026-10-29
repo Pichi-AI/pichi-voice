@@ -1147,6 +1147,45 @@ final class MeetingAEC3Tests: XCTestCase {
         try await self.assertFinalCaptureAdmitted(track, directory: directory)
     }
 
+    func testRetiredQueuedPromotionStillReportsPersistenceLoss() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-retired-write-failure-\(UUID())")
+        let trackDirectory = directory.appendingPathComponent("tracks/microphone", isDirectory: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: trackDirectory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let writer = try MeetingAudioChunkWriter(track: Self.microphoneTrack(), sessionDirectory: directory,
+                                                chunkDuration: 60, eventHandler: { _ in })
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let live = AECBlockingLiveRecorder()
+        defer { live.releaseFirstHandler() }
+        let failures = AECTerminalRecorder()
+        let old = MeetingAECOutputCommitter(
+            writer: writer, expectedGateEpoch: gate.invalidationEpoch, transcriptGate: gate,
+            liveAudioHandler: { _, sample in live.append(sample) }, terminalFailure: { failures.append($0) }
+        )
+        let first = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+            samples: [Float](repeating: 0.125, count: 480), presentationTime: .zero
+        ))
+        let queued = try XCTUnwrap(MeetingAECPCMAdapter.synthesize(
+            samples: [Float](repeating: 0.125, count: 480),
+            presentationTime: CMTime(value: 480, timescale: 48_000)
+        ))
+        old.commitUnfiltered(first)
+        XCTAssertTrue(live.waitUntilFirstHandlerStarts())
+        old.commitProcessed(queued, mayPromote: true, originalCapture: queued)
+        _ = gate.invalidate()
+        old.retire()
+        gate.update(.acousticallyClosed)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: trackDirectory.path)
+        live.releaseFirstHandler()
+        await old.waitForPendingCommits()
+        XCTAssertEqual(failures.values, [.metadataPersistence], "retirement cannot hide an accepted PCM write failure")
+        XCTAssertTrue(gate.admitsTranscript(), "a stale owner must not independently mutate its successor's gate")
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: trackDirectory.path)
+        _ = await writer.stop()
+    }
+
     func testStopAndProducerRebuildRetainAcceptedRawTailWithoutReopeningLiveGate() async throws {
         for stopping in [false, true] {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-stopped-tail-\(UUID())")
@@ -1195,7 +1234,8 @@ final class MeetingAEC3Tests: XCTestCase {
     @MainActor
     private func assertFinalCaptureAdmitted(_ track: MeetingAudioTrack, directory: URL) throws {
         var session = MeetingSession(configuration: MeetingCaptureConfiguration(
-            mode: .onlineCall, application: MeetingApplicationIdentity(bundleIdentifier: "fixture.call", displayName: "Call"),
+            mode: .onlineCall, title: "Captured speech fixture",
+            application: MeetingApplicationIdentity(bundleIdentifier: "fixture.call", displayName: "Call"),
             microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic", coreAudioUID: "mic", displayName: "Mic")
         ), timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
         session.audioTracks = [track]

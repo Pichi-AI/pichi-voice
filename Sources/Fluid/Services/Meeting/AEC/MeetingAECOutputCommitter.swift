@@ -231,11 +231,14 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
                     if self.generation == token { self.state = .admitted(protection) }
                 }
             case let .failure(error):
-                guard self.ownsAdmission else { return }
-                self.lock.withLock {
-                    if self.generation == token { self.state = .unprotected }
+                if self.ownsAdmission {
+                    self.lock.withLock {
+                        if self.generation == token { self.state = .unprotected }
+                    }
+                    _ = self.transcriptGate.invalidate()
                 }
-                _ = self.transcriptGate.invalidate()
+                // Retirement revokes admission authority, not responsibility for already queued
+                // PCM. Persistence failure means that accepted sample was not written.
                 self.reportTerminalFailure(Self.terminalFailure(for: error))
             }
         }
