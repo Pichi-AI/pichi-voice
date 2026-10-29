@@ -6,8 +6,8 @@ import PichiGigaAM
 /// Keeping this adapter outside common orchestration also keeps Parakeet's learned
 /// encoder thresholds away from this different acoustic representation.
 nonisolated enum GigaAMDictionaryAcoustics {
-    static let maximumWordCount = 256
-    static let maximumComparisons = 2_048
+    static let maximumWordCount = 4_096
+    static let maximumCandidatesPerWindow = 24
     static let maximumReferencesBytes = 8 * 1_024 * 1_024
 
     struct Snapshot: Sendable {
@@ -26,12 +26,33 @@ nonisolated enum GigaAMDictionaryAcoustics {
         let references: [GigaAMAcousticFeatures]
         let calibration: GigaAMAcousticMatcher.Calibration
         let negatives: [GigaAMAcousticFeatures]
+        let summaries: [[Float]]
+
+        init(entryID: UUID, label: String, profileKey: String, references: [GigaAMAcousticFeatures],
+             calibration: GigaAMAcousticMatcher.Calibration, negatives: [GigaAMAcousticFeatures]) {
+            self.entryID = entryID
+            self.label = label
+            self.profileKey = profileKey
+            self.references = references
+            self.calibration = calibration
+            self.negatives = negatives
+            self.summaries = references.compactMap(\.meanL2)
+        }
     }
 
     struct Output: Sendable {
         let text: String
         let evidence: [DictionaryAcousticEvidence]
         let spellings: [DictionaryVoiceSpelling]
+    }
+
+    static func referenceCacheKey(_ snapshot: Snapshot) -> String {
+        var parts = [snapshot.modelKey, snapshot.generation,
+                     snapshot.pronunciation?.profile.id ?? "", snapshot.pronunciation?.profile.generation.uuidString ?? "",
+                     snapshot.negatives?.revision.uuidString ?? ""]
+        parts += snapshot.entries.map { $0.id.uuidString + ":" + $0.replacement }
+        parts += snapshot.pronunciation?.profiles.map(DictionaryNegativeEvidenceResolver.profileKey) ?? []
+        return parts.map { "\($0.utf8.count):" + $0 }.joined()
     }
 
     static func modelKey(fingerprint: String) -> String {
@@ -134,7 +155,8 @@ nonisolated enum GigaAMDictionaryAcoustics {
     ) async throws -> Output {
         let raw = Output(text: transcript.text, evidence: [], spellings: [])
         guard snapshot.enabled, !words.isEmpty, !transcript.words.isEmpty,
-              transcript.words.count <= maximumWordCount else { return raw }
+              transcript.words.count <= maximumWordCount,
+              samples.count <= DictionaryLearningRecording.maximumSamples else { return raw }
         let source = transcript.words
         let duration = Double(samples.count) / 16_000
         guard source.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start && $0.end <= duration + 0.08 }),
@@ -147,11 +169,29 @@ nonisolated enum GigaAMDictionaryAcoustics {
             let distance: Float
             let features: GigaAMAcousticFeatures
         }
+        struct CoarseCandidate {
+            let word: Word
+            let range: ClosedRange<Int>
+            let features: GigaAMAcousticFeatures
+            let similarity: Float
+            let hasConfidence: Bool
+        }
         var candidates: [Candidate] = []
-        var comparisons = 0
-        candidateSearch: for start in source.indices where !claimed.contains(start) {
+        // Rank cheap acoustic summaries in every temporal window before doing DTW.
+        // A large vocabulary cannot exhaust a front-only budget and starve later words.
+        let windows = Dictionary(grouping: source.indices) { Int(source[$0].start / 10) }
+        for window in windows.keys.sorted() {
             try Task.checkCancellation()
-            for length in 1...min(5, source.count - start) {
+            let chunkStart = max(0, window * 160_000 - 40_000) / 640 * 640
+            let chunkEnd = min(samples.count, chunkStart + GigaAMAcousticFeatures.maximumSamples)
+            guard chunkEnd > chunkStart else { continue }
+            let chunk: GigaAMAcousticFeatures
+            do { chunk = try GigaAMAcousticFeatures.extract(Array(samples[chunkStart..<chunkEnd])) }
+            catch is CancellationError { throw CancellationError() }
+            catch { continue }
+            var shortlist: [CoarseCandidate] = []
+            for start in windows[window] ?? [] where !claimed.contains(start) {
+              for length in 1...min(5, source.count - start) {
                 let range = start...(start + length - 1)
                 guard range.allSatisfy({ !claimed.contains($0) }) else { break }
                 let segment = source[range]
@@ -172,19 +212,48 @@ nonisolated enum GigaAMDictionaryAcoustics {
                 }
                 guard !eligible.isEmpty else { continue }
                 let query: GigaAMAcousticFeatures
-                do { query = try GigaAMAcousticFeatures.extract(Array(samples[lower..<upper])) }
+                do {
+                    if lower >= chunkStart, upper <= chunkEnd {
+                        let firstFrame = max(0, (lower - chunkStart) / 640)
+                        let lastFrame = min(chunk.frameCount, (upper - chunkStart + 639) / 640)
+                        guard firstFrame < lastFrame else { continue }
+                        query = try GigaAMAcousticFeatures(values: Array(chunk.values[
+                            (firstFrame * GigaAMAcousticFeatures.dimension)..<(lastFrame * GigaAMAcousticFeatures.dimension)]))
+                    } else {
+                        // An unusually long term straddling a core-window boundary still
+                        // gets one exact bounded cut instead of being silently dropped.
+                        query = try GigaAMAcousticFeatures.extract(Array(samples[lower..<upper]))
+                    }
+                }
                 catch is CancellationError { throw CancellationError() }
                 catch { continue }
+                guard let summary = query.meanL2 else { continue }
                 for word in eligible {
                     try Task.checkCancellation()
-                    guard comparisons < maximumComparisons else { break candidateSearch }
-                    comparisons += 1
-                    guard let match = try GigaAMAcousticMatcher.match(query: query, references: word.references,
-                        calibration: word.calibration, negativeReferences: word.negatives), match.accepted else { continue }
-                    // Missing token confidence requires an especially close match.
-                    guard !knownConfidence.isEmpty || match.distance <= 0.02 else { continue }
-                    candidates.append(Candidate(word: word, range: range, distance: match.distance, features: query))
+                    let similarity = word.summaries.map {
+                        zip(summary, $0).reduce(Float(0)) { $0 + $1.0 * $1.1 }
+                    }.max() ?? -1
+                    let candidate = CoarseCandidate(word: word, range: range, features: query,
+                        similarity: similarity, hasConfidence: !knownConfidence.isEmpty)
+                    shortlist.append(candidate)
+                    shortlist.sort {
+                        if $0.similarity != $1.similarity { return $0.similarity > $1.similarity }
+                        if $0.range.count != $1.range.count { return $0.range.count < $1.range.count }
+                        return $0.range.lowerBound < $1.range.lowerBound
+                    }
+                    if shortlist.count > maximumCandidatesPerWindow { shortlist.removeLast() }
                 }
+              }
+            }
+            for candidate in shortlist {
+                try Task.checkCancellation()
+                let word = candidate.word
+                guard let match = try GigaAMAcousticMatcher.match(query: candidate.features, references: word.references,
+                    calibration: word.calibration, negativeReferences: word.negatives), match.accepted else { continue }
+                // Missing native confidence is not evidence of uncertainty. It needs
+                // an especially close acoustic match before changing a word.
+                guard candidate.hasConfidence || match.distance <= 0.02 else { continue }
+                candidates.append(Candidate(word: word, range: candidate.range, distance: match.distance, features: candidate.features))
             }
         }
         var occupied = claimed
