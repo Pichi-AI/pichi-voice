@@ -547,6 +547,9 @@ extension SettingsStore {
         }
 
         var supportsPronunciationMatching: Bool {
+            #if os(macOS)
+            if self == .gigaam { return true }
+            #endif
             #if arch(arm64)
             switch self {
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .fluidParakeetPro:

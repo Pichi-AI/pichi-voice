@@ -1,5 +1,46 @@
 import Foundation
 
+/// Replaces already-resolved acoustic word spans while preserving the surrounding transcript.
+/// Providers decide which non-overlapping spans are accepted; this layer owns UTF-16 text edits.
+nonisolated enum DictionaryTranscriptReplacement {
+    struct Replacement: Sendable {
+        let wordRange: ClosedRange<Int>
+        let label: String
+    }
+
+    static func apply(to text: String, wordTexts: [String], replacements: [Replacement]) -> String {
+        let source = text as NSString
+        var searchLocation = 0
+        var ranges: [NSRange] = []
+        let trimSet = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+
+        for wordText in wordTexts {
+            let searchableWord = wordText.trimmingCharacters(in: trimSet)
+            guard !searchableWord.isEmpty, searchLocation <= source.length else { return text }
+            let searchRange = NSRange(location: searchLocation, length: source.length - searchLocation)
+            let range = source.range(of: searchableWord, options: .caseInsensitive, range: searchRange)
+            guard range.location != NSNotFound else { return text }
+            ranges.append(range)
+            searchLocation = NSMaxRange(range)
+        }
+
+        let edits = replacements.compactMap { replacement -> (NSRange, String)? in
+            guard ranges.indices.contains(replacement.wordRange.lowerBound),
+                  ranges.indices.contains(replacement.wordRange.upperBound)
+            else { return nil }
+            let start = ranges[replacement.wordRange.lowerBound].location
+            let end = NSMaxRange(ranges[replacement.wordRange.upperBound])
+            return (NSRange(location: start, length: end - start), replacement.label)
+        }.sorted { $0.0.location > $1.0.location }
+
+        let output = NSMutableString(string: text)
+        for (range, label) in edits {
+            output.replaceCharacters(in: range, with: label)
+        }
+        return output as String
+    }
+}
+
 /// Prevents a rule from expanding a completed occurrence of its own replacement.
 /// Only rules whose output contains a partial trigger need this extra scan.
 nonisolated enum DictionaryReplacementProtection {

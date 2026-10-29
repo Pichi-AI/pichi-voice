@@ -52,6 +52,21 @@ struct DictionaryReplacementDiagnosticsTests {
         precondition(!quoted.contains("\n") && !quoted.contains("\t"))
         precondition(quoted.contains("\\n") && quoted.contains("\\\""))
         precondition(DictionaryReplacementDiagnostics.quoted(String(repeating: "x", count: 10_000)).count == 163)
-        print("PASS: replacement diagnostics, original UTF-16 ranges, canonical protection, no-ops, bounded escaping")
+
+        let transcript = "🙂 \"ник дом\", потом ник дом! Ёжик рядом."
+        let wordTexts = ["ник", "дом", "потом", "ник", "дом", "Ёжик", "рядом"]
+        precondition(DictionaryTranscriptReplacement.apply(to: transcript, wordTexts: wordTexts,
+            replacements: [.init(wordRange: 0...1, label: "SyntheticName"), .init(wordRange: 3...4, label: "SyntheticName")])
+            == "🙂 \"SyntheticName\", потом SyntheticName! Ёжик рядом.", "Repeated acoustic spans preserve emoji, quotes, punctuation and Cyrillic neighbors")
+        precondition(DictionaryTranscriptReplacement.apply(to: transcript, wordTexts: wordTexts,
+            replacements: [.init(wordRange: 5...5, label: "Ёлка")])
+            == "🙂 \"ник дом\", потом ник дом! Ёлка рядом.", "Single-word replacement preserves the exact surrounding text")
+        precondition(DictionaryTranscriptReplacement.apply(to: transcript, wordTexts: wordTexts,
+            replacements: [.init(wordRange: 99...100, label: "invalid")]) == transcript,
+            "Invalid word indices do not change the transcript")
+        precondition(DictionaryTranscriptReplacement.apply(to: transcript, wordTexts: ["absent"],
+            replacements: [.init(wordRange: 0...0, label: "invalid")]) == transcript,
+            "Unresolvable source words fail closed")
+        print("PASS: replacement diagnostics, original UTF-16 ranges, canonical protection, no-ops, bounded escaping and shared acoustic span edits")
     }
 }

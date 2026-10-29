@@ -34,8 +34,22 @@ nonisolated struct PronunciationDictionaryProfile: Codable, Equatable, Identifia
 
     var hasOriginalAudio: Bool { self.enrollments.contains { $0.originalAudioID != nil } }
     var isEligibleForMatching: Bool {
-        (self.enrollments.count >= 3 || self.hasOriginalAudio) && self.enrollments.allSatisfy {
-            $0.extractorVersion == nil || $0.extractorVersion == "parakeet-encoder-mean-l2-v1"
+        (self.enrollments.count >= 3 || self.hasOriginalAudio) && self.enrollments.count <= 10 &&
+            Self.hasConsistentFeatures(self.enrollments, modelKey: self.modelKey, hiddenSize: self.hiddenSize)
+    }
+
+    /// Storage validates feature shape and provenance without interpreting a provider's recipe.
+    /// The matching adapter additionally validates its exact extractor version and model key.
+    static func hasConsistentFeatures(_ captures: [PronunciationEnrollmentCapture], modelKey: String, hiddenSize: Int) -> Bool {
+        guard !modelKey.isEmpty, (1...2048).contains(hiddenSize), !captures.isEmpty,
+              captures.allSatisfy({
+                  $0.modelKey == modelKey && $0.values.count == hiddenSize &&
+                      $0.values.allSatisfy(\.isFinite) && $0.sourceFrameCount > 0
+              }) else { return false }
+        let versions = Set(captures.compactMap(\.extractorVersion))
+        return versions.count <= 1 && versions.allSatisfy {
+            !$0.isEmpty && $0.utf8.count <= 128 &&
+                $0.unicodeScalars.allSatisfy { $0.isASCII && !CharacterSet.whitespacesAndNewlines.contains($0) && !CharacterSet.controlCharacters.contains($0) }
         }
     }
 
@@ -175,10 +189,9 @@ actor PronunciationDictionaryStore {
                 let document = try JSONDecoder().decode(Document.self, from: data)
                 guard document.version == 1 else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
                 func isValid(_ item: PronunciationDictionaryProfile) -> Bool {
-                    (1...2048).contains(item.hiddenSize) && item.enrollments.count <= 10 &&
-                        item.enrollments.allSatisfy {
-                            $0.modelKey == item.modelKey && $0.values.count == item.hiddenSize && $0.values.allSatisfy(\.isFinite)
-                        }
+                    item.enrollments.count <= 10 && PronunciationDictionaryProfile.hasConsistentFeatures(
+                        item.enrollments, modelKey: item.modelKey, hiddenSize: item.hiddenSize
+                    )
                 }
                 let exact = document.profiles.filter { $0.modelKey == modelKey && entryIDs.contains($0.dictionaryEntryID) }
                 guard exact.count <= 128, exact.allSatisfy(isValid) else {
@@ -364,7 +377,7 @@ actor PronunciationDictionaryStore {
         try self.requireAccess()
         guard canPersist() else { throw CancellationError() }
         guard let first = enrollments.first, !first.values.isEmpty else { return }
-        guard enrollments.allSatisfy({ $0.modelKey == modelKey && $0.values.count == first.values.count }) else {
+        guard PronunciationDictionaryProfile.hasConsistentFeatures(enrollments, modelKey: modelKey, hiddenSize: first.values.count) else {
             throw PronunciationDictionaryStoreError.inconsistentEnrollment
         }
         self.loadIfNeeded()
@@ -407,9 +420,7 @@ actor PronunciationDictionaryStore {
             }
         }
         let combinedEnrollments = existingEnrollments + prepared
-        guard combinedEnrollments.allSatisfy({
-            $0.modelKey == modelKey && $0.values.count == first.values.count
-        }) else {
+        guard PronunciationDictionaryProfile.hasConsistentFeatures(combinedEnrollments, modelKey: modelKey, hiddenSize: first.values.count) else {
             throw PronunciationDictionaryStoreError.inconsistentEnrollment
         }
         let profile = PronunciationDictionaryProfile(
@@ -518,11 +529,7 @@ actor PronunciationDictionaryStore {
     func replaceAllProfiles(_ profiles: [PronunciationDictionaryProfile]) throws {
         try self.requireAccess()
         guard profiles.allSatisfy({ profile in
-            profile.hiddenSize > 0 &&
-                !profile.enrollments.isEmpty &&
-                profile.enrollments.allSatisfy {
-                    $0.modelKey == profile.modelKey && $0.values.count == profile.hiddenSize
-                }
+            PronunciationDictionaryProfile.hasConsistentFeatures(profile.enrollments, modelKey: profile.modelKey, hiddenSize: profile.hiddenSize)
         }) else {
             throw PronunciationDictionaryStoreError.inconsistentEnrollment
         }
@@ -654,7 +661,7 @@ actor PronunciationDictionaryStore {
             options: .atomic
         )
         var enrolled = capture
-        enrolled.extractorVersion = "parakeet-encoder-mean-l2-v1"
+        enrolled.extractorVersion = capture.extractorVersion ?? "parakeet-encoder-mean-l2-v1"
         enrolled.originalAudioID = evidenceID
         enrolled.observedText = evidence.observedText
         enrolled.sourceRecordingID = evidence.recordingID

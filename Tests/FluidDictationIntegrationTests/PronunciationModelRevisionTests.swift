@@ -238,6 +238,28 @@ final class PronunciationModelRevisionTests: XCTestCase {
     }
 
     #if arch(arm64)
+    func testProviderRejectsAnotherFeatureRecipeAfterCommonStorageAcceptsIt() {
+        let key = ParakeetSpeechModelCatalog.v2.pronunciationModelKey
+        let legacy = Self.profile(entryID: UUID(), key: key)
+        var current = Self.profile(entryID: UUID(), key: key)
+        current.enrollments = current.enrollments.map {
+            var capture = $0
+            capture.extractorVersion = "parakeet-encoder-mean-l2-v1"
+            return capture
+        }
+        var different = Self.profile(entryID: UUID(), key: key)
+        different.enrollments = different.enrollments.map {
+            var capture = $0
+            capture.extractorVersion = "synthetic-other-feature-recipe-v1"
+            return capture
+        }
+        XCTAssertTrue(different.isEligibleForMatching, "Common storage validates consistent feature data without assuming a provider")
+        let profiles = [legacy, current, different]
+        let entries = profiles.map { SettingsStore.CustomDictionaryEntry(id: $0.dictionaryEntryID, triggers: [], replacement: $0.label) }
+        XCTAssertEqual(FluidAudioProvider.matchingProfiles(profiles, entries: entries, includeManual: true).map(\.id),
+                       [legacy.id, current.id], "The adapter owns compatibility and cannot match an unrelated feature recipe")
+    }
+
     func testProfileCannotMixEnrollmentVectorsFromDifferentRevisions() {
         let current = ParakeetSpeechModelCatalog.mini.pronunciationModelKey
         var profile = Self.profile(entryID: UUID(), key: current)

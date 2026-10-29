@@ -2399,16 +2399,12 @@ final class ASRService: ObservableObject {
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled else { throw CancellationError() }
         try Task.checkCancellation()
         guard self.activeExclusiveActivity == nil else { throw CancellationError() }
-        #if arch(arm64)
-        if let provider = self.fluidAudioProvider,
-           let capture = try await provider.originalAudioEnrollment(evidence)
-        {
+        if let capture = try await self.transcriptionProvider.originalAudioEnrollment(evidence) {
             try Task.checkCancellation()
             guard DictionaryMatcherExperiment.sharedFeaturesEnabled,
                   DictionaryMatcherExperiment.generation == generation else { throw CancellationError() }
             return capture
         }
-        #endif
         try Task.checkCancellation()
         guard DictionaryMatcherExperiment.sharedFeaturesEnabled,
               DictionaryMatcherExperiment.generation == generation,

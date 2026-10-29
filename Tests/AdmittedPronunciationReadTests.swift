@@ -38,6 +38,92 @@ import Darwin
         let pcmFloat32: Data
     }
 
+    static func featureFormatContracts(in root: URL) async throws {
+        let directory = root.appendingPathComponent("synthetic-feature-formats")
+        let file = directory.appendingPathComponent("pronunciation-dictionary-v1.json")
+        let store = PronunciationDictionaryStore(fileURL: file)
+        let samples = (0..<6400).map { Float($0 % 13) / 100 }
+        let vector: [Float] = [1] + [Float](repeating: 0, count: 39)
+        let values = Array(repeating: vector, count: 10).flatMap { $0 }
+        let inspection = DictionaryAudioInspection(samples: samples, recordedSampleCount: samples.count,
+            frames: [.init(offset: 0, frameDuration: 0.04, hiddenSize: 40, values: values)],
+            words: [.init(text: "synthetic", start: 0.1, end: 0.3)], selectedStart: 0.1, selectedEnd: 0.3)
+        let legacy = DictionaryAudioInspection(samples: samples, recordedSampleCount: samples.count,
+            frames: [.init(offset: 0, frameDuration: 0.08, hiddenSize: 40, values: Array(values.prefix(200)))],
+            words: [], selectedStart: 0.1, selectedEnd: 0.3)
+        let encoder = PropertyListEncoder(); encoder.outputFormat = .binary
+        expect(inspection.isValid && legacy.isValid, "40 ms features and legacy 80 ms inspections validate")
+        expect(try PropertyListDecoder().decode(DictionaryAudioInspection.self, from: encoder.encode(inspection)) == inspection,
+            "40 ms audio and feature blobs round-trip without loss")
+        expect(try PropertyListDecoder().decode(DictionaryAudioInspection.self, from: encoder.encode(legacy)) == legacy,
+            "Legacy 80 ms inspection decoding remains compatible")
+        let unsupported = DictionaryAudioInspection.Frames(offset: 0, frameDuration: 0.02, hiddenSize: 40, values: values)
+        expect(!unsupported.isValid, "Unsupported feature periods are rejected")
+        rejects("Unsupported periods reject decoding before feature expansion") {
+            _ = try PropertyListDecoder().decode(DictionaryAudioInspection.Frames.self, from: encoder.encode(unsupported))
+        }
+        let overlong = DictionaryAudioInspection.Frames(offset: 0, frameDuration: 0.04, hiddenSize: 40,
+            values: [Float](repeating: 1, count: 381 * 40))
+        rejects("40 ms feature chunks cannot exceed 15.2 seconds") {
+            _ = try PropertyListDecoder().decode(DictionaryAudioInspection.Frames.self, from: encoder.encode(overlong))
+        }
+        let nonfinite = DictionaryAudioInspection.Frames(offset: 0, frameDuration: 0.04, hiddenSize: 40,
+            values: [Float](repeating: .nan, count: 40))
+        rejects("Nonfinite feature values cannot enter decoded evidence") {
+            _ = try PropertyListDecoder().decode(DictionaryAudioInspection.Frames.self, from: encoder.encode(nonfinite))
+        }
+        let tooDense = DictionaryAudioInspection(samples: [Float](repeating: 0, count: 16_000 * 120), recordedSampleCount: 16_000 * 120,
+            frames: (0..<8).map { .init(offset: Double($0) * 15, frameDuration: 0.04, hiddenSize: 2048,
+                values: [Float](repeating: 1, count: 375 * 2048)) }, words: [], selectedStart: 0, selectedEnd: 0.4)
+        expect(!tooDense.isValid, "Denser feature formats retain the old aggregate evidence memory budget")
+
+        let key = "synthetic-model:artifact-and-recipe"
+        let recipe = "synthetic-cepstral-40ms-v1"
+        let entry = UUID(), evidenceID = UUID(), recording = UUID()
+        let evidence = DictionaryLearningAudioEvidence(recordingID: recording, modelKey: key, observedText: "synthetic heard",
+            sourceWordRange: 0..<1, sourceSampleRange: 0..<samples.count, focalSampleRange: 1600..<4800, samples: samples)
+        let originalCapture = PronunciationEnrollmentCapture(values: vector, sourceFrameCount: 5, modelKey: key,
+            extractorVersion: recipe, pendingInspection: inspection)
+        let revision = await store.revision(for: entry)
+        expect(try await store.learnOriginalAudio(entryID: entry, label: "Synthetic Correct", evidenceID: evidenceID,
+            evidence: evidence, capture: originalCapture, expectedRevision: revision), "Original correction clip saved")
+        let repeats = (0..<2).map { _ in
+            PronunciationEnrollmentCapture(values: vector, sourceFrameCount: 10, modelKey: key,
+                extractorVersion: recipe, pendingInspection: inspection)
+        }
+        try await store.upsert(dictionaryEntryID: entry, label: "Synthetic Correct", modelKey: key, enrollments: repeats,
+            automaticMatchingEnabled: true)
+        let profiles = await store.allProfiles()
+        expect(profiles.count == 1 && profiles[0].enrollments.count == 3, "One original and two repeats share one profile")
+        let profile = profiles[0]
+        expect(profile.isEligibleForMatching && profile.hasTemporalRecordings, "Generic profile accepts consistent new feature recipe")
+        expect(profile.enrollments.allSatisfy { $0.extractorVersion == recipe }, "Provider recipe is preserved instead of relabeled as another encoder")
+        let source = profile.enrollments.first { $0.originalAudioID == evidenceID }!
+        expect(source.sourceRecordingID == recording && source.sourceFocalRange == 1600..<4800,
+            "Correction provenance preserves the exact source occurrence")
+        expect(try await store.originalAudioSamples(for: source, entryID: entry) == Array(samples[1600..<4800]),
+            "Original focal PCM survives persistence")
+        for capture in profile.enrollments {
+            expect(try await store.inspection(for: capture.inspectionID!) == inspection,
+                "Each retained pronunciation has its own reloadable audio and 40 ms features")
+        }
+        let reopened = PronunciationDictionaryStore(fileURL: file)
+        expect(await reopened.allProfiles() == profiles, "Profiles survive a new store instance without changing recipe or references")
+        let encodedProfile = try JSONEncoder().encode(profile)
+        expect(try JSONDecoder().decode(PronunciationDictionaryProfile.self, from: encodedProfile) == profile,
+            "New recipe metadata survives the existing backup metadata schema")
+        var inconsistent = repeats[0]
+        inconsistent.extractorVersion = "different-recipe-v1"
+        do {
+            try await reopened.upsert(dictionaryEntryID: entry, label: profile.label, modelKey: key, enrollments: [inconsistent])
+            preconditionFailure("Mixed extractor versions must not append to a profile")
+        } catch PronunciationDictionaryStoreError.inconsistentEnrollment { checks += 1 }
+        expect(await reopened.allProfiles() == profiles, "Rejected mixed-recipe update preserves the saved profile")
+        var mixed = profile
+        mixed.enrollments.append(inconsistent)
+        expect(!mixed.isEligibleForMatching, "Mixed feature recipes fail common eligibility")
+    }
+
     static func main() async throws {
         let initial = PrivateProfileStorage.current
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-pronunciation-\(UUID())")
@@ -46,6 +132,7 @@ import Darwin
             PrivateProfileStorage.select(initial)
             try? FileManager.default.removeItem(at: root)
         }
+        try await featureFormatContracts(in: root)
         func account(_ subject: String, generation: UUID = UUID()) throws -> PrivateProfileSnapshot {
             let context = AccountContext(identity: .init(issuer: "https://synthetic.invalid", subject: subject,
                 internalUserID: subject), organizationID: nil, workspaceID: nil, generation: generation)
