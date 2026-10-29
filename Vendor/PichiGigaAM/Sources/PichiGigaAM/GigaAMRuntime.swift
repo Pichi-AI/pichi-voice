@@ -61,11 +61,7 @@ public actor GigaAMRuntime {
                     // Explicit legacy imports do not bypass capacity admission.
                     // In particular, do not compile the FP16 package on a 4 GB
                     // device before finding out that its GPU route is unsuitable.
-                    let resources = GigaAMResourcePolicy.current
-                    guard resources.physicalMemory >= 8_000_000_000,
-                          resources.availableProcessMemory.map({ $0 >= 1_536 * 1_024 * 1_024 }) ?? true else {
-                        throw GigaAMError.memoryBudgetExceeded
-                    }
+                    try self.requireCoreMLCapacity()
                     guard let vocabularyFile = descriptor.vocabularyFile else { throw GigaAMError.invalidVocabulary }
                     let pieces = try String(contentsOf: directory.appendingPathComponent(vocabularyFile), encoding: .utf8)
                         .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -94,6 +90,7 @@ public actor GigaAMRuntime {
                             try Task.checkCancellation()
                             guard Self.permitsExecutionFallback(error) else { throw error }
                             native.unloadModel()
+                            try self.requireCoreMLCapacity()
                             try native.load(gpu: false)
                             self.executionStatus = .init(backend: .cpu, fallbackReason: .acceleratorLoadFailed)
                         }
@@ -156,6 +153,14 @@ public actor GigaAMRuntime {
         self.executionStatus = .init(backend: .cpu, fallbackReason: reason)
     }
 
+    private func requireCoreMLCapacity() throws {
+        let resources = GigaAMResourcePolicy.current
+        guard resources.physicalMemory >= 8_000_000_000,
+              resources.availableProcessMemory.map({ $0 >= 1_536 * 1_024 * 1_024 }) ?? true else {
+            throw GigaAMError.memoryBudgetExceeded
+        }
+    }
+
     private func loadGGUFGPUOrFallback(_ native: GigaAMGGUFInference) throws {
         do {
             try native.load(gpu: true)
@@ -186,6 +191,7 @@ public actor GigaAMRuntime {
                   let reason = self.executionStatus?.fallbackReason,
                   [.gpuUnavailable, .acceleratorLoadFailed, .acceleratorInferenceFailed].contains(reason),
                   MTLCreateSystemDefaultDevice() != nil else { return }
+            try self.requireCoreMLCapacity()
             do {
                 try native.load(gpu: true)
                 let smoke = self.frontend.features([Float](repeating: 0, count: GigaAMFrontend.fftSize))
@@ -195,7 +201,7 @@ public actor GigaAMRuntime {
                 try Task.checkCancellation()
                 guard Self.permitsExecutionFallback(error) else { throw error }
                 native.unloadModel()
-                do { try native.load(gpu: false) }
+                do { try self.requireCoreMLCapacity(); try native.load(gpu: false) }
                 catch { self.unload(); throw error }
                 self.executionStatus = .init(backend: .cpu, fallbackReason: .acceleratorLoadFailed)
             }
@@ -253,6 +259,7 @@ public actor GigaAMRuntime {
             do {
                 try autoreleasepool {
                     native.unloadModel()
+                    try self.requireCoreMLCapacity()
                     try native.load(gpu: false)
                 }
             }

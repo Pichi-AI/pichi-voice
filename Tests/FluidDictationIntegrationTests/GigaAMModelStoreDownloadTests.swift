@@ -5,6 +5,20 @@ import PichiGigaAM
 import XCTest
 
 final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
+    func testPinnedAutomaticCompactProfileKeepsReasonWithoutMisclassifyingImports() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let compact = GigaAMModelCatalog.compactONNXModel
+        let canonical = PichiGigaAMModelStore.defaultDirectory.appendingPathComponent(compact.id, isDirectory: true)
+        let store = PichiGigaAMModelStore(directory: canonical, preferences: fixture.preferences, environment: [:],
+                                         resourcePolicy: .init(hasGPU: true, physicalMemory: 4_166_696_960))
+        XCTAssertEqual(store.automaticCPUReason(forFingerprint: compact.fingerprint, directory: canonical), .memoryBudget)
+        XCTAssertNil(store.automaticCPUReason(forFingerprint: compact.fingerprint, directory: fixture.directory))
+        XCTAssertNil(store.automaticCPUReason(forFingerprint: GigaAMModelCatalog.downloadableModel.fingerprint, directory: canonical))
+        fixture.preferences.set(compact.id, forKey: "pichiGigaAMImportedModelID")
+        XCTAssertNil(store.automaticCPUReason(forFingerprint: compact.fingerprint, directory: canonical))
+    }
+
     func testAutomaticArtifactIsSelectedBeforeAnyDownloadAndNeverFetchesFP16() async throws {
         let profiles = [GigaAMResourcePolicy(hasGPU: true, physicalMemory: 16_000_000_000),
                         GigaAMResourcePolicy(hasGPU: true, physicalMemory: 4_166_696_960),

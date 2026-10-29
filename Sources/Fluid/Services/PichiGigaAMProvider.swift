@@ -184,6 +184,17 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
         try self.installedModel().descriptor.fingerprint
     }
 
+    /// Queued meetings retain a fingerprint and owned directory rather than a
+    /// live source preference. Recover only the matching automatic policy reason.
+    func automaticCPUReason(forFingerprint fingerprint: String, directory: URL) -> GigaAMExecutionStatus.FallbackReason? {
+        let owned = Self.defaultDirectory.appendingPathComponent(self.downloadDescriptor.id, isDirectory: true)
+        guard fingerprint == self.downloadDescriptor.fingerprint,
+              directory.standardizedFileURL.path == owned.standardizedFileURL.path,
+              self.preferences.string(forKey: Self.importedModelPreferenceKey) == nil,
+              self.environment["PICHI_GIGAAM_MODEL_DIR"]?.isEmpty ?? true else { return nil }
+        return self.defaultCPUReason
+    }
+
     /// Preparation only downloads the pinned public source unless a verified import was
     /// explicitly selected. Existing private files are preserved, but do not select themselves.
     func ensureInstalled(selection admittedSelection: Selection? = nil, progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
@@ -425,6 +436,9 @@ final class PichiGigaAMProvider: TranscriptionProvider {
                 try await self.modelStore.ensureInstalled(selection: admittedSelection, progressHandler: progressHandler)
             }
             let fingerprint = model.descriptor.fingerprint
+            if self.expectedModelFingerprint != nil, self.preparedDefaultCPUReason == nil {
+                self.preparedDefaultCPUReason = self.modelStore.automaticCPUReason(forFingerprint: fingerprint, directory: model.directory)
+            }
             if let expected = self.expectedModelFingerprint, expected != fingerprint {
                 throw NSError(domain: "PichiGigaAMProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "The installed GigaAM export has changed since this meeting was scheduled. Restore that export or start a new processing run."])
             }
