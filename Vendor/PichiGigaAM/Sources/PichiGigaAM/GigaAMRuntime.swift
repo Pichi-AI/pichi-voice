@@ -74,6 +74,7 @@ public actor GigaAMRuntime {
                                                        melFilterbankURL: directory.appendingPathComponent(configuration.melFilterbankFile))
                     let native = try GigaAMCoreMLInference(packageURL: modelURL, featureFrameCount: configuration.featureFrameCount)
                     self.coreML = native
+                    try self.requireCoreMLCapacity()
                     if executionProvider == .cpu {
                         try native.load(gpu: false)
                         self.executionStatus = .init(backend: .cpu, fallbackReason: .explicitCPU)
