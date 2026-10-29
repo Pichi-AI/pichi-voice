@@ -35,7 +35,14 @@ struct CustomDictionaryView: View {
     /// A row picked in the sidebar search. Opening it is the reveal; the binding is
     /// cleared so the same row can be picked again later.
     @Binding var revealTarget: AppSearchHit.Target?
-    @Binding var trainingRequest: DictionaryWordTrainingRequest? = .constant(nil)
+    @Binding var trainingRequest: DictionaryWordTrainingRequest?
+
+    init(formattingOnly: Bool = false, revealTarget: Binding<AppSearchHit.Target?>,
+         trainingRequest: Binding<DictionaryWordTrainingRequest?> = .constant(nil)) {
+        self.formattingOnly = formattingOnly
+        self._revealTarget = revealTarget
+        self._trainingRequest = trainingRequest
+    }
 
     @State private var entries: [SettingsStore.CustomDictionaryEntry] = SettingsStore.shared.customDictionaryEntries
     @State private var boostTerms: [ParakeetVocabularyStore.VocabularyConfig.Term] = []
