@@ -2088,22 +2088,28 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                             do {
                                 try await self.installAECForSupportedSpeaker(revision: committedOwnership.routeRevision)
                             } catch {
-                                do {
-                                    if try await self.resumeDirectMicrophone(
-                                        .unfiltered,
-                                        revision: committedOwnership.routeRevision,
-                                        expectedOwnership: committedOwnership,
-                                        expectedGateEpoch: rearmGateEpoch
-                                    ) {
-                                        self.eventHandler(.interrupted(
-                                            kind: .microphoneChanged,
-                                            trackID: self.microphoneWriter.trackID,
-                                            detail: "Speaker-route AEC could not restart after stream recovery; microphone speech continues without echo filtering."
-                                        ))
+                                // Recovery compensation must finish before a newer route can reopen
+                                // admission. Do not await this chain from the rebuild flight: an
+                                // older route task may be waiting for rebuildGroup to finish. Stop
+                                // drains the chain before completing the capture shutdown.
+                                self.routeProtectionTasks.enqueue { [weak self] in
+                                    guard let self else { return }
+                                    do {
+                                        if try await self.resumeDirectMicrophone(
+                                            .unfiltered,
+                                            revision: committedOwnership.routeRevision,
+                                            expectedOwnership: committedOwnership,
+                                            expectedGateEpoch: rearmGateEpoch
+                                        ) {
+                                            self.eventHandler(.interrupted(
+                                                kind: .microphoneChanged,
+                                                trackID: self.microphoneWriter.trackID,
+                                                detail: "Speaker-route AEC could not restart after stream recovery; microphone speech continues without echo filtering."
+                                            ))
+                                        }
+                                    } catch {
+                                        self.handleAECTerminalFailure(.metadataPersistence)
                                     }
-                                } catch {
-                                    self.handleAECTerminalFailure(.metadataPersistence)
-                                    return
                                 }
                             }
                         }

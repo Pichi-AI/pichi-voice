@@ -241,6 +241,51 @@ final class MeetingAEC3Tests: XCTestCase {
         }
     }
 
+    func testSerializedRecoveryCompensationCannotCloseNewerSuccessfulRouteResume() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("aec-resume-successor-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try MeetingAudioChunkWriter(
+            track: Self.microphoneTrack(), sessionDirectory: directory, chunkDuration: 60, eventHandler: { _ in }
+        )
+        let gate = MeetingMicrophoneTranscriptGate(.unprotected)
+        let chain = MeetingAsyncTaskChain()
+        let checks = AECValidationCounter()
+        let results = AECResumeResultRecorder()
+        let epoch = gate.invalidationEpoch
+        let oldResume = chain.enqueue {
+            do {
+                let resumed = try await MeetingAECOutputCommitter.resumeMicrophone(
+                    .unfiltered, writer: writer, transcriptGate: gate, expectedGateEpoch: epoch
+                ) {
+                    guard checks.next() == 2 else { return true }
+                    // A newer route arrives after the optimistic write but before the old
+                    // continuation can compensate it. Its reopen shares the runtime's chain.
+                    _ = gate.invalidate()
+                    let successorEpoch = gate.invalidationEpoch
+                    chain.enqueue {
+                        do {
+                            let reopened = try await MeetingAECOutputCommitter.resumeMicrophone(
+                                .acousticallyClosed, writer: writer, transcriptGate: gate,
+                                expectedGateEpoch: successorEpoch, mayResume: { true }
+                            )
+                            results.append(reopened)
+                        } catch { results.failed() }
+                    }
+                    return false
+                }
+                results.append(resumed)
+            } catch { results.failed() }
+        }
+        await oldResume.value
+        await chain.drain()
+        XCTAssertEqual(results.values, [false, true], "the stale transaction must finish before the successor reopens")
+        XCTAssertFalse(results.hasError)
+        XCTAssertTrue(gate.admitsTranscript(), "old compensation must not close the newer valid gate")
+        let track = await writer.stop()
+        XCTAssertEqual(track.captureEras?.last?.echoProtection, .acousticallyClosed,
+                       "old compensation must not replace the successor's valid durable era")
+    }
+
     private func block(
         _ kind: MeetingAECInputKind,
         start: Int64,
@@ -1733,6 +1778,16 @@ private final nonisolated class AECValidationCounter: @unchecked Sendable {
             return self.value
         }
     }
+}
+
+private final nonisolated class AECResumeResultRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [Bool] = []
+    private var errorObserved = false
+    var values: [Bool] { self.lock.withLock { self.storage } }
+    var hasError: Bool { self.lock.withLock { self.errorObserved } }
+    func append(_ result: Bool) { self.lock.withLock { self.storage.append(result) } }
+    func failed() { self.lock.withLock { self.errorObserved = true } }
 }
 
 private extension XCTestCase {
