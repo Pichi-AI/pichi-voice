@@ -53,11 +53,16 @@ final class GigaAMGGUFInference {
             guard samples.count <= 22 * 16_000, samples.allSatisfy(\.isFinite) else { throw GigaAMError.invalidAudio }
             guard !samples.isEmpty else { return [] }
             if cancellationToken?.isCancelled == true { throw CancellationError() }
+            // The native SDK requires a complete first analysis window, as the
+            // legacy frontend does. Keep the unpadded duration for word bounds.
+            let pcm = samples.count < GigaAMFrontend.fftSize
+                ? samples + [Float](repeating: 0, count: GigaAMFrontend.fftSize - samples.count)
+                : samples
             if let cancellationToken { session.setCancellationToken(cancellationToken) }
             defer { if cancellationToken != nil { session.clearCancellationToken() } }
             let result: Transcript
             do {
-                result = try session.run(samples, options: .init(timestamps: .token, language: "ru"))
+                result = try session.run(pcm, options: .init(timestamps: .token, language: "ru"))
             } catch TranscribeError.aborted {
                 // Native partial output must not escape cancellation as a result.
                 throw CancellationError()
@@ -65,7 +70,7 @@ final class GigaAMGGUFInference {
             try Task.checkCancellation()
             if cancellationToken?.isCancelled == true { throw CancellationError() }
             guard result.timestampKind == .token,
-                  result.tokens.count <= (samples.count + 639) / 640 + 1 else { throw GigaAMError.invalidOutput }
+                  result.tokens.count <= (pcm.count + 639) / 640 + 1 else { throw GigaAMError.invalidOutput }
             let emissions = try result.tokens.compactMap { token -> GigaAMCTCEmission? in
                 guard token.id >= 0, token.id <= 256, token.t0Ms >= 0, token.t1Ms >= token.t0Ms else {
                     throw GigaAMError.invalidOutput
