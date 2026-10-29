@@ -1222,11 +1222,14 @@ final class MeetingAEC3Tests: XCTestCase {
         var count = 0
         for chunk in track.chunks {
             let audio = try AVAudioFile(forReading: chunk.fileURL(relativeTo: directory))
-            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: AVAudioFrameCount(audio.length)))
-            try audio.read(into: buffer)
-            let channel = try XCTUnwrap(buffer.floatChannelData?[0])
-            count += Int(buffer.frameLength)
-            XCTAssertTrue((0..<Int(buffer.frameLength)).allSatisfy { abs(channel[$0] - 0.125) < 0.000_001 })
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 8192))
+            while audio.framePosition < audio.length {
+                try audio.read(into: buffer, frameCount: 8192)
+                guard buffer.frameLength > 0 else { return XCTFail("PCM reader stopped before the retained tail") }
+                let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+                count += Int(buffer.frameLength)
+                XCTAssertTrue((0..<Int(buffer.frameLength)).allSatisfy { abs(channel[$0] - 0.125) < 0.000_001 })
+            }
         }
         XCTAssertEqual(count, frames)
     }
