@@ -474,13 +474,14 @@ struct PichiVoiceMobileApp: App {
                 #if DEBUG && targetEnvironment(simulator)
                 if isHostedFixtureHost { Color.clear.accessibilityHidden(true) }
                 else if MobileAutomaticSettingsReview.isRequested { MobileAutomaticSettingsReview() }
+                else if MobileSharedGuestHistoryReview.isRequested { MobileSharedGuestHistoryReview() }
                 else { ordinaryRoot }
                 #else
                 ordinaryRoot
                 #endif
             }.task {
                 #if DEBUG && targetEnvironment(simulator)
-                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested || MobileSharedGuestHistoryReview.isRequested { return }
                 #endif
                 #if DEBUG
                 // Hosted unit probes own their injected model operations. The ordinary
@@ -508,19 +509,19 @@ struct PichiVoiceMobileApp: App {
             // captured scene cannot overwrite a newer foreground event after restore.
             .onChange(of: scenePhase, initial: true) { _, phase in
                 #if DEBUG && targetEnvironment(simulator)
-                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested || MobileSharedGuestHistoryReview.isRequested { return }
                 #endif
                 Task { await services.setSceneActive(phase == .active) }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
                 #if DEBUG && targetEnvironment(simulator)
-                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested || MobileSharedGuestHistoryReview.isRequested { return }
                 #endif
                 Task { await services.protectedDataDidBecomeAvailable() }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                 #if DEBUG && targetEnvironment(simulator)
-                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested { return }
+                if isHostedFixtureHost || MobileAutomaticSettingsReview.isRequested || MobileSharedGuestHistoryReview.isRequested { return }
                 #endif
                 Task { await services.didReceiveMemoryWarning() }
             }
