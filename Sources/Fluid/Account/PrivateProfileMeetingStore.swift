@@ -383,8 +383,9 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
             let sessions = try await transcriptOnly ? source.loadHistory() : source.loadAll()
             try checkReadable(reader)
             return sessions
-        } catch MeetingSessionStoreError.historyUnavailable {
+        } catch {
             try checkReadable(reader)
+            DebugLogger.shared.warning("One meeting history source is unavailable", source: "PrivateProfileMeetingStore")
             return nil
         }
     }

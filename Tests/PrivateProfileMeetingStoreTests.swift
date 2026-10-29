@@ -316,6 +316,26 @@ extension MeetingSessionStoreCheckpointTests {
         try await writer.delete(id: plainGuest.id)
         check(try await noKey.loadHistory().map(\.id) == [own.id],
             "An entirely locked guest catalog cannot hide healthy account history")
+        var rootProbe = plainGuest; rootProbe.id = UUID()
+        try await writer.create(rootProbe)
+        func replacingRootWithFile(_ directory: URL, operation: () async throws -> Void) async throws {
+            let retained = directory.appendingPathExtension("synthetic-backup")
+            try FileManager.default.moveItem(at: directory, to: retained)
+            defer {
+                try? FileManager.default.removeItem(at: directory)
+                try? FileManager.default.moveItem(at: retained, to: directory)
+            }
+            try Data("Synthetic invalid directory".utf8).write(to: directory)
+            try await operation()
+        }
+        try await replacingRootWithFile(guest.directory("Meetings")) {
+            check(try await noKey.loadHistory().map(\.id) == [own.id],
+                "An unreadable guest root cannot hide healthy account history")
+        }
+        try await replacingRootWithFile(a.directory("Meetings")) {
+            check(try await noKey.loadHistory().map(\.id) == [rootProbe.id],
+                "An unreadable account root cannot hide healthy shared guest history")
+        }
         let wrong = try MeetingRecordingCipher(profileID: b.id, key: Data(repeating: 0x43, count: 32))
         let wrongOwner = PrivateProfileMeetingStore(sharedGuestCipherProvider: { wrong })
         do { _ = try await wrongOwner.loadTranscript(id: source.id); check(false, "Another profile key cannot open guest data") }

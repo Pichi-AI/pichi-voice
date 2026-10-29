@@ -78,6 +78,8 @@ final class MobileEncryptedPresentationTests: XCTestCase {
                     try await host.openHistory()
                     try await host.waitForRows(fixture.visibleIDs(for: reader), excluding: fixture.accountIDs.subtracting(fixture.visibleIDs(for: reader)))
                     captureSharedGuestHistory(host, step: step)
+                    try await host.openGuestDetail(id: fixture.guestID)
+                    captureSharedGuestHistory(host, step: step + "-guest-detail")
                     await host.close()
                 } catch {
                     captureSharedGuestHistory(host, step: step + "-failed")
@@ -280,6 +282,12 @@ final class MobileEncryptedPresentationTests: XCTestCase {
             record.audioStorageMode = .memoryOnly; record.transcriptTimeDomain = .meetingRelative
             record.audioTracks = [.init(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
                 sourceDisplayName: "Synthetic microphone", format: nil, timebase: timebase, health: .waiting, chunks: [])]
+            if profile.isGuest {
+                record.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 1),
+                    end: .init(value: 2, timescale: 1), sourceTrackID: record.audioTracks[0].id, speakerID: nil,
+                    text: "Синтетический текст гостевой встречи.", revision: 0, status: .final,
+                    overlap: .none, completeness: .complete, attributionState: .unassigned)]
+            }
             try await MeetingSessionStore(rootDirectory: profile.directory("Meetings")).create(record)
         }
     }
@@ -347,6 +355,24 @@ final class MobileEncryptedPresentationTests: XCTestCase {
         }
         throw NSError(domain: "SharedGuestNativeHistory", code: 2,
                       userInfo: [NSLocalizedDescriptionKey: "The native History did not render the guest and selected-account rows"])
+    }
+
+    func openGuestDetail(id: UUID) async throws {
+        let identifier = "history.session.\(id.uuidString)"
+        guard let row = elements().first(where: { ($0 as? UIAccessibilityIdentification)?.accessibilityIdentifier == identifier }),
+              row.accessibilityActivate() else {
+            throw NSError(domain: "SharedGuestNativeHistory", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "The shared guest row could not be opened"])
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            let identifiers = Set(elements().compactMap { ($0 as? UIAccessibilityIdentification)?.accessibilityIdentifier })
+            if identifiers.contains("meeting.transcript") && identifiers.contains("transcript.copy")
+                && identifiers.contains("transcript.more") { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw NSError(domain: "SharedGuestNativeHistory", code: 4,
+                      userInfo: [NSLocalizedDescriptionKey: "Guest detail and its ordinary actions did not render in the account"])
     }
 
     private func elements() -> [NSObject] {
