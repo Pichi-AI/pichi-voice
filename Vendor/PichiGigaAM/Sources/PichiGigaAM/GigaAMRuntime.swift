@@ -21,9 +21,13 @@ public actor GigaAMRuntime {
     private var coreML: GigaAMCoreMLInference?
     private var gguf: GigaAMGGUFInference?
     private var loadedIdentity: String?
+    private let resources: @Sendable () -> GigaAMResourcePolicy
     public private(set) var executionStatus: GigaAMExecutionStatus?
 
-    public init() throws { self.frontend = try GigaAMFrontend() }
+    public init(resources: @escaping @Sendable () -> GigaAMResourcePolicy = { .current }) throws {
+        self.resources = resources
+        self.frontend = try GigaAMFrontend()
+    }
 
     public var isReady: Bool { self.session != nil || self.coreML?.isLoaded == true || self.gguf?.isLoaded == true }
 
@@ -43,7 +47,7 @@ public actor GigaAMRuntime {
                     self.gguf = native
                     if executionProvider == .cpu {
                         try self.loadGGUFCPU(native, reason: .explicitCPU)
-                    } else if let reason = GigaAMResourcePolicy.current.gpuAdmissionReason {
+                    } else if let reason = self.resources().gpuAdmissionReason {
                         try self.loadGGUFCPU(native, reason: reason)
                     } else {
                         try self.loadGGUFGPUOrFallback(native)
@@ -78,7 +82,7 @@ public actor GigaAMRuntime {
                     if executionProvider == .cpu {
                         try native.load(gpu: false)
                         self.executionStatus = .init(backend: .cpu, fallbackReason: .explicitCPU)
-                    } else if MTLCreateSystemDefaultDevice() == nil {
+                    } else if !self.resources().hasGPU {
                         try native.load(gpu: false)
                         self.executionStatus = .init(backend: .cpu, fallbackReason: .gpuUnavailable)
                     } else {
@@ -147,7 +151,7 @@ public actor GigaAMRuntime {
     }
 
     private func loadGGUFCPU(_ native: GigaAMGGUFInference, reason: GigaAMExecutionStatus.FallbackReason) throws {
-        if let bytes = GigaAMResourcePolicy.current.availableProcessMemory, bytes < 512 * 1_024 * 1_024 {
+        if let bytes = self.resources().availableProcessMemory, bytes < 512 * 1_024 * 1_024 {
             throw GigaAMError.memoryBudgetExceeded
         }
         try native.load(gpu: false)
@@ -155,7 +159,7 @@ public actor GigaAMRuntime {
     }
 
     private func requireCoreMLCapacity() throws {
-        let resources = GigaAMResourcePolicy.current
+        let resources = self.resources()
         guard resources.physicalMemory >= 8_000_000_000,
               resources.availableProcessMemory.map({ $0 >= 1_536 * 1_024 * 1_024 }) ?? true else {
             throw GigaAMError.memoryBudgetExceeded
@@ -184,15 +188,19 @@ public actor GigaAMRuntime {
                 guard self.executionStatus?.backend == .cpu,
                       let reason = self.executionStatus?.fallbackReason,
                       [.gpuUnavailable, .memoryBudget, .acceleratorLoadFailed, .acceleratorInferenceFailed].contains(reason),
-                      GigaAMResourcePolicy.current.gpuAdmissionReason == nil else { return }
+                      self.resources().gpuAdmissionReason == nil else { return }
                 try self.loadGGUFGPUOrFallback(native)
                 return
             }
-            guard let native = self.coreML, self.executionStatus?.backend == .cpu,
+            guard let native = self.coreML, native.isLoaded, self.executionStatus?.backend == .cpu,
                   let reason = self.executionStatus?.fallbackReason,
-                  [.gpuUnavailable, .acceleratorLoadFailed, .acceleratorInferenceFailed].contains(reason),
-                  MTLCreateSystemDefaultDevice() != nil else { return }
-            try self.requireCoreMLCapacity()
+                  [.gpuUnavailable, .memoryBudget, .acceleratorLoadFailed, .acceleratorInferenceFailed].contains(reason),
+                  self.resources().hasGPU else { return }
+            do { try self.requireCoreMLCapacity() }
+            catch GigaAMError.memoryBudgetExceeded {
+                self.executionStatus = .init(backend: .cpu, fallbackReason: .memoryBudget)
+                return
+            }
             do {
                 try native.load(gpu: true)
                 let smoke = self.frontend.features([Float](repeating: 0, count: GigaAMFrontend.fftSize))

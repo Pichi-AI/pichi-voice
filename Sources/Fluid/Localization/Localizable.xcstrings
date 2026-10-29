@@ -60122,6 +60122,23 @@
           }
         }
       }
+    },
+    "CPU fallback: CPU execution was selected for the available memory budget.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU fallback: CPU execution was selected for the available memory budget."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервный CPU: для доступного объёма памяти выбран CPU-профиль."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
