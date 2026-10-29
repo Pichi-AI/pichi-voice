@@ -387,6 +387,23 @@ private struct MobileVoiceEngineSettings: View {
             }
             Text(verbatim: PichiLocalization.text(model.languageSupport) + " · " + model.downloadSize)
                 .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            if let processor = model.libraryMetadata?.processor {
+                Text(PichiLocalization.text(processor))
+                    .font(theme.typography.captionStrong).foregroundStyle(theme.palette.accentText)
+                    .accessibilityIdentifier("model.computePreference.\(model.id)")
+            }
+            if let execution = asr.executionStatus(for: model) {
+                Label(PichiLocalization.format("Configured execution: %@", PichiLocalization.text(execution.backend.label)), systemImage: "cpu")
+                    .font(theme.typography.captionStrong).foregroundStyle(theme.palette.secondaryText)
+                    .accessibilityHint(PichiLocalization.text("The configured execution device is not a live utilization measurement."))
+                    .accessibilityIdentifier("model.executionStatus.\(model.id)")
+                if let reason = execution.fallbackReason {
+                    Text(PichiLocalization.text(reason)).font(theme.typography.caption)
+                        .foregroundStyle(theme.palette.readableText(theme.palette.warning))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("model.executionFallback.\(model.id)")
+                }
+            }
         }.padding(.vertical, theme.metrics.spacing.xs)
     }
 

@@ -82,6 +82,89 @@ final class MobileInferenceTestAssetsTests: XCTestCase {
     }
 }
 
+#if os(iOS) && DEBUG && targetEnvironment(simulator)
+@MainActor
+final class MobileExecutionStatusTests: XCTestCase {
+    private enum FixtureError: Error { case deletion }
+    private final class Provider: TranscriptionProvider {
+        let name = "Synthetic execution status"
+        let isAvailable = true
+        private(set) var isReady = false
+        private(set) var executionStatus: TranscriptionExecutionStatus?
+        var failDeletion = false
+        func modelsExistOnDisk() -> Bool { true }
+        func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
+            isReady = true
+            executionStatus = .init(backend: .gpu)
+        }
+        func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+            executionStatus = .init(backend: .cpu, fallbackReason: "CPU fallback: GPU execution failed.")
+            return ASRTranscriptionResult(text: "")
+        }
+        func releaseResidency() async { isReady = false; executionStatus = nil }
+        func clearCache() async throws {
+            if failDeletion { throw FixtureError.deletion }
+        }
+    }
+
+    func testPreparedDeviceFallbackAndReleaseReachMobileSettings() async throws {
+        try await withIsolatedService { service, provider in
+            try await service.ensureAsrReady()
+            XCTAssertEqual(service.executionStatus(for: .gigaam), .init(backend: .gpu))
+            XCTAssertNil(service.executionStatus(for: .parakeetTDT))
+            let lease = try service.acquireExclusiveActivity(.meeting)
+            _ = try await service.transcribeMeetingSamples([0], provider: provider, languageCode: "ru")
+            XCTAssertEqual(service.executionStatus(for: .gigaam), .init(backend: .cpu, fallbackReason: "CPU fallback: GPU execution failed."))
+            service.releaseExclusiveActivity(lease)
+        }
+    }
+
+    func testFailedModelDeletionRetiresPreparedExecutionStatus() async throws {
+        try await withIsolatedService { service, provider in
+            try await service.ensureAsrReady()
+            XCTAssertEqual(service.executionStatus(for: .gigaam), .init(backend: .gpu))
+            provider.failDeletion = true
+            do {
+                try await service.clearModelCache(for: .gigaam)
+                XCTFail("The synthetic deletion must fail")
+            } catch FixtureError.deletion {}
+            XCTAssertFalse(provider.isReady)
+            XCTAssertFalse(service.isAsrReady)
+            XCTAssertNil(service.executionStatus)
+            XCTAssertNil(service.executionStatus(for: .gigaam))
+        }
+    }
+
+    private func withIsolatedService(_ body: (ASRService, Provider) async throws -> Void) async throws {
+        let previousProfile = PrivateProfileStorage.current
+        let wasAcceptingWork = PrivateProfileStorage.acceptsNewWork
+        let profileRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        PrivateProfileStorage.select(try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: profileRoot))
+        defer {
+            PrivateProfileStorage.select(previousProfile)
+            if !wasAcceptingWork { PrivateProfileStorage.closeAdmission() }
+            try? FileManager.default.removeItem(at: profileRoot)
+        }
+        let suite = "MobileExecutionStatus.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .gigaam
+        let provider = Provider()
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator(), settings: settings)
+        service.modelProvidersForTesting[.gigaam] = provider
+        do {
+            try await body(service, provider)
+            await service.shutdownForTermination()
+            XCTAssertNil(service.executionStatus)
+        } catch {
+            await service.shutdownForTermination()
+            throw error
+        }
+    }
+}
+#endif
+
 /// Explicitly enabled public artifacts plus synthetic audio only. The same source runs
 /// in the hosted mobile target; that execution uses the adapters' actual CPU-only route.
 @MainActor

@@ -80,7 +80,7 @@ enum PichiMeetingProviderFactory {
             liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4_000_000_000, maximumTrackCount: 2),
             admissionArtifactFingerprint: {
                 // A fresh install prepares the public export. Complete imports retain priority.
-                (try? PichiGigaAMModelStore.shared.installedModelFingerprint()) ?? GigaAMModelCatalog.downloadableModel.fingerprint
+                (try? PichiGigaAMModelStore.shared.installedModelFingerprint()) ?? PichiGigaAMModelStore.shared.defaultModelFingerprint
             }, supportsInstalledIdlePreparation: true
         ),
         PichiMeetingProviderFactory.whisperTinyModelID: Registration(

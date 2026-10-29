@@ -532,6 +532,9 @@ final class ASRService: ObservableObject {
     @Published var wordBoostStatusText: String = "Word boost: off"
     @Published var micStatus: AVAuthorizationStatus = .notDetermined
     @Published var isAsrReady: Bool = false
+    @Published private(set) var executionStatus: TranscriptionExecutionStatus?
+    private var executionStatusModelID: String?
+    private var executionStatusProviderID: ObjectIdentifier?
     @Published var isDownloadingModel: Bool = false
     @Published var isLoadingModel: Bool = false // True when loading cached model into memory (not downloading)
     @Published private(set) var isCancellingModelPreparation: Bool = false
@@ -1285,6 +1288,9 @@ final class ASRService: ObservableObject {
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil
+        self.executionStatus = nil
+        self.executionStatusModelID = nil
+        self.executionStatusProviderID = nil
         self.isAsrReady = false
         self.isLoadingModel = false
         self.isDownloadingModel = false
@@ -1412,6 +1418,19 @@ final class ASRService: ObservableObject {
     /// Returns the user-friendly name of the currently selected speech model
     var activeProviderName: String {
         self.selectedTranscriptionModel.displayName
+    }
+
+    /// Status belongs to one selected model and is never inferred from its library metadata.
+    func executionStatus(for model: SettingsStore.SpeechModel) -> TranscriptionExecutionStatus? {
+        guard self.executionStatusModelID == model.id else { return nil }
+        return self.executionStatus
+    }
+
+    private func refreshExecutionStatus(from provider: any TranscriptionProvider, model: SettingsStore.SpeechModel) {
+        guard self.selectedTranscriptionModel == model else { return }
+        self.executionStatusModelID = model.id
+        self.executionStatus = provider.isReady ? provider.executionStatus : nil
+        self.executionStatusProviderID = ObjectIdentifier(provider as AnyObject)
     }
 
     /// Exposes the transcription provider for file transcription (MeetingTranscriptionService)
@@ -1710,6 +1729,9 @@ final class ASRService: ObservableObject {
 
         // Any in-flight preview belongs to the provider being retired. Its operation
         // still drains through the executor, but must not publish into this session.
+        self.executionStatus = nil
+        self.executionStatusModelID = nil
+        self.executionStatusProviderID = nil
         self.streamingWorkState.invalidateProvider()
         self.isAsrReady = false
         self.modelsExistOnDisk = false
@@ -3995,6 +4017,8 @@ final class ASRService: ObservableObject {
         do {
             traceStop("readiness_begin")
             var provider = self.transcriptionProvider
+            let executionStatusModel = self.selectedTranscriptionModel
+            defer { self.refreshExecutionStatus(from: provider, model: executionStatusModel) }
             let ensureStartedAt = Date().timeIntervalSince1970
             if self.isAsrReady, provider.isReady {
                 self.benchmarkLog("stop_ensure_ready skipped=true elapsedMs=0")
@@ -4282,6 +4306,7 @@ final class ASRService: ObservableObject {
             throw CancellationError()
         }
         let provider = admission.provider
+        defer { self.refreshExecutionStatus(from: provider, model: admission.model) }
         var samples = inputSamples
         guard !samples.isEmpty else {
             return ASRTranscriptionResult(text: "", confidence: 0)
@@ -4343,6 +4368,7 @@ final class ASRService: ObservableObject {
             throw CancellationError()
         }
         let provider = admission.provider
+        defer { self.refreshExecutionStatus(from: provider, model: admission.model) }
         guard FileManager.default.isReadableFile(atPath: fileURL.path) else {
             throw NSError(
                 domain: "ASRService",
@@ -4696,6 +4722,9 @@ final class ASRService: ObservableObject {
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil
         self.residentDictationModelID = nil
+        self.executionStatus = nil
+        self.executionStatusModelID = nil
+        self.executionStatusProviderID = nil
         self.isAsrReady = false
     }
 
@@ -4742,12 +4771,30 @@ final class ASRService: ObservableObject {
         guard let lease = self.activeActivityLease, lease.activity == .meeting else {
             throw MeetingASRPreparationError.invalidActivityLease
         }
-        defer { self.flushDeferredMeetingLeaseReleaseIfReady() }
+        var executionProvider: (any TranscriptionProvider)?
+        let executionModel = SettingsStore.SpeechModel(rawValue: configuration.asrModel)
+        defer {
+            // run() joins owner.release before returning. Never retain a status
+            // snapshot from a provider whose prepared residency has ended.
+            if let provider = executionProvider, let model = executionModel,
+               self.executionStatusProviderID == ObjectIdentifier(provider as AnyObject) {
+                self.refreshExecutionStatus(from: provider, model: model)
+            }
+            self.flushDeferredMeetingLeaseReleaseIfReady()
+        }
         return try await self.meetingPreparedScope.run(
             lease: lease, attemptID: attemptID, configuration: configuration,
             owner: self.meetingASROwner(), preparedProvider: preparedProvider,
             isActiveLease: { [weak self] in self?.activeActivityLease == $0 },
-            body: body
+            body: { [weak self] provider in
+                executionProvider = provider
+                let model = SettingsStore.SpeechModel(rawValue: configuration.asrModel)
+                if let model { self?.refreshExecutionStatus(from: provider, model: model) }
+                defer {
+                    if let model { self?.refreshExecutionStatus(from: provider, model: model) }
+                }
+                return try await body(provider)
+            }
         )
     }
 
@@ -7012,6 +7059,12 @@ final class ASRService: ObservableObject {
             source: "ASRService"
         )
 
+        defer {
+            if self.ensureReadyOperationID == operationID {
+                self.refreshExecutionStatus(from: provider, model: model)
+            }
+        }
+
         // Check if already ready
         if self.isAsrReady, provider.isReady {
             DebugLogger.shared.debug("ASR already ready with loaded models, skipping initialization", source: "ASRService")
@@ -7433,6 +7486,9 @@ final class ASRService: ObservableObject {
         DebugLogger.shared.debug("Clearing model cache for \(model.displayName)", source: "ASRService")
         let provider = isActive ? self.transcriptionProvider : self.cachedDeletionProvider(for: model)
         if isActive {
+            self.executionStatus = nil
+            self.executionStatusModelID = nil
+            self.executionStatusProviderID = nil
             self.streamingWorkState.invalidateProvider()
             self.isAsrReady = false
             self.providerResetPending = true
@@ -7546,6 +7602,13 @@ final class ASRService: ObservableObject {
               )
         else { return }
         guard !self.isDictationMuted else { return }
+        let executionStatusModel = self.selectedTranscriptionModel
+        let executionStatusProvider = self.transcriptionProvider
+        defer {
+            if self.streamingWorkState.providerGeneration == providerGeneration {
+                self.refreshExecutionStatus(from: executionStatusProvider, model: executionStatusModel)
+            }
+        }
         self.benchmarkStreamingChunkIndex += 1
         let chunkIndex = self.benchmarkStreamingChunkIndex
         let chunkAgeMs = self.elapsedMilliseconds(since: self.benchmarkRecordingStartedAt)
