@@ -60139,6 +60139,23 @@
           }
         }
       }
+    },
+    "8 GB+ RAM recommended": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "8 GB+ RAM recommended"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуется от 8 GB RAM"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
