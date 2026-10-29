@@ -382,6 +382,8 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     private var lifecycleGeneration = 0
     private var executionAttemptPending = false
     private var preparedDefaultCPUReason: GigaAMExecutionStatus.FallbackReason?
+    private let pronunciationStore: PronunciationDictionaryStore
+    private var dictionarySnapshot: GigaAMDictionaryAcoustics.Snapshot?
 
     // MARK: - Admitted transcription configuration
 
@@ -393,21 +395,47 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             return
         }
         let selection = self.expectedModelFingerprint == nil ? try self.modelStore.selectedArtifact() : nil
+        let fingerprint = self.expectedModelFingerprint ?? selection?.descriptor.fingerprint ?? self.loadedModelFingerprint
+        #if os(macOS)
+        let dictionaryEnabled = DictionaryMatcherExperiment.sharedFeaturesEnabled
+        #else
+        let dictionaryEnabled = false
+        #endif
+        let entries = dictionaryEnabled ? SettingsStore.shared.customDictionaryEntries : []
+        let modelKey = fingerprint.map(GigaAMDictionaryAcoustics.modelKey(fingerprint:)) ?? ""
+        let entryIDs = Set(entries.map(\.id))
+        let pronunciation = dictionaryEnabled && !entryIDs.isEmpty
+            ? try self.pronunciationStore.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs) : nil
+        let negatives: DictionaryNegativeExampleStore.CaptureRead?
+        do {
+            negatives = dictionaryEnabled && DictionaryMatcherExperiment.compareNegatives && !entryIDs.isEmpty
+                ? try DictionaryNegativeExampleStore.shared.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs) : nil
+        } catch {
+            pronunciation?.close(leaseID: leaseID)
+            throw error
+        }
+        self.dictionarySnapshot = .init(modelKey: modelKey, generation: DictionaryMatcherExperiment.generation,
+            enabled: dictionaryEnabled, entries: entries, pronunciation: pronunciation, negatives: negatives)
         self.admittedSource = (leaseID, selection)
         self.executionAttemptPending = true
     }
 
     func endAdmittedTranscription(leaseID: UUID) {
         guard self.admittedSource?.leaseID == leaseID else { return }
+        self.dictionarySnapshot?.pronunciation?.close(leaseID: leaseID)
+        self.dictionarySnapshot?.negatives?.close(leaseID: leaseID)
+        self.dictionarySnapshot = nil
         self.admittedSource = nil
         self.executionAttemptPending = false
     }
 
     // MARK: - Provider lifecycle
 
-    init(modelStore: PichiGigaAMModelStore = .shared, expectedModelFingerprint: String? = nil) {
+    init(modelStore: PichiGigaAMModelStore = .shared, expectedModelFingerprint: String? = nil,
+         pronunciationStore: PronunciationDictionaryStore = .shared) {
         self.modelStore = modelStore
         self.expectedModelFingerprint = expectedModelFingerprint
+        self.pronunciationStore = pronunciationStore
     }
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
@@ -545,7 +573,67 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     }
 
     func transcribeFinal(_ samples: [Float]) async throws -> ASRTranscriptionResult {
-        try await self.transcribe(samples)
+        // Direct callers get the same frozen read scope as executor-admitted dictation.
+        let ownedLease = self.admittedSource == nil ? UUID() : nil
+        if let ownedLease { try self.beginAdmittedTranscription(leaseID: ownedLease) }
+        defer { if let ownedLease { self.endAdmittedTranscription(leaseID: ownedLease) } }
+        let result = try await self.transcribeDetailed(samples)
+        let generation = self.lifecycleGeneration
+        guard let fingerprint = self.loadedModelFingerprint else { throw CancellationError() }
+        let key = GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
+        var alignment = DictionaryLearningAlignment(modelKey: key,
+            words: result.words.map { ASRWordTiming(text: $0.text, start: $0.start, end: $0.end) })
+        var text = result.text
+        if let snapshot = self.dictionarySnapshot, snapshot.enabled, snapshot.modelKey == key {
+            let references = try await GigaAMDictionaryAcoustics.preparedWords(snapshot)
+            let corrected = try await GigaAMDictionaryAcoustics.correct(transcript: result, samples: samples,
+                snapshot: snapshot, words: references)
+            try Task.checkCancellation()
+            guard self.lifecycleGeneration == generation, self.isReady else { throw CancellationError() }
+            if DictionaryMatcherExperiment.sharedFeaturesEnabled,
+               DictionaryMatcherExperiment.generation == snapshot.generation {
+                text = corrected.text
+                alignment.acousticOutput = text
+                alignment.acousticEvidence = corrected.evidence
+                alignment.voiceSpellings = corrected.spellings
+            }
+        }
+        return ASRTranscriptionResult(text: text, confidence: result.confidence,
+            dictionaryLearningAlignment: alignment, endOfUtteranceProbability: result.endOfUtteranceProbability)
+    }
+
+    func transcribeDictionaryTraining(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+        try await self.transcribeDictionaryTraining(samples, capturePronunciation: true)
+    }
+
+    func transcribeDictionaryTraining(_ samples: [Float], capturePronunciation: Bool) async throws -> ASRTranscriptionResult {
+        let result = try await self.transcribeDetailed(samples)
+        let generation = self.lifecycleGeneration
+        let words = result.words.map { ASRWordTiming(text: $0.text, start: $0.start, end: $0.end) }
+        var capture: PronunciationEnrollmentCapture?
+        if capturePronunciation, DictionaryMatcherExperiment.sharedFeaturesEnabled,
+           let fingerprint = self.loadedModelFingerprint {
+            capture = try await GigaAMDictionaryAcoustics.enrollment(samples: samples,
+                modelKey: GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint), words: words)
+        }
+        try Task.checkCancellation()
+        guard self.lifecycleGeneration == generation, self.isReady else { throw CancellationError() }
+        return ASRTranscriptionResult(text: result.text, confidence: result.confidence,
+            pronunciationEnrollment: capture, endOfUtteranceProbability: result.endOfUtteranceProbability)
+    }
+
+    func originalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture? {
+        // This representation needs no model load. Still bind it to the exact artifact
+        // that supplied the original word spans, never a later settings selection.
+        let fingerprint = self.loadedModelFingerprint ?? self.expectedModelFingerprint
+            ?? (try? self.modelStore.selectedArtifact().descriptor.fingerprint)
+        guard let fingerprint, evidence.modelKey == GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint) else { return nil }
+        var capture = try await GigaAMDictionaryAcoustics.enrollment(samples: evidence.samples,
+            modelKey: evidence.modelKey, words: [], focalRange: evidence.focalSampleRange)
+        capture?.observedText = evidence.observedText
+        capture?.sourceRecordingID = evidence.recordingID
+        capture?.sourceFocalRange = (evidence.sourceSampleRange.lowerBound + evidence.focalSampleRange.lowerBound)..<(evidence.sourceSampleRange.lowerBound + evidence.focalSampleRange.upperBound)
+        return capture
     }
 
     func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
