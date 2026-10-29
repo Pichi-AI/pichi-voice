@@ -406,7 +406,8 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         let modelKey = fingerprint.map(GigaAMDictionaryAcoustics.modelKey(fingerprint:)) ?? ""
         let entryIDs = Set(entries.map(\.id))
         let pronunciation = dictionaryEnabled && !entryIDs.isEmpty
-            ? try self.pronunciationStore.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs) : nil
+            ? try self.pronunciationStore.admitCaptureRead(leaseID: leaseID, modelKey: modelKey, entryIDs: entryIDs,
+                referenceSelection: { GigaAMDictionaryAcoustics.activeCaptures($0.enrollments) }) : nil
         let negatives: DictionaryNegativeExampleStore.CaptureRead?
         do {
             negatives = dictionaryEnabled && DictionaryMatcherExperiment.compareNegatives && !entryIDs.isEmpty
@@ -635,6 +636,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
            let fingerprint = self.loadedModelFingerprint {
             capture = try await GigaAMDictionaryAcoustics.enrollment(samples: samples,
                 modelKey: GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint), words: words)
+            capture?.observedText = result.text
         }
         try Task.checkCancellation()
         guard self.lifecycleGeneration == generation, self.isReady else { throw CancellationError() }
@@ -663,7 +665,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         guard let fingerprint, captures.count >= 3 else { return false }
         let key = GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
         var references: [GigaAMAcousticFeatures] = []
-        for capture in PronunciationDictionaryStore.matchingEnrollments(captures) {
+        for capture in GigaAMDictionaryAcoustics.activeCaptures(captures) {
             try Task.checkCancellation()
             guard capture.modelKey == key, capture.extractorVersion == GigaAMAcousticFeatures.extractorVersion else { return false }
             let inspection: DictionaryAudioInspection

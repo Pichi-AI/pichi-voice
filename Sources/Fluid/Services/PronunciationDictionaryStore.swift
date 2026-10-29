@@ -9,6 +9,7 @@ nonisolated struct PronunciationEnrollmentCapture: Codable, Equatable, Sendable 
     var sourceRecordingID: UUID?
     var sourceFocalRange: Range<Int>?
     var extractorVersion: String?
+    var capturedAt: Date? = nil
     var inspectionID: UUID?
     // nil identifies legacy enrollment; an empty vector is invalid.
     // swiftlint:disable:next discouraged_optional_collection
@@ -19,7 +20,7 @@ nonisolated struct PronunciationEnrollmentCapture: Codable, Equatable, Sendable 
 
     private enum CodingKeys: String, CodingKey {
         case values, sourceFrameCount, modelKey, originalAudioID, observedText
-        case sourceRecordingID, sourceFocalRange, extractorVersion, inspectionID, edgeEmbedding, edgeFrameCount
+        case sourceRecordingID, sourceFocalRange, extractorVersion, capturedAt, inspectionID, edgeEmbedding, edgeFrameCount
     }
 }
 
@@ -117,23 +118,31 @@ actor PronunciationDictionaryStore {
         private var selectedProfiles: [PronunciationDictionaryProfile]
         private var inspections: [UUID: DictionaryCaptureEvidenceFile]
         private var originals: [UUID: DictionaryCaptureEvidenceFile]
+        private var selectedReferences: [String: [PronunciationEnrollmentCapture]]
         private var closed = false
 
         fileprivate init(profile: PrivateProfileSnapshot, leaseID: UUID,
                          profiles: [PronunciationDictionaryProfile], omittedSharedProfileCount: Int = 0,
                          inspections: [UUID: DictionaryCaptureEvidenceFile],
-                         originals: [UUID: DictionaryCaptureEvidenceFile]) {
+                         originals: [UUID: DictionaryCaptureEvidenceFile],
+                         selectedReferences: [String: [PronunciationEnrollmentCapture]]) {
             self.profile = profile
             self.omittedSharedProfileCount = omittedSharedProfileCount
             self.leaseID = leaseID
             self.selectedProfiles = profiles
             self.inspections = inspections
             self.originals = originals
+            self.selectedReferences = selectedReferences
         }
 
         var profiles: [PronunciationDictionaryProfile] {
             self.lock.lock(); defer { self.lock.unlock() }
             return self.closed ? [] : self.selectedProfiles
+        }
+
+        func matchingEnrollments(for profile: PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.closed ? [] : self.selectedReferences[profile.id] ?? []
         }
 
         func inspection(for id: UUID) throws -> DictionaryAudioInspection {
@@ -152,7 +161,7 @@ actor PronunciationDictionaryStore {
             self.lock.lock(); defer { self.lock.unlock() }
             guard !self.closed, let id = capture.originalAudioID, let file = self.originals[id],
                   self.selectedProfiles.contains(where: {
-                      $0.dictionaryEntryID == entryID && $0.matchingEnrollments.contains(capture)
+                      $0.dictionaryEntryID == entryID && self.selectedReferences[$0.id]?.contains(capture) == true
                   }) else { throw PronunciationDictionaryStoreError.staleEvidence }
             return try file.read { try PronunciationDictionaryStore.decodeOriginalAudio($0, capture: capture, entryID: entryID) }
         }
@@ -170,6 +179,7 @@ actor PronunciationDictionaryStore {
             self.inspections.removeAll()
             self.originals.removeAll()
             self.selectedProfiles.removeAll()
+            self.selectedReferences.removeAll()
         }
 
         deinit { self.closeFiles() }
@@ -182,7 +192,8 @@ actor PronunciationDictionaryStore {
     /// excess optional candidates are omitted before the immutable snapshot is created. One
     /// fallback per otherwise unrepresented word precedes extra variants for an admitted word.
     nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>,
-                                     includingSharedFamilies: Bool = false) throws -> CaptureRead {
+                                     includingSharedFamilies: Bool = false,
+                                     referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead {
         try Task.checkCancellation()
         guard let profile = self.profile, PrivateProfileStorage.isReadable(profile),
               PrivateProfileStorage.acceptsNewWork else { throw PronunciationDictionaryStoreError.staleEvidence }
@@ -229,6 +240,7 @@ actor PronunciationDictionaryStore {
         }
         var inspections: [UUID: DictionaryCaptureEvidenceFile] = [:]
         var originals: [UUID: DictionaryCaptureEvidenceFile] = [:]
+        var selectedReferences: [String: [PronunciationEnrollmentCapture]] = [:]
         var transferred = false
         defer {
             if !transferred {
@@ -238,7 +250,11 @@ actor PronunciationDictionaryStore {
         }
         func pinReferences(_ selected: PronunciationDictionaryProfile, optional: Bool) throws -> Bool {
             try Task.checkCancellation()
-            let captures = selected.matchingEnrollments
+            let captures = referenceSelection(selected)
+            guard captures.count <= 3, captures.allSatisfy({ selected.enrollments.contains($0) }) else {
+                if optional { return false }
+                throw PronunciationDictionaryStoreError.inconsistentEnrollment
+            }
             let neededInspections = Set(captures.compactMap(\.inspectionID)).subtracting(inspections.keys)
             let neededOriginals = Set(captures.filter { $0.inspectionID == nil }.compactMap(\.originalAudioID)).subtracting(originals.keys)
             guard inspections.count + originals.count + neededInspections.count + neededOriginals.count <= 384 else {
@@ -269,6 +285,7 @@ actor PronunciationDictionaryStore {
             }
             for (id, file) in addedInspections { inspections[id] = file }
             for (id, file) in addedOriginals { originals[id] = file }
+            selectedReferences[selected.id] = captures
             committed = true
             return true
         }
@@ -297,7 +314,7 @@ actor PronunciationDictionaryStore {
         try Task.checkCancellation()
         let result = CaptureRead(profile: profile, leaseID: leaseID, profiles: profiles,
             omittedSharedProfileCount: sharedCandidateCount - (profiles.count - exact.count),
-            inspections: inspections, originals: originals)
+            inspections: inspections, originals: originals, selectedReferences: selectedReferences)
         transferred = true
         return result
     }

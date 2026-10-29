@@ -102,8 +102,9 @@ extension PichiGigaAMIntegrationTests {
         XCTAssertEqual(inspection.samples, samples)
         XCTAssertEqual(inspection.selectedStart, 0.5)
         XCTAssertEqual(inspection.selectedEnd, 1.7)
-        let features = try GigaAMAcousticFeatures.extract(Array(samples[selected]))
-        XCTAssertEqual(inspection.frames.first?.values, features.values)
+        let features = try GigaAMAcousticFeatures.extract(samples)
+        XCTAssertEqual(inspection.frames.first?.offset, 0.48)
+        XCTAssertEqual(inspection.frames.first?.values, Array(features.values[(12 * 40)..<(43 * 40)]))
         let invalid = try await GigaAMDictionaryAcoustics.enrollment(samples: samples, modelKey: "synthetic-key",
             words: [], focalRange: 0..<(samples.count + 1))
         XCTAssertNil(invalid)
@@ -179,6 +180,25 @@ extension PichiGigaAMIntegrationTests {
         XCTAssertTrue(consistent)
         XCTAssertFalse(inconsistent)
         XCTAssertFalse(provider.isReady)
+    }
+
+    func testCorrectedContextAnchorStillRequiresItsSpellingAndRejectsNegativeAudio() throws {
+        let anchorRow: [Float] = [1] + Array(repeating: 0, count: 39)
+        let alternateRow: [Float] = [0.86, sqrt(1 - 0.86 * 0.86)] + Array(repeating: 0, count: 38)
+        let anchor = try GigaAMAcousticFeatures(values: Array(repeating: anchorRow, count: 20).flatMap { $0 })
+        let alternate = try GigaAMAcousticFeatures(values: Array(repeating: alternateRow, count: 20).flatMap { $0 })
+        let references = [anchor, alternate, alternate]
+        let calibration = try XCTUnwrap(GigaAMAcousticMatcher.calibrate(references: references))
+        let normal = try XCTUnwrap(GigaAMAcousticMatcher.match(query: anchor, references: references, calibration: calibration))
+        XCTAssertFalse(normal.accepted, "One contextual pronunciation must not silently relax the regular two-reference threshold")
+        let word = GigaAMDictionaryAcoustics.Word(entryID: UUID(), label: "Термин", profileKey: "test",
+            references: references, calibration: calibration, negatives: [],
+            anchors: [.init(features: anchor, observedText: "ошибка")])
+        XCTAssertNotNil(try GigaAMDictionaryAcoustics.acceptedDistance(query: anchor, word: word, heard: "Ошибка!"))
+        XCTAssertNil(try GigaAMDictionaryAcoustics.acceptedDistance(query: anchor, word: word, heard: "Другое"))
+        let vetoed = GigaAMDictionaryAcoustics.Word(entryID: word.entryID, label: word.label, profileKey: word.profileKey,
+            references: references, calibration: calibration, negatives: [anchor], anchors: word.anchors)
+        XCTAssertNil(try GigaAMDictionaryAcoustics.acceptedDistance(query: anchor, word: vetoed, heard: "ошибка"))
     }
 
     nonisolated private static func acousticTone(_ frequency: Double, duration: Double) -> [Float] {

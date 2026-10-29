@@ -19,21 +19,27 @@ nonisolated enum GigaAMDictionaryAcoustics {
     }
 
     struct Word: Sendable {
+        struct Anchor: Sendable {
+            let features: GigaAMAcousticFeatures
+            let observedText: String
+        }
         let entryID: UUID
         let label: String
         let profileKey: String
         let references: [GigaAMAcousticFeatures]
         let calibration: GigaAMAcousticMatcher.Calibration
         let negatives: [GigaAMAcousticFeatures]
+        let anchors: [Anchor]
 
         init(entryID: UUID, label: String, profileKey: String, references: [GigaAMAcousticFeatures],
-             calibration: GigaAMAcousticMatcher.Calibration, negatives: [GigaAMAcousticFeatures]) {
+             calibration: GigaAMAcousticMatcher.Calibration, negatives: [GigaAMAcousticFeatures], anchors: [Anchor] = []) {
             self.entryID = entryID
             self.label = label
             self.profileKey = profileKey
             self.references = references
             self.calibration = calibration
             self.negatives = negatives
+            self.anchors = anchors
         }
     }
 
@@ -55,6 +61,19 @@ nonisolated enum GigaAMDictionaryAcoustics {
         "gigaam-dictionary/" + GigaAMAcousticFeatures.extractorVersion + "/" + fingerprint
     }
 
+    /// A confirmed contextual occurrence complements two isolated pronunciations.
+    /// Keep all retained versions on disk, but pin only these three references.
+    static func activeCaptures(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
+        let originals = captures.enumerated().filter { $0.element.sourceRecordingID != nil && $0.element.observedText?.isEmpty == false }
+        guard let newest = originals.max(by: {
+            let left = $0.element.capturedAt ?? .distantPast
+            let right = $1.element.capturedAt ?? .distantPast
+            return left == right ? $0.offset < $1.offset : left < right
+        }) else { return PronunciationDictionaryStore.matchingEnrollments(captures) }
+        let remaining = captures.enumerated().filter { $0.offset != newest.offset }.map(\.element)
+        return [newest.element] + Array(PronunciationDictionaryStore.matchingEnrollments(remaining).suffix(2))
+    }
+
     /// A manual isolated pronunciation and a selected original occurrence share the
     /// same representation and persistence path. The original PCM remains available
     /// for listening/re-recording; weights are never modified by this operation.
@@ -68,13 +87,20 @@ nonisolated enum GigaAMDictionaryAcoustics {
               samples.allSatisfy(\.isFinite) else { return nil }
         let range = focalRange ?? DictionaryPronunciationExperiment.trimmedRange(samples)
         guard let range, !range.isEmpty, range.lowerBound >= 0, range.upperBound <= samples.count else { return nil }
-        let features = try GigaAMAcousticFeatures.extract(Array(samples[range]))
+        // Derive deltas in the original acoustic context, then retain the focal
+        // frames. Cutting PCM first would invent artificial edges inside a word.
+        let context = try GigaAMAcousticFeatures.extract(samples)
+        let lowerFrame = range.lowerBound / 640
+        let upperFrame = min(context.frameCount, (range.upperBound + 639) / 640)
+        guard lowerFrame < upperFrame else { return nil }
+        let features = try GigaAMAcousticFeatures(values: Array(context.values[
+            (lowerFrame * GigaAMAcousticFeatures.dimension)..<(upperFrame * GigaAMAcousticFeatures.dimension)]))
         guard let mean = features.meanL2 else { return nil }
         let start = Double(range.lowerBound) / 16_000
         let end = Double(range.upperBound) / 16_000
         let inspection = DictionaryAudioInspection(
             samples: samples, recordedSampleCount: samples.count,
-            frames: [.init(offset: start, frameDuration: GigaAMAcousticFeatures.frameDuration,
+            frames: [.init(offset: Double(lowerFrame) * GigaAMAcousticFeatures.frameDuration, frameDuration: GigaAMAcousticFeatures.frameDuration,
                            hiddenSize: GigaAMAcousticFeatures.dimension, values: features.values)],
             words: words.map { .init(text: $0.text, start: $0.start, end: $0.end) },
             selectedStart: start, selectedEnd: end
@@ -84,6 +110,7 @@ nonisolated enum GigaAMDictionaryAcoustics {
         return PronunciationEnrollmentCapture(
             values: mean, sourceFrameCount: features.frameCount, modelKey: modelKey,
             extractorVersion: GigaAMAcousticFeatures.extractorVersion,
+            capturedAt: Date(),
             pendingInspection: inspection
         )
     }
@@ -95,17 +122,19 @@ nonisolated enum GigaAMDictionaryAcoustics {
         let entries = Dictionary(snapshot.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for profile in read.profiles {
             try Task.checkCancellation()
+            let captures = read.matchingEnrollments(for: profile)
             guard profile.modelKey == snapshot.modelKey,
                   profile.hiddenSize == GigaAMAcousticFeatures.dimension,
-                  profile.enrollments.count >= 3,
+                  captures.count >= 3,
                   let entry = entries[profile.dictionaryEntryID],
                   profile.label == entry.replacement,
-                  profile.matchingEnrollments.allSatisfy({
+                  captures.allSatisfy({
                       $0.modelKey == snapshot.modelKey && $0.extractorVersion == GigaAMAcousticFeatures.extractorVersion
                   }) else { continue }
             var references: [GigaAMAcousticFeatures] = []
+            var anchors: [Word.Anchor] = []
             do {
-                for capture in profile.matchingEnrollments {
+                for capture in captures {
                     try Task.checkCancellation()
                     let features: GigaAMAcousticFeatures
                     if let id = capture.inspectionID {
@@ -122,6 +151,9 @@ nonisolated enum GigaAMDictionaryAcoustics {
                         )
                     }
                     references.append(features)
+                    if capture.sourceRecordingID != nil, let observed = capture.observedText, !observed.isEmpty {
+                        anchors.append(.init(features: features, observedText: observed))
+                    }
                 }
                 let additional = references.reduce(0) { $0 + $1.values.count * MemoryLayout<Float>.size }
                 guard additional <= maximumReferencesBytes - bytes,
@@ -132,7 +164,7 @@ nonisolated enum GigaAMDictionaryAcoustics {
                         try? GigaAMAcousticFeatures(values: $0.values)
                     } ?? []
                 words.append(Word(entryID: entry.id, label: entry.replacement, profileKey: profileKey,
-                                  references: references, calibration: calibration, negatives: negatives))
+                                  references: references, calibration: calibration, negatives: negatives, anchors: anchors))
                 bytes += additional
             } catch is CancellationError { throw CancellationError() }
             catch {
@@ -153,6 +185,25 @@ nonisolated enum GigaAMDictionaryAcoustics {
         }
         return DictionaryMatchFrames(hiddenSize: GigaAMAcousticFeatures.dimension,
             values: Array(features.values[(first * GigaAMAcousticFeatures.dimension)..<((last + 1) * GigaAMAcousticFeatures.dimension)]))
+    }
+
+    /// A user-corrected original occurrence is a contextual acoustic reference,
+    /// not permission for a text rule. A single such reference needs both the
+    /// same observed spelling and a tighter acoustic distance; negatives can veto it.
+    static func acceptedDistance(query: GigaAMAcousticFeatures, word: Word, heard: String) throws -> Float? {
+        let regular = try GigaAMAcousticMatcher.match(query: query, references: word.references,
+            calibration: word.calibration, negativeReferences: word.negatives)
+        var best = regular?.accepted == true ? regular?.distance : nil
+        let normalized = DictionaryNegativeEvidenceResolver.normalized(heard)
+        for anchor in word.anchors where DictionaryNegativeEvidenceResolver.normalized(anchor.observedText) == normalized {
+            guard let distance = try GigaAMAcousticMatcher.distance(anchor.features, query), distance <= 0.02 else { continue }
+            var veto = false
+            for negative in word.negatives {
+                if let value = try GigaAMAcousticMatcher.distance(negative, query), value <= distance + 0.01 { veto = true; break }
+            }
+            if !veto { best = min(best ?? distance, distance) }
+        }
+        return best
     }
 
     /// Candidate boundaries come from the immutable original ASR result. Corrections
@@ -219,8 +270,8 @@ nonisolated enum GigaAMDictionaryAcoustics {
                     let upper = hit.frames.upperBound * GigaAMAcousticFeatures.dimension
                     guard lower >= 0, upper <= chunk.values.count, lower < upper else { continue }
                     let query = try GigaAMAcousticFeatures(values: Array(chunk.values[lower..<upper]))
-                    guard let match = try GigaAMAcousticMatcher.match(query: query, references: word.references,
-                        calibration: word.calibration, negativeReferences: word.negatives), match.accepted else { continue }
+                    let heard = range.map { source[$0].text }.joined(separator: " ")
+                    guard let distance = try self.acceptedDistance(query: query, word: word, heard: heard) else { continue }
                     // Zero native confidence is unavailable, not a low-confidence
                     // signal. The independently calibrated acoustic limit still
                     // applies; no threshold is relaxed because of this missing field.
@@ -229,13 +280,17 @@ nonisolated enum GigaAMDictionaryAcoustics {
                         try Task.checkCancellation()
                         if let other = try GigaAMAcousticMatcher.match(query: query,
                             references: competitor.references, calibration: competitor.calibration,
-                            negativeReferences: competitor.negatives), other.distance < match.distance + 0.01 {
+                            negativeReferences: competitor.negatives), other.distance < distance + 0.01 {
+                            ambiguous = true
+                            break
+                        }
+                        if let other = try self.acceptedDistance(query: query, word: competitor, heard: heard), other < distance + 0.01 {
                             ambiguous = true
                             break
                         }
                     }
                     guard !ambiguous else { continue }
-                    candidates.append(Candidate(word: word, range: range, distance: match.distance, features: query))
+                    candidates.append(Candidate(word: word, range: range, distance: distance, features: query))
                 }
             }
         }
