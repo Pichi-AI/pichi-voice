@@ -663,7 +663,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         guard let fingerprint, captures.count >= 3 else { return false }
         let key = GigaAMDictionaryAcoustics.modelKey(fingerprint: fingerprint)
         var references: [GigaAMAcousticFeatures] = []
-        for capture in captures.prefix(3) {
+        for capture in PronunciationDictionaryStore.matchingEnrollments(captures) {
             try Task.checkCancellation()
             guard capture.modelKey == key, capture.extractorVersion == GigaAMAcousticFeatures.extractorVersion else { return false }
             let inspection: DictionaryAudioInspection

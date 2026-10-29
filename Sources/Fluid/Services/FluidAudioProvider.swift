@@ -1801,7 +1801,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         guard self.temporalReferenceCache.canFit(reservation) else { return [] }
         let pronunciationGeneration = self.pronunciationGeneration
         var result: [DictionaryMatchFrames] = []
-        for capture in profile.enrollments.prefix(3) {
+        for capture in profile.matchingEnrollments {
             try Task.checkCancellation()
             guard self.sharedFeaturesEnabled,
                   pronunciationGeneration == self.pronunciationGeneration else { return [] }

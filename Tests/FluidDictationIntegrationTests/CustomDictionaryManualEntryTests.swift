@@ -546,7 +546,7 @@ final class CustomDictionaryManualEntryTests: XCTestCase {
                 modelKey: "synthetic", inspectionID: UUID())
         }
         let kept = PronunciationDictionaryStore.retainedEnrollments(captures)
-        XCTAssertEqual(Array(kept.prefix(3)), Array(captures.suffix(3)))
+        XCTAssertEqual(PronunciationDictionaryStore.matchingEnrollments(kept), Array(captures.suffix(3)))
         XCTAssertEqual(Set(kept.compactMap(\.inspectionID)), Set(captures.compactMap(\.inspectionID)))
     }
 

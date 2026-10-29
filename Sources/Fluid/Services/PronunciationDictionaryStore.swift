@@ -54,9 +54,15 @@ nonisolated struct PronunciationDictionaryProfile: Codable, Equatable, Identifia
     }
 
     var hasTemporalRecordings: Bool {
-        self.enrollments.count >= 3 && self.enrollments.prefix(3).allSatisfy {
+        self.matchingEnrollments.count >= 3 && self.matchingEnrollments.allSatisfy {
             $0.inspectionID != nil || $0.originalAudioID != nil
         }
+    }
+
+    /// Keep stored history chronological while a deliberate re-recording selects
+    /// the latest manual references. Reordering history would break future eviction.
+    var matchingEnrollments: [PronunciationEnrollmentCapture] {
+        PronunciationDictionaryStore.matchingEnrollments(self.enrollments)
     }
 
     var id: String { "\(self.dictionaryEntryID.uuidString):\(self.modelKey)" }
@@ -146,7 +152,7 @@ actor PronunciationDictionaryStore {
             self.lock.lock(); defer { self.lock.unlock() }
             guard !self.closed, let id = capture.originalAudioID, let file = self.originals[id],
                   self.selectedProfiles.contains(where: {
-                      $0.dictionaryEntryID == entryID && $0.enrollments.prefix(3).contains(capture)
+                      $0.dictionaryEntryID == entryID && $0.matchingEnrollments.contains(capture)
                   }) else { throw PronunciationDictionaryStoreError.staleEvidence }
             return try file.read { try PronunciationDictionaryStore.decodeOriginalAudio($0, capture: capture, entryID: entryID) }
         }
@@ -232,7 +238,7 @@ actor PronunciationDictionaryStore {
         }
         func pinReferences(_ selected: PronunciationDictionaryProfile, optional: Bool) throws -> Bool {
             try Task.checkCancellation()
-            let captures = selected.enrollments.prefix(3)
+            let captures = selected.matchingEnrollments
             let neededInspections = Set(captures.compactMap(\.inspectionID)).subtracting(inspections.keys)
             let neededOriginals = Set(captures.filter { $0.inspectionID == nil }.compactMap(\.originalAudioID)).subtracting(originals.keys)
             guard inspections.count + originals.count + neededInspections.count + neededOriginals.count <= 384 else {
@@ -460,11 +466,16 @@ actor PronunciationDictionaryStore {
         let selected = protected.union(remaining)
         // Manual references first so the matcher can keep its existing calibration.
         return selected.sorted { lhs, rhs in
-            if protected.contains(lhs) != protected.contains(rhs) { return protected.contains(lhs) }
             let leftManual = captures[lhs].originalAudioID == nil
             let rightManual = captures[rhs].originalAudioID == nil
             return leftManual == rightManual ? lhs < rhs : leftManual
         }.map { captures[$0] }
+    }
+
+    static func matchingEnrollments(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
+        let manual = Array(captures.filter { $0.originalAudioID == nil }.suffix(3))
+        let original = captures.filter { $0.originalAudioID != nil }.suffix(3 - manual.count)
+        return manual + original
     }
 
     /// Validated focal audio for legacy and new automatically learned references.

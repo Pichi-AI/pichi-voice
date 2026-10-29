@@ -100,12 +100,12 @@ nonisolated enum GigaAMDictionaryAcoustics {
                   profile.enrollments.count >= 3,
                   let entry = entries[profile.dictionaryEntryID],
                   profile.label == entry.replacement,
-                  profile.enrollments.prefix(3).allSatisfy({
+                  profile.matchingEnrollments.allSatisfy({
                       $0.modelKey == snapshot.modelKey && $0.extractorVersion == GigaAMAcousticFeatures.extractorVersion
                   }) else { continue }
             var references: [GigaAMAcousticFeatures] = []
             do {
-                for capture in profile.enrollments.prefix(3) {
+                for capture in profile.matchingEnrollments {
                     try Task.checkCancellation()
                     let features: GigaAMAcousticFeatures
                     if let id = capture.inspectionID {
@@ -221,7 +221,9 @@ nonisolated enum GigaAMDictionaryAcoustics {
                     let query = try GigaAMAcousticFeatures(values: Array(chunk.values[lower..<upper]))
                     guard let match = try GigaAMAcousticMatcher.match(query: query, references: word.references,
                         calibration: word.calibration, negativeReferences: word.negatives), match.accepted else { continue }
-                    guard !knownConfidence.isEmpty || match.distance <= 0.02 else { continue }
+                    // Zero native confidence is unavailable, not a low-confidence
+                    // signal. The independently calibrated acoustic limit still
+                    // applies; no threshold is relaxed because of this missing field.
                     var ambiguous = false
                     for competitor in words where competitor.entryID != word.entryID {
                         try Task.checkCancellation()
