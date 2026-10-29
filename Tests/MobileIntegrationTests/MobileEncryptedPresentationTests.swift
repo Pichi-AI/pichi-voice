@@ -4,8 +4,8 @@ import UIKit
 import XCTest
 @testable import PichiVoiceMobile
 
-/// The publisher retains a trusted read path. Only local presentation omits
-/// encrypted content, while ordinary meetings from before opt-in stay visible.
+/// Shared device guest history stays visible. Account-protected presentation and
+/// trusted publication retain their existing per-record boundaries.
 @MainActor
 final class MobileEncryptedPresentationTests: XCTestCase {
     func testEncryptedGuestHistoryIsVisibleWhileAccountProtectionStaysConcealed() async {
@@ -14,7 +14,8 @@ final class MobileEncryptedPresentationTests: XCTestCase {
         var account = session(title: "Protected account recording", concealed: true)
         account.profileOwnership = .init(profileID: "synthetic-account", issuer: "https://identity.invalid",
             subject: "synthetic", internalUserID: "synthetic", organizationID: "org", workspaceID: "workspace")
-        let history = MeetingHistorySnapshot { [guest, account] }
+        let values = [guest, account]
+        let history = MeetingHistorySnapshot { values }
         await history.refresh()
         XCTAssertEqual(history.sessions.map(\.id), [guest.id])
         XCTAssertTrue(guest.requiresEncryptedPersistence == true)
