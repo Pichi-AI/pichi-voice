@@ -72,6 +72,23 @@ struct GigaAMVocabulary: Sendable {
     }
 }
 
+/// Already-collapsed native CTC evidence, independent of its inference backend.
+struct GigaAMCTCEmission: Sendable {
+    let piece: String
+    let start: TimeInterval
+    let end: TimeInterval
+    let confidence: Float
+
+    init(piece: String, start: TimeInterval, end: TimeInterval, confidence: Float) {
+        self.piece = piece
+        self.start = start
+        self.end = end
+        // Some runtimes do not provide calibrated token probabilities. Preserve
+        // their text while using finite zero for the existing unknown-score slot.
+        self.confidence = confidence.isFinite && (0...1).contains(confidence) ? confidence : 0
+    }
+}
+
 struct GigaAMCTC {
     static let frameDuration: TimeInterval = 0.04
 
@@ -103,6 +120,23 @@ struct GigaAMCTC {
             }
             previous = best
         }
+        let emissions = tokens.map {
+            GigaAMCTCEmission(piece: $0.piece,
+                             start: Double($0.startFrame) * Self.frameDuration,
+                             end: Double($0.endFrame + 1) * Self.frameDuration,
+                             confidence: $0.probability)
+        }
+        return try Self.words(emissions: emissions, subword: vocabulary.subword, audioDuration: audioDuration)
+    }
+
+    /// Both ONNX logits and native GGUF tokens use the same lexical envelope.
+    static func words(emissions: [GigaAMCTCEmission], subword: Bool,
+                      audioDuration: TimeInterval) throws -> [GigaAMWordTiming] {
+        guard audioDuration.isFinite, audioDuration >= 0,
+              emissions.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end >= $0.start }),
+              zip(emissions, emissions.dropFirst()).allSatisfy({ $0.start <= $1.start }) else {
+            throw GigaAMError.invalidOutput
+        }
         var words: [GigaAMWordTiming] = []
         var currentText = ""
         var start = 0.0
@@ -124,20 +158,20 @@ struct GigaAMCTC {
             lexicalStart = nil
             lexicalEnd = nil
         }
-        for token in tokens {
-            let wordBoundary = vocabulary.subword ? token.piece.hasPrefix("▁") : token.piece == " "
+        for token in emissions {
+            let wordBoundary = subword ? token.piece.hasPrefix("▁") : token.piece == " "
             if wordBoundary { flush() }
-            let piece = vocabulary.subword ? token.piece.replacingOccurrences(of: "▁", with: " ") : token.piece
+            let piece = subword ? token.piece.replacingOccurrences(of: "▁", with: " ") : token.piece
             let body = piece.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !body.isEmpty else { continue }
-            if currentText.isEmpty { start = Double(token.startFrame) * Self.frameDuration }
+            if currentText.isEmpty { start = token.start }
             currentText += body
-            end = Double(token.endFrame + 1) * Self.frameDuration
+            end = token.end
             if body.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) {
-                if lexicalStart == nil { lexicalStart = Double(token.startFrame) * Self.frameDuration }
+                if lexicalStart == nil { lexicalStart = token.start }
                 lexicalEnd = end
             }
-            probabilities.append(token.probability)
+            probabilities.append(token.confidence)
         }
         flush()
         return words
@@ -153,6 +187,7 @@ public enum GigaAMError: LocalizedError {
     case checksumMismatch(String)
     case notPrepared
     case incompatibleModel
+    case memoryBudgetExceeded
 
     public var errorDescription: String? {
         switch self {
@@ -163,7 +198,8 @@ public enum GigaAMError: LocalizedError {
         case .missingModels(let directory): return "Import the GigaAM model folder in Settings. Expected model files in \(directory.path)."
         case .checksumMismatch(let file): return "GigaAM checksum verification failed for \(file)."
         case .notPrepared: return "GigaAM is not loaded."
-        case .incompatibleModel: return "This ONNX export is not a supported GigaAM v3 CTC model."
+        case .incompatibleModel: return "This export is not a supported GigaAM v3 CTC model."
+        case .memoryBudgetExceeded: return "Not enough memory is available for this GigaAM export. Close other apps and try again."
         }
     }
 }

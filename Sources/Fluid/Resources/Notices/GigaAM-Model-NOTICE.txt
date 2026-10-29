@@ -1,4 +1,4 @@
-GigaAM v3 public ONNX model attribution
+GigaAM v3 public model attribution
 
 Base model: ai-sage/GigaAM-v3, GigaChat Team
 https://huggingface.co/ai-sage/GigaAM-v3
@@ -8,9 +8,26 @@ Pinned revision: 322c3b29492673eb7d0b434bfa9dfb8653e34d02
 Pinned model card:
 https://huggingface.co/istupakov/gigaam-v3-onnx/blob/322c3b29492673eb7d0b434bfa9dfb8653e34d02/README.md
 
-The public download used by a fresh Pichi Voice installation is the converted
-and quantized v3_e2e_ctc.int8.onnx with v3_e2e_ctc_vocab.txt. It is the Russian
-GigaAM v3 E2E CTC INT8 export, without a private end-of-utterance (EOU) head.
+The GPU profile uses Handy's published Q8_0 GGUF conversion:
+https://huggingface.co/handy-computer/gigaam-v3-e2e-ctc-gguf
+Pinned revision: 59717de63d50dd9dd93b3249da6ad3f2f1c4ad6b
+File: gigaam-v3-e2e-ctc-Q8_0.gguf
+SHA-256: 9ccce4750dc813a493d96ca15ee251712bedec15ac9a02fa3d2bd732f08ae5eb
+It embeds its frontend and vocabulary and serves CPU and Metal through the
+already bundled transcribe.cpp runtime. No weights or graph are modified by
+the application. The original ONNX INT8 remains the compact CPU profile for
+devices outside the automatic GPU capacity policy.
+
+Optional imports also support the unchanged Core ML conversion by Ivan Ushakov
+(Inhum): https://huggingface.co/inhum/gigaam-v3-coreml
+Pinned revision: 43dc96918bc232deafa7b7d0600fb499806f7ac1
+The package includes the author's exact window, filterbank and vocabulary.
+All six files are pinned by SHA-256 in GigaAMModelCatalog. It is not an
+automatic fallback download; capacity is checked before compilation.
+
+The earlier v3_e2e_ctc.int8.onnx export remains registered for existing imports
+and pinned jobs. Both public exports are Russian GigaAM v3 E2E CTC without a
+private end-of-utterance (EOU) head.
 The inherited settings identifier gigaam-v3-eou is retained for compatibility;
 it does not identify an EOU head in this public artifact. Separately imported
 private EOU exports have their own fingerprints and are not distributed here.

@@ -120,6 +120,13 @@ private final class FakeMeetingTranscriptionProvider: TranscriptionProvider, @un
 
     private let lock = NSLock()
     private var ready = false
+    private var reportedExecutionStatus: TranscriptionExecutionStatus?
+    var executionStatus: TranscriptionExecutionStatus? {
+        self.lock.withLock { self.ready ? self.reportedExecutionStatus : nil }
+    }
+    func reportExecutionStatus(_ value: TranscriptionExecutionStatus) {
+        self.lock.withLock { self.reportedExecutionStatus = value }
+    }
     private var prepareCallCount = 0
     private var gate: ContinuationGate?
     private var error: Error?
@@ -1412,6 +1419,31 @@ final class ASRServiceMeetingASRScopeTests: XCTestCase {
         XCTAssertTrue(harness.recorder.events.isEmpty)
         XCTAssertFalse(harness.owner.isClaimed)
         XCTAssertEqual(harness.provider.prepareCalls, 0)
+    }
+
+    func testExecutionStatusRetiresAfterJoinedScopeSuccessAndFailure() async throws {
+        enum ExpectedFailure: Error { case injected }
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        settings.selectedSpeechModel = .gigaam
+        defer { settings.selectedSpeechModel = previous }
+        let harness = self.makeHarness()
+        harness.provider.reportExecutionStatus(.init(backend: .gpu))
+        let lease = try harness.acquireMeetingLease()
+        defer { harness.service.releaseExclusiveActivity(lease) }
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: SettingsStore.SpeechModel.gigaam.rawValue, languageCode: "ru")
+        for fail in [false, true] {
+            do {
+                _ = try await harness.service.withPreparedMeetingASR(attemptID: UUID(), configuration: configuration) { _ in
+                    XCTAssertEqual(harness.service.executionStatus(for: .gigaam), .init(backend: .gpu))
+                    if fail { throw ExpectedFailure.injected }
+                    return "done"
+                }
+                XCTAssertFalse(fail)
+            } catch ExpectedFailure.injected { XCTAssertTrue(fail) }
+            XCTAssertFalse(harness.provider.isReady)
+            XCTAssertNil(harness.service.executionStatus(for: .gigaam))
+        }
     }
 
     func testScopeSuccessPassesConfigurationThroughAndDrainsInOrder() async throws {

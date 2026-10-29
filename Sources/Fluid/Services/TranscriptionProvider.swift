@@ -172,6 +172,33 @@ nonisolated struct ASRSegmentTiming: Codable, Sendable, Equatable {
     }
 }
 
+/// The prepared execution policy reported by a provider. This is configuration,
+/// not a measurement of GPU or Neural Engine utilization.
+nonisolated struct TranscriptionExecutionStatus: Sendable, Equatable {
+    enum Backend: String, Sendable {
+        case cpu
+        case gpu
+        case neuralEngine
+
+        var label: String {
+            switch self {
+            case .cpu: return "CPU"
+            case .gpu: return "GPU"
+            case .neuralEngine: return "Neural Engine"
+            }
+        }
+    }
+
+    let backend: Backend
+    /// A bounded localization key supplied by the adapter, never a raw inference error.
+    let fallbackReason: String?
+
+    init(backend: Backend, fallbackReason: String? = nil) {
+        self.backend = backend
+        self.fallbackReason = fallbackReason
+    }
+}
+
 // MARK: - Transcription Provider Protocol
 
 /// Protocol that abstracts speech-to-text transcription.
@@ -185,6 +212,9 @@ protocol TranscriptionProvider {
 
     /// Whether models are downloaded and ready
     var isReady: Bool { get }
+
+    /// Current prepared execution policy, or nil when the provider does not report it.
+    var executionStatus: TranscriptionExecutionStatus? { get }
 
     /// Download/prepare models for transcription.
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws
@@ -252,6 +282,7 @@ protocol TranscriptionProvider {
 
 // Default implementation for optional methods
 extension TranscriptionProvider {
+    var executionStatus: TranscriptionExecutionStatus? { nil }
     @MainActor func beginAdmittedTranscription(leaseID: UUID) throws {}
     @MainActor func endAdmittedTranscription(leaseID: UUID) async {}
     func modelsExistOnDisk() -> Bool { return false }

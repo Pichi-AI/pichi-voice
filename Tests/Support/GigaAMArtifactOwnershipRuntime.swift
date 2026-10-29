@@ -53,6 +53,9 @@ public actor GigaAMArtifactTestGate {
 
 public actor GigaAMRuntime {
     public init() throws {}
+    public var executionStatus: GigaAMExecutionStatus? { nil }
+    public var isReady: Bool { false }
+    public func beginAttempt() throws {}
     public func load(descriptor: GigaAMModelDescriptor, directory: URL) async throws {
         try await GigaAMArtifactTestGate.shared.load(descriptor: descriptor, directory: directory)
     }
