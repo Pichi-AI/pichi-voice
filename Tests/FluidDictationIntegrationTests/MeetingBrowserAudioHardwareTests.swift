@@ -30,6 +30,9 @@ import XCTest
 /// occur. The optional transcript stays in the private outcome, never stdout or an attachment.
 /// Start/stop deadlines cancel cooperatively and join ownership before returning; the caller must
 /// retain the outer XCTest/process watchdog for an unresponsive OS audio service.
+/// CONTINUITY=1 extends this same selected-application probe to 60...150 seconds, permits a
+/// silent application track, and requires continuous microphone delivery to the live PCM hook.
+/// This mode checks capture/delivery during externally operated sharing, not ASR word accuracy.
 @MainActor
 final class MeetingBrowserAudioHardwareTests: XCTestCase {
     func testSelectedBrowserSpeechIsSavedInApplicationTrackWhenEnabled() async throws {
@@ -86,13 +89,16 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
         let directory = try await store.sessionDirectory(for: session.id)
         let engine = MeetingCaptureEngine()
         let events = BrowserCaptureEvents()
+        let live = BrowserCaptureLiveInput()
+        var finalLiveInput: [String: BrowserCaptureLiveTrack] = [:]
         let immutableSession = session
         let start: MeetingCaptureStartResult
         do {
             start = try await Self.withDeadline(seconds: 8) {
                 try await engine.start(
                     session: immutableSession, configuration: configuration,
-                    sessionDirectory: directory, eventHandler: { events.record($0) }
+                    sessionDirectory: directory, eventHandler: { events.record($0) },
+                    liveAudioHandler: { kind, sample in live.record(kind, sample: sample) }
                 )
             }
             session.audioTracks = start.tracks
@@ -105,7 +111,21 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
                 sessionDirectory: directory.path, durationSeconds: options.durationSeconds,
                 readyAt: Date()
             ), to: options.root.appendingPathComponent("capture-ready.json"))
-            try await Task.sleep(nanoseconds: UInt64(options.durationSeconds * 1_000_000_000))
+            if options.continuity {
+                let deadline = ProcessInfo.processInfo.systemUptime + options.durationSeconds
+                var snapshotIndex = 0
+                while ProcessInfo.processInfo.systemUptime < deadline {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                    snapshotIndex += 1
+                    let snapshot = live.snapshot(includeCurrentGap: true)
+                    try Self.write(snapshot, to: options.root.appendingPathComponent("live-input.json"))
+                    try Self.write(snapshot, to: options.root.appendingPathComponent(String(format: "live-input-%04d.json", snapshotIndex)))
+                }
+            } else {
+                try await Task.sleep(nanoseconds: UInt64(options.durationSeconds * 1_000_000_000))
+            }
+            // Freeze before Stop/decode so intentional teardown cannot look like capture starvation.
+            finalLiveInput = live.snapshot(includeCurrentGap: true)
             try Task.checkCancellation()
             let sessionID = session.id
             let stop = try await Self.withDeadline(seconds: 8) {
@@ -137,7 +157,9 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
 
         // The legacy browser probe includes startup/ready/drain time outside its 5...30-second
         // stimulus wait. Preserve its original 60-second decode cap rather than using that wait.
-        let tracks = try session.audioTracks.map { try Self.measure($0, in: directory, maximumCaptureDuration: 60) }
+        let tracks = try session.audioTracks.map {
+            try Self.measure($0, in: directory, maximumCaptureDuration: options.continuity ? options.durationSeconds + 20 : 60)
+        }
         let eventSummary = events.summary()
         var failures: [String] = []
         let terminalInterruptions: [MeetingInterruptionKind] = [
@@ -153,15 +175,32 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
         if Set(tracks.map(\.kind)) != Set(["applicationAudio", "microphone"]) {
             failures.append("Real meeting capture did not produce both tracks.")
         }
-        for track in tracks where track.chunkCount == 0 || track.finalizedChunkCount != track.chunkCount
-            || track.persistedBytes == 0 || track.decodedFrames == 0 || track.nonFiniteSamples > 0 {
+        for track in tracks where (!options.continuity || track.kind == "microphone") && (track.chunkCount == 0 || track.finalizedChunkCount != track.chunkCount
+            || track.persistedBytes == 0 || track.decodedFrames == 0 || track.nonFiniteSamples > 0) {
             failures.append("\(track.kind) has missing, unfinalized, empty, or invalid audio.")
         }
         if let browser = tracks.first(where: { $0.kind == "applicationAudio" }) {
-            if browser.sourceIdentifier != options.bundleID || browser.rms <= 0.001
-                || browser.peak <= 0.01 || browser.nonSilentSeconds < 0.5 {
+            if browser.sourceIdentifier != options.bundleID || (!options.continuity && (browser.rms <= 0.001
+                || browser.peak <= 0.01 || browser.nonSilentSeconds < 0.5)) {
                 failures.append("Selected applicationAudio did not contain the externally played speech signal.")
             }
+        }
+        let liveInput = finalLiveInput
+        if options.continuity {
+            if let microphone = liveInput["microphone"], microphone.callbacks > 0 {
+                if microphone.invalidCallbacks > 0 || microphone.overlappingCallbacks > 0 || microphone.backwardCallbacks > 0 {
+                    failures.append("Live microphone PCM contains invalid, overlapping, or backward callbacks.")
+                }
+                if microphone.maximumArrivalGapSeconds > 3 || microphone.maximumPresentationGapSeconds > 3 {
+                    failures.append("Live microphone PCM delivery stalled for more than three seconds.")
+                }
+                if microphone.deliveredDurationSeconds < options.durationSeconds - 3 {
+                    failures.append("Live microphone PCM coverage is shorter than the controlled capture interval.")
+                }
+            } else {
+                failures.append("Production capture did not deliver microphone PCM to its live handler.")
+            }
+            try Self.write(liveInput, to: options.root.appendingPathComponent("live-input.json"))
         }
         var speechText: String?
         do {
@@ -182,7 +221,8 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
             runID: options.runID, targetBundleID: options.bundleID, durationSeconds: options.durationSeconds,
             status: failures.isEmpty ? "passed" : "failed", failures: failures,
             sessionDirectory: directory.path, captureScope: start.captureScope.map { String(describing: $0) },
-            tracks: tracks, events: eventSummary, speechText: speechText
+            tracks: tracks, events: eventSummary, speechText: speechText,
+            liveInput: liveInput
         )
     }
 
@@ -343,6 +383,7 @@ private struct BrowserCaptureOptions {
     let durationSeconds: Double
     let modelDirectory: URL?
     let expectedText: String?
+    let continuity: Bool
 
     init(environment: [String: String]) throws {
         func required(_ suffix: String) throws -> String {
@@ -364,9 +405,11 @@ private struct BrowserCaptureOptions {
             throw BrowserCaptureFailure(message: "RUN_ID must be a fresh UUID.")
         }
         self.runID = runID
-        let rawDuration = environment["PICHI_BROWSER_CAPTURE_DURATION_SECONDS"] ?? "25"
-        guard let duration = Double(rawDuration), duration.isFinite, (5...30).contains(duration) else {
-            throw BrowserCaptureFailure(message: "DURATION_SECONDS must be in 5...30.")
+        self.continuity = environment["PICHI_BROWSER_CAPTURE_CONTINUITY"] == "1"
+        let rawDuration = environment["PICHI_BROWSER_CAPTURE_DURATION_SECONDS"] ?? (self.continuity ? "120" : "25")
+        let allowedDuration = self.continuity ? 60.0...150.0 : 5.0...30.0
+        guard let duration = Double(rawDuration), duration.isFinite, allowedDuration.contains(duration) else {
+            throw BrowserCaptureFailure(message: "DURATION_SECONDS is outside the selected bounded capture range.")
         }
         self.durationSeconds = duration
         let modelPath = environment["PICHI_BROWSER_CAPTURE_GIGAAM_MODEL_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -412,6 +455,87 @@ private struct BrowserCaptureReport: Encodable {
     let tracks: [BrowserCaptureTrackMetrics]
     let events: BrowserCaptureEventSummary?
     let speechText: String?
+    var liveInput: [String: BrowserCaptureLiveTrack]? = nil
+}
+
+private nonisolated struct BrowserCaptureLiveTrack: Encodable, Sendable {
+    var callbacks = 0
+    var frames: Int64 = 0
+    var deliveredDurationSeconds = 0.0
+    var invalidCallbacks = 0
+    var overlappingCallbacks = 0
+    var backwardCallbacks = 0
+    var maximumArrivalGapSeconds = 0.0
+    var maximumPresentationGapSeconds = 0.0
+    var firstPresentationSeconds: Double?
+    var lastPresentationStartSeconds: Double?
+    var lastPresentationEndSeconds: Double?
+    var lastArrivalUptime: Double?
+}
+
+/// Numeric-only, bounded evidence of the actual production capture-to-live-callback boundary.
+private final nonisolated class BrowserCaptureLiveInput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tracks: [String: BrowserCaptureLiveTrack] = [:]
+
+    func record(_ kind: MeetingAudioTrackKind, sample: CMSampleBuffer) {
+        let frames = CMSampleBufferGetNumSamples(sample)
+        guard frames > 0, let description = CMSampleBufferGetFormatDescription(sample),
+              let format = CMAudioFormatDescriptionGetStreamBasicDescription(description),
+              format.pointee.mSampleRate.isFinite, format.pointee.mSampleRate > 0 else {
+            self.recordInvalid(kind)
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        let start = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample))
+        guard start.isFinite else { self.recordInvalid(kind); return }
+        let end = start + Double(frames) / format.pointee.mSampleRate
+        self.lock.withLock {
+            var value = self.tracks[kind.rawValue] ?? BrowserCaptureLiveTrack()
+            value.callbacks += 1
+            value.frames += Int64(frames)
+            value.deliveredDurationSeconds += Double(frames) / format.pointee.mSampleRate
+            if let previous = value.lastArrivalUptime {
+                value.maximumArrivalGapSeconds = max(value.maximumArrivalGapSeconds, now - previous)
+            }
+            if let previous = value.lastPresentationEndSeconds {
+                value.maximumPresentationGapSeconds = max(value.maximumPresentationGapSeconds, start - previous)
+                if start < previous - 1 / format.pointee.mSampleRate - 0.000_001 {
+                    value.overlappingCallbacks += 1
+                }
+            }
+            if let previous = value.lastPresentationStartSeconds, start < previous {
+                value.backwardCallbacks += 1
+            }
+            value.firstPresentationSeconds = value.firstPresentationSeconds ?? start
+            value.lastPresentationStartSeconds = start
+            value.lastPresentationEndSeconds = end
+            value.lastArrivalUptime = now
+            self.tracks[kind.rawValue] = value
+        }
+    }
+
+    private func recordInvalid(_ kind: MeetingAudioTrackKind) {
+        self.lock.withLock {
+            var value = self.tracks[kind.rawValue] ?? BrowserCaptureLiveTrack()
+            value.invalidCallbacks += 1
+            self.tracks[kind.rawValue] = value
+        }
+    }
+
+    func snapshot(includeCurrentGap: Bool = false) -> [String: BrowserCaptureLiveTrack] {
+        self.lock.withLock {
+            guard includeCurrentGap else { return self.tracks }
+            let now = ProcessInfo.processInfo.systemUptime
+            return self.tracks.mapValues { original in
+                var value = original
+                if let last = value.lastArrivalUptime {
+                    value.maximumArrivalGapSeconds = max(value.maximumArrivalGapSeconds, now - last)
+                }
+                return value
+            }
+        }
+    }
 }
 
 fileprivate struct BrowserCaptureTrackMetrics: Encodable {

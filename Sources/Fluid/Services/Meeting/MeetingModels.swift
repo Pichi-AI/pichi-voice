@@ -215,8 +215,8 @@ nonisolated struct MeetingApplicationIdentity: Codable, Equatable, Sendable {
     var displayID: UInt32?
     /// The specific window auto-detection found evidence in. Additive/optional so pre-existing
     /// manifests still decode (synthesized Codable uses decodeIfPresent/encodeIfPresent for
-    /// Optional properties). `MeetingWindowSelector` prefers it when set and it still exists —
-    /// prevents recording a different foreground window than the one that was actually detected.
+    /// Optional properties). This remains detection evidence; selected-application audio follows
+    /// the resolved process across window changes instead of binding capture to this window.
     var windowID: UInt32?
 
     init(

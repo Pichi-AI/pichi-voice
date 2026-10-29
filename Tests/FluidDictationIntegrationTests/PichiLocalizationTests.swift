@@ -253,7 +253,7 @@ final class PichiLocalizationTests: XCTestCase {
 
     func testMeetingHealthWarningsUseCompiledCatalogWithoutChangingPersistedDiagnostics() throws {
         let warnings = [
-            "No meeting audio is being captured while your microphone is active.": "Звук встречи не записывается, хотя микрофон активен.",
+            "No meeting audio is being captured while your microphone is active.": "В приложении тихо; микрофон активен.",
             "Capture delivered an invalid audio sample.": "Получен некорректный аудиосэмпл.",
             "Capture delivered audio without a valid presentation timestamp.": "Получено аудио без корректной временной метки.",
             "Capture delivered audio from a retired producer epoch.": "Получено аудио от уже заменённого источника захвата.",
@@ -262,13 +262,15 @@ final class PichiLocalizationTests: XCTestCase {
         ]
         let french = try XCTUnwrap(PichiInterfaceLanguage(rawValue: "fr"))
         for (detail, translated) in warnings {
+            let english = detail == "No meeting audio is being captured while your microphone is active."
+                ? "The app is quiet; your microphone is active." : detail
             var health = MeetingTrackHealth.waiting
             health.status = .degraded
             health.detail = detail
             let stored = try JSONEncoder().encode(health)
             XCTAssertEqual(health.localizedStatusText(language: .russian), translated)
-            XCTAssertEqual(health.localizedStatusText(language: .english), detail)
-            XCTAssertEqual(health.localizedStatusText(language: french), detail)
+            XCTAssertEqual(health.localizedStatusText(language: .english), english)
+            XCTAssertEqual(health.localizedStatusText(language: french), english)
             XCTAssertEqual(try JSONDecoder().decode(MeetingTrackHealth.self, from: stored), health)
             XCTAssertEqual(health.detail, detail)
         }
