@@ -43,7 +43,6 @@ nonisolated enum GigaAMDictionaryAcoustics {
     struct Output: Sendable {
         let text: String
         let evidence: [DictionaryAcousticEvidence]
-        let spellings: [DictionaryVoiceSpelling]
     }
 
     static func referenceCacheKey(_ snapshot: Snapshot) -> String {
@@ -153,7 +152,7 @@ nonisolated enum GigaAMDictionaryAcoustics {
     @concurrent static func correct(
         transcript: GigaAMTranscript, samples: [Float], snapshot: Snapshot, words: [Word]
     ) async throws -> Output {
-        let raw = Output(text: transcript.text, evidence: [], spellings: [])
+        let raw = Output(text: transcript.text, evidence: [])
         guard snapshot.enabled, !words.isEmpty, !transcript.words.isEmpty,
               transcript.words.count <= maximumWordCount,
               samples.count <= DictionaryLearningRecording.maximumSamples else { return raw }
@@ -253,6 +252,19 @@ nonisolated enum GigaAMDictionaryAcoustics {
                 // Missing native confidence is not evidence of uncertainty. It needs
                 // an especially close acoustic match before changing a word.
                 guard candidate.hasConfidence || match.distance <= 0.02 else { continue }
+                // Coarse ranking is an optimization, never an ambiguity decision.
+                // Even a competing label outside the shortlist can veto this cut.
+                var ambiguous = false
+                for competitor in words where competitor.entryID != word.entryID {
+                    try Task.checkCancellation()
+                    if let other = try GigaAMAcousticMatcher.match(query: candidate.features,
+                        references: competitor.references, calibration: competitor.calibration,
+                        negativeReferences: competitor.negatives), other.distance < match.distance + 0.01 {
+                        ambiguous = true
+                        break
+                    }
+                }
+                guard !ambiguous else { continue }
                 candidates.append(Candidate(word: word, range: candidate.range, distance: match.distance, features: candidate.features))
             }
         }
@@ -279,10 +291,8 @@ nonisolated enum GigaAMDictionaryAcoustics {
                 label: candidate.word.label, profileKey: candidate.word.profileKey, modelKey: snapshot.modelKey,
                 sourceWordRange: candidate.range.lowerBound..<(candidate.range.upperBound + 1), frames: frames)
         }
-        let spellings = accepted.map { candidate in
-            DictionaryVoiceSpelling(entryID: candidate.word.entryID, label: candidate.word.label,
-                                    spelling: candidate.range.map { source[$0].text }.joined(separator: " "))
-        }
-        return Output(text: text, evidence: evidence, spellings: spellings)
+        // Acoustic consistency never grants permission to create a global text
+        // trigger. In particular BIMCheck must not silently become AI Enablement.
+        return Output(text: text, evidence: evidence)
     }
 }

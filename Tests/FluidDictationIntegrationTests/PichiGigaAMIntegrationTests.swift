@@ -54,7 +54,7 @@ extension PichiGigaAMIntegrationTests {
         let output = try await GigaAMDictionaryAcoustics.correct(transcript: result, samples: samples, snapshot: snapshot, words: words)
         XCTAssertEqual(output.text, "До Термин после.")
         XCTAssertEqual(output.evidence.first?.sourceWordRange, 1..<2)
-        XCTAssertEqual(output.spellings.first?.spelling, "ошибка")
+        XCTAssertFalse(entry.triggers.contains("ошибка"), "An acoustic match must not grant a global text replacement")
 
         // Another artifact's references must never be reused merely because the
         // dictionary word or vector dimension happens to be the same.

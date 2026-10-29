@@ -614,11 +614,10 @@ final class PichiGigaAMProvider: TranscriptionProvider {
                 text = corrected.text
                 alignment.acousticOutput = text
                 alignment.acousticEvidence = corrected.evidence
-                alignment.voiceSpellings = corrected.spellings
             }
         }
         return ASRTranscriptionResult(text: text, confidence: result.confidence,
-            dictionaryLearningAlignment: alignment, endOfUtteranceProbability: result.endOfUtteranceProbability)
+            endOfUtteranceProbability: result.endOfUtteranceProbability, dictionaryLearningAlignment: alignment)
     }
 
     func transcribeDictionaryTraining(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -640,7 +639,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         try Task.checkCancellation()
         guard self.lifecycleGeneration == generation, self.isReady else { throw CancellationError() }
         return ASRTranscriptionResult(text: result.text, confidence: result.confidence,
-            pronunciationEnrollment: capture, endOfUtteranceProbability: result.endOfUtteranceProbability)
+            endOfUtteranceProbability: result.endOfUtteranceProbability, pronunciationEnrollment: capture)
     }
 
     func originalAudioEnrollment(_ evidence: DictionaryLearningAudioEvidence) async throws -> PronunciationEnrollmentCapture? {
