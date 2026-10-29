@@ -25742,13 +25742,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No meeting audio is being captured while your microphone is active."
+            "value": "The app is quiet; your microphone is active."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Звук встречи не записывается, хотя микрофон активен."
+            "value": "В приложении тихо; микрофон активен."
           }
         }
       }
