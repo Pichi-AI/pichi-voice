@@ -254,16 +254,12 @@ final class MeetingDesktopTranscriptParagraphTests: XCTestCase {
             window.makeKeyAndOrderFront(nil)
             NSApplication.shared.activate(ignoringOtherApps: true)
             defer { window.contentView = nil; window.close() }
-            // The actual view owns its separate cancellable projection. Give its task/run loop
-            // a bounded opportunity to render before retaining this first native view frame.
+            // The actual view owns a separate cancellable projection. External native capture
+            // verifies real composited pixels; caching a layer-backed hosting view is not proof.
             for _ in 0..<20 {
                 try await Task.sleep(for: .milliseconds(100))
                 host.layoutSubtreeIfNeeded(); window.displayIfNeeded()
             }
-            let image = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: image)
-            try XCTUnwrap(image.representation(using: .png, properties: [:]))
-                .write(to: directory.appendingPathComponent("\(label)-native.png"), options: .atomic)
             let reviewToken = UUID().uuidString
             try JSONSerialization.data(withJSONObject: ["phase": label, "pid": ProcessInfo.processInfo.processIdentifier,
                 "window": window.title, "reviewToken": reviewToken], options: [.prettyPrinted])
