@@ -113,9 +113,13 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
             ), to: options.root.appendingPathComponent("capture-ready.json"))
             if options.continuity {
                 let deadline = ProcessInfo.processInfo.systemUptime + options.durationSeconds
+                var snapshotIndex = 0
                 while ProcessInfo.processInfo.systemUptime < deadline {
                     try await Task.sleep(nanoseconds: 1_000_000_000)
-                    try Self.write(live.snapshot(includeCurrentGap: true), to: options.root.appendingPathComponent("live-input.json"))
+                    snapshotIndex += 1
+                    let snapshot = live.snapshot(includeCurrentGap: true)
+                    try Self.write(snapshot, to: options.root.appendingPathComponent("live-input.json"))
+                    try Self.write(snapshot, to: options.root.appendingPathComponent(String(format: "live-input-%04d.json", snapshotIndex)))
                 }
             } else {
                 try await Task.sleep(nanoseconds: UInt64(options.durationSeconds * 1_000_000_000))
@@ -184,6 +188,9 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
         let liveInput = finalLiveInput
         if options.continuity {
             if let microphone = liveInput["microphone"], microphone.callbacks > 0 {
+                if microphone.invalidCallbacks > 0 || microphone.overlappingCallbacks > 0 || microphone.backwardCallbacks > 0 {
+                    failures.append("Live microphone PCM contains invalid, overlapping, or backward callbacks.")
+                }
                 if microphone.maximumArrivalGapSeconds > 3 || microphone.maximumPresentationGapSeconds > 3 {
                     failures.append("Live microphone PCM delivery stalled for more than three seconds.")
                 }
@@ -451,13 +458,17 @@ private struct BrowserCaptureReport: Encodable {
     var liveInput: [String: BrowserCaptureLiveTrack]? = nil
 }
 
-private struct BrowserCaptureLiveTrack: Encodable {
+private nonisolated struct BrowserCaptureLiveTrack: Encodable, Sendable {
     var callbacks = 0
     var frames: Int64 = 0
     var deliveredDurationSeconds = 0.0
+    var invalidCallbacks = 0
+    var overlappingCallbacks = 0
+    var backwardCallbacks = 0
     var maximumArrivalGapSeconds = 0.0
     var maximumPresentationGapSeconds = 0.0
     var firstPresentationSeconds: Double?
+    var lastPresentationStartSeconds: Double?
     var lastPresentationEndSeconds: Double?
     var lastArrivalUptime: Double?
 }
@@ -471,10 +482,13 @@ private final nonisolated class BrowserCaptureLiveInput: @unchecked Sendable {
         let frames = CMSampleBufferGetNumSamples(sample)
         guard frames > 0, let description = CMSampleBufferGetFormatDescription(sample),
               let format = CMAudioFormatDescriptionGetStreamBasicDescription(description),
-              format.pointee.mSampleRate.isFinite, format.pointee.mSampleRate > 0 else { return }
+              format.pointee.mSampleRate.isFinite, format.pointee.mSampleRate > 0 else {
+            self.recordInvalid(kind)
+            return
+        }
         let now = ProcessInfo.processInfo.systemUptime
         let start = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample))
-        guard start.isFinite else { return }
+        guard start.isFinite else { self.recordInvalid(kind); return }
         let end = start + Double(frames) / format.pointee.mSampleRate
         self.lock.withLock {
             var value = self.tracks[kind.rawValue] ?? BrowserCaptureLiveTrack()
@@ -486,10 +500,25 @@ private final nonisolated class BrowserCaptureLiveInput: @unchecked Sendable {
             }
             if let previous = value.lastPresentationEndSeconds {
                 value.maximumPresentationGapSeconds = max(value.maximumPresentationGapSeconds, start - previous)
+                if start < previous - 1 / format.pointee.mSampleRate - 0.000_001 {
+                    value.overlappingCallbacks += 1
+                }
+            }
+            if let previous = value.lastPresentationStartSeconds, start < previous {
+                value.backwardCallbacks += 1
             }
             value.firstPresentationSeconds = value.firstPresentationSeconds ?? start
+            value.lastPresentationStartSeconds = start
             value.lastPresentationEndSeconds = end
             value.lastArrivalUptime = now
+            self.tracks[kind.rawValue] = value
+        }
+    }
+
+    private func recordInvalid(_ kind: MeetingAudioTrackKind) {
+        self.lock.withLock {
+            var value = self.tracks[kind.rawValue] ?? BrowserCaptureLiveTrack()
+            value.invalidCallbacks += 1
             self.tracks[kind.rawValue] = value
         }
     }
