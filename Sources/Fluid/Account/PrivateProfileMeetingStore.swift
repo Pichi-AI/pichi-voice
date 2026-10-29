@@ -45,14 +45,25 @@ extension PrivateProfileRecordingObserver {
     nonisolated func captureAdmissionCancelled(id: MeetingSessionID, admission: MeetingPrivateProfileAdmission) async {}
 }
 
-/// One adapter for existing callers. Reads follow the visible profile; admitted capture writes
-/// retain their original immutable root even when logout conceals that profile.
+/// Guest recordings belong to the device and remain visible alongside the selected account.
+/// Account recordings and admitted capture writes retain their original immutable roots.
 actor PrivateProfileMeetingStore: MeetingSessionStoring {
-    static let shared = PrivateProfileMeetingStore()
+    static let shared = PrivateProfileMeetingStore(sharedGuestCipherProvider: {
+        try await MeetingRecordingKeychainStore(namespace: MeetingRecordingKeychainStore.defaultNamespace)
+            .load(profileID: MeetingProfileOwnership.guest.profileID)
+    })
     private var stores: [String: MeetingSessionStore] = [:]
     private var admissions: [MeetingSessionID: MeetingPrivateProfileAdmission] = [:]
     private var recordingObserver: (any PrivateProfileRecordingObserver)?
     private var encryptedProfiles = Set<String>()
+    private let sharedGuestCipherProvider: (@Sendable () async throws -> MeetingRecordingCipher?)?
+    private var preparedGuestReaderGeneration: UUID?
+
+    /// Custom stores never access production Keychain. The production facade can restore only
+    /// an existing device-guest key, without changing the account's key or creating a new one.
+    init(sharedGuestCipherProvider: (@Sendable () async throws -> MeetingRecordingCipher?)? = nil) {
+        self.sharedGuestCipherProvider = sharedGuestCipherProvider
+    }
 
     func installRecordingObserver(_ observer: any PrivateProfileRecordingObserver) throws {
         guard recordingObserver == nil else { throw AccountError.busy }
@@ -156,15 +167,18 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
             guard (source.requiresEncryptedPersistence == true) == admitted.requiresEncryptedPersistence else { throw AccountError.staleOperation }
             profile = admitted.profile
         } else {
-            profile = try readableProfile()
-            guard let existing = try await store(for: profile).load(id: source.id), permits(existing, in: profile)
+            let reader = try readableProfile()
+            guard let resolved = try await visibleSession(id: source.id, reader: reader, transcriptOnly: false),
+                  source.profileOwnership?.matches(resolved.profile) == true
+                    || (reader.isGuest && source.profileOwnership == nil && resolved.profile.isGuest)
             else { throw AccountError.staleOperation }
-            try checkReadable(profile)
+            try checkReadable(reader)
+            profile = resolved.profile
         }
         guard profile.isGuest || source.profileOwnership != nil else { throw AccountError.staleOperation }
         if let owner = source.profileOwnership, !owner.matches(profile) { throw AccountError.staleOperation }
         var session = source
-        // Older guest manifests gain only an explicit guest marker, never the next login's owner.
+        // A shared guest edit keeps guest provenance; reading never rewrites the legacy file.
         session.profileOwnership = .init(profile: profile)
         try await store(for: profile).save(session)
         if session.state == .completed, let admitted = admissions[session.id] {
@@ -173,37 +187,34 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     }
 
     func load(id: MeetingSessionID) async throws -> MeetingSession? {
-        let profile = try readableProfile()
-        let session = try await store(for: profile).load(id: id)
-        try checkReadable(profile)
-        guard let session, permits(session, in: profile) else { return nil }
-        return session
+        let reader = try readableProfile()
+        return try await visibleSession(id: id, reader: reader, transcriptOnly: false)?.session
     }
 
     /// History/transcript reads preserve the same owner fence without reopening or hashing audio.
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? {
-        let profile = try readableProfile()
-        let session = try await store(for: profile).loadTranscript(id: id)
-        try checkReadable(profile)
-        guard let session, permits(session, in: profile) else { return nil }
-        return session
+        let reader = try readableProfile()
+        return try await visibleSession(id: id, reader: reader, transcriptOnly: true)?.session
     }
 
     func loadHistory() async throws -> [MeetingSession] {
+        try await visibleCatalog(transcriptOnly: true)
+    }
+
+    func loadAll() async throws -> [MeetingSession] {
+        try await visibleCatalog(transcriptOnly: false)
+    }
+
+    func loadHistoryForMaintenance() async throws -> [MeetingSession] {
         let profile = try readableProfile()
         let sessions = try await store(for: profile).loadHistory()
         try checkReadable(profile)
         return sessions.filter { permits($0, in: profile) }
     }
 
-    func loadAll() async throws -> [MeetingSession] {
-        let profile = try readableProfile()
-        let sessions = try await store(for: profile).loadAll()
-        try checkReadable(profile)
-        return sessions.filter { permits($0, in: profile) }
-    }
-
     func loadRecoverable() async throws -> [MeetingSession] {
+        // Startup recovery rewrites state. Shared guest recordings stay available for explicit
+        // user actions, without applying another profile's processing settings automatically.
         let profile = try readableProfile()
         let sessions = try await store(for: profile).loadRecoverable()
         try checkReadable(profile)
@@ -215,57 +226,51 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
         if let admission = admissions[id] {
             return try await store(for: admission.profile).sessionDirectory(for: id)
         }
-        let profile = try readableProfile()
-        guard let session = try await store(for: profile).load(id: id), permits(session, in: profile)
+        let reader = try readableProfile()
+        guard let resolved = try await visibleSession(id: id, reader: reader, transcriptOnly: false)
         else { throw AccountError.staleOperation }
-        try checkReadable(profile)
-        return try await store(for: profile).sessionDirectory(for: id)
+        let directory = try await store(for: resolved.profile).sessionDirectory(for: id)
+        try checkReadable(reader)
+        return directory
     }
 
     func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? {
-        let profile = try readableProfile()
-        guard let session = try await store(for: profile).load(id: id), permits(session, in: profile) else { return nil }
-        let directory = try await store(for: profile).existingSessionDirectory(for: id)
-        try checkReadable(profile)
+        let reader = try readableProfile()
+        guard let resolved = try await visibleSession(id: id, reader: reader, transcriptOnly: false) else { return nil }
+        let directory = try await store(for: resolved.profile).existingSessionDirectory(for: id)
+        try checkReadable(reader)
         return directory
     }
 
     func delete(id: MeetingSessionID) async throws {
-        let profile = try readableProfile()
-        guard let session = try await store(for: profile).load(id: id), permits(session, in: profile) else { return }
-        try checkReadable(profile)
-        try await store(for: profile).delete(id: id)
-        admissions.removeValue(forKey: id)
+        let reader = try readableProfile()
+        guard let resolved = try await visibleSession(id: id, reader: reader, transcriptOnly: false) else { return }
+        try await delete(id: id, expectedOwnership: .init(profile: resolved.profile))
     }
 
     /// A frozen current-profile owner permits an idempotent cleanup retry even when a
     /// prior filesystem removal deleted the manifest before returning an error.
     func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
-        let profile = try readableProfile()
-        guard expectedOwnership.matches(profile) else { throw AccountError.staleOperation }
-        if let session = try await store(for: profile).load(id: id) {
-            guard permits(session, in: profile), session.profileOwnership == expectedOwnership else { throw AccountError.staleOperation }
-        }
-        try checkReadable(profile)
-        try await store(for: profile).delete(id: id)
-        admissions.removeValue(forKey: id)
+        try await delete(id: id, expectedOwnership: expectedOwnership, validating: { _ in })
     }
 
     func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership,
                 validating: @Sendable (MeetingSession) throws -> Void) async throws {
-        let profile = try readableProfile()
-        guard expectedOwnership.matches(profile) else { throw AccountError.staleOperation }
-        try checkReadable(profile)
-        try await store(for: profile).delete(id: id, expectedOwnership: expectedOwnership, validating: validating)
-        try checkReadable(profile)
+        let reader = try readableProfile()
+        let profile = try await deletionProfile(id: id, expectedOwnership: expectedOwnership, reader: reader)
+        try await store(for: profile).delete(id: id, expectedOwnership: expectedOwnership, validating: { session in
+            guard self.permits(session, in: profile) else { throw AccountError.staleOperation }
+            try validating(session)
+        })
+        try checkReadable(reader)
         admissions.removeValue(forKey: id)
     }
 
     func deleteAudioFiles(for id: MeetingSessionID) async throws {
-        let profile = try readableProfile()
-        guard let session = try await store(for: profile).load(id: id), permits(session, in: profile) else { return }
-        try checkReadable(profile)
-        try await store(for: profile).deleteAudioFiles(for: id)
+        let reader = try readableProfile()
+        guard let resolved = try await visibleSession(id: id, reader: reader, transcriptOnly: false) else { return }
+        try await store(for: resolved.profile).deleteAudioFiles(for: id)
+        try checkReadable(reader)
     }
 
     /// Reload a terminal source using its original admission. Never resolve a replacement owner
@@ -279,7 +284,110 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
     }
 
     /// Lifecycle calls only after coordinator capture/finalization and private mutations join.
-    func finishProfileTransition() { admissions.removeAll(); stores.removeAll(); encryptedProfiles.removeAll() }
+    func finishProfileTransition() {
+        admissions.removeAll(); stores.removeAll(); encryptedProfiles.removeAll()
+        preparedGuestReaderGeneration = nil
+    }
+
+    private func guestProfile(for reader: PrivateProfileSnapshot) -> PrivateProfileSnapshot {
+        .init(id: MeetingProfileOwnership.guest.profileID, context: nil, generation: reader.generation,
+            rootDirectory: reader.legacyRootDirectory, legacyRootDirectory: reader.legacyRootDirectory, isReadable: true)
+    }
+
+    private func sharedGuestStore(for reader: PrivateProfileSnapshot) async throws -> (PrivateProfileSnapshot, MeetingSessionStore) {
+        let guest = guestProfile(for: reader)
+        let target = store(for: guest)
+        if preparedGuestReaderGeneration != reader.generation {
+            let encrypted = try await target.hasEncryptedPersistenceData()
+            try checkReadable(reader)
+            if encrypted {
+                guard let provider = sharedGuestCipherProvider,
+                      let cipher = try await provider(), cipher.profileID == guest.id
+                else { throw MeetingRecordingCipher.Failure.unavailableKey }
+                try checkReadable(reader)
+                try await target.installEncryptionCipher(cipher)
+                try checkReadable(reader)
+            }
+            preparedGuestReaderGeneration = reader.generation
+        }
+        return (guest, target)
+    }
+
+    private nonisolated func projected(_ session: MeetingSession, source: PrivateProfileSnapshot,
+                                      reader: PrivateProfileSnapshot) -> MeetingSession {
+        var value = session
+        // Explicit in-memory provenance lets later edits route to guest without adopting an
+        // arbitrary ownerless account snapshot. The original manifest is untouched on read.
+        if !reader.isGuest, source.isGuest, value.profileOwnership == nil { value.profileOwnership = .guest }
+        return value
+    }
+
+    private func visibleSession(id: MeetingSessionID, reader: PrivateProfileSnapshot,
+                                transcriptOnly: Bool) async throws -> (profile: PrivateProfileSnapshot, session: MeetingSession)? {
+        let primary = store(for: reader)
+        let own = try await transcriptOnly ? primary.loadTranscript(id: id) : primary.load(id: id)
+        try checkReadable(reader)
+        if let own {
+            guard permits(own, in: reader) else { return nil }
+            return (reader, own)
+        }
+        // UUID is the existing UI/API identity. The current profile has precedence, even if
+        // its directory is incomplete or contains a foreign record. Never route around it.
+        let ownDirectory = try await primary.existingSessionDirectory(for: id)
+        try checkReadable(reader)
+        guard !reader.isGuest, ownDirectory == nil else { return nil }
+        let guest = guestProfile(for: reader)
+        let guestDirectory = try await store(for: guest).existingSessionDirectory(for: id)
+        try checkReadable(reader)
+        guard guestDirectory != nil else { return nil }
+        let (_, shared) = try await sharedGuestStore(for: reader)
+        let session = try await transcriptOnly ? shared.loadTranscript(id: id) : shared.load(id: id)
+        try checkReadable(reader)
+        guard let session, permits(session, in: guest) else { return nil }
+        return (guest, projected(session, source: guest, reader: reader))
+    }
+
+    private func visibleCatalog(transcriptOnly: Bool) async throws -> [MeetingSession] {
+        let reader = try readableProfile()
+        let primary = store(for: reader)
+        let own = try await transcriptOnly ? primary.loadHistory() : primary.loadAll()
+        try checkReadable(reader)
+        var sessions = own.filter { permits($0, in: reader) }
+        guard !reader.isGuest else { return sessions }
+        let (guest, shared) = try await sharedGuestStore(for: reader)
+        let guests = try await transcriptOnly ? shared.loadHistory() : shared.loadAll()
+        try checkReadable(reader)
+        let ownIDs = Set(own.map(\.id))
+        for session in guests where !ownIDs.contains(session.id) && permits(session, in: guest) {
+            let ownDirectory = try await primary.existingSessionDirectory(for: session.id)
+            try checkReadable(reader)
+            guard ownDirectory == nil else { continue }
+            sessions.append(projected(session, source: guest, reader: reader))
+        }
+        return sessions.sorted {
+            $0.startedAt == $1.startedAt ? $0.id.uuidString < $1.id.uuidString : $0.startedAt > $1.startedAt
+        }
+    }
+
+    private func deletionProfile(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership,
+                                 reader: PrivateProfileSnapshot) async throws -> PrivateProfileSnapshot {
+        let source: PrivateProfileSnapshot
+        if expectedOwnership.matches(reader) {
+            source = reader
+        } else {
+            guard !reader.isGuest, expectedOwnership == .guest else { throw AccountError.staleOperation }
+            let ownDirectory = try await store(for: reader).existingSessionDirectory(for: id)
+            try checkReadable(reader)
+            guard ownDirectory == nil else { throw AccountError.staleOperation }
+            (source, _) = try await sharedGuestStore(for: reader)
+        }
+        if let existing = try await store(for: source).load(id: id) {
+            guard permits(existing, in: source), expectedOwnership.matchesPersistedOwner(existing.profileOwnership)
+            else { throw AccountError.staleOperation }
+        }
+        try checkReadable(reader)
+        return source
+    }
 
     private func store(for profile: PrivateProfileSnapshot) -> MeetingSessionStore {
         if let existing = stores[profile.id] { return existing }
@@ -293,12 +401,13 @@ actor PrivateProfileMeetingStore: MeetingSessionStoring {
         return profile
     }
     private func checkReadable(_ expected: PrivateProfileSnapshot) throws {
+        try Task.checkCancellation()
         let current = PrivateProfileStorage.current
         guard current.isReadable, PrivateProfileStorage.acceptsNewWork,
               current.id == expected.id, current.generation == expected.generation
         else { throw AccountError.staleOperation }
     }
-    private func permits(_ session: MeetingSession, in profile: PrivateProfileSnapshot) -> Bool {
+    private nonisolated func permits(_ session: MeetingSession, in profile: PrivateProfileSnapshot) -> Bool {
         if let ownership = session.profileOwnership { return ownership.matches(profile) }
         return profile.isGuest
     }

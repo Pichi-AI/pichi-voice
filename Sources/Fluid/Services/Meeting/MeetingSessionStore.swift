@@ -14,6 +14,8 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func load(id: MeetingSessionID) async throws -> MeetingSession?
     func loadAll() async throws -> [MeetingSession]
     func loadHistory() async throws -> [MeetingSession]
+    /// Automatic cleanup uses only records governed by the selected profile's settings.
+    func loadHistoryForMaintenance() async throws -> [MeetingSession]
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession?
     func loadRecoverable() async throws -> [MeetingSession]
     func sessionDirectory(for id: MeetingSessionID) async throws -> URL
@@ -34,6 +36,7 @@ nonisolated extension MeetingSessionStoring {
         return .init(requiresEncryptedPersistence: protectedPublication, requiresPIIRedaction: protectedPublication)
     }
     func loadHistory() async throws -> [MeetingSession] { try await self.loadAll() }
+    func loadHistoryForMaintenance() async throws -> [MeetingSession] { try await self.loadHistory() }
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
     func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership? { nil }
     func cancelCaptureAdmission(for id: MeetingSessionID) async {}
@@ -364,7 +367,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
                 validating: @Sendable (MeetingSession) throws -> Void) async throws {
         try Task.checkCancellation()
         if let session = try self.load(id: id) {
-            guard session.profileOwnership == expectedOwnership else { throw CocoaError(.fileWriteNoPermission) }
+            guard expectedOwnership.matchesPersistedOwner(session.profileOwnership) else { throw CocoaError(.fileWriteNoPermission) }
             try validating(session)
         }
         try self.delete(id: id)

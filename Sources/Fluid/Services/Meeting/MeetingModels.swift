@@ -1129,6 +1129,14 @@ nonisolated struct MeetingProfileOwnership: Codable, Equatable, Sendable {
     let internalUserID: String?
     let organizationID: String?
     let workspaceID: String?
+
+    static let guest = Self(profileID: "guest", issuer: nil, subject: nil,
+        internalUserID: nil, organizationID: nil, workspaceID: nil)
+
+    /// Schema-1 ownerless records are legacy guest data, never an account admission.
+    func matchesPersistedOwner(_ owner: Self?) -> Bool {
+        owner == self || (owner == nil && self == .guest)
+    }
 }
 
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {

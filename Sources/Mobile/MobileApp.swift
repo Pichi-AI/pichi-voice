@@ -183,7 +183,7 @@ final class AppServices: ObservableObject {
         }.store(in: &idlePreparationObservers)
         observeIdleResourceStores()
         let recordingKeys = isProductionComposition
-            ? MeetingRecordingKeychainStore(namespace: (Bundle.main.bundleIdentifier ?? AppBrand.keychainService) + ".recording-encryption.v1") : nil
+            ? MeetingRecordingKeychainStore(namespace: MeetingRecordingKeychainStore.defaultNamespace) : nil
         let resolveRecordingCipher: @MainActor @Sendable (PrivateProfileSnapshot, Bool) async throws -> MeetingRecordingCipher? = { profile, create in
             guard let publicationStore else { return nil }
             guard PrivateProfileStorage.isReadable(profile) else { throw AccountError.staleOperation }
