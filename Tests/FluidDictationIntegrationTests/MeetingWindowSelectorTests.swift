@@ -1,5 +1,6 @@
 @testable import FluidVoice_Debug
 import Foundation
+@preconcurrency import ScreenCaptureKit
 import XCTest
 
 final class MeetingWindowSelectorTests: XCTestCase {
@@ -89,5 +90,101 @@ final class MeetingWindowSelectorTests: XCTestCase {
         let behindEarlyID = self.candidate(1, title: "A", frame: CGRect(x: 0, y: 0, width: 800, height: 600), zOrderIndex: 4)
         let frontLateID = self.candidate(9, title: "B", frame: CGRect(x: 0, y: 0, width: 800, height: 600), zOrderIndex: 1)
         XCTAssertEqual(MeetingWindowSelector.selectWindow(from: [behindEarlyID, frontLateID])?.windowID, 9)
+    }
+}
+
+/// Inspects the real production filter without starting a stream or requesting screen permission.
+final class MeetingApplicationAudioFilterTests: XCTestCase {
+    private func currentProcessContent() async throws -> (SCShareableContent, SCRunningApplication, SCDisplay) {
+        let content = try await SCShareableContent.currentProcess
+        guard let application = content.applications.first(where: {
+            $0.processID == ProcessInfo.processInfo.processIdentifier
+        }), let display = content.displays.first else {
+            throw XCTSkip("ScreenCaptureKit has no current-process application or display")
+        }
+        return (content, application, display)
+    }
+
+    func testSelectedApplicationFilterDoesNotDependOnPreferredWindowEvidence() async throws {
+        guard #available(macOS 15.2, *) else { throw XCTSkip("Filter inspection requires macOS 15.2") }
+        let (content, application, display) = try await self.currentProcessContent()
+        let existingWindowID = content.windows.first(where: {
+            $0.owningApplication?.processID == application.processID
+        })?.windowID
+        // Detection evidence can describe an existing, removed/replaced, or absent/hidden window.
+        // Production filter construction has no dependency on the current window list.
+        let preferredWindowIDs: [UInt32?] = [existingWindowID, UInt32.max, nil]
+        for windowID in preferredWindowIDs {
+            let selection = MeetingApplicationIdentity(
+                bundleIdentifier: application.bundleIdentifier, processID: application.processID,
+                displayName: "Selected application", displayID: display.displayID, windowID: windowID
+            )
+            let result = try MeetingScreenCaptureAudioSettings.contentFilter(
+                for: .application(selection), applications: content.applications, displays: content.displays
+            )
+            XCTAssertNotEqual(result.filter.style, .window)
+            XCTAssertEqual(result.filter.includedApplications.map(\.processID), [application.processID])
+            XCTAssertEqual(result.filter.includedApplications.map(\.bundleIdentifier), [application.bundleIdentifier])
+            XCTAssertEqual(result.filter.includedDisplays.map(\.displayID), [display.displayID])
+            guard case .display = result.scope else { return XCTFail("selected audio must retain application filtering on a display") }
+        }
+    }
+
+    func testStaleOrReusedSavedPIDResolvesOnlyTheSelectedBundle() async throws {
+        guard #available(macOS 15.2, *) else { throw XCTSkip("Filter inspection requires macOS 15.2") }
+        let (content, application, display) = try await self.currentProcessContent()
+        let unrelated = content.applications.first(where: { $0.bundleIdentifier != application.bundleIdentifier })
+        let selection = MeetingApplicationIdentity(
+            bundleIdentifier: application.bundleIdentifier, processID: unrelated?.processID ?? -1,
+            displayName: "Selected application", displayID: display.displayID, windowID: UInt32.max
+        )
+        let result = try MeetingScreenCaptureAudioSettings.contentFilter(
+            for: .application(selection), applications: content.applications, displays: content.displays
+        )
+        XCTAssertEqual(result.filter.includedApplications.map(\.processID), [application.processID])
+        XCTAssertEqual(result.filter.includedApplications.map(\.bundleIdentifier), [application.bundleIdentifier])
+        XCTAssertNotEqual(result.filter.style, .window)
+    }
+
+    func testUnavailableSelectedApplicationCannotCaptureAnUnrelatedProcessOrSystemAudio() async throws {
+        let (content, application, display) = try await self.currentProcessContent()
+        let selection = MeetingApplicationIdentity(
+            bundleIdentifier: "example.invalid.missing-capture-target", processID: application.processID,
+            displayName: "Missing application", displayID: display.displayID
+        )
+        XCTAssertThrowsError(try MeetingScreenCaptureAudioSettings.contentFilter(
+            for: .application(selection), applications: content.applications, displays: content.displays
+        ))
+        XCTAssertThrowsError(try MeetingScreenCaptureAudioSettings.contentFilter(
+            for: .application(selection), applications: [], displays: content.displays
+        ))
+        // System capture is available only through its explicit source, independently of apps.
+        let system = try MeetingScreenCaptureAudioSettings.contentFilter(
+            for: .systemAudio, applications: [], displays: content.displays
+        )
+        guard case .systemAudio = system.scope else { return XCTFail("explicit system capture must preserve its scope") }
+    }
+
+    func testSelectedDisplayFallbackKeepsTheApplicationRestriction() async throws {
+        guard #available(macOS 15.2, *) else { throw XCTSkip("Filter inspection requires macOS 15.2") }
+        let (content, application, display) = try await self.currentProcessContent()
+        for preferredDisplayID in content.displays.map(\.displayID) + [UInt32.max] {
+            let selection = MeetingApplicationIdentity(
+                bundleIdentifier: application.bundleIdentifier, processID: application.processID,
+                displayName: "Selected application", displayID: preferredDisplayID
+            )
+            let result = try MeetingScreenCaptureAudioSettings.contentFilter(
+                for: .application(selection), applications: content.applications, displays: content.displays
+            )
+            let expectedDisplay = content.displays.first(where: { $0.displayID == preferredDisplayID }) ?? display
+            XCTAssertEqual(result.filter.includedDisplays.map(\.displayID), [expectedDisplay.displayID])
+            XCTAssertEqual(result.filter.includedApplications.map(\.processID), [application.processID])
+            XCTAssertThrowsError(try MeetingScreenCaptureAudioSettings.contentFilter(
+                for: .application(selection), applications: content.applications, displays: []
+            ))
+        }
+        XCTAssertThrowsError(try MeetingScreenCaptureAudioSettings.contentFilter(
+            for: .systemAudio, applications: content.applications, displays: []
+        ))
     }
 }

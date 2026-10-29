@@ -16,6 +16,9 @@ import FluidAudio
 /// `FLUIDVOICE_LIVE_REPLAY_APP_WAV` paths and distinct expected phrases in
 /// `FLUIDVOICE_LIVE_REPLAY_MIC_EXPECTED_TEXT` / `FLUIDVOICE_LIVE_REPLAY_APP_EXPECTED_TEXT`.
 /// Choose approved fixtures where each expected phrase belongs to only its source track.
+/// Cold buffered replay additionally sets `FLUIDVOICE_LIVE_REPLAY_COLD_START=1`,
+/// `FLUIDVOICE_LIVE_REPLAY_MODEL_ID` and `FLUIDVOICE_LIVE_REPLAY_LANGUAGE`. Its short
+/// opening markers must begin at zero and finalize within the first five seconds.
 final class MeetingLiveReplayTests: XCTestCase {
     private static let chunkFrames = 320 // 20ms @ 16kHz
     private static let sampleRate: Double = 16_000
@@ -38,6 +41,15 @@ final class MeetingLiveReplayTests: XCTestCase {
         }
 
         let fixture = try ReplayFixture(environment: env)
+        let coldStart = env["FLUIDVOICE_LIVE_REPLAY_COLD_START"] == "1"
+        let modelID = env["FLUIDVOICE_LIVE_REPLAY_MODEL_ID"]
+        let languageCode = env["FLUIDVOICE_LIVE_REPLAY_LANGUAGE"] ?? "en"
+        if coldStart {
+            guard case .buffered = MeetingLiveTranscriptionCoordinator.captionRoute(
+                languageCode: languageCode, modelID: modelID) else {
+                throw Self.invalidReplayInput("Cold replay requires an explicitly registered buffered caption model")
+            }
+        }
 
         let micSamples = try Self.load16kMonoFloatSamples(path: fixture.microphonePath)
         let appSamples = try Self.load16kMonoFloatSamples(path: fixture.applicationPath)
@@ -79,12 +91,12 @@ final class MeetingLiveReplayTests: XCTestCase {
             let lock = NSLock()
             var latest: MeetingLiveTranscriptSnapshot = .empty
             var log: [(elapsed: TimeInterval, snapshot: MeetingLiveTranscriptSnapshot)] = []
-            let start = Date()
+            let start = ProcessInfo.processInfo.systemUptime
             func record(_ snapshot: MeetingLiveTranscriptSnapshot) {
                 self.lock.lock()
                 defer { self.lock.unlock() }
                 self.latest = snapshot
-                self.log.append((Date().timeIntervalSince(self.start), snapshot))
+                self.log.append((ProcessInfo.processInfo.systemUptime - self.start, snapshot))
             }
         }
         let box = SnapshotBox()
@@ -92,43 +104,49 @@ final class MeetingLiveReplayTests: XCTestCase {
             box.record(snapshot)
         }
 
+        let configuration: MeetingFinalProcessingConfiguration?
+        if let modelID {
+            configuration = try await PichiMeetingProviderFactory.frozenConfiguration(asrModel: modelID, languageCode: languageCode)
+        } else { configuration = nil }
         let harnessStart = Date()
-        coordinator.start(mode: .onlineCall)
+        coordinator.start(mode: .onlineCall, languageCode: languageCode, modelID: modelID, configuration: configuration)
 
         do {
-            // Wait for the pipeline to report ready before hammering it with non-real-time audio: a
-            // capacity-24 (~480ms) bounded queue means feeding faster than real time before the model
-            // is loaded would just drop nearly everything, which would test harness pacing, not the
-            // pipeline's actual transcription/echo-suppression behavior.
-            let readyTimeout: TimeInterval = 300
-            let readyDeadline = Date().addingTimeInterval(readyTimeout)
-            while Date() < readyDeadline {
-                let available = box.lock.withLock { box.latest.availability == .available }
-                if available { break }
-                try await Task.sleep(nanoseconds: 200_000_000)
+            if !coldStart {
+                // The upstream English streaming path has a short in-memory queue. Keep
+                // its existing warm replay; the cold buffered path deliberately skips it.
+                let readyTimeout: TimeInterval = 300
+                let readyDeadline = Date().addingTimeInterval(readyTimeout)
+                while Date() < readyDeadline {
+                    let available = box.lock.withLock { box.latest.availability == .available }
+                    if available { break }
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                }
+                let firstAvailableElapsed = Date().timeIntervalSince(harnessStart)
+                let becameAvailable = box.lock.withLock { box.latest.availability == .available }
+                print("[replay] first-track-ready after \(String(format: "%.1f", firstAvailableElapsed))s (available=\(becameAvailable))")
+                guard becameAvailable else {
+                    XCTFail("Live captions never became available within \(readyTimeout)s")
+                    await coordinator.stop()
+                    return
+                }
+                // Availability is published by the first ready track in the legacy path.
+                try await Task.sleep(nanoseconds: 5_000_000_000)
             }
-            let firstAvailableElapsed = Date().timeIntervalSince(harnessStart)
-            let becameAvailable = box.lock.withLock { box.latest.availability == .available }
-            print("[replay] first-track-ready after \(String(format: "%.1f", firstAvailableElapsed))s (available=\(becameAvailable))")
-            guard becameAvailable else {
-                XCTFail("Live captions never became available within \(readyTimeout)s - model load likely failed.")
-                await coordinator.stop()
-                return
-            }
-            // Both engines load their own model instance in parallel; give the slower one a grace
-            // window since the snapshot only reports "available" on the FIRST track's readiness.
-            try await Task.sleep(nanoseconds: 5_000_000_000)
 
             // The bounded queue holds only ~480ms per track (capacity 24 * 20ms). Blasting all ~19.5k
             // chunks in a tight loop (sub-second) overwhelms it before the drain loop can ever get
             // scheduled, which would test harness timing, not the pipeline. Cap the feed rate at
             // `accelerationFactor`x real time instead - still far from a real 192s sleep, but paced
             // enough for the actor's drain loop to keep up with genuine ASR inference.
-            let accelerationFactor = 1.5
+            // Cold replay feeds from the first packet while preparation is still running.
+            // Keep its native cadence so disk admission is tested independently of ASR speed.
+            let accelerationFactor = coldStart ? 1.0 : 1.5
             let feedStart = Date()
             var bufferFailures = 0
             var sampleBufferFailures = 0
             var offeredCount = 0
+            var firstOfferElapsed: TimeInterval?
             var totalWaitSeconds: Double = 0
             for (index, event) in events.enumerated() {
                 try Task.checkCancellation()
@@ -141,6 +159,7 @@ final class MeetingLiveReplayTests: XCTestCase {
                     sampleBufferFailures += 1
                     continue
                 }
+                if firstOfferElapsed == nil { firstOfferElapsed = ProcessInfo.processInfo.systemUptime - box.start }
                 coordinator.offer(kind: event.kind, sampleBuffer: sampleBuffer)
                 offeredCount += 1
                 let ptsSeconds = Double(event.ptsSamples) / Self.sampleRate
@@ -165,11 +184,13 @@ final class MeetingLiveReplayTests: XCTestCase {
             // changing.
             var lastSnapshot = box.lock.withLock { box.latest }
             var stableCount = 0
-            let settleDeadline = Date().addingTimeInterval(60)
+            let settleDeadline = Date().addingTimeInterval(coldStart ? 120 : 60)
             while Date() < settleDeadline, stableCount < 10 {
                 try await Task.sleep(nanoseconds: 300_000_000)
                 let current = box.lock.withLock { box.latest }
-                if current == lastSnapshot {
+                let bothColdTracksPublished = current.utterances.contains { $0.speaker == .you }
+                    && current.utterances.contains { $0.speaker == .them }
+                if current == lastSnapshot, !coldStart || bothColdTracksPublished {
                     stableCount += 1
                 } else {
                     stableCount = 0
@@ -198,6 +219,18 @@ final class MeetingLiveReplayTests: XCTestCase {
 
             let degradedTransitions = box.lock.withLock {
                 box.log.filter { if case .degraded = $0.snapshot.availability { return true } else { return false } }
+            }
+            if coldStart {
+                let firstReady = box.lock.withLock { box.log.first { $0.snapshot.availability == .available }?.elapsed }
+                print("[cold-replay] first-ready-seconds=\(firstReady.map(String.init(describing:)) ?? "unavailable") feed-began-without-ready-wait=true")
+                let readyElapsed = try XCTUnwrap(firstReady)
+                let offerElapsed = try XCTUnwrap(firstOfferElapsed)
+                print("[cold-replay] first-offer-seconds=\(offerElapsed)")
+                print("[cold-replay] ready-after-first-offer-seconds=\(readyElapsed - offerElapsed)")
+                XCTAssertGreaterThan(readyElapsed, offerElapsed, "Input must begin while the cold provider is still preparing")
+                let openingIssues = Self.coldOpeningIssues(final, fixture: fixture)
+                XCTAssertTrue(openingIssues.isEmpty, openingIssues.joined(separator: "\n"))
+                XCTAssertTrue(degradedTransitions.isEmpty, "Cold preparation must retain opening packets without degrading captions")
             }
             print("Degraded-availability updates observed: \(degradedTransitions.count)")
             for transition in degradedTransitions.prefix(20) {
@@ -401,6 +434,43 @@ final class MeetingLiveReplayTests: XCTestCase {
             previousStart = utterance.start
         }
         return issues
+    }
+
+    /// Cold fixtures put their short control phrase at time zero. Finding that text
+    /// somewhere later in a long transcript is insufficient evidence for opening coverage.
+    private static func coldOpeningIssues(_ snapshot: MeetingLiveTranscriptSnapshot, fixture: ReplayFixture) -> [String] {
+        var issues: [String] = []
+        for (speaker, marker) in [(MeetingLiveSpeaker.you, fixture.microphoneText), (.them, fixture.applicationText)] {
+            guard let first = snapshot.utterances.first(where: { $0.speaker == speaker }),
+                  ReplayFixture.normalize(first.text).contains(marker) else {
+                issues.append("A first finalized caption missed its opening marker.")
+                continue
+            }
+            if !first.start.isFinite || !first.end.isFinite || first.start < 0 || first.start > 0.1
+                || first.end <= first.start || first.end > 5 {
+                issues.append("An opening caption is shifted beyond its controlled first-phrase interval.")
+            }
+        }
+        return issues
+    }
+
+    func testColdReplayRejectsShiftedOrLaterOpeningMarkers() throws {
+        let fixture = try ReplayFixture(environment: Self.syntheticReplayEnvironment)
+        var valid = MeetingLiveTranscriptSnapshot.empty
+        valid.utterances = [
+            .init(id: UUID(), speaker: .you, text: "Microphone only", start: 0, end: 3),
+            .init(id: UUID(), speaker: .them, text: "Application only", start: 0, end: 3),
+        ]
+        XCTAssertTrue(Self.coldOpeningIssues(valid, fixture: fixture).isEmpty)
+        var shifted = valid
+        for index in shifted.utterances.indices {
+            shifted.utterances[index].start += 10
+            shifted.utterances[index].end += 10
+        }
+        XCTAssertFalse(Self.coldOpeningIssues(shifted, fixture: fixture).isEmpty)
+        var later = valid
+        later.utterances.insert(.init(id: UUID(), speaker: .you, text: "Unrelated later turn", start: 0, end: 1), at: 0)
+        XCTAssertFalse(Self.coldOpeningIssues(later, fixture: fixture).isEmpty)
     }
 
     func testReplayRequiresExplicitFixturesAndDistinctExpectedPhrases() throws {

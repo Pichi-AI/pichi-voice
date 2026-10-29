@@ -21,6 +21,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     private let lock = NSLock()
     private let writer: MeetingAudioChunkWriter
     private let producerEpoch: UInt64
+    private let expectedGateEpoch: UInt64?
     private let transcriptGate: MeetingMicrophoneTranscriptGate
     private let liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     private let terminalFailure: @Sendable (MeetingAECFailure) -> Void
@@ -32,6 +33,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     private var promotionGateEpoch: UInt64 = 0
     private var terminalFailureReported = false
     private var pendingCommitCount = 0
+    private var retired = false
 
     var hasPendingCommits: Bool {
         self.lock.withLock { self.pendingCommitCount > 0 }
@@ -40,6 +42,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     init(
         writer: MeetingAudioChunkWriter,
         producerEpoch: UInt64 = 0,
+        expectedGateEpoch: UInt64? = nil,
         transcriptGate: MeetingMicrophoneTranscriptGate,
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?,
         protectionChanged: @escaping @Sendable (MeetingMicrophoneEchoProtection) -> Void = { _ in },
@@ -47,16 +50,26 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     ) {
         self.writer = writer
         self.producerEpoch = producerEpoch
+        self.expectedGateEpoch = expectedGateEpoch
         self.transcriptGate = transcriptGate
         self.liveAudioHandler = liveAudioHandler
         self.terminalFailure = terminalFailure
         self.protectionChanged = protectionChanged
     }
 
-    /// Warm-up frames are processed and recorded but remain in the unprotected era. The first
-    /// frame *after* the 200-frame attestation performs the atomic durable promotion.
-    func commitProcessed(_ sampleBuffer: CMSampleBuffer, mayPromote: Bool) {
-        let hasPromotion = self.lock.withLock { self.state != .unprotected }
+    /// Only an existing filtered promotion can continue without a new attestation. Raw speech
+    /// admitted during warm-up must not accidentally count as a successful AEC promotion.
+    func commitProcessed(_ sampleBuffer: CMSampleBuffer, mayPromote: Bool, originalCapture: CMSampleBuffer? = nil) {
+        guard self.ownsAdmission else {
+            if self.lock.withLock({ !self.retired }) { self.retainPendingCapture(originalCapture ?? sampleBuffer) }
+            return
+        }
+        let hasPromotion = self.lock.withLock { () -> Bool in
+            switch self.state {
+            case .admitted(.softwareEchoCancelled), .promotionPending(_, .softwareEchoCancelled): return true
+            default: return false
+            }
+        }
         guard mayPromote || hasPromotion else {
             guard self.enqueueOrFail(sampleBuffer, startSeconds: Self.seconds(of: sampleBuffer)) else { return }
             _ = self.transcriptGate.observeAndAdmit(sampleBuffer)
@@ -71,31 +84,81 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         self.commitAdmitted(sampleBuffer, protection: .unfiltered)
     }
 
-    /// The runtime's route/recovery path has no processed frame to promote. It still uses the
-    /// same durable-era-before-admission contract, bound to its frozen producer and gate epoch.
-    static func resumeMicrophone(
+    func commitCaptured(_ sampleBuffer: CMSampleBuffer, protection: MeetingMicrophoneEchoProtection) {
+        precondition(protection == .unfiltered || protection == .acousticallyClosed)
+        self.commitAdmitted(sampleBuffer, protection: protection)
+    }
+
+    /// Retiring local ownership never changes the shared gate or a successor's durable era.
+    func retire() {
+        self.lock.withLock {
+            self.retired = true
+            self.generation &+= 1
+            self.state = .unprotected
+        }
+    }
+
+    /// Route/rebuild flushes retain already accepted capture PCM exactly once. Obsolete owners
+    /// may retain these bytes but cannot relabel them, reopen admission, or offer stale live data.
+    func retainPendingCapture(_ sampleBuffer: CMSampleBuffer, unfiltered: Bool = false) {
+        guard unfiltered else {
+            _ = self.enqueueOrFail(sampleBuffer, startSeconds: Self.seconds(of: sampleBuffer))
+            return
+        }
+        let start = Self.seconds(of: sampleBuffer)
+        self.beginPendingCommit()
+        self.writer.enqueue(sampleBuffer, producerEpoch: self.producerEpoch, afterPersistingMetadata: { track in
+            Self.applyEra(to: &track, protection: .unfiltered, provenance: nil, startSeconds: start)
+        }, failClosed: true) { result in
+            defer { self.endPendingCommit() }
+            if case let .failure(error) = result { self.reportTerminalFailure(Self.terminalFailure(for: error)) }
+        }
+    }
+
+    private var ownsAdmission: Bool {
+        self.lock.withLock {
+            !self.retired && (self.expectedGateEpoch == nil || self.expectedGateEpoch == self.transcriptGate.invalidationEpoch)
+        }
+    }
+
+    /// Metadata-only route choices share the frame committer's immutable authority. Losing that
+    /// authority makes completion inert; the successor owns the next conservative/valid era.
+    func resumeProtection(
         _ protection: MeetingMicrophoneEchoProtection,
-        writer: MeetingAudioChunkWriter,
-        transcriptGate: MeetingMicrophoneTranscriptGate,
-        expectedGateEpoch: UInt64,
-        mayResume: @Sendable () -> Bool
+        mayResume: @escaping @Sendable () -> Bool
     ) async throws -> Bool {
-        guard mayResume(), transcriptGate.invalidationEpoch == expectedGateEpoch else { return false }
-        let start = transcriptGate.latestObservedSeconds()
-        try await writer.updateTrackMetadataFailClosed { track in
-            Self.applyEra(to: &track, protection: protection, provenance: nil, startSeconds: start)
+        precondition(protection == .unfiltered || protection == .acousticallyClosed)
+        guard self.ownsAdmission, mayResume() else { return false }
+        let epoch = self.expectedGateEpoch ?? self.transcriptGate.invalidationEpoch
+        let start = self.transcriptGate.latestObservedSeconds()
+        self.beginPendingCommit()
+        return try await withCheckedThrowingContinuation { continuation in
+            self.writer.enqueueMetadata(failClosed: true, mutate: { track in
+                let permitted = mayResume()
+                self.lock.withLock {
+                    guard permitted, !self.retired, self.transcriptGate.invalidationEpoch == epoch else { return }
+                    Self.applyEra(to: &track, protection: protection, provenance: nil, startSeconds: start)
+                }
+            }) { result in
+                defer { self.endPendingCommit() }
+                switch result {
+                case .success:
+                    let permitted = mayResume()
+                    let opened = self.lock.withLock {
+                        !self.retired && permitted && self.transcriptGate.updateIfNotInvalidated(protection, since: epoch)
+                    }
+                    continuation.resume(returning: opened)
+                case let .failure(error): continuation.resume(throwing: error)
+                }
+            }
         }
-        if mayResume(), transcriptGate.updateIfNotInvalidated(protection, since: expectedGateEpoch) {
-            return true
-        }
-        let unsafeStart = transcriptGate.invalidate()?.unsafeStartSeconds
-        try await writer.updateTrackMetadataFailClosed { track in
-            Self.applyEra(to: &track, protection: .unprotected, provenance: nil, startSeconds: unsafeStart)
-        }
-        return false
     }
 
     private func commitAdmitted(_ sampleBuffer: CMSampleBuffer, protection: MeetingMicrophoneEchoProtection) {
+        guard self.ownsAdmission else {
+            if self.lock.withLock({ !self.retired }) { self.retainPendingCapture(sampleBuffer) }
+            return
+        }
         let sampleBox = SampleBox(sampleBuffer)
         let startSeconds = Self.seconds(of: sampleBuffer)
         let action = self.lock.withLock { () -> (token: UInt64?, gateEpoch: UInt64) in
@@ -107,7 +170,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
             default:
                 self.generation &+= 1
                 let token = self.generation
-                self.promotionGateEpoch = self.transcriptGate.invalidationEpoch
+                self.promotionGateEpoch = self.expectedGateEpoch ?? self.transcriptGate.invalidationEpoch
                 self.state = .promotionPending(token, protection)
                 return (token, self.promotionGateEpoch)
             }
@@ -126,12 +189,17 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
             sampleBox.sampleBuffer,
             producerEpoch: self.producerEpoch,
             afterPersistingMetadata: { track in
-                Self.applyEra(
-                    to: &track,
-                    protection: protection,
-                    provenance: protection == .softwareEchoCancelled ? MeetingAECConstants.provenance : nil,
-                    startSeconds: startSeconds
-                )
+                self.lock.withLock {
+                    guard !self.retired,
+                          self.expectedGateEpoch == nil || self.expectedGateEpoch == self.transcriptGate.invalidationEpoch
+                    else { return }
+                    Self.applyEra(
+                        to: &track,
+                        protection: protection,
+                        provenance: protection == .softwareEchoCancelled ? MeetingAECConstants.provenance : nil,
+                        startSeconds: startSeconds
+                    )
+                }
             },
             // Promotion failure must preserve the older conservative in-memory track.
             failClosed: false
@@ -139,14 +207,15 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
             defer { self.endPendingCommit() }
             switch result {
             case .success:
+                guard self.ownsAdmission else { return }
                 // A route/lifecycle close racing this completion holds the gate closed; land a
                 // compensating conservative write after the optimistic era just persisted.
-                guard self.transcriptGate.updateIfNotInvalidated(
-                    protection,
-                    since: action.gateEpoch
-                ) else {
+                let opened = self.lock.withLock {
+                    !self.retired && self.transcriptGate.updateIfNotInvalidated(protection, since: action.gateEpoch)
+                }
+                guard opened else {
                     let needsSafetyEra = self.lock.withLock { () -> Bool in
-                        guard self.generation == token else { return false }
+                        guard !self.retired, self.generation == token else { return false }
                         self.generation &+= 1
                         self.state = .unprotected
                         return true
@@ -155,24 +224,31 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
                     return
                 }
                 self.offerLive(sampleBox, gateEpoch: action.gateEpoch)
-                if self.transcriptGate.invalidationEpoch == action.gateEpoch {
+                if self.ownsAdmission, self.transcriptGate.invalidationEpoch == action.gateEpoch {
                     self.protectionChanged(protection)
                 }
                 self.lock.withLock {
                     if self.generation == token { self.state = .admitted(protection) }
                 }
             case let .failure(error):
-                self.lock.withLock {
-                    if self.generation == token { self.state = .unprotected }
+                if self.ownsAdmission {
+                    self.lock.withLock {
+                        if self.generation == token { self.state = .unprotected }
+                    }
+                    _ = self.transcriptGate.invalidate()
                 }
-                _ = self.transcriptGate.invalidate()
+                // Retirement revokes admission authority, not responsibility for already queued
+                // PCM. Persistence failure means that accepted sample was not written.
                 self.reportTerminalFailure(Self.terminalFailure(for: error))
             }
         }
     }
 
     private func offerLive(_ sample: SampleBox, gateEpoch: UInt64) {
-        if self.transcriptGate.observeAndAdmit(sample.sampleBuffer, since: gateEpoch) {
+        let admitted = self.lock.withLock {
+            !self.retired && self.transcriptGate.observeAndAdmit(sample.sampleBuffer, since: gateEpoch)
+        }
+        if admitted {
             self.liveAudioHandler?(.microphone, sample.sampleBuffer)
         }
     }
@@ -180,6 +256,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
     /// Records a raw/bypass sample. If the prior state could have been protected, its demotion and
     /// this sample are one writer command, so raw bytes cannot land beneath optimistic metadata.
     func commitRaw(_ sampleBuffer: CMSampleBuffer, failure: MeetingAECFailure) {
+        guard self.lock.withLock({ !self.retired }) else { return }
         let sampleBox = SampleBox(sampleBuffer)
         let startSeconds = Self.seconds(of: sampleBuffer)
         _ = self.transcriptGate.observeAndAdmit(sampleBox.sampleBuffer)
@@ -227,22 +304,22 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
             self.state = .unprotected
         }
         _ = self.transcriptGate.invalidate()
-        self.persistSafetyEra(startSeconds: boundary?.unsafeStartSeconds)
+        self.persistSafetyEra(startSeconds: boundary?.unsafeStartSeconds, force: true)
     }
 
     /// Enqueues the fail-closed `unprotected` era as a bounded writer-queue command and reports a
     /// terminal failure if even that command cannot persist.
-    private func persistSafetyEra(startSeconds: Double?) {
+    private func persistSafetyEra(startSeconds: Double?, force: Bool = false) {
         self.beginPendingCommit()
         self.writer.enqueueMetadata(
             failClosed: true,
             mutate: { track in
-                Self.applyEra(
-                    to: &track,
-                    protection: .unprotected,
-                    provenance: nil,
-                    startSeconds: startSeconds
-                )
+                self.lock.withLock {
+                    guard force || !self.retired else { return }
+                    Self.applyEra(
+                        to: &track, protection: .unprotected, provenance: nil, startSeconds: startSeconds
+                    )
+                }
             }
         ) { [self] result in
             defer { self.endPendingCommit() }
@@ -267,6 +344,7 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         self.lock.withLock {
             self.generation &+= 1
             self.state = .unprotected
+            self.retired = true
         }
         _ = self.transcriptGate.invalidate()
     }
@@ -310,7 +388,12 @@ final nonisolated class MeetingAECOutputCommitter: @unchecked Sendable {
         startSeconds: Double?,
         onConsumed: (@Sendable () -> Void)? = nil
     ) -> Bool {
-        guard self.writer.enqueue(sampleBuffer, producerEpoch: self.producerEpoch, onConsumed: onConsumed) else {
+        self.beginPendingCommit()
+        guard self.writer.enqueue(sampleBuffer, producerEpoch: self.producerEpoch, onConsumed: {
+            defer { self.endPendingCommit() }
+            onConsumed?()
+        }) else {
+            self.endPendingCommit()
             self.lock.withLock {
                 self.generation &+= 1
                 self.state = .unprotected
