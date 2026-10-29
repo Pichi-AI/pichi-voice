@@ -10,11 +10,15 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.24.2"),
+        .package(path: "../TranscribeCpp"),
     ],
     targets: [
         .target(
             name: "PichiGigaAM",
-            dependencies: [.product(name: "onnxruntime", package: "onnxruntime-swift-package-manager")],
+            dependencies: [
+                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
+                .product(name: "TranscribeCpp", package: "TranscribeCpp"),
+            ],
             linkerSettings: [.linkedFramework("Accelerate"), .linkedFramework("CoreML"), .linkedFramework("Metal")]
         ),
         .testTarget(name: "PichiGigaAMTests", dependencies: ["PichiGigaAM"]),
