@@ -185,6 +185,19 @@ final class MeetingDesktopTranscriptParagraphTests: XCTestCase {
               let output = environment["PICHI_TRANSCRIPT_READING_OUTPUT"] else {
             throw XCTSkip("Opt-in native transcript preview requires an explicit local fixture and output directory")
         }
+        let settings = SettingsStore.shared
+        let previousTheme = settings.themePreference
+        let previousThemeValue = settings.defaults.object(forKey: SettingsStore.Keys.themePreference)
+        let previousAppearance = NSApplication.shared.appearance
+        let previousLanguage = environment["PICHI_INTERFACE_LANGUAGE"]
+        setenv("PICHI_INTERFACE_LANGUAGE", "ru", 1)
+        defer {
+            settings.themePreference = previousTheme
+            settings.defaults.set(previousThemeValue, forKey: SettingsStore.Keys.themePreference)
+            NSApplication.shared.appearance = previousAppearance
+            if let previousLanguage { setenv("PICHI_INTERFACE_LANGUAGE", previousLanguage, 1) }
+            else { unsetenv("PICHI_INTERFACE_LANGUAGE") }
+        }
         XCTAssertTrue(fixture.hasPrefix("/") && output.hasPrefix("/"))
         let directory = URL(fileURLWithPath: output, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
@@ -218,6 +231,8 @@ final class MeetingDesktopTranscriptParagraphTests: XCTestCase {
         NSApplication.shared.setActivationPolicy(.regular)
         defer { NSApplication.shared.setActivationPolicy(previousPolicy) }
         for (label, scheme) in [("light", ColorScheme.light), ("dark", .dark)] {
+            settings.themePreference = scheme == .light ? .light : .dark
+            NSApplication.shared.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
             let content = AdaptiveAppTheme(accent: SettingsStore.shared.accentColor) {
                 MeetingResultCanvas(session: source, isQuiescent: true, canUndo: false,
                     onCopyTranscript: { _, _ in }, onExportTranscript: { _, _, _ in },
@@ -233,6 +248,7 @@ final class MeetingDesktopTranscriptParagraphTests: XCTestCase {
             window.isReleasedWhenClosed = false
             window.title = "Transcript paragraph audit - \(label)"
             window.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
+            host.appearance = window.appearance
             window.contentView = host
             window.center()
             window.makeKeyAndOrderFront(nil)
