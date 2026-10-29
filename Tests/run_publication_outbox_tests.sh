@@ -45,6 +45,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Account/AccountPublicationConfiguration.swift Sources/Fluid/Account/AccountLegacyTransport.swift  Sources/Fluid/Account/AccountLegacySessionStore.swift Sources/Fluid/Account/AccountSessionService.swift Sources/Fluid/Account/PrivateProfileStorage.swift \
     Sources/Fluid/Account/PrivateProfileService.swift Sources/Fluid/Account/PrivateProfileMeetingStore.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift \
+    Sources/Fluid/Services/Meeting/MeetingRecordingKeychainStore.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \

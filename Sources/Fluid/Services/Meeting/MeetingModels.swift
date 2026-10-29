@@ -1129,6 +1129,14 @@ nonisolated struct MeetingProfileOwnership: Codable, Equatable, Sendable {
     let internalUserID: String?
     let organizationID: String?
     let workspaceID: String?
+
+    static let guest = Self(profileID: "guest", issuer: nil, subject: nil,
+        internalUserID: nil, organizationID: nil, workspaceID: nil)
+
+    /// Schema-1 ownerless records are legacy guest data, never an account admission.
+    func matchesPersistedOwner(_ owner: Self?) -> Bool {
+        owner == self || (owner == nil && self == .guest)
+    }
 }
 
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
@@ -1180,9 +1188,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var piiRedactionEnabled: Bool? = nil
     /// New protected captures persist local transcript data as ciphertext.
     var requiresEncryptedPersistence: Bool? = nil
-    /// Local display/export controls consume this immutable per-record policy. Trusted
-    /// processing and publication owners retain their existing store read operations.
-    var isLocalContentConcealed: Bool { requiresEncryptedPersistence == true }
+    /// Device guest meetings are shared local history, including encrypted-at-rest recordings.
+    /// Account-protected captures retain their existing local display/export restrictions.
+    var isLocalContentConcealed: Bool {
+        requiresEncryptedPersistence == true && profileOwnership != MeetingProfileOwnership.guest
+    }
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil

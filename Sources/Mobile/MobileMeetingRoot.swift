@@ -491,7 +491,8 @@ struct MobileMeetingRoot: View {
     private func canAccessOwner(_ session: MeetingSession) -> Bool {
         let profile = PrivateProfileStorage.current
         guard privateProfile.isPrivateDataVisible, PrivateProfileStorage.isReadable(profile) else { return false }
-        return session.profileOwnership?.matches(profile) ?? profile.isGuest
+        return session.profileOwnership == MeetingProfileOwnership.guest
+            || (session.profileOwnership?.matches(profile) ?? profile.isGuest)
     }
 
     private var isShowingStart: Bool { coordinator.currentSession == nil || coordinator.state == .idle }

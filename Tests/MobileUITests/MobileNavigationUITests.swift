@@ -19,7 +19,8 @@ final class MobileNavigationUITests: XCTestCase {
         if name.contains("testFragmentParticipantCorrectionScopesUndoAndReopen")
             || name.contains("testParticipantInlineNameAndOwnerTransferSmoke")
             || name.contains("testTranscriptScrollKeepsNavigationControlsReadable")
-            || name.contains("testColdGuestHistoryLoadsWithoutManualRefresh") {
+            || name.contains("testColdGuestHistoryLoadsWithoutManualRefresh")
+            || name.contains("testSharedGuestHistoryAcrossAccountProfiles") {
             #if !targetEnvironment(simulator)
             throw XCTSkip("Participant correction fixtures are simulator-only")
             #endif
@@ -51,7 +52,14 @@ final class MobileNavigationUITests: XCTestCase {
         continueAfterFailure = false
         if !productionDownload { XCUIDevice.shared.orientation = .portrait }
         app = XCUIApplication()
-        if !productionDownload { app.launchArguments += ["-PichiInterfaceLanguage", "en"] }
+        if !productionDownload {
+            let language = name.contains("testSharedGuestHistoryAcrossAccountProfiles") ? "ru" : "en"
+            app.launchArguments += ["-PichiInterfaceLanguage", language]
+        }
+        if name.contains("testSharedGuestHistoryAcrossAccountProfiles") {
+            app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_REVIEW"] = "1"
+            app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_PROFILE"] = "a"
+        }
         if name.contains("testSpeakerColorsNativeSmoke") || name.contains("testParticipantInlineNameAndOwnerTransferSmoke")
             || name.contains("testColdGuestHistoryLoadsWithoutManualRefresh") {
             app.launchEnvironment["PICHI_UI_SAVED_MEETING_REVIEW"] = "1"
@@ -803,6 +811,52 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(app.buttons[rowID].waitForExistence(timeout: 5),
                           "A cold guest launch must load the staged saved meeting without a pull-to-refresh")
             capture("cold-guest-history-\(appearance)")
+        }
+        #endif
+    }
+
+    func testSharedGuestHistoryAcrossAccountProfiles() throws {
+        #if !targetEnvironment(simulator)
+        throw XCTSkip("Synthetic shared History review requires an owned simulator")
+        #else
+        let guestID = "E0000000-0000-4000-8000-000000000001"
+        let accountAID = "E0000000-0000-4000-8000-000000000002"
+        let accountBID = "E0000000-0000-4000-8000-000000000003"
+        let launchArguments = app.launchArguments
+        defer { app.terminate() }
+        for appearance in ["light", "dark"] {
+            for profile in ["a", "b", "guest"] {
+                app.terminate()
+                app.launchArguments = launchArguments + ["-ThemePreference", appearance]
+                app.launchEnvironment["PICHI_UI_SHARED_GUEST_HISTORY_PROFILE"] = profile
+                app.launch()
+                XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15),
+                              "The actual meeting root must finish its isolated profile fixture")
+                capture("shared-guest-\(profile)-\(appearance)-ready")
+                let historyTitle = app.tabBars.buttons["История"].exists ? "История" : "History"
+                openNavigation("history", title: historyTitle)
+                let guest = app.buttons["history.session.\(guestID)"]
+                XCTAssertTrue(guest.waitForExistence(timeout: 5),
+                              "Every profile must show the saved device-guest meeting without refresh")
+                XCTAssertTrue(guest.label.contains("Гостевая встреча Ёж"))
+                let ownID: String? = profile == "a" ? accountAID : (profile == "b" ? accountBID : nil)
+                if let ownID {
+                    XCTAssertTrue(app.buttons["history.session.\(ownID)"].waitForExistence(timeout: 5),
+                                  "An account must retain its own meeting alongside shared guest History")
+                }
+                for foreignID in [accountAID, accountBID] where foreignID != ownID {
+                    XCTAssertFalse(app.buttons["history.session.\(foreignID)"].exists,
+                                   "Guest sharing must not expose another account's private meeting")
+                }
+                capture("shared-guest-\(profile)-\(appearance)-list")
+                guest.tap()
+                XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5),
+                              "The shared guest row must open its actual transcript")
+                XCTAssertTrue(app.buttons["transcript.copy"].exists)
+                XCTAssertTrue(app.buttons["transcript.more"].exists)
+                XCTAssertTrue(app.staticTexts["Синтетический текст гостевой встречи."].waitForExistence(timeout: 5))
+                capture("shared-guest-\(profile)-\(appearance)-detail")
+            }
         }
         #endif
     }
