@@ -18,5 +18,8 @@ start = source.index('    private func processRewriteWithVoiceInstruction(')
 end = source.index('    private func setActiveRecordingMode(', start)
 Path(sys.argv[1]).write_text('import Foundation\n@MainActor extension VoiceEditOwner {\n' + source[start:end].replace('private func', 'func', 1) + '}\n')
 PY
-xcrun swiftc -parse-as-library "$task_test_dir/VoiceEdit.swift" Tests/VoiceEditCancellationTests.swift -o "$task_test_dir/edit-tests"
+python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift" --synthetic-brand
+xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
+    "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
+    "$task_test_dir/VoiceEdit.swift" Tests/VoiceEditCancellationTests.swift -o "$task_test_dir/edit-tests"
 "$task_test_dir/edit-tests"

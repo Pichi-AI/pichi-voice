@@ -401,6 +401,7 @@ history = history.replace('self.$projection.searchQuery', 'self.$searchQuery').r
 files = ink_snippet('Sources/Fluid/UI/FileTranscriptionView.swift',
     '            HStack(spacing: self.theme.metrics.spacing.sm) {\n                Image(systemName: "magnifyingglass")',
     '            Divider()')
+files = files.replace('self.$privateProjection.searchQuery', 'self.$searchQuery').replace('self.privateProjection.searchQuery', 'self.searchQuery')
 def chart_block(source, start, height, offset=0):
     first = source.index(start, offset)
     last = source.index(f'.frame(height: {height})', first) + len(f'.frame(height: {height})')
