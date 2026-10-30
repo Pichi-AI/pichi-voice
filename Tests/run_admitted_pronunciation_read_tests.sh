@@ -15,4 +15,4 @@ xcrun swiftc -target x86_64-apple-macosx15.0 -parse-as-library -swift-version "$
     Sources/Fluid/Services/DictionaryExperimentalMatcher.swift Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift \
     Tests/Support/PrivateProfileStoresSupport.swift \
     Tests/AdmittedPronunciationReadTests.swift -o "$task_test_dir/tests"
-"$task_test_dir/tests"
+"$task_test_dir/tests" "$@"

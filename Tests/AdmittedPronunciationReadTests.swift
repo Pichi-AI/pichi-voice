@@ -38,6 +38,121 @@ import Darwin
         let pcmFloat32: Data
     }
 
+    static func featureEvidenceTransportContracts() throws {
+        let now = Date(timeIntervalSince1970: 1000)
+        let text = "alpha term beta term omega"
+        let words = [ASRWordTiming(text: "alpha", start: 0.2, end: 0.5),
+                     ASRWordTiming(text: "term", start: 1.01, end: 1.21),
+                     ASRWordTiming(text: "beta", start: 1.5, end: 1.8),
+                     ASRWordTiming(text: "term", start: 5.03, end: 5.21),
+                     ASRWordTiming(text: "omega", start: 5.5, end: 5.8)]
+        let samples = [Float](repeating: 0.2, count: 16_000 * 8)
+        func feature(offset: Double = 0, period: Double = 0.04, hidden: Int = 2, count: Int = 200,
+                     base: Float = 0, version: String = "synthetic-encoder-v1") -> DictionaryLearningFeatureFrames {
+            .init(extractorVersion: version, frames: .init(offset: offset, frameDuration: period, hiddenSize: hidden,
+                values: (0..<count).flatMap { row in [Float](repeating: base + Float(row), count: hidden) }))
+        }
+        func recording(_ features: [DictionaryLearningFeatureFrames], retainAudio: Bool = true) -> DictionaryLearningRecording {
+            DictionaryLearningRecording(alignment: .init(modelKey: "synthetic-artifact-hash", words: words,
+                featureFrames: features), samples: samples, retainAudio: retainAudio, now: now)!
+        }
+        func evidence(_ recording: DictionaryLearningRecording) throws -> DictionaryLearningAudioEvidence {
+            try DictionaryLearningAlignmentResolver.resolve(recording: recording, deliveredTextBeforeEdit: text,
+                selectedUTF16Range: (text as NSString).range(of: "term", options: .backwards), observedText: "term", now: now)
+        }
+        let native = feature(offset: 0.015, hidden: 768)
+        let retained = recording([native])
+        expect(retained.alignment.featureFrames == [native], "Valid 40 ms encoder windows retain exact values and origin")
+        let cut = try evidence(retained)
+        expect(cut.sourceWordRange == 3..<4, "Repeated spelling resolves only the selected second occurrence")
+        expect(cut.modelKey == "synthetic-artifact-hash" && cut.featureFrames[0].extractorVersion == native.extractorVersion,
+            "Feature transport preserves the source artifact key and extractor version")
+        expect(cut.sourceSampleRange.lowerBound == 47_360 && cut.focalSampleRange == 33_120..<36_000,
+            "Existing source PCM and focal alignment remain exact")
+        expect(cut.featureFrames.count == 1 && cut.featureFrames[0].frames.hiddenSize == 768 &&
+            cut.featureFrames[0].frames.count == 5 && cut.featureFrames[0].frames.values.first == 125,
+            "Only focal encoder frames from the selected occurrence are copied")
+        expect(abs(cut.featureFrames[0].frames.offset - 2.055) < 1e-9,
+            "A non-grid encoder origin becomes relative to evidence PCM without losing its offset")
+        expect(cut.featureFrames[0].frames.offset <= Double(cut.focalSampleRange.lowerBound) / 16_000 &&
+            cut.featureFrames[0].frames.offset + Double(cut.featureFrames[0].frames.count) * 0.04 >= Double(cut.focalSampleRange.upperBound) / 16_000,
+            "Outward frame rounding covers the whole selected acoustic occurrence")
+
+        let legacy = try evidence(recording([feature(offset: 0.025, period: 0.08, count: 100, version: "synthetic-legacy-v1")]))
+        expect(legacy.featureFrames[0].frames.count == 3 && legacy.featureFrames[0].frames.values.first == 62 &&
+            abs(legacy.featureFrames[0].frames.offset - 2.025) < 1e-9,
+            "Legacy 80 ms feature windows preserve their own origin and frame period")
+        let overlapping = recording([feature(count: 135, base: 1000), feature(offset: 3.6, count: 70, base: 2000)])
+        let best = try evidence(overlapping)
+        expect(best.featureFrames.count == 1 && best.featureFrames[0].frames.values.first == 2035 &&
+            best.featureFrames[0].frames.count == 6, "Overlapping windows choose the one with safer context around the whole focal range")
+        expect(abs(best.featureFrames[0].frames.offset - 2.04) < 1e-9, "Chosen window retains its recording-relative frame origin")
+        let tied = try evidence(recording([feature(base: 3000), feature(base: 4000)]))
+        expect(tied.featureFrames[0].frames.values.first == 3125, "Equal-context windows choose the first source window deterministically")
+        let wrongOccurrence = try evidence(recording([feature(offset: 0.96, count: 12, base: 5000)]))
+        expect(wrongOccurrence.featureFrames.isEmpty && wrongOccurrence.sourceWordRange == 3..<4,
+            "Features covering only the earlier repeated word cannot supply the selected occurrence")
+
+        let crossing = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic", words: [
+            .init(text: "term", start: 3.16, end: 3.24)], featureFrames: [feature(count: 80), feature(offset: 3.2, count: 80)]),
+            samples: samples, now: now)!
+        let crossingEvidence = try DictionaryLearningAlignmentResolver.resolve(recording: crossing, deliveredTextBeforeEdit: "term",
+            selectedUTF16Range: NSRange(location: 0, length: 4), observedText: "term", now: now)
+        expect(crossingEvidence.featureFrames.isEmpty && !crossingEvidence.samples.isEmpty,
+            "A focal occurrence crossing separate encoder windows keeps PCM but never stitches feature windows")
+        let aligned = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic", words: [
+            .init(text: "term", start: 0.04, end: 0.08)], featureFrames: [feature(count: 200)]), samples: samples, now: now)!
+        let alignedEvidence = try DictionaryLearningAlignmentResolver.resolve(recording: aligned, deliveredTextBeforeEdit: "term",
+            selectedUTF16Range: NSRange(location: 0, length: 4), observedText: "term", now: now)
+        expect(alignedEvidence.featureFrames[0].frames.count == 1 && alignedEvidence.featureFrames[0].frames.values.first == 1,
+            "Exact frame-boundary selections do not include a neighboring occurrence")
+        let noFeatures = try evidence(recording([]))
+        expect(noFeatures.featureFrames.isEmpty && noFeatures.sourceWordRange == 3..<4,
+            "Legacy initializers and evidence resolution remain unchanged without auxiliary features")
+        let longWindow = feature(hidden: 768, count: 550)
+        let longRecording = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic-long-window", words: words,
+            featureFrames: [longWindow]), samples: [Float](repeating: 0.2, count: 16_000 * 22), now: now)!
+        expect(longRecording.alignment.featureFrames.count == 1 && !longWindow.frames.isValid,
+            "Raw recording transport accepts a bounded full inference window beyond the shorter persisted-inspection limit")
+        let longEvidence = try evidence(longRecording)
+        expect(longEvidence.featureFrames.count == 1 && longEvidence.featureFrames[0].frames.isValid,
+            "A full inference window is reduced to a bounded persistable focal feature cut")
+
+        var nonfinite = native.frames.values
+        nonfinite[0] = .nan
+        let invalid: [[DictionaryLearningFeatureFrames]] = [
+            [feature(version: "")], [feature(version: "bad recipe")], [feature(offset: -.infinity)],
+            [feature(offset: -0.04)], [feature(period: 0.03)], [feature(offset: 9, count: 1)],
+            [feature(offset: 0.015, count: 201)],
+            [.init(extractorVersion: "synthetic", frames: .init(offset: 0, frameDuration: 0.04, hiddenSize: 768, values: [1]))],
+            [.init(extractorVersion: native.extractorVersion, frames: .init(offset: 0, frameDuration: 0.04, hiddenSize: 768, values: nonfinite))],
+            [feature(), feature(version: "different-recipe")],
+            [feature(), feature(hidden: 3)], [feature(), feature(period: 0.08, count: 100)],
+            [feature(offset: 4, count: 20), feature(count: 20)],
+            Array(repeating: feature(count: 1), count: DictionaryLearningRecording.maximumFeatureChunks + 1),
+        ]
+        for frames in invalid {
+            let value = recording(frames)
+            expect(value.alignment.featureFrames.isEmpty && value.samples == samples,
+                "Invalid optional feature metadata or values are dropped without discarding source PCM")
+        }
+        // Share one synthetic 16 MiB array across windows: retention still accounts for every
+        // window's logical payload, without allocating a large model or dataset for the probe.
+        let sixteenMiB = [Float](repeating: 0.2, count: 4_194_304)
+        let budgetWindow = DictionaryLearningFeatureFrames(extractorVersion: "synthetic-large-v1",
+            frames: .init(offset: 0, frameDuration: 0.04, hiddenSize: 2048, values: sixteenMiB))
+        let budgetRecording = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic", words: words,
+            featureFrames: Array(repeating: budgetWindow, count: 9)), samples: [Float](repeating: 0.2, count: 16_000 * 82), now: now)!
+        expect(DictionaryLearningRecording.maximumFeatureBytes == 128 * 1024 * 1024 && budgetRecording.alignment.featureFrames.isEmpty &&
+            !budgetRecording.samples.isEmpty, "A payload above the explicit 128 MiB budget drops only auxiliary features")
+        let negative = DictionaryAcousticEvidence(id: UUID(), entryID: UUID(), label: "Synthetic", profileKey: "synthetic-profile",
+            modelKey: "synthetic", sourceWordRange: 0..<1, frames: .init(hiddenSize: 2, values: [1, 0]))
+        let negativeOnly = DictionaryLearningRecording(alignment: .init(modelKey: "synthetic", words: words,
+            acousticEvidence: [negative], featureFrames: [native]), samples: samples, retainAudio: false, now: now)!
+        expect(negativeOnly.samples.isEmpty && negativeOnly.alignment.featureFrames.isEmpty &&
+            negativeOnly.alignment.acousticEvidence.count == 1, "Negative-only retention strips raw PCM and raw feature windows but preserves accepted negative evidence")
+    }
+
     static func featureFormatContracts(in root: URL) async throws {
         let directory = root.appendingPathComponent("synthetic-feature-formats")
         let file = directory.appendingPathComponent("pronunciation-dictionary-v1.json")
@@ -125,6 +240,11 @@ import Darwin
     }
 
     static func main() async throws {
+        if CommandLine.arguments.contains("--feature-evidence-only") {
+            try featureEvidenceTransportContracts()
+            print("Feature evidence transport: \(checks) assertions passed")
+            return
+        }
         let initial = PrivateProfileStorage.current
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-pronunciation-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -132,6 +252,7 @@ import Darwin
             PrivateProfileStorage.select(initial)
             try? FileManager.default.removeItem(at: root)
         }
+        try featureEvidenceTransportContracts()
         try await featureFormatContracts(in: root)
         func account(_ subject: String, generation: UUID = UUID()) throws -> PrivateProfileSnapshot {
             let context = AccountContext(identity: .init(issuer: "https://synthetic.invalid", subject: subject,

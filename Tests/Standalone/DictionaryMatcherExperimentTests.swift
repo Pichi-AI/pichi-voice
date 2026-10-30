@@ -13,6 +13,7 @@ struct ASRWordTiming: Sendable { let text: String; let start: Double; let end: D
 struct PronunciationEnrollmentCapture { let inspectionID: UUID?; let originalAudioID: UUID?; let values: [Float] }
 struct PronunciationDictionaryProfile { let modelKey: String; let label: String; let enrollments: [PronunciationEnrollmentCapture] }
 enum PronunciationDictionaryStoreError: Error { case inconsistentEnrollment, staleEvidence }
+enum DictionaryMatchPlaygroundError: Error { case unavailable(String) }
 
 @main struct DictionaryMatcherExperimentTests {
     static var checks = 0
