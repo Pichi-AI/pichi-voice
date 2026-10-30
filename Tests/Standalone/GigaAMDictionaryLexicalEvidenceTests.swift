@@ -64,6 +64,9 @@ import Foundation
         for heard in ["Clod a", "Clod om", "Clodo m", "Clod e", "Clod em"] {
             precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: heard, canonical: "Claude"))
         }
+        precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "AlfaA", canonical: "Alpha"))
+        precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "ClodOm", canonical: "Claude"))
+        precondition(!GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "Clodom", canonical: "Claude"))
         precondition(GigaAMDictionaryLexicalEvidence.dropsSourceComponents(heard: "Alfa Desktop Pro", canonical: "Alpha Desktop"))
         for pair in [("не зови", "зови"), ("мне", "тебе"), ("Call model 4", "Call model 5"), ("don't call", "call"),
                      ("you help me", "me help you"), ("couldn't call", "call")] {
