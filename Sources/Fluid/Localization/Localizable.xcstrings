@@ -209,15 +209,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A protected transcript export requires a completed meeting captured with sensitive data redaction enabled."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A protected transcript export requires a completed recording made with sensitive data redaction enabled."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A protected transcript export requires a completed recording made with sensitive data redaction enabled."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A protected transcript export requires a completed meeting captured with sensitive data redaction enabled."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для защищённого экспорта нужна завершённая встреча, записанная с включённым скрытием конфиденциальных данных."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для защищённого экспорта нужна завершённая запись, сделанная с включённым скрытием конфиденциальных данных."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для защищённого экспорта нужна завершённая запись, сделанная с включённым скрытием конфиденциальных данных."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для защищённого экспорта нужна завершённая встреча, записанная с включённым скрытием конфиденциальных данных."
+                }
+              }
+            }
           }
         }
       }
@@ -226,15 +262,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This meeting cannot be exported in the portable transcript format."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This recording cannot be exported in the portable transcript format."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This recording cannot be exported in the portable transcript format."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This meeting cannot be exported in the portable transcript format."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Эту встречу нельзя экспортировать в переносимом формате расшифровки."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Эту запись нельзя экспортировать в переносимом формате расшифровки."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Эту запись нельзя экспортировать в переносимом формате расшифровки."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Эту встречу нельзя экспортировать в переносимом формате расшифровки."
+                }
+              }
+            }
           }
         }
       }
@@ -9295,15 +9367,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Capture audio could not be normalized onto the meeting timeline."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Capture audio could not be normalized onto the recording timeline."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Capture audio could not be normalized onto the recording timeline."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Capture audio could not be normalized onto the meeting timeline."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось синхронизировать аудио со шкалой времени встречи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось синхронизировать аудио со шкалой времени записи."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось синхронизировать аудио со шкалой времени записи."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось синхронизировать аудио со шкалой времени встречи."
+                }
+              }
+            }
           }
         }
       }
@@ -10162,15 +10270,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose a supported meeting language from Recording settings."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Choose a supported language in Recording settings."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Choose a supported language in Recording settings."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Choose a supported meeting language from Recording settings."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выберите поддерживаемый язык встречи в настройках записи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выберите поддерживаемый язык в настройках записи."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выберите поддерживаемый язык в настройках записи."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выберите поддерживаемый язык встречи в настройках записи."
+                }
+              }
+            }
           }
         }
       }
@@ -12284,6 +12428,74 @@
           "stringUnit": {
             "state": "translated",
             "value": "Скопировано!"
+          }
+        }
+      }
+    },
+    "Choose text to edit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose text to edit"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите текст для исправления"
+          }
+        }
+      }
+    },
+    "Choose a fragment to name": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a fragment to name"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите фрагмент для назначения участника"
+          }
+        }
+      }
+    },
+    "Search transcript text": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search transcript text"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск по тексту расшифровки"
+          }
+        }
+      }
+    },
+    "%@: %.1f s. Audio intervals: %lld.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %.1f s. Audio intervals: %lld."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %.1f с. Участков: %lld."
           }
         }
       }
@@ -18163,15 +18375,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "FluidVoice is tidying up meeting storage. Try again in a moment."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording storage is being tidied up. Try again in a moment."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording storage is being tidied up. Try again in a moment."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "FluidVoice is tidying up meeting storage. Try again in a moment."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "FluidVoice очищает хранилище встреч. Попробуйте ещё раз через несколько секунд."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Хранилище записей очищается. Попробуйте ещё раз через несколько секунд."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Хранилище записей очищается. Попробуйте ещё раз через несколько секунд."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "FluidVoice очищает хранилище встреч. Попробуйте ещё раз через несколько секунд."
+                }
+              }
+            }
           }
         }
       }
@@ -20449,15 +20697,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In-room meeting"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "In-room meeting"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Встреча в одной комнате"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Запись"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Запись"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Встреча в одной комнате"
+                }
+              }
+            }
           }
         }
       }
@@ -23029,15 +23313,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Встреча"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Запись"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Запись"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Встреча"
+                }
+              }
+            }
           }
         }
       }
@@ -23199,15 +23519,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting history could not be loaded."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recordings could not be loaded."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recordings could not be loaded."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting history could not be loaded."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось загрузить историю встреч."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось загрузить записи."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось загрузить записи."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось загрузить историю встреч."
+                }
+              }
+            }
           }
         }
       }
@@ -23336,15 +23692,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Another meeting recording is already active."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another recording is already in progress."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another recording is already in progress."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another meeting recording is already active."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Уже идёт запись другой встречи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Уже идёт другая запись."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Уже идёт другая запись."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Уже идёт запись другой встречи."
+                }
+              }
+            }
           }
         }
       }
@@ -23353,15 +23745,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "There is no active meeting recording."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "There is no recording in progress."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "There is no recording in progress."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "There is no active meeting recording."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сейчас нет активной записи встречи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас запись не идёт."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас запись не идёт."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас нет активной записи встречи."
+                }
+              }
+            }
           }
         }
       }
@@ -23370,15 +23798,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A different meeting recording is active."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A different recording is in progress."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A different recording is in progress."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A different meeting recording is active."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сейчас активна запись другой встречи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас идёт другая запись."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас идёт другая запись."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас активна запись другой встречи."
+                }
+              }
+            }
           }
         }
       }
@@ -23421,15 +23885,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Microphone permission is required to record this meeting."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Microphone permission is required to make this recording."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Microphone permission is required to make this recording."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Microphone permission is required to record this meeting."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Чтобы записать эту встречу, разрешите доступ к микрофону."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Чтобы сделать запись, разрешите доступ к микрофону."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Чтобы сделать запись, разрешите доступ к микрофону."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Чтобы записать эту встречу, разрешите доступ к микрофону."
+                }
+              }
+            }
           }
         }
       }
@@ -23455,15 +23955,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Not enough free space is available for recording. Free space for at least a one-hour recording and processing workspace, then try again."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Not enough free space is available for recording. Free space for at least a one-hour recording and processing workspace, then try again."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Недостаточно свободного места для записи встречи. Освободите место хотя бы для часа записи и её обработки, затем повторите попытку."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Недостаточно свободного места для записи. Освободите место хотя бы для часа записи и её обработки, затем повторите попытку."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Недостаточно свободного места для записи. Освободите место хотя бы для часа записи и её обработки, затем повторите попытку."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Недостаточно свободного места для записи встречи. Освободите место хотя бы для часа записи и её обработки, затем повторите попытку."
+                }
+              }
+            }
           }
         }
       }
@@ -23472,15 +24008,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting recording could not start. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording could not start. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording could not start. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting recording could not start. %@"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось начать запись встречи. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось начать запись. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось начать запись. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось начать запись встречи. %@"
+                }
+              }
+            }
           }
         }
       }
@@ -23489,15 +24061,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting recording could not stop cleanly. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording could not stop cleanly. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording could not stop cleanly. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting recording could not stop cleanly. %@"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось корректно остановить запись встречи. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось корректно остановить запись. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось корректно остановить запись. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось корректно остановить запись встречи. %@"
+                }
+              }
+            }
           }
         }
       }
@@ -23523,15 +24131,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting audio could not be saved. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording audio could not be saved. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording audio could not be saved. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting audio could not be saved. %@"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось сохранить звук встречи. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось сохранить звук записи. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось сохранить звук записи. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось сохранить звук встречи. %@"
+                }
+              }
+            }
           }
         }
       }
@@ -23642,15 +24286,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting title cannot be empty."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording title cannot be empty."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording title cannot be empty."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting title cannot be empty."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Название встречи не может быть пустым."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Название записи не может быть пустым."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Название записи не может быть пустым."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Название встречи не может быть пустым."
+                }
+              }
+            }
           }
         }
       }
@@ -38444,15 +39124,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The meeting has an invalid audio chunk manifest."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording has an invalid audio chunk manifest."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording has an invalid audio chunk manifest."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The meeting has an invalid audio chunk manifest."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Список аудиофрагментов встречи содержит ошибки."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиофрагментов записи содержит ошибки."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиофрагментов записи содержит ошибки."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиофрагментов встречи содержит ошибки."
+                }
+              }
+            }
           }
         }
       }
@@ -38461,15 +39177,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The meeting has an invalid audio track manifest."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording has an invalid audio track manifest."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording has an invalid audio track manifest."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The meeting has an invalid audio track manifest."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Список аудиодорожек встречи содержит ошибки."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиодорожек записи содержит ошибки."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиодорожек записи содержит ошибки."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиодорожек встречи содержит ошибки."
+                }
+              }
+            }
           }
         }
       }
@@ -38512,15 +39264,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The meeting transcript contains invalid references."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording transcript contains invalid references."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording transcript contains invalid references."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The meeting transcript contains invalid references."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расшифровка встречи содержит неверные ссылки."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка записи содержит неверные ссылки."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка записи содержит неверные ссылки."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка встречи содержит неверные ссылки."
+                }
+              }
+            }
           }
         }
       }
@@ -38721,15 +39509,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The selected model does not support live captions in this meeting language."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected model does not support live captions in this language."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected model does not support live captions in this language."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected model does not support live captions in this meeting language."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выбранная модель не поддерживает субтитры на этом языке встречи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранная модель не поддерживает субтитры на этом языке."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранная модель не поддерживает субтитры на этом языке."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранная модель не поддерживает субтитры на этом языке встречи."
+                }
+              }
+            }
           }
         }
       }
@@ -38755,15 +39579,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The speaker is no longer part of this meeting."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The speaker is no longer part of this recording."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The speaker is no longer part of this recording."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The speaker is no longer part of this meeting."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Этого участника больше нет в данной встрече."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этого участника больше нет в этой записи."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этого участника больше нет в этой записи."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этого участника больше нет в данной встрече."
+                }
+              }
+            }
           }
         }
       }
@@ -39592,15 +40452,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This transcript line is no longer part of the meeting."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This transcript line is no longer part of the recording."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This transcript line is no longer part of the recording."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This transcript line is no longer part of the meeting."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Этой строки расшифровки больше нет во встрече."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этой строки расшифровки больше нет в записи."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этой строки расшифровки больше нет в записи."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этой строки расшифровки больше нет во встрече."
+                }
+              }
+            }
           }
         }
       }
@@ -43909,23 +44805,6 @@
         }
       }
     },
-    "Your meetings, models and voice profile are kept.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your meetings, models and voice profile are kept."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Встречи, модели и голосовой профиль сохранятся."
-          }
-        }
-      }
-    },
     "Your mic will record the room.": {
       "extractionState": "manual",
       "localizations": {
@@ -45797,15 +46676,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "meeting transcription"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "recording transcription"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "recording transcription"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "meeting transcription"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расшифровка встречи"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка записи"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка записи"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка встречи"
+                }
+              }
+            }
           }
         }
       }
@@ -50855,32 +51770,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Another PCM window still owns the meeting inference runtime."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another PCM window still owns the recognition runtime."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another PCM window still owns the recognition runtime."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another PCM window still owns the meeting inference runtime."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Распознавание предыдущего фрагмента PCM встречи ещё не завершено."
-          }
-        }
-      }
-    },
-    "Applies to past meetings too. Transcripts are always kept.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Applies to past meetings too. Transcripts are always kept."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Применяется и к прошлым встречам. Расшифровки сохраняются всегда."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Распознавание предыдущего фрагмента PCM записи ещё не завершено."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Распознавание предыдущего фрагмента PCM записи ещё не завершено."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Распознавание предыдущего фрагмента PCM встречи ещё не завершено."
+                }
+              }
+            }
           }
         }
       }
@@ -50939,15 +51873,51 @@
     "Battery use and recognition speed depend on the device. Test longer meetings on your iPad.": {
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Battery use and recognition speed depend on the device. Test longer meetings on your iPad."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Battery use and recognition speed depend on the device. Test longer recordings on your iPad."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Battery use and recognition speed depend on the device. Test longer recordings on your iPhone."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Battery use and recognition speed depend on the device. Test longer meetings on your iPad."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные встречи на своём iPad."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные записи на своём iPad."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные записи на своём iPhone."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные встречи на своём iPad."
+                }
+              }
+            }
           }
         }
       }
@@ -50965,40 +51935,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Изменения применяются к новым встречам. Срок хранения аудио применяется и к существующим записям."
-          }
-        }
-      }
-    },
-    "Delete Meeting": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete Meeting"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Удалить встречу"
-          }
-        }
-      }
-    },
-    "Delete this meeting and its recordings?": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete this meeting and its recordings?"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Удалить эту встречу и её записи?"
           }
         }
       }
@@ -51205,15 +52141,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting backend \"%@\" does not support %@ input."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recognition backend \"%@\" does not support %@ input."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recognition backend \"%@\" does not support %@ input."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting backend \"%@\" does not support %@ input."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Обработчик встречи «%@» не поддерживает аудиовход %@."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Движок распознавания «%@» не поддерживает аудиовход %@."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Движок распознавания «%@» не поддерживает аудиовход %@."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Обработчик встречи «%@» не поддерживает аудиовход %@."
+                }
+              }
+            }
           }
         }
       }
@@ -51222,15 +52194,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting backend \"%@\" produced capabilities different from its registration."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recognition backend \"%@\" produced capabilities different from its registration."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recognition backend \"%@\" produced capabilities different from its registration."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting backend \"%@\" produced capabilities different from its registration."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Возможности обработчика встречи «%@» отличаются от зарегистрированных."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Возможности движка распознавания «%@» отличаются от зарегистрированных."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Возможности движка распознавания «%@» отличаются от зарегистрированных."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Возможности обработчика встречи «%@» отличаются от зарегистрированных."
+                }
+              }
+            }
           }
         }
       }
@@ -51455,15 +52463,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sensitive data redaction requires a compatible meeting backend."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Sensitive data redaction requires a compatible transcription backend."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Sensitive data redaction requires a compatible transcription backend."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Sensitive data redaction requires a compatible meeting backend."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для удаления чувствительных данных нужен совместимый движок встреч."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для удаления чувствительных данных нужен совместимый движок распознавания."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для удаления чувствительных данных нужен совместимый движок распознавания."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для удаления чувствительных данных нужен совместимый движок встреч."
+                }
+              }
+            }
           }
         }
       }
@@ -51635,15 +52679,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed Whisper artifact changed after this recording was scheduled. Start a new processing run."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed Whisper artifact changed after this recording was scheduled. Start a new processing run."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Установленная модель Whisper изменилась после подготовки этой встречи. Запустите обработку заново."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель Whisper изменилась после подготовки этой записи. Запустите обработку заново."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель Whisper изменилась после подготовки этой записи. Запустите обработку заново."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель Whisper изменилась после подготовки этой встречи. Запустите обработку заново."
+                }
+              }
+            }
           }
         }
       }
@@ -51652,15 +52732,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The installed meeting model changed after this attempt was scheduled. Start a new processing run."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed recognition model changed after this attempt was scheduled. Start a new processing run."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed recognition model changed after this attempt was scheduled. Start a new processing run."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed meeting model changed after this attempt was scheduled. Start a new processing run."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Установленная модель встречи изменилась после подготовки этой попытки. Запустите обработку заново."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель распознавания изменилась после подготовки этой попытки. Запустите обработку заново."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель распознавания изменилась после подготовки этой попытки. Запустите обработку заново."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель встречи изменилась после подготовки этой попытки. Запустите обработку заново."
+                }
+              }
+            }
           }
         }
       }
@@ -51669,15 +52785,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The meeting PCM window is outside the bounded inference contract."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording PCM window is outside the bounded inference contract."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording PCM window is outside the bounded inference contract."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The meeting PCM window is outside the bounded inference contract."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Фрагмент PCM встречи превышает допустимые ограничения распознавания."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Фрагмент PCM записи превышает допустимые ограничения распознавания."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Фрагмент PCM записи превышает допустимые ограничения распознавания."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Фрагмент PCM встречи превышает допустимые ограничения распознавания."
+                }
+              }
+            }
           }
         }
       }
@@ -51766,15 +52918,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The pinned recognition model files are unavailable. Restore them or start a new processing run."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The pinned recognition model files are unavailable. Restore them or start a new processing run."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Зафиксированные файлы модели для встречи недоступны. Восстановите их или запустите обработку заново."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Зафиксированные файлы модели распознавания недоступны. Восстановите их или запустите обработку заново."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Зафиксированные файлы модели распознавания недоступны. Восстановите их или запустите обработку заново."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Зафиксированные файлы модели для встречи недоступны. Восстановите их или запустите обработку заново."
+                }
+              }
+            }
           }
         }
       }
@@ -51783,15 +52971,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The selected meeting runtime does not support in-memory audio."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected recognition runtime does not support in-memory audio."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected recognition runtime does not support in-memory audio."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected meeting runtime does not support in-memory audio."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранный движок распознавания не поддерживает распознавание аудио из памяти."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранный движок распознавания не поддерживает распознавание аудио из памяти."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
+                }
+              }
+            }
           }
         }
       }
@@ -52119,15 +53343,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Настройте свой голос, чтобы в следующих встречах ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Настройте свой голос, чтобы в следующих записях ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Настройте свой голос, чтобы в следующих записях ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Настройте свой голос, чтобы в следующих встречах ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+                }
+              }
+            }
           }
         }
       }
@@ -52136,15 +53396,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Today I am setting up my voice for meeting transcripts. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Today I am setting up my voice for transcripts of my recordings. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Today I am setting up my voice for transcripts of my recordings. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Today I am setting up my voice for meeting transcripts. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сегодня я настраиваю свой голос для расшифровки встреч. Я говорю в обычном темпе и держу микрофон на удобном расстоянии. Этот образец поможет приложению отличить мой голос от голосов других людей. Я могу удалить свой голосовой профиль в настройках в любое время."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сегодня я настраиваю свой голос для расшифровки записей. Я говорю в обычном темпе и держу микрофон на удобном расстоянии. Этот образец поможет приложению отличить мой голос от голосов других людей. Я могу удалить свой голосовой профиль в настройках в любое время."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сегодня я настраиваю свой голос для расшифровки записей. Я говорю в обычном темпе и держу микрофон на удобном расстоянии. Этот образец поможет приложению отличить мой голос от голосов других людей. Я могу удалить свой голосовой профиль в настройках в любое время."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сегодня я настраиваю свой голос для расшифровки встреч. Я говорю в обычном темпе и держу микрофон на удобном расстоянии. Этот образец поможет приложению отличить мой голос от голосов других людей. Я могу удалить свой голосовой профиль в настройках в любое время."
+                }
+              }
+            }
           }
         }
       }
@@ -52204,15 +53500,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice sample is ready. Save to use it in future meetings."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Voice sample is ready. Save to use it in future recordings."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Voice sample is ready. Save to use it in future recordings."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Voice sample is ready. Save to use it in future meetings."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Образец голоса готов. Сохраните его, чтобы использовать в следующих встречах."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Образец голоса готов. Сохраните его, чтобы использовать в следующих записях."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Образец голоса готов. Сохраните его, чтобы использовать в следующих записях."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Образец голоса готов. Сохраните его, чтобы использовать в следующих встречах."
+                }
+              }
+            }
           }
         }
       }
@@ -52272,15 +53604,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Future meetings will use participant labels until you set up your voice again. Existing transcripts are unchanged."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Future recordings will use participant labels until you set up your voice again. Existing transcripts are unchanged."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Future recordings will use participant labels until you set up your voice again. Existing transcripts are unchanged."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Future meetings will use participant labels until you set up your voice again. Existing transcripts are unchanged."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "В следующих встречах будут использоваться метки участников, пока вы снова не настроите свой голос. Существующие расшифровки не изменятся."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "В следующих записях будут использоваться метки участников, пока вы снова не настроите свой голос. Существующие расшифровки не изменятся."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "В следующих записях будут использоваться метки участников, пока вы снова не настроите свой голос. Существующие расшифровки не изменятся."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "В следующих встречах будут использоваться метки участников, пока вы снова не настроите свой голос. Существующие расшифровки не изменятся."
+                }
+              }
+            }
           }
         }
       }
@@ -52867,23 +54235,6 @@
         }
       }
     },
-    "Ready to meet": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ready to meet"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Всё готово к встрече"
-          }
-        }
-      }
-    },
     "Setup progress": {
       "extractionState": "manual",
       "localizations": {
@@ -52914,23 +54265,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Записывайте разговоры, следите за текстом во время речи и возвращайтесь к любому моменту позже. Вся обработка выполняется на этом устройстве."
-          }
-        }
-      }
-    },
-    "Live meeting transcripts": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Live meeting transcripts"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Текст встречи во время разговора"
           }
         }
       }
@@ -53016,40 +54350,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ресурсы для определения речи и участников готовятся автоматически. Устанавливаются файлы, без загрузки всех моделей в память."
-          }
-        }
-      }
-    },
-    "Your meeting setup is ready": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your meeting setup is ready"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Настройка для встреч завершена"
-          }
-        }
-      }
-    },
-    "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Начните запись, чтобы видеть текст и участников. Выбранные настройки хранения аудио и очистки данных применяются к новым встречам."
           }
         }
       }
@@ -53275,23 +54575,6 @@
         }
       }
     },
-    "Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new meetings.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new meetings."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Добавьте имена, слова и фразы, которые нужно скрывать при включённой очистке. Словарь хранится на этом устройстве и применяется к новым встречам."
-          }
-        }
-      }
-    },
     "Add word or phrase": {
       "extractionState": "manual",
       "localizations": {
@@ -53411,36 +54694,55 @@
         }
       }
     },
-    "Selected for new meetings. Text and speaker labels update during recording.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Selected for new meetings. Text and speaker labels update during recording."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выбрано для новых встреч. Текст и участники обновляются во время записи."
-          }
-        }
-      }
-    },
     "Speaker resources prepare automatically. Finish setup before an offline meeting.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Speaker resources prepare automatically. Finish setup before an offline meeting."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Speaker resources prepare automatically. Finish setup before recording offline."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Speaker resources prepare automatically. Finish setup before recording offline."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Speaker resources prepare automatically. Finish setup before an offline meeting."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ресурсы определения участников готовятся автоматически. Завершите настройку перед встречей без интернета."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Ресурсы определения участников готовятся автоматически. Завершите настройку перед записью без интернета."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Ресурсы определения участников готовятся автоматически. Завершите настройку перед записью без интернета."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Ресурсы определения участников готовятся автоматически. Завершите настройку перед встречей без интернета."
+                }
+              }
+            }
           }
         }
       }
@@ -53656,15 +54958,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Use location for meeting addresses"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Use location for recording addresses"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Use location for recording addresses"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Use location for meeting addresses"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Использовать геолокацию для адресов встреч"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Использовать геолокацию для адресов записей"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Использовать геолокацию для адресов записей"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Использовать геолокацию для адресов встреч"
+                }
+              }
+            }
           }
         }
       }
@@ -53673,15 +55011,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Optional. Save the address where a meeting starts. Location is requested once per meeting, without background tracking."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Optional. Save the address where a recording starts. Location is requested once per recording, without background tracking."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Optional. Save the address where a recording starts. Location is requested once per recording, without background tracking."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Optional. Save the address where a meeting starts. Location is requested once per meeting, without background tracking."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Необязательно. Сохраняйте адрес, где начинается встреча. Геолокация запрашивается один раз на встречу, без отслеживания в фоне."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Необязательно. Сохраняйте адрес, где начинается запись. Геолокация запрашивается один раз на запись, без отслеживания в фоне."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Необязательно. Сохраняйте адрес, где начинается запись. Геолокация запрашивается один раз на запись, без отслеживания в фоне."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Необязательно. Сохраняйте адрес, где начинается встреча. Геолокация запрашивается один раз на встречу, без отслеживания в фоне."
+                }
+              }
+            }
           }
         }
       }
@@ -53690,15 +55064,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apple resolves the address. It is saved with the meeting and shown in your interface language."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple resolves the address. It is saved with the recording and shown in your interface language."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple resolves the address. It is saved with the recording and shown in your interface language."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple resolves the address. It is saved with the meeting and shown in your interface language."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apple определяет адрес. Он сохраняется вместе со встречей и отображается на языке интерфейса."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple определяет адрес. Он сохраняется вместе с записью и отображается на языке интерфейса."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple определяет адрес. Он сохраняется вместе с записью и отображается на языке интерфейса."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple определяет адрес. Он сохраняется вместе со встречей и отображается на языке интерфейса."
+                }
+              }
+            }
           }
         }
       }
@@ -53741,15 +55151,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Location access is denied. Allow it in system settings to save meeting addresses."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Location access is denied. Allow it in system settings to save recording addresses."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Location access is denied. Allow it in system settings to save recording addresses."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Location access is denied. Allow it in system settings to save meeting addresses."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Доступ к геолокации запрещён. Разрешите его в системных настройках, чтобы сохранять адреса встреч."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Доступ к геолокации запрещён. Разрешите его в системных настройках, чтобы сохранять адреса записей."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Доступ к геолокации запрещён. Разрешите его в системных настройках, чтобы сохранять адреса записей."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Доступ к геолокации запрещён. Разрешите его в системных настройках, чтобы сохранять адреса встреч."
+                }
+              }
+            }
           }
         }
       }
@@ -58799,23 +60245,6 @@
         }
       }
     },
-    "Start your first meeting": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Start your first meeting"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Начните первую встречу"
-          }
-        }
-      }
-    },
     "On": {
       "extractionState": "manual",
       "localizations": {
@@ -58829,23 +60258,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Включено"
-          }
-        }
-      }
-    },
-    "Record a meeting and return to its transcript.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Record a meeting and return to its transcript."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Запишите встречу и вернитесь к её тексту."
           }
         }
       }
@@ -59564,23 +60976,6 @@
         }
       }
     },
-    "Microphone, language and meeting location": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Microphone, language and meeting location"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Микрофон, язык и место встречи"
-          }
-        }
-      }
-    },
     "Speaker labels and your voice": {
       "extractionState": "manual",
       "localizations": {
@@ -59628,23 +61023,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Только запись, полный доступ по паролю"
-          }
-        }
-      }
-    },
-    "The model will be removed from this device. Meetings and transcripts stay.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The model will be removed from this device. Meetings and transcripts stay."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модель будет удалена с этого устройства. Встречи и расшифровки сохранятся."
           }
         }
       }
@@ -60210,23 +61588,6 @@
         }
       }
     },
-    "Only recording stays available: start, stop and your own voice setup. Meetings, transcripts and settings open with the administrator password.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Only recording stays available: start, stop and your own voice setup. Meetings, transcripts and settings open with the administrator password."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Остаётся только запись: начать, остановить и настроить свой голос. Встречи, расшифровки и настройки открываются паролем администратора."
-          }
-        }
-      }
-    },
     "For a shared device in a meeting room. Recording and storage settings can't be changed in restricted mode, so check them first.": {
       "extractionState": "manual",
       "localizations": {
@@ -60529,6 +61890,2299 @@
           "stringUnit": {
             "state": "translated",
             "value": "Эти записи звучат неодинаково. Произнесите термин ещё раз."
+          }
+        }
+      }
+    },
+    "Search recordings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск записей"
+          }
+        }
+      }
+    },
+    "No matching recordings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записи не найдены"
+          }
+        }
+      }
+    },
+    "Make your first recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Make your first recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сделайте первую запись"
+          }
+        }
+      }
+    },
+    "Record anything and come back to its transcript.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record anything and come back to its transcript."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запишите что угодно и возвращайтесь к расшифровке."
+          }
+        }
+      }
+    },
+    "Delete Recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить запись"
+          }
+        }
+      }
+    },
+    "Delete this recording with its transcript and audio?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete this recording with its transcript and audio?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить эту запись вместе с расшифровкой и аудио?"
+          }
+        }
+      }
+    },
+    "Applies to past recordings too. Transcripts are always kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applies to past recordings too. Transcripts are always kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Применяется и к прошлым записям. Расшифровки сохраняются всегда."
+          }
+        }
+      }
+    },
+    "Microphone, language and location": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone, language and location"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон, язык и местоположение"
+          }
+        }
+      }
+    },
+    "Recording location": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording location"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Место записи"
+          }
+        }
+      }
+    },
+    "Selected for new recordings. Text and speaker labels update during recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected for new recordings. Text and speaker labels update during recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрано для новых записей. Текст и участники обновляются во время записи."
+          }
+        }
+      }
+    },
+    "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начните запись, чтобы видеть текст и участников. Выбранные настройки хранения аудио и очистки данных применяются к новым записям."
+          }
+        }
+      }
+    },
+    "The model will be removed from this device. Recordings and transcripts stay.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model will be removed from this device. Recordings and transcripts stay."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель будет удалена с этого устройства. Записи и расшифровки сохранятся."
+          }
+        }
+      }
+    },
+    "Your recordings, models and voice profile are kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your recordings, models and voice profile are kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записи, модели и голосовой профиль сохранятся."
+          }
+        }
+      }
+    },
+    "Your setup is ready": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your setup is ready"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройка завершена"
+          }
+        }
+      }
+    },
+    "Live transcripts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live transcripts"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст во время записи"
+          }
+        }
+      }
+    },
+    "Record anything. Come back to every word.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record anything. Come back to every word."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывайте что угодно и возвращайтесь к каждому слову."
+          }
+        }
+      }
+    },
+    "Only recording stays available: start, stop and your own voice setup. Recordings, transcripts and settings open with the administrator password.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only recording stays available: start, stop and your own voice setup. Recordings, transcripts and settings open with the administrator password."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остаётся только запись: начать, остановить и настроить свой голос. Записи, расшифровки и настройки открываются паролем администратора."
+          }
+        }
+      }
+    },
+    "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройте свой голос, чтобы в следующих записях ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+          }
+        }
+      }
+    },
+    "The You label applies only to this recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The You label applies only to this recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отметка «Вы» применяется только к этой записи."
+          }
+        }
+      }
+    },
+    "There is no transcript text or saved audio available for this recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is no transcript text or saved audio available for this recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой записи нет текста расшифровки или сохранённого аудио."
+          }
+        }
+      }
+    },
+    "Transcription failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось расшифровать запись"
+          }
+        }
+      }
+    },
+    "Transcription was interrupted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription was interrupted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расшифровка записи прервана"
+          }
+        }
+      }
+    },
+    "Recording in progress": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording in progress"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Идёт запись"
+          }
+        }
+      }
+    },
+    "Recording was interrupted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording was interrupted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись прервана"
+          }
+        }
+      }
+    },
+    "Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавьте имена, слова и фразы, которые нужно скрывать при включённой очистке. Словарь хранится на этом устройстве и применяется к новым записям."
+          }
+        }
+      }
+    },
+    "Recordings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записи"
+          }
+        }
+      }
+    },
+    "Enable Local API": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable Local API"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включить локальный API"
+          }
+        }
+      }
+    },
+    "Let other apps on this Mac transcribe audio, read transcription history and edit the dictionary through a local HTTP endpoint at 127.0.0.1.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Let other apps on this Mac transcribe audio, read transcription history and edit the dictionary through a local HTTP endpoint at 127.0.0.1."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешить другим приложениям на этом Mac распознавать аудио, читать историю расшифровок и изменять словарь через локальный HTTP-эндпоинт 127.0.0.1."
+          }
+        }
+      }
+    },
+    "Changes take effect after you restart FluidVoice.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes take effect after you restart FluidVoice."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменения применяются после перезапуска FluidVoice."
+          }
+        }
+      }
+    },
+    "Fluid Speech Pro": {
+      "extractionState": "manual",
+      "comment": "Model name. Preserve this spelling in every language.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fluid Speech Pro"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fluid Speech Pro"
+          }
+        }
+      }
+    },
+    "Qwen3 ASR 1.7B": {
+      "extractionState": "manual",
+      "comment": "Model name. Preserve this spelling in every language.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3 ASR 1.7B"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3 ASR 1.7B"
+          }
+        }
+      }
+    },
+    "Audio recording": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиозапись"
+          }
+        }
+      }
+    },
+    "Conversation": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор"
+          }
+        }
+      }
+    },
+    "Conversation about decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор о решениях"
+          }
+        }
+      }
+    },
+    "Conversation about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор об опыте"
+          }
+        }
+      }
+    },
+    "Conversation about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор об идеях"
+          }
+        }
+      }
+    },
+    "Conversation about outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор об итогах"
+          }
+        }
+      }
+    },
+    "Conversation about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор о планах"
+          }
+        }
+      }
+    },
+    "Conversation about proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор о предложениях"
+          }
+        }
+      }
+    },
+    "Conversation about results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор о результатах"
+          }
+        }
+      }
+    },
+    "Conversation about tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conversation about tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор о задачах"
+          }
+        }
+      }
+    },
+    "Debate": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debate"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дискуссия"
+          }
+        }
+      }
+    },
+    "Debate on decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debate on decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дискуссия о решениях"
+          }
+        }
+      }
+    },
+    "Debate on ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debate on ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дискуссия об идеях"
+          }
+        }
+      }
+    },
+    "Debate on proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debate on proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дискуссия о предложениях"
+          }
+        }
+      }
+    },
+    "Debate on results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debate on results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дискуссия о результатах"
+          }
+        }
+      }
+    },
+    "Dialogue": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dialogue"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диалог"
+          }
+        }
+      }
+    },
+    "Dialogue about decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dialogue about decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диалог о решениях"
+          }
+        }
+      }
+    },
+    "Dialogue about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dialogue about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диалог об опыте"
+          }
+        }
+      }
+    },
+    "Dialogue about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dialogue about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диалог об идеях"
+          }
+        }
+      }
+    },
+    "Dialogue about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dialogue about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диалог о планах"
+          }
+        }
+      }
+    },
+    "Discussion": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение"
+          }
+        }
+      }
+    },
+    "Discussion of decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение решений"
+          }
+        }
+      }
+    },
+    "Discussion of experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение опыта"
+          }
+        }
+      }
+    },
+    "Discussion of ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение идей"
+          }
+        }
+      }
+    },
+    "Discussion of opinions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of opinions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение мнений"
+          }
+        }
+      }
+    },
+    "Discussion of outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение итогов"
+          }
+        }
+      }
+    },
+    "Discussion of plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение планов"
+          }
+        }
+      }
+    },
+    "Discussion of proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение предложений"
+          }
+        }
+      }
+    },
+    "Discussion of questions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of questions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение вопросов"
+          }
+        }
+      }
+    },
+    "Discussion of results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение результатов"
+          }
+        }
+      }
+    },
+    "Discussion of tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discussion of tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждение задач"
+          }
+        }
+      }
+    },
+    "Exchange of experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exchange of experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обмен опытом"
+          }
+        }
+      }
+    },
+    "Exchange of opinions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exchange of opinions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обмен мнениями"
+          }
+        }
+      }
+    },
+    "Group discussion": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение"
+          }
+        }
+      }
+    },
+    "Group discussion of decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение решений"
+          }
+        }
+      }
+    },
+    "Group discussion of experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение опыта"
+          }
+        }
+      }
+    },
+    "Group discussion of ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение идей"
+          }
+        }
+      }
+    },
+    "Group discussion of opinions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of opinions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение мнений"
+          }
+        }
+      }
+    },
+    "Group discussion of outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение итогов"
+          }
+        }
+      }
+    },
+    "Group discussion of plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение планов"
+          }
+        }
+      }
+    },
+    "Group discussion of proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение предложений"
+          }
+        }
+      }
+    },
+    "Group discussion of questions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of questions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение вопросов"
+          }
+        }
+      }
+    },
+    "Group discussion of results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение результатов"
+          }
+        }
+      }
+    },
+    "Group discussion of tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group discussion of tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповое обсуждение задач"
+          }
+        }
+      }
+    },
+    "Group meeting": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповая встреча"
+          }
+        }
+      }
+    },
+    "Group meeting to discuss plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group meeting to discuss plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповая встреча для обсуждения планов"
+          }
+        }
+      }
+    },
+    "Group meeting to discuss proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group meeting to discuss proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповая встреча для обсуждения предложений"
+          }
+        }
+      }
+    },
+    "Group meeting to discuss results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group meeting to discuss results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповая встреча для обсуждения результатов"
+          }
+        }
+      }
+    },
+    "Group meeting to discuss tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group meeting to discuss tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Групповая встреча для обсуждения задач"
+          }
+        }
+      }
+    },
+    "Interview": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью"
+          }
+        }
+      }
+    },
+    "Interview about decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview about decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью о решениях"
+          }
+        }
+      }
+    },
+    "Interview about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью об опыте"
+          }
+        }
+      }
+    },
+    "Interview about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью об идеях"
+          }
+        }
+      }
+    },
+    "Interview about outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview about outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью об итогах"
+          }
+        }
+      }
+    },
+    "Interview about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interview about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интервью о планах"
+          }
+        }
+      }
+    },
+    "Lecture": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lecture"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лекция"
+          }
+        }
+      }
+    },
+    "Meeting to discuss plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting to discuss plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча для обсуждения планов"
+          }
+        }
+      }
+    },
+    "Meeting to discuss proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting to discuss proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча для обсуждения предложений"
+          }
+        }
+      }
+    },
+    "Meeting to discuss results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting to discuss results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча для обсуждения результатов"
+          }
+        }
+      }
+    },
+    "Meeting to discuss tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting to discuss tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встреча для обсуждения задач"
+          }
+        }
+      }
+    },
+    "Monologue": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monologue"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Монолог"
+          }
+        }
+      }
+    },
+    "Monologue about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monologue about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Монолог об опыте"
+          }
+        }
+      }
+    },
+    "Monologue about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monologue about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Монолог об идеях"
+          }
+        }
+      }
+    },
+    "Monologue about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Monologue about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Монолог о планах"
+          }
+        }
+      }
+    },
+    "Notes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки"
+          }
+        }
+      }
+    },
+    "Notes about decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки о решениях"
+          }
+        }
+      }
+    },
+    "Notes about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки об опыте"
+          }
+        }
+      }
+    },
+    "Notes about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки об идеях"
+          }
+        }
+      }
+    },
+    "Notes about outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки об итогах"
+          }
+        }
+      }
+    },
+    "Notes about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки о планах"
+          }
+        }
+      }
+    },
+    "Notes about proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки о предложениях"
+          }
+        }
+      }
+    },
+    "Notes about results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки о результатах"
+          }
+        }
+      }
+    },
+    "Notes about tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notes about tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Заметки о задачах"
+          }
+        }
+      }
+    },
+    "Presentation": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация"
+          }
+        }
+      }
+    },
+    "Presentation of decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация решений"
+          }
+        }
+      }
+    },
+    "Presentation of experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация опыта"
+          }
+        }
+      }
+    },
+    "Presentation of ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация идей"
+          }
+        }
+      }
+    },
+    "Presentation of outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация итогов"
+          }
+        }
+      }
+    },
+    "Presentation of plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация планов"
+          }
+        }
+      }
+    },
+    "Presentation of proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация предложений"
+          }
+        }
+      }
+    },
+    "Presentation of results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация результатов"
+          }
+        }
+      }
+    },
+    "Presentation of tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Presentation of tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Презентация задач"
+          }
+        }
+      }
+    },
+    "Reflections": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления"
+          }
+        }
+      }
+    },
+    "Reflections about decisions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о решениях"
+          }
+        }
+      }
+    },
+    "Reflections about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления об опыте"
+          }
+        }
+      }
+    },
+    "Reflections about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления об идеях"
+          }
+        }
+      }
+    },
+    "Reflections about outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления об итогах"
+          }
+        }
+      }
+    },
+    "Reflections about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о планах"
+          }
+        }
+      }
+    },
+    "Reflections about proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о предложениях"
+          }
+        }
+      }
+    },
+    "Reflections about questions": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about questions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о вопросах"
+          }
+        }
+      }
+    },
+    "Reflections about results": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about results"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о результатах"
+          }
+        }
+      }
+    },
+    "Reflections about tasks": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reflections about tasks"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размышления о задачах"
+          }
+        }
+      }
+    },
+    "Talk": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа"
+          }
+        }
+      }
+    },
+    "Talk about experience": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about experience"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа об опыте"
+          }
+        }
+      }
+    },
+    "Talk about ideas": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about ideas"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа об идеях"
+          }
+        }
+      }
+    },
+    "Talk about outcomes": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about outcomes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа об итогах"
+          }
+        }
+      }
+    },
+    "Talk about plans": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about plans"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа о планах"
+          }
+        }
+      }
+    },
+    "Talk about proposals": {
+      "comment": "Universal automatic title for a long recording. Selected locally from the current transcript.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk about proposals"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Беседа о предложениях"
           }
         }
       }

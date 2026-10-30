@@ -270,7 +270,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
-    private var correctionUndoStacks: [MeetingSessionID: [TranscriptCorrection]] = [:]
+    private struct OwnedTranscriptCorrection {
+        let ownership: MeetingProfileOwnership?
+        let correction: TranscriptCorrection
+    }
+
+    private var correctionUndoStacks: [MeetingSessionID: [OwnedTranscriptCorrection]] = [:]
     private let prepareRecordingDependencies: @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void
     private let validateRecordingModels: @MainActor () async throws -> Void
     private let validateFrozenRecordingConfiguration: @MainActor (MeetingFinalProcessingConfiguration) throws -> Void
@@ -1283,6 +1288,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private func performCorrection(
         sessionID: MeetingSessionID,
+        expectedOwnership: MeetingProfileOwnership? = nil,
         mutate: (inout MeetingSession) throws -> TranscriptCorrection
     ) async throws -> MeetingSession {
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
@@ -1297,8 +1303,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Re-check after the awaits above: another operation may have started while we waited.
         try self.assertSafeToMutate(sessionID: sessionID)
         try Task.checkCancellation()
+        try Self.validateCorrectionOwnership(target, expected: expectedOwnership)
 
         let before = target
+        let sourceOwnership = Self.correctionOwnership(before)
         let inverse = try mutate(&target)
         guard target != before else { return target }
         // Speaker identity/attribution changes preserve recognized text. Only actual text
@@ -1308,10 +1316,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         try Task.checkCancellation()
         try self.assertSafeToMutate(sessionID: sessionID)
+        try Self.validateCorrectionOwnership(target, expected: expectedOwnership)
         try await self.store.save(target)
 
         var stack = self.correctionUndoStacks[sessionID] ?? []
-        stack.append(inverse)
+        stack.append(OwnedTranscriptCorrection(ownership: sourceOwnership, correction: inverse))
         if stack.count > Self.correctionUndoStackCap {
             stack.removeFirst(stack.count - Self.correctionUndoStackCap)
         }
@@ -1355,9 +1364,19 @@ final class MeetingSessionCoordinator: ObservableObject {
         if self.latestCompletedSession?.id == session.id { self.latestCompletedSession = session }
     }
 
+    private static func correctionOwnership(_ session: MeetingSession) -> MeetingProfileOwnership? {
+        // A facade never exposes an ownerless account manifest. Only actual guest mode may
+        // normalize its legacy nil owner; synthetic/custom stores keep nil compatibility.
+        session.profileOwnership ?? (PrivateProfileStorage.current.isGuest ? .guest : nil)
+    }
+
+    private static func validateCorrectionOwnership(_ session: MeetingSession, expected: MeetingProfileOwnership?) throws {
+        guard expected == nil || self.correctionOwnership(session) == expected else { throw AccountError.staleOperation }
+    }
+
     @discardableResult
-    func editTranscriptText(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, text: String, expectedRevision: Int) async throws -> MeetingSession {
-        try await self.performCorrection(sessionID: sessionID) { session in
+    func editTranscriptText(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, text: String, expectedRevision: Int, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
+        try await self.performCorrection(sessionID: sessionID, expectedOwnership: expectedOwnership) { session in
             guard let index = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }) else {
                 throw MeetingDomainError.segmentNotFound
             }
@@ -1384,8 +1403,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     @discardableResult
-    func renameSpeaker(sessionID: MeetingSessionID, speakerID: SessionSpeakerID, to displayName: String) async throws -> MeetingSession {
-        try await self.performCorrection(sessionID: sessionID) { session in
+    func renameSpeaker(sessionID: MeetingSessionID, speakerID: SessionSpeakerID, to displayName: String, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
+        try await self.performCorrection(sessionID: sessionID, expectedOwnership: expectedOwnership) { session in
             let previous = session.speakers.first(where: { $0.id == speakerID })
             try session.renameSpeaker(id: speakerID, to: displayName)
             return .rename(speakerID: speakerID, previousName: previous?.displayName ?? "",
@@ -1395,8 +1414,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     @discardableResult
-    func renameSpeakers(sessionID: MeetingSessionID, names: [SessionSpeakerID: String]) async throws -> MeetingSession {
-        try await self.performCorrection(sessionID: sessionID) { session in
+    func renameSpeakers(sessionID: MeetingSessionID, names: [SessionSpeakerID: String], expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
+        try await self.performCorrection(sessionID: sessionID, expectedOwnership: expectedOwnership) { session in
             var applied: [(speakerID: SessionSpeakerID, previousName: String, previousGeneratedNumber: Int?, previousCustomDisplayName: Bool?)] = []
             for (speakerID, name) in names {
                 guard let existing = session.speakers.first(where: { $0.id == speakerID }),
@@ -1415,12 +1434,13 @@ final class MeetingSessionCoordinator: ObservableObject {
     @discardableResult
     func setLocalUserSpeaker(
         sessionID: MeetingSessionID,
-        speakerID: SessionSpeakerID?
+        speakerID: SessionSpeakerID?,
+        expectedOwnership: MeetingProfileOwnership? = nil
     ) async throws -> MeetingSession {
         // This explicit user operation deliberately renumbers generated labels using its
         // own interface snapshot, independently of background attempts' frozen templates.
         let speakerNameFormat = PichiLocalization.text("Speaker %lld")
-        return try await self.performCorrection(sessionID: sessionID) { session in
+        return try await self.performCorrection(sessionID: sessionID, expectedOwnership: expectedOwnership) { session in
             let previous = session.speakers.map { speaker in
                 (speakerID: speaker.id, previousIsLocalUser: speaker.isLocalUser,
                  previousName: speaker.displayName, previousGeneratedNumber: speaker.generatedParticipantNumber,
@@ -1433,8 +1453,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     @discardableResult
-    func editSpeakers(sessionID: MeetingSessionID, edits: MeetingSpeakerEdits) async throws -> MeetingSession {
-        try await self.performCorrection(sessionID: sessionID) { session in
+    func editSpeakers(sessionID: MeetingSessionID, edits: MeetingSpeakerEdits, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
+        try await self.performCorrection(sessionID: sessionID, expectedOwnership: expectedOwnership) { session in
             let merges = try edits.resolvedMerges()
             let previousSpeakers = session.speakers
             let assignments = session.transcriptSegments.compactMap { segment -> SpeakerAssignmentCorrection? in
@@ -1458,9 +1478,10 @@ final class MeetingSessionCoordinator: ObservableObject {
     func reassignSegment(
         sessionID: MeetingSessionID,
         segmentID: MeetingTranscriptSegmentID,
-        to speakerID: SessionSpeakerID
+        to speakerID: SessionSpeakerID,
+        expectedOwnership: MeetingProfileOwnership? = nil
     ) async throws -> MeetingSession {
-        try await self.reassignSegments(sessionID: sessionID, segmentIDs: [segmentID], to: speakerID)
+        try await self.reassignSegments(sessionID: sessionID, segmentIDs: [segmentID], to: speakerID, expectedOwnership: expectedOwnership)
     }
 
     /// A readable paragraph can contain several native members. One participant choice owns
@@ -1469,9 +1490,10 @@ final class MeetingSessionCoordinator: ObservableObject {
     func reassignSegments(
         sessionID: MeetingSessionID,
         segmentIDs: [MeetingTranscriptSegmentID],
-        to speakerID: SessionSpeakerID
+        to speakerID: SessionSpeakerID,
+        expectedOwnership: MeetingProfileOwnership? = nil
     ) async throws -> MeetingSession {
-        try await self.performCorrection(sessionID: sessionID) { session in
+        try await self.performCorrection(sessionID: sessionID, expectedOwnership: expectedOwnership) { session in
             guard session.activeSpeakers.contains(where: { $0.id == speakerID }) else {
                 throw MeetingDomainError.speakerNotFound
             }
@@ -1503,9 +1525,10 @@ final class MeetingSessionCoordinator: ObservableObject {
     func nameUnknownSegment(
         sessionID: MeetingSessionID,
         segmentID: MeetingTranscriptSegmentID,
-        displayName: String
+        displayName: String,
+        expectedOwnership: MeetingProfileOwnership? = nil
     ) async throws -> MeetingSession {
-        try await self.performCorrection(sessionID: sessionID) { session in
+        try await self.performCorrection(sessionID: sessionID, expectedOwnership: expectedOwnership) { session in
             guard let segment = session.transcriptSegments.first(where: { $0.id == segmentID }) else {
                 throw MeetingDomainError.segmentNotFound
             }
@@ -1524,8 +1547,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     @discardableResult
-    func mergeSpeakers(sessionID: MeetingSessionID, source: SessionSpeakerID, into targetID: SessionSpeakerID) async throws -> MeetingSession {
-        try await self.performCorrection(sessionID: sessionID) { session in
+    func mergeSpeakers(sessionID: MeetingSessionID, source: SessionSpeakerID, into targetID: SessionSpeakerID, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
+        try await self.performCorrection(sessionID: sessionID, expectedOwnership: expectedOwnership) { session in
             let movedSegments = session.transcriptSegments
                 .filter { $0.speakerID == source }
                 .map { (id: $0.id, previousRevision: $0.revision, previousSpeakerAttribution: $0.speakerAttribution, previousLegacyInference: $0.speakerAttributionInference, previousUserSpeakerAssigned: $0.isUserSpeakerAssigned) }
@@ -1535,7 +1558,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     @discardableResult
-    func undoTranscriptCorrection(sessionID: MeetingSessionID) async throws -> MeetingSession {
+    func undoTranscriptCorrection(sessionID: MeetingSessionID, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
         self.isMutatingSession = true
         defer { self.releaseMutationGate() }
@@ -1543,7 +1566,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         await self.ensureRestored()
         await self.flushQueuedPersistence()
 
-        guard var stack = self.correctionUndoStacks[sessionID], let correction = stack.popLast() else {
+        guard var stack = self.correctionUndoStacks[sessionID], let entry = stack.last else {
             throw MeetingCoordinatorError.noCorrectionToUndo
         }
 
@@ -1551,6 +1574,10 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         try self.assertSafeToMutate(sessionID: sessionID)
         try Task.checkCancellation()
+        try Self.validateCorrectionOwnership(target, expected: expectedOwnership)
+        guard Self.correctionOwnership(target) == entry.ownership else { throw AccountError.staleOperation }
+        let correction = entry.correction
+        stack.removeLast()
 
         guard Self.applyInverse(correction, to: &target) else {
             // Inverse target no longer exists: drop the stale entry, never save a no-op.
@@ -1566,9 +1593,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             try Task.checkCancellation()
             try self.assertSafeToMutate(sessionID: sessionID)
+            guard Self.correctionOwnership(target) == entry.ownership else { throw AccountError.staleOperation }
             try await self.store.save(target)
         } catch {
-            stack.append(correction)
+            stack.append(entry)
             self.correctionUndoStacks[sessionID] = stack
             throw error
         }
@@ -1584,7 +1612,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     /// Not a transcript correction: does not push onto `correctionUndoStacks`.
     @discardableResult
-    func renameSession(sessionID: MeetingSessionID, to title: String) async throws -> MeetingSession {
+    func renameSession(sessionID: MeetingSessionID, to title: String, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
         self.isMutatingSession = true
         defer { self.releaseMutationGate() }
@@ -1595,12 +1623,21 @@ final class MeetingSessionCoordinator: ObservableObject {
         var target = try await self.resolveSession(sessionID)
 
         try self.assertSafeToMutate(sessionID: sessionID)
+        try Self.validateCorrectionOwnership(target, expected: expectedOwnership)
 
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
-        guard target.displayTitle != trimmed else { return target }
+        guard target.displayTitle != trimmed || target.automaticTitle != nil else { return target }
 
-        if let directory = try await self.store.existingSessionDirectory(for: sessionID) {
+        let directory: URL?
+        if let directoryOwner = expectedOwnership ?? target.profileOwnership {
+            directory = try await self.store.loadExistingSource(id: sessionID, expectedOwnership: directoryOwner)?.directory
+        } else {
+            // Legacy ownerless guest mode has one root and no account fallback. Custom
+            // ownerless stores retain their existing summary-migration compatibility.
+            directory = try await self.store.existingSessionDirectory(for: sessionID)
+        }
+        if let directory {
             let snapshot = target
             try await Task.detached(priority: .utility) {
                 try MeetingSavedSummary.migrateLegacySummaries(in: directory, for: snapshot)
@@ -1609,6 +1646,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         target.title = trimmed
         target.defaultTitleBase = nil
+        target.automaticTitle = nil
         target.updatedAt = Date()
         try await self.store.save(target)
 
@@ -1621,7 +1659,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Manifest-first: cleared manifest saved before file removal, so a crash between the two
     /// leaves a leftover `tracks/` that the sweep heals. Undo stack survives (audio-independent).
     @discardableResult
-    func deleteAudio(sessionID: MeetingSessionID) async throws -> MeetingSession {
+    func deleteAudio(sessionID: MeetingSessionID, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.activityInProgress }
         self.isMutatingSession = true
         defer { self.releaseMutationGate() }
@@ -1632,8 +1670,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         var target = try await self.resolveSession(sessionID)
 
         try self.assertSafeToMutate(sessionID: sessionID)
+        try Self.validateCorrectionOwnership(target, expected: expectedOwnership)
 
-        target = try await self.applyAudioDeletion(to: target)
+        target = try await self.applyAudioDeletion(to: target, expectedOwnership: expectedOwnership)
 
         self.refreshSlots(with: target)
         return target
@@ -1641,7 +1680,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     /// Shared by deleteAudio and the sweep — the sweep already holds the gate, so it must not
     /// call the public guard-throwing API.
-    private func applyAudioDeletion(to inputTarget: MeetingSession) async throws -> MeetingSession {
+    private func applyAudioDeletion(to inputTarget: MeetingSession, expectedOwnership: MeetingProfileOwnership? = nil) async throws -> MeetingSession {
         var target = inputTarget
         guard target.retention.audioDeletedAt == nil else { return target }
         for index in target.audioTracks.indices {
@@ -1655,7 +1694,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         try await self.store.save(target)
         do {
-            try await self.store.deleteAudioFiles(for: target.id)
+            if let owner = expectedOwnership ?? target.profileOwnership {
+                try await self.store.deleteAudioFiles(for: target.id, expectedOwnership: owner)
+            } else {
+                try await self.store.deleteAudioFiles(for: target.id)
+            }
         } catch {
             DebugLogger.shared.warning(
                 "Failed to remove audio files for \(target.id) after save; sweep will heal it later: \(error)",
@@ -1697,9 +1740,14 @@ final class MeetingSessionCoordinator: ObservableObject {
             )
             return
         }
-        var leftovers: [(id: MeetingSessionID, leftover: LeftoverAudio)] = []
+        let maintenanceOwners = Dictionary(sessions.compactMap { session in
+            session.profileOwnership.map { (session.id, $0) }
+        }, uniquingKeysWith: { first, _ in first })
+        var leftovers: [(id: MeetingSessionID, ownership: MeetingProfileOwnership?, leftover: LeftoverAudio)] = []
         for session in sessions {
-            if let leftover = await self.leftoverAudio(for: session) { leftovers.append((session.id, leftover)) }
+            if let leftover = await self.leftoverAudio(for: session) {
+                leftovers.append((session.id, session.profileOwnership, leftover))
+            }
         }
         self.isReadingRetentionSessions = false
         let policy = self.settings.meetingAudioRetentionPolicy
@@ -1736,10 +1784,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         // A queued tail save landing after our deletes would resurrect the audio manifest.
         await self.flushQueuedPersistence()
 
-        for (id, leftover) in leftovers where self.isSafeToSweep(sessionID: id) {
+        for (id, ownership, leftover) in leftovers where self.isSafeToSweep(sessionID: id) {
             switch leftover {
             case let .workingState(directory): try? MeetingRetainedProcessingCheckpoint.remove(in: directory)
-            case .audioFiles: try? await self.store.deleteAudioFiles(for: id)
+            case .audioFiles:
+                if let ownership { try? await self.store.deleteAudioFiles(for: id, expectedOwnership: ownership) }
+                else { try? await self.store.deleteAudioFiles(for: id) }
             }
         }
 
@@ -1753,6 +1803,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             // The decoded snapshot predates the gate. Delete only what is still expired now.
             let currentPolicy = self.settings.meetingAudioRetentionPolicy
             guard let session = try? await self.resolveSession(id),
+                  maintenanceOwners[id].map({ $0.matchesPersistedOwner(session.profileOwnership) }) ?? true,
                   session.retention.audioDeletedAt == nil, Self.isSweepEligible(session),
                   let deadline = currentPolicy.deadline(endedAt: session.endedAt, startedAt: session.startedAt)
             else { continue }
@@ -1762,7 +1813,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
 
             do {
-                let target = try await self.applyAudioDeletion(to: session)
+                let target = try await self.applyAudioDeletion(to: session, expectedOwnership: maintenanceOwners[id])
                 self.refreshSlots(with: target)
                 deletedAudio = true
             } catch {
@@ -1798,9 +1849,12 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// files can outlive tracks after interruption and must also trigger the existing cleanup.
     private func leftoverAudio(for session: MeetingSession) async -> LeftoverAudio? {
         let fullyCompleted = session.state == .completed && session.transcriptIsComplete == true
-        guard session.retention.audioDeletedAt != nil || fullyCompleted,
-              let directory = try? await self.store.existingSessionDirectory(for: session.id)
-        else { return nil }
+        guard session.retention.audioDeletedAt != nil || fullyCompleted else { return nil }
+        let directory: URL?
+        if let owner = session.profileOwnership {
+            directory = try? await self.store.loadExistingSource(id: session.id, expectedOwnership: owner)?.directory
+        } else { directory = try? await self.store.existingSessionDirectory(for: session.id) }
+        guard let directory else { return nil }
         let hasWorkingState = (try? MeetingRetainedProcessingCheckpoint.hasWorkingState(in: directory)) ?? false
         if session.retention.audioDeletedAt == nil {
             // Completion is already durable. A crash before cache removal must not retain
@@ -2629,6 +2683,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 ))
             }
             session.state = .completed
+            session = await MeetingAutomaticNaming.applyingInBackground(to: session)
+            guard self.operationGeneration == generation,
+                  !Task.isCancelled || result.postProcessing != nil else { throw CancellationError() }
             session.updatedAt = Date()
             do {
                 let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.resultPersist)
@@ -2636,9 +2693,13 @@ final class MeetingSessionCoordinator: ObservableObject {
                 defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.resultPersist, since: began,
                     samples: session.transcriptSegments.count, succeeded: succeeded) }
                 await self.flushQueuedPersistence()
+                guard self.operationGeneration == generation,
+                      !Task.isCancelled || result.postProcessing != nil else { throw CancellationError() }
                 try await self.store.save(session)
                 succeeded = true
             }
+            guard self.operationGeneration == generation,
+                  !Task.isCancelled || result.postProcessing != nil else { throw CancellationError() }
             let publishBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.resultPublish)
             self.removeCheckpoint(sessionDirectory: sessionDirectory, removeRetainedState: result.isComplete)
             self.activeSession = nil
@@ -2668,6 +2729,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 throw error
             }
             if error is CancellationError {
+                session.title = inputSession.title
+                session.defaultTitleBase = inputSession.defaultTitleBase
+                session.automaticTitle = inputSession.automaticTitle
                 session.speakers = inputSession.speakers
                 session.transcriptSegments = inputSession.transcriptSegments
                 session.postProcessing = inputSession.postProcessing
@@ -2690,6 +2754,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             // A failed completed-session save must not durably publish a sidecar or overwrite the
             // last saved transcript under `.failed`. The verified new sidecar remains unreferenced
             // for retry/journal reconciliation.
+            session.title = inputSession.title
+            session.defaultTitleBase = inputSession.defaultTitleBase
+            session.automaticTitle = inputSession.automaticTitle
             session.speakers = inputSession.speakers
             session.transcriptSegments = inputSession.transcriptSegments
             session.postProcessing = inputSession.postProcessing

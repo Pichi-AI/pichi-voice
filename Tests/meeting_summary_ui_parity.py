@@ -38,7 +38,7 @@ def main():
     assert "switch self.presentedWorkflow" in wrapper
     assert "case .grounded:" in wrapper and "PichiMeetingSummaryView(session:" in wrapper
     assert "case .templates:" in wrapper and "TemplateMeetingSummaryView(session:" in wrapper
-    assert '@AppStorage("MeetingSummaryWorkflow") private var workflow = MeetingSummaryWorkflow.grounded' in wrapper
+    assert '@AppStorage("MeetingSummaryWorkflow", store: PrivateProfileDefaults.shared) private var workflow = MeetingSummaryWorkflow.grounded' in wrapper
     assert "controller: self.templateController" in wrapper
     template = declaration(source, "struct TemplateMeetingSummaryView: View")
     assert "self.kindPicker" in declaration(template, "private var configurationPanel:")
@@ -64,9 +64,9 @@ def main():
             assert catalog[key]["localizations"][language]["stringUnit"]["value"], (key, language)
 
     provider = (ROOT / "Sources/Fluid/Services/Meeting/MeetingSummaryProvider.swift").read_text()
-    controller = (ROOT / "Sources/Fluid/Services/Meeting/MeetingSummaryController.swift").read_text()
+    saved_summary = (ROOT / "Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift").read_text()
     repository = (ROOT / "Sources/Fluid/Services/ModelRepository.swift").read_text()
-    kind = declaration(controller, "nonisolated enum MeetingSummaryKind:")
+    kind = declaration(saved_summary, "nonisolated enum MeetingSummaryKind:")
     selection = declaration(provider, "nonisolated struct MeetingSummarySelection:")
     preferences = declaration(provider, "final class MeetingSummaryPreferences:")
     workflow = declaration(source, "nonisolated enum MeetingSummaryWorkflow:")
@@ -153,7 +153,7 @@ struct RecordedRequest { let kind: MeetingSummaryKind; let prompt: String; let p
     }
 ''' + methods + "\n}\n"
     stored_workflow = next(line.strip().replace("private ", "", 1) for line in wrapper.splitlines()
-                           if line.strip().startswith('@AppStorage("MeetingSummaryWorkflow")'))
+                           if line.strip().startswith('@AppStorage("MeetingSummaryWorkflow",'))
     # The UI's actual property wrapper/key/default are preserved. Only its storage
     # is explicitly injected to prevent reading/writing application preferences.
     swift += "\n@MainActor final class WorkflowOwner {\n" + stored_workflow + '''
@@ -172,8 +172,13 @@ struct RecordedRequest { let kind: MeetingSummaryKind; let prompt: String; let p
         work = Path(work)
         generated = work / "ActualSummaryUI.swift"
         generated.write_text(swift)
+        profile_types = work / "ProfileTypes.swift"
+        subprocess.run(["python3", "Tests/Support/write_private_profile_standalone_types.py",
+                        str(profile_types), "--synthetic-brand"], cwd=ROOT, check=True)
         subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5",
                         "-module-cache-path", str(work / "ModuleCache"), str(generated),
+                        str(profile_types), str(ROOT / "Sources/Fluid/Account/PrivateProfileStorage.swift"),
+                        str(ROOT / "Sources/Fluid/Account/PrivateProfileDefaults.swift"),
                         str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
                         str(ROOT / "Sources/Fluid/Views/CommandModelCatalog.swift"),
                         "-o", str(work / "tests")], check=True, cwd=ROOT, env={**os.environ, "DEVELOPER_DIR": developer})

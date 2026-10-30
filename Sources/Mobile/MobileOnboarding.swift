@@ -42,7 +42,7 @@ struct MobileOnboarding: View {
     private var step: Int { settings.mobileSetupStep }
     /// Phones in either orientation; Plus and Pro Max phones report a regular width in landscape.
     private var isCompact: Bool { horizontalSizeClass == .compact || verticalSizeClass == .compact }
-    private let titles = ["Welcome", "Choose Voice Engine", "Automatic speaker labels", "Data cleanup", "My voice", "Meeting location", "Ready to meet"]
+    private let titles = ["Welcome", "Choose Voice Engine", "Automatic speaker labels", "Data cleanup", "My voice", "Recording location", "Ready to record"]
 
     /// Desktop measures: the step column, the hero widths and the wide first action.
     private enum Metrics {
@@ -177,7 +177,7 @@ struct MobileOnboarding: View {
                 eyebrow: AppBrand.appName,
                 title: "Just speak.",
                 accentTitle: "We'll handle the rest.",
-                firstDetail: PichiLocalization.text("Record your meeting. Come back to every word."),
+                firstDetail: PichiLocalization.text("Record anything. Come back to every word."),
                 secondDetail: "Speech is transcribed on this device.",
                 actions: actions
             )
@@ -192,7 +192,7 @@ struct MobileOnboarding: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 14) {
-                highlight("Live meeting transcripts", systemImage: "waveform")
+                highlight("Live transcripts", systemImage: "waveform")
                 highlight("Automatic speaker labels", systemImage: "person.2")
                 highlight("Optional local data cleanup", systemImage: "lock.shield")
             }
@@ -218,8 +218,8 @@ struct MobileOnboarding: View {
         switch step {
         case 1: "Choose a local speech model. You can change it later in Settings. Speed and memory use depend on your device."
         case 2: "Speaker labels appear automatically while you record. Short or overlapping speech can be uncertain. You can correct participant names later."
-        case 4: "Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."
-        case 6: "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings."
+        case 4: "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."
+        case 6: "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new recordings."
         default: nil
         }
     }
@@ -275,7 +275,7 @@ struct MobileOnboarding: View {
         case 5:
             MeetingLocationSettingsContent().fluidOnboardingStepCard()
         default:
-            Label(PichiLocalization.text("Your meeting setup is ready"), systemImage: "checkmark.circle.fill")
+            Label(PichiLocalization.text("Your setup is ready"), systemImage: "checkmark.circle.fill")
                 .font(theme.typography.sectionTitle).foregroundStyle(theme.palette.success)
                 .frame(maxWidth: .infinity)
             if accountSession.isConfigured {

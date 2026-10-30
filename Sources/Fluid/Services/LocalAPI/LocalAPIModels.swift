@@ -11,10 +11,10 @@ enum LocalAPI {
         static var current: Configuration {
             let defaults = PrivateProfileDefaults.shared
             let enabled: Bool
-            if defaults.object(forKey: "LocalAPIEnabled") == nil {
+            if defaults.object(forKey: SettingsStore.Keys.localAPIEnabled) == nil {
                 enabled = false
             } else {
-                enabled = defaults.bool(forKey: "LocalAPIEnabled")
+                enabled = defaults.bool(forKey: SettingsStore.Keys.localAPIEnabled)
             }
 
             let rawPort = defaults.integer(forKey: "LocalAPIPort")

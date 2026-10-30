@@ -27,6 +27,7 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
     private var statusObserver: NSKeyValueObservation?
     private var requestID = UUID()
     private var activeSegmentIDs: [MeetingTranscriptSegmentID] = []
+    private var activeOwnership: MeetingProfileOwnership?
     private let profile = PrivateProfileStorage.current
 
     init() { PrivateProfileService.shared.register(self) }
@@ -41,12 +42,23 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
         self.toggle(sessionID: sessionID, segmentIDs: [segmentID])
     }
 
+    /// UI actions pin the source actually displayed before the first asynchronous lookup.
+    func toggle(session: MeetingSession, segmentIDs: [MeetingTranscriptSegmentID]) {
+        self.toggle(sessionID: session.id, segmentIDs: segmentIDs,
+                    expectedOwnership: session.profileOwnership ?? .guest)
+    }
+
     /// Read the requested paragraph from fresh canonical data before resolving audio. The first
     /// member remains the playback identity; the verified mapping covers the paragraph's range.
     func toggle(sessionID: MeetingSessionID, segmentIDs: [MeetingTranscriptSegmentID]) {
+        self.toggle(sessionID: sessionID, segmentIDs: segmentIDs, expectedOwnership: .init(profile: self.profile))
+    }
+
+    private func toggle(sessionID: MeetingSessionID, segmentIDs: [MeetingTranscriptSegmentID], expectedOwnership: MeetingProfileOwnership) {
         guard PrivateProfileStorage.isReadable(profile) else { return }
         guard let segmentID = segmentIDs.first else { return }
         let wasActive = self.activeSegmentID == segmentID && self.activeSegmentIDs == segmentIDs
+            && self.activeOwnership == expectedOwnership
         if wasActive {
             self.togglePause()
             return
@@ -54,13 +66,15 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
         self.stop()
         self.activeSegmentID = segmentID
         self.activeSegmentIDs = segmentIDs
+        self.activeOwnership = expectedOwnership
         self.isLoading = true
         let requestID = self.requestID
         self.loadTask = Task { [weak self] in
             do {
-                guard let session = try await MeetingSessionStore.shared.load(id: sessionID),
-                      let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: sessionID)
+                guard let source = try await MeetingSessionStore.shared.loadExistingSource(id: sessionID,
+                    expectedOwnership: expectedOwnership)
                 else { throw MeetingSegmentPlaybackError.unavailable }
+                let session = source.session, directory = source.directory
                 let segment = try MeetingSegmentPlaybackPlan.segmentRange(in: session, segmentIDs: segmentIDs)
                 let composition = try await Self.composition(session: session, segment: segment, directory: directory)
                 try Task.checkCancellation()
@@ -161,6 +175,7 @@ final class MeetingSegmentPlayback: ObservableObject, PrivateProfileTransitionPa
     func stop() {
         self.requestID = UUID()
         self.errorMessage = nil
+        self.activeOwnership = nil
         self.loadTask?.cancel()
         self.loadTask = nil
         self.player?.pause()

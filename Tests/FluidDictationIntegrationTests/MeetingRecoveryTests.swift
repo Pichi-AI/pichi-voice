@@ -1864,7 +1864,7 @@ final class MeetingRecoveryTests: XCTestCase {
                         onRecordAgain: { _ in action() },
                         onCopyTranscript: { _, _ in action() },
                         onExportTranscript: { _, _, _ in action() },
-                        onReassignSegment: { _, _, _ in action() },
+                        onReassignSegments: { _, _, _ in action() },
                         onNameUnknownSegment: { _, _, _ in action() },
                         onUndoCorrection: { _ in action(); return false },
                         onRenameSession: { _, _ in action() },
@@ -2402,7 +2402,7 @@ final class MeetingRecoveryTests: XCTestCase {
             onRecordAgain: { _ in actions.record() },
             onCopyTranscript: { _, _ in actions.record() },
             onExportTranscript: { _, _, _ in actions.record() },
-            onReassignSegment: { _, _, _ in actions.record() },
+            onReassignSegments: { _, _, _ in actions.record() },
             onNameUnknownSegment: { _, _, _ in actions.record() },
             onUndoCorrection: { _ in actions.record(); return false },
             onRenameSession: { _, _ in actions.record() },
@@ -4091,6 +4091,40 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(arbiter.releaseCount, 1)
     }
 
+    func testRejectedCompletedSaveRestoresAutomaticTitleWithItsTranscript() async throws {
+        for cancellation in [false, true] {
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let inner = MeetingSessionStore(rootDirectory: dir)
+            var session = self.makeCorrectionSession(state: .interrupted).session
+            session.defaultTitleBase = "Meeting"
+            session.endedAt = session.startedAt.addingTimeInterval(1_800)
+            try await inner.create(session)
+            let store = RejectCompletedTitleStore(inner: inner, cancellation: cancellation)
+            let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                processing: TitleFixtureProcessingController(), audioArbiter: StubArbiter())
+            do {
+                _ = try await coordinator.retryProcessing(sessionID: session.id)
+                XCTFail("The fixture must reject the completed publication")
+            } catch {
+                XCTAssertEqual(error is CancellationError, cancellation)
+            }
+            let rejected = await store.rejected
+            XCTAssertNotNil(rejected?.automaticTitle, "The failure must happen after a new title was generated")
+            XCTAssertNotEqual(rejected?.title, session.title)
+            let saved = try await inner.loadTranscript(id: session.id)
+            XCTAssertEqual(saved?.title, session.title)
+            XCTAssertEqual(saved?.defaultTitleBase, session.defaultTitleBase)
+            XCTAssertEqual(saved?.automaticTitle, session.automaticTitle)
+            XCTAssertEqual(saved?.transcriptSegments, session.transcriptSegments)
+            XCTAssertEqual(saved?.state, cancellation ? .interrupted : .failed)
+
+            let retried = try await coordinator.retryProcessing(sessionID: session.id)
+            XCTAssertNotNil(retried.automaticTitle, "A discarded title cannot suppress naming the successful retry")
+            XCTAssertEqual(retried.automaticTitle?.previousTitle, session.title)
+        }
+    }
+
     // MARK: - Slice 3, test 4: checkpoint survives a failed retry
 
     func testCheckpointSurvivesProcessingFailure() async throws {
@@ -4660,6 +4694,135 @@ final class MeetingRecoveryTests: XCTestCase {
                        "Successful undo durably restores both custom aliases and their exact number provenance")
         XCTAssertEqual(restoredDisk?.transcriptSegments, session.transcriptSegments)
         XCTAssertEqual(restoredDisk?.audioTracks, session.audioTracks)
+    }
+
+    func testSharedGuestCorrectionAndUndoCannotRetargetCollidingAccountSource() async throws {
+        let originalProfile = PrivateProfileStorage.current
+        let dir = self.makeTempDirectory()
+        defer { PrivateProfileStorage.select(originalProfile); try? FileManager.default.removeItem(at: dir) }
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: dir)
+        let account = try PrivateProfileStorage.proposed(context: .init(identity: .init(
+            issuer: "https://identity.invalid/correction", subject: "source", internalUserID: "source"),
+            organizationID: "organization", workspaceID: "workspace", generation: UUID()),
+            generation: UUID(), legacyRootDirectory: dir)
+        let guestStore = MeetingSessionStore(rootDirectory: guest.directory("Meetings"))
+        let accountStore = MeetingSessionStore(rootDirectory: account.directory("Meetings"))
+        let (legacy, speakerA, speakerB, memberID) = self.makeCorrectionSession(state: .completed)
+        try await guestStore.create(legacy)
+        PrivateProfileStorage.select(guest)
+        let guestFacade = PrivateProfileMeetingStore()
+        let guestCoordinator = MeetingSessionCoordinator(store: guestFacade, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        _ = try await guestCoordinator.editTranscriptText(sessionID: legacy.id, segmentID: memberID,
+            text: "Guest mode edit", expectedRevision: legacy.transcriptSegments[0].revision, expectedOwnership: .guest)
+        let legacyUndo = try await guestCoordinator.undoTranscriptCorrection(sessionID: legacy.id, expectedOwnership: .guest)
+        XCTAssertEqual(legacyUndo.transcriptSegments, legacy.transcriptSegments,
+                       "A nil legacy guest edit can undo after persistence makes its guest owner explicit")
+        await guestCoordinator.shutdownForTermination()
+        await guestFacade.finishProfileTransition()
+        PrivateProfileStorage.select(account)
+        let facade = PrivateProfileMeetingStore()
+        let coordinator = MeetingSessionCoordinator(store: facade, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let loaded = try await facade.loadTranscript(id: legacy.id)
+        let displayed = try XCTUnwrap(loaded)
+        let edited = try await coordinator.editTranscriptText(sessionID: legacy.id, segmentID: memberID,
+            text: "Edited guest words", expectedRevision: displayed.transcriptSegments[0].revision,
+            expectedOwnership: .guest)
+        XCTAssertNil(coordinator.activeSession)
+        XCTAssertNil(coordinator.latestCompletedSession, "The regression must reload historical sources on undo")
+        var replacement = edited
+        replacement.profileOwnership = .init(profile: account)
+        replacement.title = "Same UUID and same member identities"
+        try await accountStore.create(replacement)
+        let guestURL = guest.directory("Meetings").appendingPathComponent(legacy.id.uuidString).appendingPathComponent("session.json")
+        let accountURL = account.directory("Meetings").appendingPathComponent(legacy.id.uuidString).appendingPathComponent("session.json")
+        let guestMarker = guestURL.deletingLastPathComponent().appendingPathComponent("tracks/source-marker.bin")
+        let accountMarker = accountURL.deletingLastPathComponent().appendingPathComponent("tracks/source-marker.bin")
+        let guestAudio = Data("synthetic guest audio".utf8), accountAudio = Data("synthetic private audio".utf8)
+        try guestAudio.write(to: guestMarker); try accountAudio.write(to: accountMarker)
+        let guestBefore = try Data(contentsOf: guestURL), accountBefore = try Data(contentsOf: accountURL)
+        // Even a compatibility caller without a displayed-owner argument cannot replay a
+        // guest inverse into an account source with matching member IDs and revisions.
+        do { _ = try await coordinator.undoTranscriptCorrection(sessionID: legacy.id); XCTFail("Undo must remain guest-owned") }
+        catch { XCTAssertEqual(error as? AccountError, .staleOperation) }
+        XCTAssertTrue(coordinator.canUndoCorrection(sessionID: legacy.id), "Rejected source replacement keeps the original inverse retryable")
+        let expectedRevision = replacement.transcriptSegments[0].revision
+        let operations: [() async throws -> MeetingSession] = [
+            { try await coordinator.editTranscriptText(sessionID: legacy.id, segmentID: memberID, text: "Stale guest edit",
+                expectedRevision: expectedRevision, expectedOwnership: .guest) },
+            { try await coordinator.reassignSegments(sessionID: legacy.id, segmentIDs: [memberID], to: speakerB, expectedOwnership: .guest) },
+            { try await coordinator.renameSpeaker(sessionID: legacy.id, speakerID: speakerA, to: "Stale name", expectedOwnership: .guest) },
+            { try await coordinator.nameUnknownSegment(sessionID: legacy.id, segmentID: memberID, displayName: "Stale new participant", expectedOwnership: .guest) },
+            { try await coordinator.editSpeakers(sessionID: legacy.id, edits: .init(names: [speakerA: "Stale roster"]), expectedOwnership: .guest) },
+            { try await coordinator.setLocalUserSpeaker(sessionID: legacy.id, speakerID: speakerA, expectedOwnership: .guest) },
+            { try await coordinator.renameSession(sessionID: legacy.id, to: "Stale title", expectedOwnership: .guest) },
+            { try await coordinator.deleteAudio(sessionID: legacy.id, expectedOwnership: .guest) }
+        ]
+        for operation in operations {
+            do { _ = try await operation(); XCTFail("Displayed guest commands cannot enter the account source") }
+            catch { XCTAssertEqual(error as? AccountError, .staleOperation) }
+        }
+        do { try await coordinator.deleteSession(id: legacy.id, expectedOwnership: .guest); XCTFail("Stale guest confirmation cannot delete the account source") }
+        catch { XCTAssertEqual(error as? AccountError, .staleOperation) }
+        XCTAssertEqual(try Data(contentsOf: guestMarker), guestAudio)
+        XCTAssertEqual(try Data(contentsOf: accountMarker), accountAudio)
+        XCTAssertEqual(try Data(contentsOf: guestURL), guestBefore)
+        XCTAssertEqual(try Data(contentsOf: accountURL), accountBefore)
+        try await accountStore.delete(id: legacy.id)
+        let restored = try await coordinator.undoTranscriptCorrection(sessionID: legacy.id, expectedOwnership: .guest)
+        XCTAssertEqual(restored.transcriptSegments, legacy.transcriptSegments,
+                       "After the original source becomes visible, its retained inverse still restores only guest words")
+        await coordinator.shutdownForTermination()
+        await facade.finishProfileTransition()
+    }
+
+    func testDesktopParagraphActionsKeepMemberEditsAndBatchSpeakerUndo() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let disk = MeetingSessionStore(rootDirectory: dir)
+        var (session, _, speakerB, _) = self.makeCorrectionSession(state: .completed)
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = ["Первое", "второе", "третье", "слово."].enumerated().map { index, text in
+            var member = template
+            member.id = UUID(); member.text = text
+            member.start = .init(value: Int64(index * 500), timescale: 1000)
+            member.end = .init(value: Int64(index * 500 + 400), timescale: 1000)
+            member.nativePrecision = .word; member.nativeUnitID = "synthetic-desktop-word-\(index)"
+            member.nativeTiming = .init(start: Double(index) / 2, end: Double(index) / 2 + 0.4)
+            return member
+        }
+        try await disk.create(session)
+        let store = GatedThrowingSaveStore(inner: disk, recorder: EventRecorder())
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        let paragraphs = try await MeetingTranscriptExporter.readingParagraphs(for: session)
+        let projection = MeetingResultTranscriptProjection(session: session, paragraphs: paragraphs)
+        let row = try XCTUnwrap(projection.rows(matching: .init(session), includeEchoes: false).first)
+        XCTAssertEqual(row.memberIDs, session.transcriptSegments.map(\.id))
+        let selection = MeetingTranscriptMemberSelection(paragraph: row.paragraph, purpose: .editText)
+        let member = try XCTUnwrap(selection.members(matching: "второе").first)
+        let unchanged = try await disk.load(id: session.id)
+        XCTAssertEqual(unchanged?.transcriptSegments, session.transcriptSegments)
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id), "Abandoning the picker creates no correction")
+        let edited = try await coordinator.editTranscriptText(sessionID: session.id, segmentID: member.id,
+            text: "Исправлено", expectedRevision: member.revision)
+        XCTAssertEqual(edited.transcriptSegments[0], session.transcriptSegments[0])
+        XCTAssertEqual(edited.transcriptSegments[2], session.transcriptSegments[2])
+        XCTAssertEqual(edited.transcriptSegments[1].text, "Исправлено")
+        XCTAssertEqual(edited.transcriptSegments[1].nativeTiming, member.nativeTiming)
+        XCTAssertEqual(edited.transcriptSegments[1].nativeUnitID, member.nativeUnitID)
+        let restored = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        XCTAssertEqual(restored.transcriptSegments, session.transcriptSegments)
+        let savesBeforeBatch = await store.savedEventCounts.count
+        let assigned = try await coordinator.reassignSegments(sessionID: session.id, segmentIDs: row.memberIDs, to: speakerB)
+        let savesAfterBatch = await store.savedEventCounts.count
+        XCTAssertEqual(savesAfterBatch, savesBeforeBatch + 1)
+        XCTAssertTrue(assigned.transcriptSegments.allSatisfy { $0.speakerID == speakerB })
+        XCTAssertEqual(assigned.transcriptSegments.map(\.nativeTiming), session.transcriptSegments.map(\.nativeTiming))
+        let undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+        XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id), "The paragraph assignment is exactly one undo")
     }
 
     func testBatchSpeakerCorrectionIsOneSaveAndUndoIncludingOwnerAndManualProvenance() async throws {
@@ -6551,6 +6714,49 @@ final class MeetingRecoveryTests: XCTestCase {
 
     /// Recording admission preempts maintenance: a sweep whose read finishes during a pending Start
     /// leaves the gate to Start and re-arms itself instead of failing Start as maintenance.
+    func testRetentionCatalogCannotHealAudioInAFallbackGuestWithTheSameUUID() async throws {
+        let originalProfile = PrivateProfileStorage.current
+        let dir = self.makeTempDirectory()
+        defer { PrivateProfileStorage.select(originalProfile); try? FileManager.default.removeItem(at: dir) }
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: dir)
+        let account = try PrivateProfileStorage.proposed(context: .init(identity: .init(
+            issuer: "https://identity.invalid/maintenance", subject: "source", internalUserID: "source"),
+            organizationID: "organization", workspaceID: "workspace", generation: UUID()),
+            generation: UUID(), legacyRootDirectory: dir)
+        let guestStore = MeetingSessionStore(rootDirectory: guest.directory("Meetings"))
+        let accountStore = MeetingSessionStore(rootDirectory: account.directory("Meetings"))
+        let legacy = self.makeCorrectionSession(state: .completed).session
+        try await guestStore.create(legacy)
+        var owned = legacy
+        owned.profileOwnership = .init(profile: account); owned.retention.audioDeletedAt = Date()
+        owned.audioTracks[0].chunks = []
+        try await accountStore.create(owned)
+        let guestDirectory = guest.directory("Meetings").appendingPathComponent(legacy.id.uuidString)
+        let marker = guestDirectory.appendingPathComponent("tracks/source-marker.bin")
+        let bytes = Data("preserve original guest audio".utf8)
+        try bytes.write(to: marker)
+        let originalManifest = try Data(contentsOf: guestDirectory.appendingPathComponent("session.json"))
+        PrivateProfileStorage.select(account)
+        let facade = PrivateProfileMeetingStore()
+        let entered = self.expectation(description: "Owned maintenance catalog captured")
+        let store = GatedLoadAllStore(inner: facade, readsBeforeHolding: true) { index in
+            if index == 1 { entered.fulfill() }
+        }
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        self.addTeardownBlock { @MainActor in await store.openAllGates(); await coordinator.shutdownForTermination() }
+        let sweep = Task { await coordinator.sweepExpiredAudio() }
+        await self.fulfillment(of: [entered], timeout: 2)
+        try await accountStore.delete(id: owned.id)
+        await store.openGate(1)
+        await sweep.value
+        XCTAssertEqual(try Data(contentsOf: marker), bytes)
+        XCTAssertEqual(try Data(contentsOf: guestDirectory.appendingPathComponent("session.json")), originalManifest,
+                       "A removed account source cannot send its stale cleanup into shared guest data")
+        await coordinator.shutdownForTermination()
+        await facade.finishProfileTransition()
+    }
+
     func testPendingStartPreemptsRetentionSweepAndReArmsIt() async throws {
         let dir = self.makeTempDirectory()
         let realStore = MeetingSessionStore(rootDirectory: dir)
@@ -7700,6 +7906,22 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(restored.defaultTitleBase, "Meeting")
     }
 
+    func testGeneratedTitleKeepsTranscriptLanguageAndExcludesStartInEitherInterface() throws {
+        var (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        session.defaultTitleBase = "Meeting"
+        session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
+            candidateID: "discussion__questions", localizationKey: "Discussion of questions",
+            previousTitle: "Meeting with an old start", previousDefaultTitleBase: "Meeting", languageCode: "ru")
+        XCTAssertEqual(session.displayTitle(language: .russian), "Обсуждение вопросов")
+        XCTAssertEqual(session.displayTitle(language: .english), "Обсуждение вопросов")
+        XCTAssertFalse(session.displayTitleIncludesStart)
+        session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
+            candidateID: "discussion__questions", localizationKey: "Discussion of questions",
+            previousTitle: "Meeting with an old start", previousDefaultTitleBase: "Meeting", languageCode: "en")
+        XCTAssertEqual(session.displayTitle(language: .russian), "Discussion of questions")
+        XCTAssertEqual(session.displayTitle(language: .english), "Discussion of questions")
+    }
+
     func testOldMeetingWithoutAutomaticTitleMetadataKeepsItsTitle() throws {
         let (session, _, _, _) = self.makeCorrectionSession(state: .completed)
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(session)) as? [String: Any])
@@ -7754,6 +7976,32 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(reloaded?.title, "Weekly Sync")
         XCTAssertNil(reloaded?.defaultTitleBase)
         // A title rename must not consume the transcript-correction undo stack.
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
+    func testRenameGeneratedSessionToVisibleTitleBecomesExplicit() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        session.defaultTitleBase = "Meeting"
+        session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
+            candidateID: "discussion__questions", localizationKey: "Discussion of questions",
+            previousTitle: "Original automatic title", previousDefaultTitleBase: "Meeting", languageCode: "ru")
+        try await store.create(session)
+        let visible = session.displayTitle
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        let renamed = try await coordinator.renameSession(sessionID: session.id, to: visible)
+        XCTAssertEqual(renamed.title, visible)
+        XCTAssertNil(renamed.defaultTitleBase)
+        XCTAssertNil(renamed.automaticTitle)
+        let saved = try await store.loadTranscript(id: session.id)
+        XCTAssertEqual(saved?.title, visible)
+        XCTAssertNil(saved?.automaticTitle)
+        XCTAssertNil(saved?.defaultTitleBase)
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
     }
 
@@ -8177,6 +8425,46 @@ private final class GatedMeetingLocationResolver: MeetingLocationResolving {
     }
 }
 
+private actor RejectCompletedTitleStore: MeetingSessionStoring {
+    private let inner: MeetingSessionStore
+    private let cancellation: Bool
+    private(set) var rejected: MeetingSession?
+
+    init(inner: MeetingSessionStore, cancellation: Bool) {
+        self.inner = inner; self.cancellation = cancellation
+    }
+
+    func create(_ session: MeetingSession) async throws { try await self.inner.create(session) }
+    func save(_ session: MeetingSession) async throws {
+        if session.state == .completed, self.rejected == nil {
+            self.rejected = session
+            if self.cancellation { throw CancellationError() }
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try await self.inner.save(session)
+    }
+    func load(id: MeetingSessionID) async throws -> MeetingSession? { try await self.inner.load(id: id) }
+    func loadAll() async throws -> [MeetingSession] { try await self.inner.loadAll() }
+    func loadRecoverable() async throws -> [MeetingSession] { try await self.inner.loadRecoverable() }
+    func sessionDirectory(for id: MeetingSessionID) async throws -> URL { try await self.inner.sessionDirectory(for: id) }
+    func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? { try await self.inner.existingSessionDirectory(for: id) }
+    func delete(id: MeetingSessionID) async throws { try await self.inner.delete(id: id) }
+    func deleteAudioFiles(for id: MeetingSessionID) async throws { try await self.inner.deleteAudioFiles(for: id) }
+}
+
+@MainActor
+private final class TitleFixtureProcessingController: MeetingProcessingControlling {
+    func process(session: MeetingSession, sessionDirectory: URL,
+                 progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
+        var segment = session.transcriptSegments[0]
+        segment.text = String(repeating: "Я думаю о вопросе, почему возникает этот вопрос. ", count: 60)
+        return MeetingProcessingResult(speakers: session.speakers, segments: [segment],
+            attempt: .init(id: UUID(), startedAt: Date(), completedAt: Date(), stage: .completed,
+                pipelineVersion: MeetingProcessingPipeline.pipelineVersion, asrProvider: nil, asrModel: nil,
+                diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil))
+    }
+}
+
 @MainActor
 private final class StubProcessingController: MeetingProcessingControlling {
     func process(
@@ -8545,7 +8833,7 @@ private actor GatedRecoverableStore: MeetingSessionStoring {
 /// Other storage operations remain real, so capture and audio handback can finish while held.
 /// `readsBeforeHolding` returns the snapshot taken when the call entered, as a slow decode would.
 private actor GatedLoadAllStore: MeetingSessionStoring {
-    private let inner: MeetingSessionStore
+    private let inner: any MeetingSessionStoring
     private let entered: @Sendable (Int) -> Void
     private let readsBeforeHolding: Bool
     private var nextIndex = 0
@@ -8553,7 +8841,7 @@ private actor GatedLoadAllStore: MeetingSessionStoring {
     private var allOpen = false
     private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
 
-    init(inner: MeetingSessionStore, readsBeforeHolding: Bool = false, entered: @escaping @Sendable (Int) -> Void) {
+    init(inner: any MeetingSessionStoring, readsBeforeHolding: Bool = false, entered: @escaping @Sendable (Int) -> Void) {
         self.inner = inner; self.readsBeforeHolding = readsBeforeHolding; self.entered = entered
     }
 
@@ -8569,10 +8857,16 @@ private actor GatedLoadAllStore: MeetingSessionStoring {
         for continuation in pending { continuation.resume() }
     }
 
-    func loadAll() async throws -> [MeetingSession] {
+    func loadAll() async throws -> [MeetingSession] { try await readCatalog(maintenance: false) }
+    func loadHistoryForMaintenance() async throws -> [MeetingSession] { try await readCatalog(maintenance: true) }
+    private func readCatalog(maintenance: Bool) async throws -> [MeetingSession] {
         self.nextIndex += 1
         let index = self.nextIndex
-        let snapshot = self.readsBeforeHolding ? try await self.inner.loadAll() : nil
+        let snapshot: [MeetingSession]?
+        if self.readsBeforeHolding {
+            if maintenance { snapshot = try await self.inner.loadHistoryForMaintenance() }
+            else { snapshot = try await self.inner.loadAll() }
+        } else { snapshot = nil }
         if !self.allOpen, !self.openIndices.contains(index) {
             await withCheckedContinuation { continuation in
                 self.continuations[index] = continuation
@@ -8580,9 +8874,16 @@ private actor GatedLoadAllStore: MeetingSessionStoring {
             }
         }
         if let snapshot { return snapshot }
+        if maintenance { return try await self.inner.loadHistoryForMaintenance() }
         return try await self.inner.loadAll()
     }
 
+    func loadExistingSource(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws -> (session: MeetingSession, directory: URL)? {
+        try await inner.loadExistingSource(id: id, expectedOwnership: expectedOwnership)
+    }
+    func deleteAudioFiles(for id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
+        try await inner.deleteAudioFiles(for: id, expectedOwnership: expectedOwnership)
+    }
     func create(_ session: MeetingSession) async throws { try await self.inner.create(session) }
     func save(_ session: MeetingSession) async throws { try await self.inner.save(session) }
     func load(id: MeetingSessionID) async throws -> MeetingSession? { try await self.inner.load(id: id) }

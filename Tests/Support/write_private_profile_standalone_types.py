@@ -10,6 +10,15 @@ source = Path('Sources/Fluid/Account/AccountDomain.swift').read_text()
 types = '\n'.join(declaration(source, marker) for marker in [
     'nonisolated struct AccountIdentity:', 'nonisolated struct AccountContext:',
     'nonisolated enum AccountError:'])
+if '--operation-owner' in sys.argv:
+    service = Path('Sources/Fluid/Account/PrivateProfileService.swift').read_text()
+    types += '\n' + declaration(service, '@MainActor protocol PrivateProfileTransitionParticipant:')
+    # Keep the real weak registration contract without starting account services.
+    types += '\n@MainActor final class PrivateProfileService {\n'
+    types += '    static let shared = PrivateProfileService()\n'
+    types += declaration(service, '    private struct WeakParticipant') + '\n'
+    types += '    private var participants: [WeakParticipant] = []\n'
+    types += declaration(service, '    func register(') + '\n}\n'
 if '--synthetic-brand' in sys.argv:
     types += '''\nnonisolated enum AppBrand {
         static let storageNamespace = "local.voice.synthetic-profile-test"

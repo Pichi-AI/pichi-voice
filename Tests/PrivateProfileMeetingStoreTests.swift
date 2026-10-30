@@ -107,6 +107,82 @@ extension MeetingSessionStoreCheckpointTests {
 
         try await checkSharedGuestLibrary(root: root.appendingPathComponent("shared-library"), check: check)
         try await checkSharedGuestCipherGeneration(root: root.appendingPathComponent("shared-cipher"), check: check)
+        try await checkOwnerBoundExistingSource(root: root.appendingPathComponent("playback-source"), check: check)
+    }
+
+    private static func checkOwnerBoundExistingSource(root: URL, check: (Bool, String) -> Void) async throws {
+        let original = PrivateProfileStorage.current
+        defer { PrivateProfileStorage.select(original) }
+        let guest = try PrivateProfileStorage.proposed(context: nil, generation: UUID(), legacyRootDirectory: root)
+        let account = try PrivateProfileStorage.proposed(context: .init(identity: .init(
+            issuer: "https://identity.invalid/playback", subject: "source", internalUserID: "source"),
+            organizationID: "organization", workspaceID: "workspace", generation: UUID()),
+            generation: UUID(), legacyRootDirectory: root)
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+            machTimebaseDenominator: 1, firstPresentationTime: nil)
+        var legacy = MeetingSession(configuration: .init(mode: .inRoom, title: "Original guest playback",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic")), timebase: timebase)
+        legacy.state = .completed; legacy.transcriptTimeDomain = .meetingRelative
+        legacy.audioTracks = [.init(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+            sourceDisplayName: "Synthetic", format: nil, timebase: timebase, health: .waiting, chunks: [])]
+        legacy.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 1),
+            end: .init(value: 1, timescale: 1), sourceTrackID: legacy.audioTracks[0].id, speakerID: nil,
+            text: "Original source words", revision: 0, status: .final, overlap: .none, completeness: .complete)]
+        let guestStore = MeetingSessionStore(rootDirectory: guest.directory("Meetings"))
+        let accountStore = MeetingSessionStore(rootDirectory: account.directory("Meetings"))
+        try await guestStore.create(legacy)
+        let guestDirectory = guest.directory("Meetings").appendingPathComponent(legacy.id.uuidString)
+        let concrete = try await guestStore.loadExistingSource(id: legacy.id, expectedOwnership: .guest)
+        let existential: any MeetingSessionStoring = guestStore
+        let protocolRead = try await existential.loadExistingSource(id: legacy.id, expectedOwnership: .guest)
+        check(concrete?.session.id == legacy.id && protocolRead?.session.id == legacy.id
+              && concrete?.directory == protocolRead?.directory,
+            "Concrete and protocol calls use the actual async atomic source witness, never the unsupported default")
+        let originalBytes = try Data(contentsOf: guestDirectory.appendingPathComponent("session.json"))
+        PrivateProfileStorage.select(account)
+        let initial = PrivateProfileMeetingStore()
+        let displayed = try await initial.loadTranscript(id: legacy.id)!
+        check(displayed.profileOwnership == .guest && displayed.resultSidecarReference == nil,
+            "Displayed legacy guest playback has explicit source ownership without requiring a sidecar")
+        var replacement = legacy
+        replacement.profileOwnership = .init(profile: account); replacement.title = "Colliding account source"
+        let frozenReplacement = replacement
+        // The existing key-provider suspension is after account-root visibility was checked,
+        // and before the chosen guest source returns. Insert the collision at that exact seam.
+        let racing = PrivateProfileMeetingStore(sharedGuestCipherProvider: {
+            try await accountStore.create(frozenReplacement)
+            return nil
+        })
+        let paired = try await racing.loadExistingSource(id: displayed.id, expectedOwnership: .guest)
+        check(paired?.session.title == legacy.title && paired?.session.profileOwnership == .guest
+              && paired?.directory.standardizedFileURL == guestDirectory.standardizedFileURL,
+            "An in-flight guest source read keeps metadata and directory in the same owner root")
+        check(try await accountStore.loadTranscript(id: legacy.id)?.title == replacement.title,
+            "The deterministic collision exists before the paired source read finishes")
+        let independentlyResolved = try await initial.existingSessionDirectory(for: legacy.id)
+        check(independentlyResolved?.standardizedFileURL != guestDirectory.standardizedFileURL,
+            "The old split-directory lookup would now select the account sibling")
+        do {
+            _ = try await racing.loadExistingSource(id: displayed.id, expectedOwnership: .guest)
+            check(false, "A stale displayed guest cannot retarget before its first source lookup")
+        } catch { check(true, "A before-first-read account collision rejects the displayed guest ownership") }
+        let current = try await racing.loadExistingSource(id: replacement.id, expectedOwnership: .init(profile: account))
+        check(current?.session.title == replacement.title
+              && current?.directory.standardizedFileURL == independentlyResolved?.standardizedFileURL,
+            "A freshly displayed account source still reads its own matching directory")
+        let guestMarker = guestDirectory.appendingPathComponent("tracks/source-marker.bin")
+        let accountMarker = account.directory("Meetings").appendingPathComponent(legacy.id.uuidString)
+            .appendingPathComponent("tracks/source-marker.bin")
+        let guestAudio = Data("synthetic guest audio".utf8), accountAudio = Data("synthetic private audio".utf8)
+        try guestAudio.write(to: guestMarker); try accountAudio.write(to: accountMarker)
+        do {
+            try await racing.deleteAudioFiles(for: displayed.id, expectedOwnership: .guest)
+            check(false, "A stale guest audio deletion cannot select the account directory")
+        } catch { check(true, "Pinned guest audio deletion rejects a colliding current source") }
+        check(try Data(contentsOf: guestMarker) == guestAudio && Data(contentsOf: accountMarker) == accountAudio,
+            "Rejected owner-bound audio removal preserves both roots' original bytes")
+        check(try Data(contentsOf: guestDirectory.appendingPathComponent("session.json")) == originalBytes,
+            "Owner-bound playback resolution never rewrites the original legacy guest manifest")
     }
 
     private static func checkSharedGuestLibrary(root: URL, check: (Bool, String) -> Void) async throws {
@@ -253,11 +329,21 @@ extension MeetingSessionStoreCheckpointTests {
         check(!(try await store.loadHistory()).contains { $0.id == explicit.id },
             "The merged catalog suppresses a guest UUID shadowed by an unreadable current record")
         var foreignShadow = ownedA; foreignShadow.id = explicit.id
+        foreignShadow.defaultTitleBase = "Meeting"
+        foreignShadow.endedAt = foreignShadow.startedAt.addingTimeInterval(MeetingAutomaticNaming.minimumDuration)
+        let shadowTrackID = foreignShadow.audioTracks[0].id
+        foreignShadow.transcriptSegments = [.init(id: UUID(), start: .init(value: 0, timescale: 1),
+            end: .init(value: 1_800, timescale: 1), sourceTrackID: shadowTrackID, speakerID: nil,
+            text: String(repeating: "Я думаю о вопросе, почему возникает этот вопрос. ", count: 60),
+            revision: 0, status: .final, overlap: .none, completeness: .complete)]
         try await bStore.save(foreignShadow)
+        let foreignTitleBytes = try Data(contentsOf: shadowManifest)
         check(try await store.load(id: explicit.id) == nil,
             "A foreign-owned current-root record cannot expose its guest sibling through fallback")
         check(!(try await store.loadHistory()).contains { $0.id == explicit.id },
             "Current-root ownership failure does not create duplicate or substituted guest rows")
+        check(try Data(contentsOf: shadowManifest) == foreignTitleBytes,
+            "Rejecting a long default-named foreign shadow cannot migrate its title before ownership filtering")
         var forgedGuest = explicit; forgedGuest.title = "Rejected shadowed guest write"
         do { try await store.save(forgedGuest); check(false, "An explicit guest snapshot cannot bypass current-root collision precedence") }
         catch { check(true, "Guest mutation rejects a foreign-owned colliding current-root record") }

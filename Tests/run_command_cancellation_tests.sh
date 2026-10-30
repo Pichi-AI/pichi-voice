@@ -53,9 +53,10 @@ PYCODE
 { echo 'import Foundation'; sed -n '/^struct CommandToolOutput:/,$p' Sources/Fluid/Views/CommandMessageView.swift; } > "$task_test_dir/CommandToolOutput.swift"
 # Compile the entire production agent, including streaming callbacks and recursive turns.
 # Only its model, terminal, UI, and UserDefaults dependencies are test doubles.
-python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift"
-xcrun swiftc -parse-as-library \
+python3 -S Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift" --operation-owner
+xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileOperationOwner.swift \
     Tests/Support/StandaloneGuestProfileDefaults.swift \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Branding/AppBrand.swift \

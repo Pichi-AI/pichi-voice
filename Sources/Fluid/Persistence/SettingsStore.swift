@@ -2066,6 +2066,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var localAPIEnabled: Bool {
+        get { self.defaults.bool(forKey: Keys.localAPIEnabled) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.localAPIEnabled)
+        }
+    }
+
     /// Set when the user copied the skill instructions for an agent FluidVoice cannot see (Cursor,
     /// Gemini and others). It keeps meetings shared after the Claude Code and Codex skills are removed,
     /// until the user stops it.

@@ -250,9 +250,13 @@ builds/
 /docs/*
 !/docs/development/
 /docs/development/*
+!/docs/development/automatic-recording-titles.md
 !/docs/development/upstream-1.6.12-beta1-20261013.md
 !/docs/development/codex.md
 !/docs/development/upstream.md
+!/docs/development/pichi-sso-delivery-plan.md
+!/docs/development/pichi-account-sync-contract-v1.md
+!/docs/development/pichi-production-account-migration.md
 !/docs/development/branding.md
 !/docs/development/localization.md
 !/docs/development/analytics.md

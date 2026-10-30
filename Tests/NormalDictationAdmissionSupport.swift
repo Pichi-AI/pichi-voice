@@ -74,6 +74,7 @@ nonisolated enum NormalDictationHTTPConfiguration {
 }
 
 @MainActor final class NormalDictationAdmissionOwner {
+    let privateOutputOperations = PrivateProfileOperationOwner()
     enum ActiveRecordingMode { case dictate }
     enum DictationOutputRoute { case normal, onboardingSandbox }
     struct AITextProcessingResult {

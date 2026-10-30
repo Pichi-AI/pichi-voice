@@ -127,6 +127,16 @@
         check(NotchOverlayManager.shared.events.last?.text == "valid menu A preview", "Current-owner menu preview still publishes")
         check(manager.meetingMenuPresentation.sourceName == "private A app" && manager.meetingMenuPresentation.startedAt != nil,
               "Current-owner meeting metadata reaches its menu")
+        coordinatorA.activeSession = .init(capturedApplication: .init(displayName: "encrypted guest app"),
+            startedAt: Date(), requiresEncryptedPersistence: true, profileOwnership: .guest)
+        await drainMenuQueue()
+        check(manager.meetingMenuPresentation.sourceName == "encrypted guest app",
+              "Encrypted device-guest captures retain readable local source metadata")
+        coordinatorA.activeSession = .init(capturedApplication: .init(displayName: "SECRET protected account app"),
+            startedAt: Date(), requiresEncryptedPersistence: true)
+        await drainMenuQueue()
+        check(manager.meetingMenuPresentation.sourceName == nil,
+              "A concealed account-protected source cannot expose its app name through the menu")
 
         // Actual Combine receive(on:) queues are still pending while A is concealed and B selected.
         NotchOverlayManager.shared.events.removeAll()
@@ -134,6 +144,10 @@
         coordinatorA.activeSession = .init(capturedApplication: .init(displayName: "SECRET queued A app"), startedAt: Date(timeIntervalSince1970: 200))
         manager.meetingStartError = "SECRET A setup error"
         manager.isProcessingActive = true; manager.overlayVisible = true
+        let trainingExpiry = Task<Void, Never> { await Task.yield() }
+        manager.dictionaryWordTrainingExpiry = trainingExpiry
+        manager.pendingDictionaryWordTrainingRequest = UUID()
+        manager.dictionaryWordTrainingRequestID = UUID()
         NotchContentState.shared.text = "SECRET A notch text"
         PrivateProfileStorage.conceal(generation: UUID())
         NotificationCenter.default.post(name: PrivateProfileService.willConceal, object: nil)
@@ -145,12 +159,16 @@
               "Conceal clears cached private menu item titles and tooltips before any later refresh")
         check(!manager.isProcessingActive && !manager.overlayVisible && NotchContentState.shared.text.isEmpty && manager.pendingCancellations > 0,
               "Menu conceal retires its pending presentation and private notch payload synchronously")
+        check(trainingExpiry.isCancelled && manager.dictionaryWordTrainingExpiry == nil
+              && manager.pendingDictionaryWordTrainingRequest == nil && manager.dictionaryWordTrainingRequestID == nil,
+              "Menu conceal cancels the dictionary expiry and clears its owner-bound pending handoff")
         check(coordinatorA.stops == 0 && manager.stopMeetingRecordingHandler != nil,
               "Conceal does not stop the recorder or discard its Stop route")
         PrivateProfileStorage.select(profileB)
         await drainMenuQueue()
         check(NotchOverlayManager.shared.events.isEmpty && manager.meetingMenuPresentation.sourceName == nil,
               "Queued A menu preview and meeting metadata cannot publish under readable B")
+        await trainingExpiry.value
         manager.stopMeetingRecording()
         await drainMenuQueue()
         check(coordinatorA.stops == 1, "The generic concealed recording item still invokes its original coordinator Stop")

@@ -139,8 +139,9 @@ final class MobileSetupTransactionTests: XCTestCase {
 
     func testBackgroundAndEnrollmentJoinTheCanonicalVoiceInstallation() async throws {
         let voice = SetupVoiceResourceProbe()
-        let (started, startSignal) = AsyncStream<Void>.makeStream()
+        let started = expectation(description: "Canonical voice installation has started")
         let (release, releaseSignal) = AsyncStream<Void>.makeStream()
+        defer { releaseSignal.finish() }
         let artifact = MeetingNemotronModelArtifact(packageURL: URL(fileURLWithPath: "/synthetic-unused"),
             totalByteCount: 1, fileCount: 1, manifestSHA256: "synthetic", entryMetadataSHA256: "synthetic",
             profile: .experimentalFast128FP16CPU)
@@ -151,15 +152,20 @@ final class MobileSetupTransactionTests: XCTestCase {
             if !voice.isReady { throw URLError(.fileDoesNotExist) }
         }, installVoice: { _ in
             voice.begin()
-            startSignal.yield(())
+            started.fulfill()
             for await _ in release { break }
             voice.finish()
         })
         var speechChecks = 0
         let resources = MobileRequiredResources(prepareSpeech: { speechChecks += 1 }, voiceStore: canonical, speakerStore: { _ in selected })
         let background = Task { try await resources.prepare(modelID: "synthetic") }
-        var events = started.makeAsyncIterator()
-        _ = await events.next()
+        await fulfillment(of: [started], timeout: 5)
+        guard voice.starts == 1 else {
+            releaseSignal.finish()
+            do { try await background.value }
+            catch { XCTFail("Canonical voice preparation ended before installation began: \(error)") }
+            return
+        }
         let enrollment = Task { try await canonical.prepare(dependencies: [.voiceMatching]) }
         for _ in 0..<10 { await Task.yield() }
         releaseSignal.yield(())
@@ -171,7 +177,6 @@ final class MobileSetupTransactionTests: XCTestCase {
         XCTAssertTrue(canonical.voiceMatchingReady)
         XCTAssertEqual(voice.starts, 1)
         XCTAssertFalse(selected.voiceMatchingReady, "Profile-specific installation must not own the shared encoder")
-        startSignal.finish(); releaseSignal.finish()
     }
 
     func testPrivacyActivationCommitsOnlyAfterActualPreparationAndJoinsRepeatedEnable() async throws {

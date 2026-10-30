@@ -132,10 +132,17 @@ extension MeetingSessionStoreCheckpointTests {
             capturedAt: located.startedAt, addresses: [PichiLocalization.language.rawValue: "10 Example Street, Sample City"])
         let locatedObject = try JSONSerialization.jsonObject(with:
             MeetingTranscriptExporter.protectedTranscriptJSON(for: located)) as! [String: Any]
-        check(locatedObject["title"] as? String == located.displayTitle,
-              "Portable export uses the selected interface address and date")
+        check(locatedObject["title"] as? String == located.displayTitle
+              && (locatedObject["title"] as? String)?.contains("Example Street") == false,
+              "The export uses the canonical title without turning separate place metadata into its name")
         located.location?.addresses[PichiLocalization.language.rawValue] = String(repeating: "я", count: 201)
-        try rejects(located, .limitExceeded, "Validate the localized address title that is actually exported")
+        let separatePlaceObject = try JSONSerialization.jsonObject(with:
+            MeetingTranscriptExporter.protectedTranscriptJSON(for: located)) as! [String: Any]
+        check(separatePlaceObject["title"] as? String == located.displayTitle,
+              "Unexported place metadata does not become an unrelated title-size rejection")
+        located.defaultTitleBase = nil
+        located.title = String(repeating: "я", count: 201)
+        try rejects(located, .limitExceeded, "The actual exported custom title retains its existing size limit")
         invalid = session; invalid.state = .recording
         try rejects(invalid, .protectedTranscriptRequired, "A live recording cannot be handed off as completed")
         invalid = session; invalid.transcriptSegments[0].originalText = "PRIVATE ORIGINAL"

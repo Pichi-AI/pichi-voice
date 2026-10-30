@@ -614,11 +614,13 @@ extension MeetingSessionModelTests {
 
         Initial provisional text
 
-        ### [01:05] Unknown speaker
+        ### [01:05]
 
         Next steps
 
         """)
+        XCTAssertFalse(MeetingTranscriptExporter.markdown(for: session).contains("Unknown speaker"),
+                       "Human exports use the same supported participant labels as the reading view")
         XCTAssertEqual(MeetingTranscriptExportFormat.markdown.fileExtension, "md")
         XCTAssertEqual(MeetingTranscriptExportFormat.text.fileExtension, "txt")
         XCTAssertEqual(MeetingTranscriptExportFormat.json.fileExtension, "json")

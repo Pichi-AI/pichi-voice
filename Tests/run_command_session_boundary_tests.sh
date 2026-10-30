@@ -57,9 +57,20 @@ extension ChatHistoryStore {
 }
 SWIFT
 
-python3 Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift" --synthetic-brand
-xcrun swiftc -parse-as-library \
+python3 -B -S - "$task_test_dir/CommandModeService.swift" <<'PY'
+from pathlib import Path
+import sys
+sys.path.insert(0, 'Tests')
+from run_meeting_backup_refresh_tests import declaration
+source = Path('Sources/Fluid/Services/CommandModeService.swift').read_text()
+with Path(sys.argv[1]).open('a') as output:
+    output.write('\nextension CommandModeService {\n'
+        + declaration(source, '    func prepareForPrivateProfileTransition()') + '\n}\n')
+PY
+python3 -S Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/ProfileTypes.swift" --synthetic-brand --operation-owner
+xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/ProfileTypes.swift" Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileOperationOwner.swift \
     Tests/Support/StandaloneGuestProfileDefaults.swift \
     "$task_test_dir/CommandModeService.swift" \
     "$task_test_dir/ChatHistoryStore.swift" \

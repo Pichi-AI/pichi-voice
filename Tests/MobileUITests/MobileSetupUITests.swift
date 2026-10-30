@@ -17,9 +17,13 @@ final class MobileSetupUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
-    /// Presentation acceptance of the ordinary guest distribution, without
-    /// preparing ASR, enrolling a voice or starting microphone capture.
-    func testGuestDistributionSetupPagesWithoutAccount() throws {
+    /// Pinned-page presentation with the account expectation taken from the frozen
+    /// distribution. No sign-in, ASR preparation, voice enrollment or capture occurs.
+    func testDistributionSetupPagesKeepAccountOptional() throws {
+        let accountExpectation = try XCTUnwrap(
+            ProcessInfo.processInfo.environment["PICHI_SETUP_EXPECT_ACCOUNT_CONFIGURATION"],
+            "Derive the account expectation from the frozen app's packaged distribution")
+        XCTAssertTrue(["configured", "unconfigured"].contains(accountExpectation))
         let app = XCUIApplication()
         defer { app.terminate() }
         for (language, appearance) in [("en", "light"), ("ru", "dark")] {
@@ -31,7 +35,12 @@ final class MobileSetupUITests: XCTestCase {
             capture("guest-\(language)-welcome")
             let next = app.buttons["onboarding.next"]
             XCTAssertTrue(next.isHittable && next.isEnabled)
-            next.tap()
+            // Pinned argument-domain steps are presentation fixtures, not writable
+            // navigation state. The ordinary first-run test below verifies Next.
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                   "-MobileSetupVersion", "0", "-MobileSetupStep", "1"]
+            app.launch()
             XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.1"].firstMatch.waitForExistence(timeout: 10))
             capture("guest-\(language)-voice-choice")
             app.terminate()
@@ -42,9 +51,17 @@ final class MobileSetupUITests: XCTestCase {
                                    "-MobileSetupVersion", "0", "-MobileSetupStep", "6"]
             app.launch()
             XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.6"].firstMatch.waitForExistence(timeout: 15))
-            XCTAssertFalse(app.buttons["account.signIn"].exists,
-                           "The guest distribution must not offer an unconfigured or local SSO server")
-            XCTAssertFalse(app.buttons["account.continueAsGuest"].exists)
+            if accountExpectation == "configured" {
+                XCTAssertTrue(app.buttons["account.signIn"].exists,
+                              "A configured distribution offers optional sign-in")
+                let guest = app.buttons["account.continueAsGuest"]
+                XCTAssertTrue(guest.exists && guest.isEnabled,
+                              "A configured account must not prevent continuing as a guest")
+            } else {
+                XCTAssertFalse(app.buttons["account.signIn"].exists,
+                               "The guest distribution must not offer an unconfigured or local SSO server")
+                XCTAssertFalse(app.buttons["account.continueAsGuest"].exists)
+            }
             XCTAssertEqual(app.alerts.count, 0)
             capture("guest-\(language)-ready-page")
             app.terminate()
@@ -104,7 +121,7 @@ final class MobileSetupUITests: XCTestCase {
         capture("flow-08-skipped-location")
         app.buttons["onboarding.next"].tap()
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["Начните первую встречу"].firstMatch.waitForExistence(timeout: 10),
+        XCTAssertTrue(app.staticTexts["Сделайте первую запись"].firstMatch.waitForExistence(timeout: 10),
                       "A completed first setup opens the empty Meetings list with its first-meeting hint")
         capture("flow-09-normal-app")
         app.terminate()
@@ -124,7 +141,7 @@ final class MobileSetupUITests: XCTestCase {
                 app.terminate()
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
                 app.launch()
-                let title = language == "ru" ? "Начните первую встречу" : "Start your first meeting"
+                let title = language == "ru" ? "Сделайте первую запись" : "Make your first recording"
                 XCTAssertTrue(app.staticTexts[title].firstMatch.waitForExistence(timeout: 10))
                 for (orientation, name) in [(UIDeviceOrientation.portrait, "portrait"), (.landscapeLeft, "landscape")] {
                     XCUIDevice.shared.orientation = orientation
@@ -228,7 +245,7 @@ final class MobileSetupUITests: XCTestCase {
         for (orientation, name) in [(UIDeviceOrientation.portrait, "portrait"), (.landscapeLeft, "landscape")] {
             XCUIDevice.shared.orientation = orientation
             XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 15))
-            let highlight = app.staticTexts["Текст встречи во время разговора"]
+            let highlight = app.staticTexts["Текст во время записи"]
             XCTAssertTrue(highlight.waitForExistence(timeout: 5))
             XCTAssertGreaterThanOrEqual(highlight.frame.height, 18, "The highlights must not shrink with the hero")
             XCTAssertTrue(app.buttons["onboarding.next"].isHittable)
