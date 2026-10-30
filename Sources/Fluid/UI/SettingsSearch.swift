@@ -74,6 +74,7 @@ enum SettingsSearchTarget: Hashable {
     case dictionaryMatcherExperiments
     case historyPerformance
     case dictationScreenContext
+    case localAPI
 
     var section: SettingsSection {
         switch self {
@@ -133,7 +134,7 @@ enum SettingsSearchTarget: Hashable {
         case .dataAndDiagnostics, .backupAndRestore, .debugLogs:
             return .dataAndDiagnostics
 
-        case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance, .dictationScreenContext:
+        case .experimental, .returnToStartingField, .fasterLongDictation, .dictionaryMatcherExperiments, .historyPerformance, .dictationScreenContext, .localAPI:
             return .experimental
         }
     }
@@ -471,6 +472,11 @@ enum SettingsSearchIndex {
             target: .dictationScreenContext,
             title: "Use my active screen to improve dictation accuracy",
             terms: ["experimental local context OCR screen words window capture recording permission accessibility cursor names spelling"]
+        ),
+        .init(
+            target: .localAPI,
+            title: "Enable Local API",
+            terms: ["experimental loopback http server endpoint port 47733 browser extension integration transcribe"]
         ),
     ] }
 

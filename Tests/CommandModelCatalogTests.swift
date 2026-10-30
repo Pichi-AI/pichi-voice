@@ -37,6 +37,8 @@ enum PrivateAIModelRegistry {
 }
 
 final class SettingsStore: ObservableObject {
+    let defaults = UserDefaults.standard
+
     struct SavedProvider: Equatable {
         let id: String
         let name: String

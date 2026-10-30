@@ -48,6 +48,7 @@ extension SettingsStore {
         static let fluidMeetEnabled = "FluidMeetEnabled"
         static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
         static let meetingAutoDetectBrowserEnabled = "MeetingAutoDetectBrowserEnabled"
+        static let localAPIEnabled = "LocalAPIEnabled"
         static let microphoneSelectionMode = "MicrophoneSelectionMode"
         // Keep the original persisted key so existing installs migrate in place.
         static let microphoneSelectionMigrationVersion = "AppOnlyMicrophoneSelectionMigrationVersion"

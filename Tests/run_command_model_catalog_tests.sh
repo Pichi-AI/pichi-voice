@@ -85,7 +85,7 @@ route = source[source.index('nonisolated struct MeetingSummaryRoute {'):source.i
 # resolver plus actual legacy RemoteService/LLMClient request admission.
 route = route[:route.index('    /// Provider selection is shared;')] + '}\n'
 remote = source[source.index('/// Uses a dedicated session'):]
-kind_source = Path('Sources/Fluid/Services/Meeting/MeetingSummaryController.swift').read_text()
+kind_source = Path('Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift').read_text()
 kind = declaration(kind_source, 'nonisolated enum MeetingSummaryKind:') + '\n'
 # The prompt uses the shared pure source-language contract. Keep the
 # actual declaration without linking capture, persistence or model services.
@@ -268,6 +268,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -D PICHI_CREDENTIAL_TEST_BACKEND
     Tests/LocalAPICredentialAdmissionSupport.swift \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Persistence/KeychainService.swift \
+    Sources/Fluid/Persistence/SettingsStoreKeys.swift \
     Sources/Fluid/Persistence/SettingsStore+CommandMode.swift \
     Sources/Fluid/Services/CloudTextProvider.swift \
     Sources/Fluid/Services/LocalTextModelCatalog.swift \
