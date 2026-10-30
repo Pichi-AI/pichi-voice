@@ -93,6 +93,33 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
         self.tokens(text)?.map(\.key)
     }
 
+    /// A recorded spelling may corroborate a grammatical ending, but cannot
+    /// authorize a correction by itself. Keep all vowels and component boundaries
+    /// here: consonant-only similarity would confuse ordinary words and names.
+    static func observedStemSupport(heard: String, canonical: String, observedVariants: [String]) -> Bool {
+        guard observedVariants.count <= 20,
+              let source = self.tokens(heard), let target = self.tokens(canonical),
+              let canonicalComparison = self.compare(heard: heard, canonical: canonical, observedVariants: []),
+              !canonicalComparison.protectsContent else { return false }
+        // The current source must still contain every part of a compound. A
+        // truncated recorded alias is never proof of an additional component.
+        guard target.count == 1 || self.supportsCanonicalComponents(heard: heard, canonical: canonical) else { return false }
+        let sourceKeys = source.map { self.soundKey($0.text, preservingVowels: true) }
+        let endings: Set<String> = ["", "e", "a", "u", "om", "em"]
+        for variant in observedVariants {
+            guard let recorded = self.tokens(variant), recorded.count == source.count,
+                  let comparison = self.compare(heard: heard, canonical: variant, observedVariants: []),
+                  !comparison.protectsContent else { continue }
+            let recordedKeys = recorded.map { self.soundKey($0.text, preservingVowels: true) }
+            guard sourceKeys.dropLast().elementsEqual(recordedKeys.dropLast()),
+                  let stem = recordedKeys.last, let inflected = sourceKeys.last,
+                  stem.count >= 4, inflected.hasPrefix(stem) else { continue }
+            let ending = String(inflected.dropFirst(stem.count))
+            if endings.contains(ending) { return true }
+        }
+        return false
+    }
+
     /// Every canonical component needs actual current-source letters. The best
     /// prefix is consumed greedily, including the whole remaining source as a
     /// possibility, so a shorter prefix cannot fabricate an unspoken suffix.
@@ -153,20 +180,25 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
             .lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
-    private static func soundKey(_ text: String) -> String {
+    private static func soundKey(_ text: String, preservingVowels: Bool = false) -> String {
         var value = (text.applyingTransform(.toLatin, reverse: false) ?? text).lowercased()
         // Standard transliteration marks are expanded before diacritic removal.
         for (before, after) in [("č", "ch"), ("š", "sh"), ("ž", "zh"), ("ŝ", "sh"), ("ǰ", "j")] {
             value = value.replacingOccurrences(of: before, with: after)
         }
         value = (value.applyingTransform(.stripCombiningMarks, reverse: false) ?? value).filter { $0.isLetter || $0.isNumber }
-        for (before, after) in [("ph", "f"), ("ck", "k"), ("qu", "k"), ("au", "o"), ("aw", "o"),
-                                ("ou", "o"), ("ow", "o"), ("ee", "i"), ("ea", "i"), ("oo", "u")] {
+        for (before, after) in [("ph", "f"), ("ck", "k")] {
             value = value.replacingOccurrences(of: before, with: after)
+        }
+        if !preservingVowels {
+            for (before, after) in [("qu", "k"), ("au", "o"), ("aw", "o"), ("ou", "o"), ("ow", "o"),
+                                    ("ee", "i"), ("ea", "i"), ("oo", "u")] {
+                value = value.replacingOccurrences(of: before, with: after)
+            }
         }
         value = value.replacingOccurrences(of: "c(?=[eiy])", with: "s", options: .regularExpression)
             .replacingOccurrences(of: "c", with: "k").replacingOccurrences(of: "j", with: "y")
-        if value.count >= 4, value.hasSuffix("e") { value.removeLast() }
+        if !preservingVowels, value.count >= 4, value.hasSuffix("e") { value.removeLast() }
         return value
     }
 
