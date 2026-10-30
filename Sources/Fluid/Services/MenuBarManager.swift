@@ -91,9 +91,32 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     /// Subscription for forwarding audio levels to expanded command notch
     private var expandedModeAudioSubscription: AnyCancellable?
+    @Published private(set) var dictionaryWordTrainingRequestID: UUID?
+    private var pendingDictionaryWordTrainingRequest: DictionaryWordTrainingRequest?
+    private var dictionaryWordTrainingExpiry: Task<Void, Never>?
 
     override init() {
         super.init()
+        NotificationCenter.default.publisher(for: .openDictionaryWordTraining)
+            .sink { [weak self] notification in
+                MainActor.assumeIsolated {
+                    guard let self, let request = notification.object as? DictionaryWordTrainingRequest,
+                          request.isCurrent, !SettingsStore.shared.shouldShowOnboarding,
+                          self.asrService?.isRunningOrStarting != true else { return }
+                    self.pendingDictionaryWordTrainingRequest = request
+                    self.dictionaryWordTrainingRequestID = request.id
+                    self.dictionaryWordTrainingExpiry?.cancel()
+                    self.dictionaryWordTrainingExpiry = Task { @MainActor [weak self] in
+                        do { try await Task.sleep(for: .seconds(120)) } catch { return }
+                        guard let self, self.dictionaryWordTrainingRequestID == request.id else { return }
+                        self.pendingDictionaryWordTrainingRequest = nil
+                        self.dictionaryWordTrainingRequestID = nil
+                        self.dictionaryWordTrainingExpiry = nil
+                    }
+                    self.revealDictionary()
+                }
+            }
+            .store(in: &self.cancellables)
         NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.concealPrivatePresentation() }
@@ -369,6 +392,10 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func concealPrivatePresentation() {
+        self.dictionaryWordTrainingExpiry?.cancel()
+        self.dictionaryWordTrainingExpiry = nil
+        self.pendingDictionaryWordTrainingRequest = nil
+        self.dictionaryWordTrainingRequestID = nil
         self.meetingStartError = nil
         self.meetingStartRequested = false
         self.meetingStatusMenuItem?.title = ""
@@ -1511,6 +1538,19 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     @objc private func openCustomDictionary() {
         self.openNavigationDestination(.customDictionary)
+    }
+
+    func revealDictionary() {
+        self.openNavigationDestination(.customDictionary)
+    }
+
+    func consumeDictionaryWordTrainingRequest() -> DictionaryWordTrainingRequest? {
+        self.dictionaryWordTrainingExpiry?.cancel()
+        self.dictionaryWordTrainingExpiry = nil
+        let request = self.pendingDictionaryWordTrainingRequest
+        self.pendingDictionaryWordTrainingRequest = nil
+        self.dictionaryWordTrainingRequestID = nil
+        return request?.isCurrent == true ? request : nil
     }
 
     @objc private func openMeetingTranscription() {

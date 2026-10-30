@@ -12,6 +12,7 @@ gigaam = (repo / "Sources/Fluid/Services/PichiGigaAMProvider.swift").read_text()
 experiment = (repo / "Sources/Fluid/Services/DictionaryPronunciationExperiment.swift").read_text()
 references = (repo / "Sources/Fluid/Services/DictionaryPronunciationReferences.swift").read_text()
 negative = (repo / "Sources/Fluid/Services/DictionaryNegativeExamples.swift").read_text()
+native = (repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMCoreMLInference.swift").read_text()
 
 def between(source, start, end):
     index = source.index(start)
@@ -38,7 +39,8 @@ vocabulary = vocabulary.replace("#if arch(arm64)", "").replace("#endif", "")
 evidence_reader = between(negative, "nonisolated final class DictionaryCaptureEvidenceFile", "\nnonisolated struct DictionaryAcousticEvidence")
 experiment_core = between(experiment, "nonisolated enum DictionaryPronunciationExperiment", "\n/// Bounded, local-only evidence")
 references_core = references.replace("#if arch(arm64)", "").replace("import FluidAudio", "").replace("#endif", "")
-projection = enhancements + "\n" + evidence_reader + "\n" + experiment_core + "\n" + references_core + "\n" + vocabulary
+runtime_status = between(native, "public struct GigaAMExecutionStatus:", "/// The shipped Core ML graph")
+projection = runtime_status + "\n" + enhancements + "\n" + evidence_reader + "\n" + experiment_core + "\n" + references_core + "\n" + vocabulary
 projection += "\n@MainActor final class FluidAudioProvider {\n" + options + getters + "\n" + method(fluid, "    static func preparedEdgeProfiles(") + "\n// FLUID_TEST_FIELDS\n}\n"
 projection = projection.replace("    private ", "    ")
 fields = '''
@@ -79,9 +81,10 @@ projection = projection.replace("// GIGAAM_STORE_FIELDS", """
     let preferences = GigaAMPreferences()
     let downloadDescriptor = GigaAMModelDescriptor(id: "public")
     let importDescriptors = [GigaAMModelDescriptor(id: "private")]
+    let defaultCPUReason: GigaAMExecutionStatus.FallbackReason? = nil
 """)
 gigaam_hooks = between(gigaam, "    private var admittedSource:", "    // MARK: - Provider lifecycle")
-projection += "\n@MainActor final class PichiGigaAMProvider { let modelStore: PichiGigaAMModelStore; let expectedModelFingerprint: String?; init(store: PichiGigaAMModelStore, expected: String? = nil) { modelStore = store; expectedModelFingerprint = expected }\n" + gigaam_hooks.replace("    private ", "    ") + "\n}\n"
+projection += "\n@MainActor final class PichiGigaAMProvider { let modelStore: PichiGigaAMModelStore; let expectedModelFingerprint: String?; let pronunciationStore = PronunciationDictionaryStore.shared; var loadedModelFingerprint: String?; var dictionarySnapshot: GigaAMDictionaryAcoustics.Snapshot?; var executionAttemptPending = false; init(store: PichiGigaAMModelStore, expected: String? = nil) { modelStore = store; expectedModelFingerprint = expected }\n" + gigaam_hooks.replace("    private ", "    ") + "\n}\n"
 assert "self.modelStore.ensureInstalled(selection: admittedSelection" in method(gigaam, "    func prepare(")
 assert "let selection = try admittedSelection ?? self.selectedArtifact()" in method(gigaam, "    func ensureInstalled(")
 
@@ -105,4 +108,4 @@ with tempfile.TemporaryDirectory(prefix="pichi-fluid-capture-options-") as direc
         executable = directory / ("tests-actor" if isolation else "tests-default")
         subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-strict-concurrency=targeted", "-D", "DEBUG", *isolation, "-module-cache-path", str(directory / "ModuleCache"), str(source), "-o", str(executable)], check=True, cwd=repo)
         subprocess.run([str(executable)], check=True, cwd=repo)
-print("FluidAudio capture source paths: 12 checks passed")
+print("FluidAudio actual capture source paths passed with both compiler isolation modes; temporary files removed.")

@@ -26,8 +26,6 @@ nonisolated final class DebugLogger {
     static let shared = DebugLogger()
     func log(_ message: String, source: String) {}
 }
-nonisolated struct ASRTranscriptionResult { let text: String; let confidence: Float; let endOfUtteranceProbability: Float? }
-nonisolated struct ASRWordTiming { let text: String; let start: TimeInterval; let end: TimeInterval }
 nonisolated enum ProgressiveFileDownloader {
     static func download(from: URL, configuration: URLSessionConfiguration, maximumBytes: Int64,
                          onProgress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> (URL, URLResponse) {

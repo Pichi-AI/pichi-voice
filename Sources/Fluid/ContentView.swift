@@ -332,6 +332,8 @@ struct ContentView: View {
     /// A dictionary, vocabulary, punctuation or prompt row chosen from the sidebar
     /// search. The screen it belongs to opens that row and clears this.
     @State private var appSearchRevealTarget: AppSearchHit.Target?
+    @State private var dictionaryWordTrainingRequest: DictionaryWordTrainingRequest?
+    @StateObject private var dictionaryTrainingWindow = DictionaryTrainingWindowReference()
     @State private var appSearchExpanded: Set<AppSearchKind> = []
 
     @State private var isHelpEntryHovered = false
@@ -516,12 +518,23 @@ struct ContentView: View {
 
         return withToolbar
             .environment(\.fluidToolbarTrailingInset, self.toolbarTrailingInset)
+            .background(DictionaryTrainingWindowReader(reference: self.dictionaryTrainingWindow))
+            .onReceive(self.dictionaryTrainingWindow.objectWillChange) { _ in self.handleDictionaryWordTrainingRequest() }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+                self.handleDictionaryWordTrainingRequest()
+            }
+            .onChange(of: self.menuBarManager.dictionaryWordTrainingRequestID) { _, _ in
+                self.handleDictionaryWordTrainingRequest()
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 self.refreshAccessibilityPermissionState()
                 self.prewarmAIDictationIfNeeded(for: .primary, localOnly: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .openCustomDictionaryFromVoiceEngine)) { _ in
                 self.navigateToApp(.customDictionary)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
+                self.dictionaryWordTrainingRequest = nil
             }
             .onReceive(NotificationCenter.default.publisher(for: .openScreenContextSettings)) { _ in
                 self.openSettings(.experimental)
@@ -1270,6 +1283,14 @@ struct ContentView: View {
         }
     }
 
+    private func handleDictionaryWordTrainingRequest() {
+        guard self.dictionaryTrainingWindow.window?.isKeyWindow == true,
+              !self.settings.shouldShowOnboarding, !self.asr.isRunningOrStarting,
+              let request = self.menuBarManager.consumeDictionaryWordTrainingRequest(), request.isCurrent else { return }
+        self.dictionaryWordTrainingRequest = request
+        self.navigateToApp(.customDictionary)
+    }
+
     private func navigateToApp(_ destination: SidebarItem) {
         guard destination != .meetingTranscription || self.settings.fluidMeetEnabled else {
             self.openSettings(.fluidMeet)
@@ -1983,7 +2004,7 @@ struct ContentView: View {
         case .meetingTranscription:
             return AnyView(self.meetingTranscriptionView)
         case .customDictionary:
-            return AnyView(CustomDictionaryView(revealTarget: self.$appSearchRevealTarget))
+            return AnyView(CustomDictionaryView(revealTarget: self.$appSearchRevealTarget, trainingRequest: self.$dictionaryWordTrainingRequest))
         case .stats:
             return AnyView(self.statsView)
         case .feedback:

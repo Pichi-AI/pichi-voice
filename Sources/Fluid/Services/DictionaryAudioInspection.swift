@@ -1,14 +1,36 @@
 // nil means an invalid cut, not a zero-length embedding.
 import Foundation
 
-/// Bounded local diagnostic evidence. Never used to change production matching.
+/// Bounded local audio and feature evidence shared by enrollment, matching and diagnostics.
 nonisolated struct DictionaryAudioInspection: Codable, Equatable, Sendable {
+    // Preserve the existing aggregate evidence budget while accepting denser feature frames.
+    private static let maximumFeatureValues = 9 * Frames.maximumValues
+
     struct Frames: Codable, Equatable, Sendable {
+        static let maximumValues = 190 * 2048
         let offset: Double
         let frameDuration: Double
         let hiddenSize: Int
         let values: [Float]
         var count: Int { self.hiddenSize > 0 ? self.values.count / self.hiddenSize : 0 }
+
+        static func maximumCount(frameDuration: Double) -> Int? {
+            switch frameDuration {
+            case 0.08: return 190
+            case 0.04: return 380
+            default: return nil
+            }
+        }
+
+        var isValid: Bool {
+            guard let maximumCount = Self.maximumCount(frameDuration: self.frameDuration),
+                  self.offset.isFinite, self.offset >= 0, (1...2048).contains(self.hiddenSize),
+                  !self.values.isEmpty, self.values.count % self.hiddenSize == 0,
+                  self.count <= maximumCount, self.values.count <= Self.maximumValues,
+                  self.values.allSatisfy(\.isFinite)
+            else { return false }
+            return true
+        }
     }
 
     struct Word: Codable, Equatable, Sendable {
@@ -35,19 +57,20 @@ nonisolated struct DictionaryAudioInspection: Codable, Equatable, Sendable {
               self.selectedEnd <= self.paddedDuration + 0.081
         else { return false }
         var previousEnd = 0.0
+        var featureValues = 0
         for frame in self.frames {
-            guard frame.offset.isFinite, frame.offset >= previousEnd - 0.081,
-                  frame.frameDuration == 0.08, frame.hiddenSize > 0, frame.hiddenSize <= 2048,
-                  frame.values.count % frame.hiddenSize == 0, !frame.values.isEmpty, frame.count <= 190,
-                  frame.values.allSatisfy(\.isFinite),
+            guard frame.isValid, frame.frameDuration == self.frames.first?.frameDuration,
+                  frame.offset >= previousEnd - frame.frameDuration - 0.001,
+                  frame.values.count <= Self.maximumFeatureValues - featureValues,
                   frame.offset + Double(frame.count) * frame.frameDuration <= self.paddedDuration + 0.081
             else { return false }
+            featureValues += frame.values.count
             previousEnd = frame.offset + Double(frame.count) * frame.frameDuration
         }
         return true
     }
 
-    // Uses one encoder pass and the same mean/L2 operation as the matcher.
+    // Uses the persisted feature sequence and the same mean/L2 summary as enrollment.
     // Crossing separately encoded chunks is deliberately unavailable.
     // swiftlint:disable:next discouraged_optional_collection
     func embedding(start: Double, end: Double) -> [Float]? {
@@ -186,6 +209,9 @@ extension DictionaryAudioInspection {
         self.words = try values.decode([Word].self, forKey: .words)
         self.selectedStart = try values.decode(Double.self, forKey: .selectedStart)
         self.selectedEnd = try values.decode(Double.self, forKey: .selectedEnd)
+        guard self.isValid else {
+            throw DecodingError.dataCorruptedError(forKey: .frames, in: values, debugDescription: "Invalid inspection feature layout")
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -217,7 +243,22 @@ extension DictionaryAudioInspection.Frames {
         self.offset = try container.decode(Double.self, forKey: .offset)
         self.frameDuration = try container.decode(Double.self, forKey: .frameDuration)
         self.hiddenSize = try container.decode(Int.self, forKey: .hiddenSize)
-        self.values = try DictionaryAudioInspection.floats(from: container.decode(Data.self, forKey: .values))
+        guard let maximumCount = Self.maximumCount(frameDuration: self.frameDuration),
+              self.offset.isFinite, self.offset >= 0, (1...2048).contains(self.hiddenSize)
+        else {
+            throw DecodingError.dataCorruptedError(forKey: .frameDuration, in: container, debugDescription: "Invalid inspection frame format")
+        }
+        let data = try container.decode(Data.self, forKey: .values)
+        guard !data.isEmpty, data.count % (self.hiddenSize * MemoryLayout<Float>.size) == 0,
+              data.count <= maximumCount * self.hiddenSize * MemoryLayout<Float>.size,
+              data.count <= Self.maximumValues * MemoryLayout<Float>.size
+        else {
+            throw DecodingError.dataCorruptedError(forKey: .values, in: container, debugDescription: "Inspection feature chunk exceeds its duration budget")
+        }
+        self.values = try DictionaryAudioInspection.floats(from: data)
+        guard self.isValid else {
+            throw DecodingError.dataCorruptedError(forKey: .values, in: container, debugDescription: "Invalid inspection feature values")
+        }
     }
 
     func encode(to encoder: Encoder) throws {

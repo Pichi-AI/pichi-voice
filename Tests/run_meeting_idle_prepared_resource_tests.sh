@@ -11,7 +11,17 @@ retire = source[source.index('    func retireIdleSpeechResidency()'):source.inde
 release = source[source.index('    private func releaseResidentProvider()'):source.index('    func activateModel(')]
 pipeline = Path('Sources/Fluid/Services/Meeting/MeetingProcessingPipelineMemoryAttempt.swift').read_text()
 prefix = pipeline[pipeline.index('/// Optional prefix resources'):pipeline.index('@MainActor\nfinal class MeetingMemoryProcessingAttempt')]
-Path(sys.argv[1]).write_text('import Foundation\n' + prefix + '\nextension IdleSpeechHostWitness {\n' + retire + release + '\n}\n')
+provider = Path('Sources/Fluid/Services/TranscriptionProvider.swift').read_text()
+marker = 'nonisolated struct TranscriptionExecutionStatus:'
+assert provider.count(marker) == 1, 'Expected one production execution-status declaration'
+start = provider.index(marker)
+end = provider.index('{', start) + 1
+depth = 1
+while depth:
+    depth += (provider[end] == '{') - (provider[end] == '}')
+    end += 1
+Path(sys.argv[1]).write_text('import Foundation\n' + provider[start:end] + '\n' + prefix
+    + '\nextension IdleSpeechHostWitness {\n' + retire + release + '\n}\n')
 PY
 # Actual generic lease and residency coordinator; fake native loaders hold no model/audio.
 xcrun swiftc -parse-as-library -swift-version 6 -default-isolation MainActor \

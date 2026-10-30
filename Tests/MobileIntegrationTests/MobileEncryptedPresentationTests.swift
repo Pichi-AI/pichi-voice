@@ -84,7 +84,8 @@ final class MobileEncryptedPresentationTests: XCTestCase {
             apiBaseURL: URL(string: "https://api.example")!, clientID: "synthetic",
             apiAudience: "synthetic", bundleIdentifier: "ai.example.voice"),
             browser: ColdHistoryBrowser(), transport: ColdHistoryTransport(), credentials: credentials)
-        let services = AppServices(store: store, settings: SettingsStore(defaults: defaults), accountSession: account)
+        let services = AppServices(store: store, settings: SettingsStore(defaults: defaults),
+            meetingModelResidency: MeetingModelResidencyCoordinator(), accountSession: account)
         let captureID = UUID()
         addTeardownBlock { @MainActor in
             await credentials.release()

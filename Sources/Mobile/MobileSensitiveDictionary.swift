@@ -41,7 +41,7 @@ struct MobileSensitiveDictionarySettings: View {
         } header: {
             Text(PichiLocalization.text("Words and phrases to hide"))
         } footer: {
-            MobileSettingsFooter(PichiLocalization.text("Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new meetings."))
+            MobileSettingsFooter(PichiLocalization.text("Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new recordings."))
         }
     }
 }

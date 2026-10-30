@@ -51,7 +51,7 @@ constant = re.search(r'    static let supportedFormatsDescription = ("[^"\n]+")'
 drop_constant = re.search(r'    static let dropErrorCopy = ("[^"\n]+")', source)
 assert constant and drop_constant
 view = read('Sources/Fluid/UI/FileTranscriptionView.swift')
-drop_expression = re.findall(r'self\.dropErrorMessage = (.+)\n', view)
+drop_expression = re.findall(r'self\.privateProjection\.dropErrorMessage = (.+)\n', view)
 drop_expression = [expression for expression in drop_expression if 'Self.dropErrorCopy' in expression]
 assert len(drop_expression) == 1, 'Expected one production drop error assignment'
 picker_calls = re.findall(r'FluidDropdownPicker\(\s*("[^"\n]+"),\s*selectedTitle: (.+),\n\s*selection: self\.\$settings\.fileTranscriptionExpectedSpeakerCount\n\s*\)', view)

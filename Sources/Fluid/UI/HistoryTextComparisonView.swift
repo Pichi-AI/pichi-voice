@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct HistoryTextComparisonView: View {
@@ -8,6 +9,7 @@ struct HistoryTextComparisonView: View {
     @State private var comparison: HistoryTextDiff?
     @State private var comparisonMessage: String?
     @State private var hasCompared = false
+    @State private var correctionSelection: DictionaryHistoryWordSelection?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -44,6 +46,23 @@ struct HistoryTextComparisonView: View {
                 ? "This entry is too long for inline comparison. Both texts remain available below."
                 : nil
         }
+        .sheet(item: self.$correctionSelection) { selection in
+            HistoryDictionaryCorrectionSheet(selection: selection) { corrected in
+                guard PrivateProfileStorage.isReadable(selection.profile), PrivateProfileStorage.acceptsNewWork,
+                      let current = TranscriptionHistoryStore.shared.entries.first(where: { $0.id == selection.entryID }),
+                      selection.matches(current),
+                      let request = DictionaryWordTrainingRequest(
+                          candidate: .init(heardText: selection.heardText, correctedText: corrected),
+                          profile: selection.profile
+                      ) else { return false }
+                self.correctionSelection = nil
+                NotificationCenter.default.post(name: .openDictionaryWordTraining, object: request)
+                return true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PrivateProfileService.willConceal)) { _ in
+            self.correctionSelection = nil
+        }
     }
 
     private func section(title: String, content: String, isOriginal: Bool) -> some View {
@@ -65,11 +84,12 @@ struct HistoryTextComparisonView: View {
                     self.enhancementBadge(isOriginal: isOriginal)
                 }
             }
-            self.text(content, isOriginal: isOriginal)
-                .fixedSize(horizontal: false, vertical: true)
-                .font(self.theme.typography.body).lineSpacing(5)
-                .foregroundStyle(isOriginal ? self.theme.palette.secondaryText : self.theme.palette.primaryText)
-                .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            DictionarySelectableTranscript(text: self.attributedText(content, isOriginal: isOriginal)) { range in
+                self.correctionSelection = DictionaryHistoryWordSelection(
+                    entryID: self.entry.id, sourceText: content, range: range, isOriginal: isOriginal
+                )
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(20)
         .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 16))
@@ -101,23 +121,72 @@ struct HistoryTextComparisonView: View {
             .fixedSize()
     }
 
-    private func text(_ content: String, isOriginal: Bool) -> Text {
-        guard self.showChanges, let comparison else { return Text(AttributedString(content)) }
-        let runs = isOriginal ? comparison.original : comparison.final
-        var text = AttributedString()
-        for run in runs {
-            var part = AttributedString(run.text)
+    private func attributedText(_ content: String, isOriginal: Bool) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 5
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: self.theme.typography.nativeBodyFont,
+            .foregroundColor: NSColor(isOriginal ? self.theme.palette.secondaryText : self.theme.palette.primaryText),
+            .paragraphStyle: paragraph,
+        ]
+        guard self.showChanges, let comparison else { return NSAttributedString(string: content, attributes: attributes) }
+        let result = NSMutableAttributedString(string: "")
+        for run in isOriginal ? comparison.original : comparison.final {
+            var runAttributes = attributes
             if run.changed {
-                part.foregroundColor = self.theme.palette.readableText(isOriginal ? .red : .green)
-                part.backgroundColor = self.theme.palette.cardBackground
-                if isOriginal {
-                    part.strikethroughStyle = .single
-                } else {
-                    part.underlineStyle = .single
-                }
+                runAttributes[.foregroundColor] = NSColor(self.theme.palette.readableText(isOriginal ? .red : .green))
+                runAttributes[.backgroundColor] = NSColor(self.theme.palette.cardBackground)
+                runAttributes[isOriginal ? .strikethroughStyle : .underlineStyle] = NSUnderlineStyle.single.rawValue
             }
-            text.append(part)
+            result.append(NSAttributedString(string: run.text, attributes: runAttributes))
         }
-        return Text(text)
+        return result
+    }
+}
+
+private struct HistoryDictionaryCorrectionSheet: View {
+    let selection: DictionaryHistoryWordSelection
+    let onContinue: (String) -> Bool
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
+    @State private var corrected = ""
+    @State private var error: String?
+    @FocusState private var spellingFocused: Bool
+
+    private var spelling: String { self.corrected.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
+            Text("Correct word in dictionary").font(self.theme.typography.sectionTitle)
+            Text(self.selection.heardText).font(self.theme.typography.body)
+                .foregroundStyle(self.theme.palette.secondaryText)
+            TextField("Correct spelling", text: self.$corrected)
+                .textFieldStyle(.roundedBorder).font(self.theme.typography.body)
+                .focused(self.$spellingFocused)
+                .onSubmit(self.continueToDictionary)
+            Text("Record pronunciation examples in the dictionary. The history text stays unchanged.")
+                .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if let error = self.error {
+                Text(PichiLocalization.text(error)).font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { self.dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Continue in dictionary", action: self.continueToDictionary)
+                    .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                    .disabled(!DictionaryCorrectionEditPolicy.isTerm(self.spelling) || self.spelling == self.selection.heardText)
+            }
+        }
+        .padding(self.theme.metrics.spacing.xl).frame(width: 440)
+        .background(self.theme.palette.windowBackground)
+        .onAppear { self.corrected = self.selection.heardText; self.spellingFocused = true }
+    }
+
+    private func continueToDictionary() {
+        guard DictionaryCorrectionEditPolicy.isTerm(self.spelling), self.spelling != self.selection.heardText else { return }
+        if self.onContinue(self.spelling) { self.dismiss() }
+        else { self.error = "This transcription changed. Select the word again." }
     }
 }

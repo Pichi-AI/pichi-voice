@@ -70,14 +70,18 @@ final class MobileFirstRunWalkthroughUITests: XCTestCase {
         XCTAssertTrue(start.waitForExistence(timeout: 5) && start.isHittable)
         let meeting = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "history.session.")).firstMatch
         XCTAssertTrue(meeting.exists)
+        // The default name leaves the start to the row's second line and to the page.
+        let name = language == "ru" ? "Запись" : "Recording"
+        XCTAssertTrue(meeting.label.contains(name) && !meeting.label.contains("\(name) · "), meeting.label)
         meeting.tap(); settle(); capture("13-meeting-again")
         XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[name].exists, "The page title is the default name alone")
     }
 
     private func open(_ section: String) {
         let sidebar = app.buttons["navigation.\(section)"]
         if sidebar.exists && sidebar.isHittable { sidebar.tap(); return }
-        let titles = ["meetings": ["Встречи", "Meetings"], "settings": ["Настройки", "Settings"]][section] ?? []
+        let titles = ["meetings": ["Записи", "Recordings"], "settings": ["Настройки", "Settings"]][section] ?? []
         let tab = app.tabBars.buttons.matching(NSPredicate(format: "label IN %@", titles)).firstMatch
         XCTAssertTrue(tab.waitForExistence(timeout: 5), "\(section) must be reachable")
         tab.tap()

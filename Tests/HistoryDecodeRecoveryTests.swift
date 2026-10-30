@@ -2,12 +2,13 @@ import Foundation
 
 // Standalone harness: compile the real chat and file transcription stores against
 // in-memory persistence. Never touches the installed app's history.
-final class UserDefaults {
-    static let standard = UserDefaults()
+final class InMemoryHistoryDefaults: UserDefaults, @unchecked Sendable {
+    private let lock = NSLock()
     private var values: [String: Any] = [:]
-    func data(forKey key: String) -> Data? { self.values[key] as? Data }
-    func string(forKey key: String) -> String? { self.values[key] as? String }
-    func set(_ value: Any?, forKey key: String) { self.values[key] = value }
+    init() { super.init(suiteName: nil)! }
+    override func data(forKey key: String) -> Data? { self.lock.withLock { self.values[key] as? Data } }
+    override func string(forKey key: String) -> String? { self.lock.withLock { self.values[key] as? String } }
+    override func set(_ value: Any?, forKey key: String) { self.lock.withLock { self.values[key] = value } }
 }
 
 struct SpeakerTranscriptSegment: Codable, Equatable { let text: String }
@@ -49,7 +50,7 @@ final class DebugLogger {
         var unreadableFile = try self.object(files[0])
         unreadableFile["id"] = UUID().uuidString
         unreadableFile["confidence"] = NSNull()
-        let fileDefaults = UserDefaults()
+        let fileDefaults = InMemoryHistoryDefaults()
         fileDefaults.set(try self.array(files, inserting: unreadableFile), forKey: self.fileKey)
         let fileStore = FileTranscriptionHistoryStore(defaults: fileDefaults)
         check(fileStore.entries == files, "Readable file transcripts must survive one unreadable entry")
@@ -75,17 +76,17 @@ final class DebugLogger {
         let overflowing = overflowSource.replacingOccurrences(of: #""duration":60"#, with: #""duration":1e400"#)
         check(overflowing != overflowSource, "The overflow fixture must replace the duration")
         check((try? JSONDecoder().decode(FileTranscriptionEntry.self, from: Data(overflowSource.utf8))) != nil, "The overflow fixture is readable before the change")
-        let literalDefaults = UserDefaults()
+        let literalDefaults = InMemoryHistoryDefaults()
         literalDefaults.set(Data(#"""
         [\#(try self.json(files[0])),"junk",null,\#(overflowing),\#(try self.json(files[1], extra: #""futureField":1e400"#))]
         """#.utf8), forKey: self.fileKey)
         check(FileTranscriptionHistoryStore(defaults: literalDefaults).entries == files, "Readable transcripts survive any mix of unreadable elements")
 
-        let garbageDefaults = UserDefaults()
+        let garbageDefaults = InMemoryHistoryDefaults()
         garbageDefaults.set(Data("not json".utf8), forKey: self.fileKey)
         check(FileTranscriptionHistoryStore(defaults: garbageDefaults).entries.isEmpty, "Unparseable history loads empty")
 
-        let cleanFileDefaults = UserDefaults()
+        let cleanFileDefaults = InMemoryHistoryDefaults()
         let cleanFileBytes = try JSONEncoder().encode(files)
         cleanFileDefaults.set(cleanFileBytes, forKey: self.fileKey)
         check(FileTranscriptionHistoryStore(defaults: cleanFileDefaults).entries == files, "Readable history loads unchanged")
@@ -101,7 +102,7 @@ final class DebugLogger {
         guard var messages = unreadableChat["messages"] as? [[String: Any]] else { preconditionFailure("Encoded chat must carry messages") }
         messages[0]["stepType"] = "stepFromANewerVersion"
         unreadableChat["messages"] = messages
-        let chatDefaults = UserDefaults()
+        let chatDefaults = InMemoryHistoryDefaults()
         chatDefaults.set(try self.array(chats, inserting: unreadableChat), forKey: self.chatKey)
         chatDefaults.set(unreadableChatID, forKey: "CommandModeCurrentChatID")
         let chatStore = ChatHistoryStore(defaults: chatDefaults)
@@ -110,7 +111,7 @@ final class DebugLogger {
         let savedChats = try JSONDecoder().decode([ChatSession].self, from: chatDefaults.data(forKey: self.chatKey) ?? Data())
         check(savedChats.map(\.id) == chats.map(\.id), "The launch save must keep every readable chat")
 
-        let cleanChatDefaults = UserDefaults()
+        let cleanChatDefaults = InMemoryHistoryDefaults()
         let cleanChatBytes = try JSONEncoder().encode(chats)
         cleanChatDefaults.set(cleanChatBytes, forKey: self.chatKey)
         cleanChatDefaults.set(chats[1].id, forKey: "CommandModeCurrentChatID")

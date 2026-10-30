@@ -88,7 +88,7 @@ private struct Fixture: View {
     }
 
     static func verifyClockAndLifetime(locale: Locale, directory: URL) throws {
-        let defaults = UserDefaults()
+        let defaults = InMemoryFileHistoryDefaults()
         let store = FileTranscriptionHistoryStore(defaults: defaults)
         store.addEntry(TranscriptionResult(
             id: UUID(), text: "FluidVoice ё Synthetic transcript", confidence: 1, duration: 1,

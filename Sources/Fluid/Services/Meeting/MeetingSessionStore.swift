@@ -12,6 +12,8 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     func create(_ session: MeetingSession) async throws
     func save(_ session: MeetingSession) async throws
     func load(id: MeetingSessionID) async throws -> MeetingSession?
+    /// One owner-bound read returns metadata and its existing directory from the same source.
+    func loadExistingSource(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws -> (session: MeetingSession, directory: URL)?
     func loadAll() async throws -> [MeetingSession]
     func loadHistory() async throws -> [MeetingSession]
     /// Automatic cleanup uses only records governed by the selected profile's settings.
@@ -26,6 +28,7 @@ nonisolated protocol MeetingSessionStoring: Sendable {
     /// Removes the `tracks/` directory and any processing checkpoint, leaving the manifest and
     /// transcript untouched. Idempotent — missing paths are not an error.
     func deleteAudioFiles(for id: MeetingSessionID) async throws
+    func deleteAudioFiles(for id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws
 }
 
 // Test/custom stores retain their existing behavior unless they provide the lighter reads.
@@ -38,6 +41,10 @@ nonisolated extension MeetingSessionStoring {
     func loadHistory() async throws -> [MeetingSession] { try await self.loadAll() }
     func loadHistoryForMaintenance() async throws -> [MeetingSession] { try await self.loadHistory() }
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? { try await self.load(id: id) }
+    func loadExistingSource(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws -> (session: MeetingSession, directory: URL)? {
+        // A custom facade must promise source identity, rather than split unrelated lookups.
+        throw CocoaError(.featureUnsupported)
+    }
     func captureOwnership(for id: MeetingSessionID) async throws -> MeetingProfileOwnership? { nil }
     func cancelCaptureAdmission(for id: MeetingSessionID) async {}
     func captureOwnership(for id: MeetingSessionID, configuration: MeetingCaptureConfiguration) async throws -> MeetingProfileOwnership? {
@@ -51,6 +58,10 @@ nonisolated extension MeetingSessionStoring {
     }
     func delete(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership, validating: @Sendable (MeetingSession) throws -> Void) async throws {
         // A custom store must provide an atomic implementation, not a load/await/delete approximation.
+        throw CocoaError(.featureUnsupported)
+    }
+
+    func deleteAudioFiles(for id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
         throw CocoaError(.featureUnsupported)
     }
 
@@ -241,6 +252,17 @@ actor MeetingSessionStore: MeetingSessionStoring {
         return migrated
     }
 
+    func loadExistingSource(id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws -> (session: MeetingSession, directory: URL)? {
+        guard let session = try self.load(id: id) else { return nil }
+        guard expectedOwnership.matchesPersistedOwner(session.profileOwnership) else {
+            throw CocoaError(.fileReadNoPermission)
+        }
+        // This actor owns one immutable root. No suspension can pair this metadata with
+        // another profile's same-UUID directory, including a legacy ownerless guest.
+        guard let directory = try self.existingSessionDirectory(for: id) else { return nil }
+        return (session, directory)
+    }
+
     /// Reading transcript/history never opens or hashes audio. Recovery and audio consumers
     /// keep using load(id:), which still reconciles and validates the requested recording.
     func loadTranscript(id: MeetingSessionID) async throws -> MeetingSession? {
@@ -384,6 +406,15 @@ actor MeetingSessionStore: MeetingSessionStoring {
             try self.fileSystem.manager.removeItem(at: checkpointURL)
         }
         try MeetingRetainedProcessingCheckpoint.remove(in: directory)
+    }
+
+    func deleteAudioFiles(for id: MeetingSessionID, expectedOwnership: MeetingProfileOwnership) async throws {
+        if let session = try self.load(id: id) {
+            guard expectedOwnership.matchesPersistedOwner(session.profileOwnership) else {
+                throw CocoaError(.fileWriteNoPermission)
+            }
+        }
+        try self.deleteAudioFiles(for: id)
     }
 
     private func requiresEncryption(for id: MeetingSessionID) -> Bool {

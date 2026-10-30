@@ -132,8 +132,8 @@ final class MobileNavigationUITests: XCTestCase {
             try require((start.exists && start.isEnabled) || app.buttons["transcript.more"].exists,
                         "Meetings must show idle recording controls or an existing completed transcript")
             let recoveryHeading = app.staticTexts.matching(NSPredicate(format: "label IN %@", [
-                "Meeting transcription was interrupted", "Расшифровка встречи прервана",
-                "Meeting transcription failed", "Не удалось расшифровать встречу"
+                "Transcription was interrupted", "Расшифровка записи прервана",
+                "Transcription failed", "Не удалось расшифровать запись"
             ])).firstMatch
             try require(!recoveryHeading.exists, "Download smoke refuses interrupted or failed meetings even without retryable audio")
             try require(!app.buttons["meeting.retry"].exists && !app.buttons["meeting.restartProcessing"].exists,
@@ -145,7 +145,7 @@ final class MobileNavigationUITests: XCTestCase {
                         "A concrete frozen Release AUT revision is required")
             try requireNoActiveAttempt()
             // Ordinary navigation reveals the current session before Settings is touched.
-            openNavigation("meetings", title: app.tabBars.buttons["Встречи"].exists ? "Встречи" : "Meetings")
+            openNavigation("meetings", title: app.tabBars.buttons["Записи"].exists ? "Записи" : "Recordings")
             try requireMeetingAtRest()
             openNavigation("settings", title: app.tabBars.buttons["Настройки"].exists ? "Настройки" : "Settings")
             try requireNoActiveAttempt()
@@ -191,7 +191,7 @@ final class MobileNavigationUITests: XCTestCase {
             }
             capture("speech-download-05-download-result")
             try require(ready, "Speech detection must show its own Ready label and enabled Download within 120 seconds")
-            openNavigation("meetings", title: app.tabBars.buttons["Встречи"].exists ? "Встречи" : "Meetings")
+            openNavigation("meetings", title: app.tabBars.buttons["Записи"].exists ? "Записи" : "Recordings")
             try requireMeetingAtRest()
             capture("speech-download-06-returned-to-existing-meeting")
         } catch {
@@ -292,8 +292,8 @@ final class MobileNavigationUITests: XCTestCase {
         /// A restored interrupted or failed meeting opens its own page at launch instead.
         func priorOwnedTerminalVisible() -> Bool {
             guard let priorOwnedTitle, !priorOwnedTitle.isEmpty, noActiveAttemptVisible() else { return false }
-            let heading = ["interrupted": ["Meeting transcription was interrupted", "Расшифровка встречи прервана"],
-                           "failed": ["Meeting transcription failed", "Не удалось расшифровать встречу"]][priorOwnedState ?? ""]
+            let heading = ["interrupted": ["Transcription was interrupted", "Расшифровка записи прервана"],
+                           "failed": ["Transcription failed", "Не удалось расшифровать запись"]][priorOwnedState ?? ""]
             if let heading, app.staticTexts.matching(NSPredicate(format: "label == %@", priorOwnedTitle)).firstMatch.exists,
                app.staticTexts.matching(NSPredicate(format: "label IN %@", heading)).firstMatch.exists {
                 return true
@@ -426,7 +426,7 @@ final class MobileNavigationUITests: XCTestCase {
                 mark("prior_owned_terminal_standard_error_dismissed")
                 capture("production-01-prior-owned-terminal-error-dismissed")
             }
-            openNavigation("meetings", title: "Meetings")
+            openNavigation("meetings", title: "Recordings")
             capture("production-01-existing-idle")
             try require(noActiveAttemptVisible(),
                         "An existing recording or processing attempt is not owned by this selector")
@@ -628,7 +628,7 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(app.buttons["account.signIn"].isEnabled)
             capture("legacy-\(language)-\(appearance)-secure-password")
             // Do not submit credentials or create any remote session.
-            openNavigation("meetings", title: language == "ru" ? "Встречи" : "Meetings")
+            openNavigation("meetings", title: language == "ru" ? "Записи" : "Recordings")
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5), "The visible Meetings control must actually leave the Account screen")
             XCTAssertEqual(app.keyboards.count, 0, "Leaving Account must dismiss its secure input keyboard")
             openNavigation("settings", title: language == "ru" ? "Настройки" : "Settings")
@@ -662,7 +662,7 @@ final class MobileNavigationUITests: XCTestCase {
         openNavigation("settings", title: "Settings")
         XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 5))
         // The root's last footer explains Replay onboarding and ends the scrollable list.
-        let lastFooter = app.staticTexts["Your meetings, models and voice profile are kept."].firstMatch
+        let lastFooter = app.staticTexts["Your recordings, models and voice profile are kept."].firstMatch
         if app.tabBars.firstMatch.exists {
             let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
             for step in 0..<4 where !lastFooter.exists || !app.windows.firstMatch.frame.contains(lastFooter.frame)
@@ -734,7 +734,7 @@ final class MobileNavigationUITests: XCTestCase {
             app.launchArguments = launchArguments + ["-ThemePreference", appearance]
             app.launch()
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
-            openNavigation("meetings", title: "Meetings")
+            openNavigation("meetings", title: "Recordings")
             XCTAssertTrue(app.buttons[rowID].waitForExistence(timeout: 5),
                           "A cold guest launch must load the staged saved meeting without a pull-to-refresh")
             capture("cold-guest-history-\(appearance)")
@@ -760,7 +760,7 @@ final class MobileNavigationUITests: XCTestCase {
                 XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15),
                               "The actual meeting root must finish its isolated profile fixture")
                 capture("shared-guest-\(profile)-\(appearance)-ready")
-                let meetingsTitle = app.tabBars.buttons["Встречи"].exists ? "Встречи" : "Meetings"
+                let meetingsTitle = app.tabBars.buttons["Записи"].exists ? "Записи" : "Recordings"
                 openNavigation("meetings", title: meetingsTitle)
                 let guest = app.buttons["history.session.\(guestID)"]
                 XCTAssertTrue(guest.waitForExistence(timeout: 5),
@@ -841,7 +841,7 @@ final class MobileNavigationUITests: XCTestCase {
             }
             XCTAssertTrue(start.isHittable)
             capture("owner-\(language)-\(appearance)-landscape")
-            openNavigation("meetings", title: language == "ru" ? "Встречи" : "Meetings")
+            openNavigation("meetings", title: language == "ru" ? "Записи" : "Recordings")
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
             capture("owner-\(language)-left-settings")
         }
@@ -887,7 +887,7 @@ final class MobileNavigationUITests: XCTestCase {
             capture("settings-\(detail)-opened")
             if detail == "recording" { XCTAssertFalse(app.buttons["settings.recording.done"].exists) }
 
-            openNavigation("meetings", title: "Meetings")
+            openNavigation("meetings", title: "Recordings")
             XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5), "A pushed \(detail) view must not cover Meetings")
             XCTAssertTrue(app.buttons["meeting.start"].isHittable)
             XCTAssertTrue(app.descendants(matching: .any)["history.list"].firstMatch.exists)
@@ -912,7 +912,7 @@ final class MobileNavigationUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["settings.models.detail"].firstMatch.waitForExistence(timeout: 5),
                       "Rotating the layout must preserve the selected settings detail")
         capture("models-landscape")
-        openNavigation("meetings", title: "Meetings")
+        openNavigation("meetings", title: "Recordings")
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
         app.buttons["meeting.settings"].tap()
         let done = app.buttons["settings.recording.done"]
@@ -939,14 +939,14 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertFalse(visibleDetail.exists)
             capture("reselect-\(detail)-root")
         }
-        openNavigation("meetings", title: "Meetings")
-        openNavigation("meetings", title: "Meetings")
+        openNavigation("meetings", title: "Recordings")
+        openNavigation("meetings", title: "Recordings")
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["history.list"].firstMatch.waitForExistence(timeout: 5))
     }
 
     func testReselectingMeetingsClosesMeetingDetail() throws {
-        openNavigation("meetings", title: "Meetings")
+        openNavigation("meetings", title: "Recordings")
         let meeting = app.buttons["history.session.DDD86147-F0B9-4B13-88B5-099B1E0D8BA5"]
         guard meeting.waitForExistence(timeout: 5) else {
             throw XCTSkip("Stage the synthetic NavigationMeeting.json in the simulator's meeting store before this test")
@@ -957,10 +957,10 @@ final class MobileNavigationUITests: XCTestCase {
         capture("meeting-detail-opened")
         openNavigation("settings", title: "Settings")
         XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 5))
-        openNavigation("meetings", title: "Meetings")
+        openNavigation("meetings", title: "Recordings")
         XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5),
                       "Switching sections preserves the meeting detail until Meetings is reselected")
-        openNavigation("meetings", title: "Meetings")
+        openNavigation("meetings", title: "Recordings")
         XCTAssertTrue(app.descendants(matching: .any)["history.list"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(meeting.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["meeting.start"].isHittable)
@@ -996,7 +996,7 @@ final class MobileNavigationUITests: XCTestCase {
             app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance]
             app.launch()
             waitForOrientation(portrait: true)
-            openNavigation("meetings", title: "Встречи")
+            openNavigation("meetings", title: "Записи")
             let meeting = app.buttons["history.session.\(fixtureID)"]
             guard meeting.waitForExistence(timeout: 5) else {
                 throw XCTSkip("Stage the synthetic WordTimingMeeting.json in the simulator meeting store")
@@ -1115,8 +1115,8 @@ final class MobileNavigationUITests: XCTestCase {
     func testGeneralizedSpeakerAttributionLabelsInBothLanguagesAndThemes() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9016"
         for (language, appearance, meetingsTitle, mainLabel, participantLabel) in [
-            ("en", "light", "Meetings", "Анна", "Борис"),
-            ("ru", "dark", "Встречи", "Анна", "Борис")
+            ("en", "light", "Recordings", "Анна", "Борис"),
+            ("ru", "dark", "Записи", "Анна", "Борис")
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -1154,7 +1154,7 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testProtectedTranscriptExportOpensNativeShareSheetInBothLanguages() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9016"
-        for (language, appearance, meetingsTitle) in [("en", "light", "Meetings"), ("ru", "dark", "Встречи")] {
+        for (language, appearance, meetingsTitle) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
@@ -1270,8 +1270,8 @@ final class MobileNavigationUITests: XCTestCase {
                            "A genuine short reply must not be swallowed by another participant")
         }
         for (language, appearance, meetingsTitle, participantLabel, cancelTitle) in [
-            ("en", "light", "Meetings", "Анна", "Cancel"),
-            ("ru", "dark", "Встречи", "Анна", "Отмена")
+            ("en", "light", "Recordings", "Анна", "Cancel"),
+            ("ru", "dark", "Записи", "Анна", "Отмена")
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -1324,8 +1324,8 @@ final class MobileNavigationUITests: XCTestCase {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9024"
         let speakerID = "00000000-0000-0000-0000-000000000065"
         for (language, appearance, meetingsTitle) in [
-            ("en", "light", "Meetings"),
-            ("ru", "dark", "Встречи")
+            ("en", "light", "Recordings"),
+            ("ru", "dark", "Записи")
         ] {
             func openFixture() throws {
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
@@ -1406,8 +1406,8 @@ final class MobileNavigationUITests: XCTestCase {
         let secondID = "00000000-0000-0000-0000-000000000066"
         let firstFragmentID = "00000000-0000-0000-0000-202610210101"
         for (language, appearance, meetings, ownerName, thisIsMe, generatedName) in [
-            ("en", "light", "Meetings", "You", "This is me", "Speaker 1"),
-            ("ru", "dark", "Встречи", "Вы", "Это я", "Участник 1")
+            ("en", "light", "Recordings", "You", "This is me", "Speaker 1"),
+            ("ru", "dark", "Записи", "Вы", "Это я", "Участник 1")
         ] where language == onlyLanguage {
             func openFixture() throws {
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
@@ -1514,8 +1514,8 @@ final class MobileNavigationUITests: XCTestCase {
         #else
         let fixtureID = "8EEC0000-2026-4000-8000-000000000021"
         for (language, appearance, meetings) in [
-            ("en", "light", "Meetings"),
-            ("ru", "dark", "Встречи")
+            ("en", "light", "Recordings"),
+            ("ru", "dark", "Записи")
         ] {
             for iteration in 0..<2 {
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
@@ -1563,8 +1563,8 @@ final class MobileNavigationUITests: XCTestCase {
         let secondID = "00000000-0000-0000-0000-202610210104"
         let lastID = "00000000-0000-0000-0000-202610210105"
         for (language, appearance, meetings, ownerName, otherName) in [
-            ("en", "light", "Meetings", "You", "Participant 1"),
-            ("ru", "dark", "Встречи", "Вы", "Participant 1")
+            ("en", "light", "Recordings", "You", "Participant 1"),
+            ("ru", "dark", "Записи", "Вы", "Participant 1")
         ] {
             func openFixture() throws {
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
@@ -1693,7 +1693,7 @@ final class MobileNavigationUITests: XCTestCase {
         #else
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9025"
         let lastID = "00000000-0000-0000-0000-202610210105"
-        for (language, appearance, meetings) in [("en", "light", "Meetings"), ("ru", "dark", "Встречи")] {
+        for (language, appearance, meetings) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
             app.launch()
@@ -1724,7 +1724,7 @@ final class MobileNavigationUITests: XCTestCase {
         #if targetEnvironment(simulator)
         let fixtureID = "C010C010-2026-4000-8000-000000000021"
         for (language, appearance, meetings, firstName) in [
-            ("en", "light", "Meetings", "You"), ("ru", "dark", "Встречи", "Вы")
+            ("en", "light", "Recordings", "You"), ("ru", "dark", "Записи", "Вы")
         ] {
             app.terminate()
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
@@ -1762,7 +1762,7 @@ final class MobileNavigationUITests: XCTestCase {
         let expected = try JSONSerialization.jsonObject(with: Data(encoded.utf8)) as! [String]
         XCTAssertFalse(expected.isEmpty)
         let identifiers = try savedParagraphIdentifiers(expectedCount: expected.count)
-        for (language, appearance, meetings) in [("en", "light", "Meetings"), ("ru", "dark", "Встречи")] {
+        for (language, appearance, meetings) in [("en", "light", "Recordings"), ("ru", "dark", "Записи")] {
             app.terminate()
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
             app.launch()
@@ -1811,7 +1811,7 @@ final class MobileNavigationUITests: XCTestCase {
                 break
             }
         }
-        openNavigation("meetings", title: "Встречи")
+        openNavigation("meetings", title: "Записи")
         capture("private-saved-history")
         let meeting = app.buttons["history.session.\(sessionID)"]
         XCTAssertTrue(meeting.waitForExistence(timeout: 10))
@@ -1826,8 +1826,8 @@ final class MobileNavigationUITests: XCTestCase {
     func testRetainedProcessingRecoveryActionsInBothLanguagesAndThemes() throws {
         let fixtureID = "2C920909-152B-4050-9ACB-454E82411015"
         for (language, appearance, meetingsTitle, restartTitle) in [
-            ("en", "light", "Meetings", "Start processing again"),
-            ("ru", "dark", "Встречи", "Начать обработку заново")
+            ("en", "light", "Recordings", "Start processing again"),
+            ("ru", "dark", "Записи", "Начать обработку заново")
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -1867,7 +1867,7 @@ final class MobileNavigationUITests: XCTestCase {
             throw XCTSkip("Stage an unresolved RetainedRecoveryMeeting.json with its silent audio after a completed setup")
         }
         capture("recovery-start-01-restored-offer")
-        openNavigation("meetings", title: "Meetings")
+        openNavigation("meetings", title: "Recordings")
         XCTAssertTrue(fixtureRow.waitForExistence(timeout: 5))
         let start = app.buttons["meeting.start"]
         XCTAssertTrue(start.isHittable)
@@ -1893,10 +1893,10 @@ final class MobileNavigationUITests: XCTestCase {
         #else
         let fixtureID = "A02B2152-C9AF-4E50-88A5-BE1B97120210"
         for (language, appearance, meetingsTitle, expected) in [
-            ("en", "light", "Meetings", "1 Example Street, Example City"),
-            ("ru", "dark", "Встречи", "ул. Примерная, 1, Примерск"),
-            ("en", "dark", "Meetings", "1 Example Street, Example City"),
-            ("ru", "light", "Встречи", "ул. Примерная, 1, Примерск")
+            ("en", "light", "Recordings", "1 Example Street, Example City"),
+            ("ru", "dark", "Записи", "ул. Примерная, 1, Примерск"),
+            ("en", "dark", "Recordings", "1 Example Street, Example City"),
+            ("ru", "light", "Записи", "ул. Примерная, 1, Примерск")
         ] {
             app.terminate()
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
@@ -1906,12 +1906,25 @@ final class MobileNavigationUITests: XCTestCase {
             openNavigation("meetings", title: meetingsTitle)
             let meeting = app.buttons["history.session.\(fixtureID)"]
             XCTAssertTrue(meeting.waitForExistence(timeout: 10), "Stage LocationMeeting.json in the owned simulator")
-            XCTAssertTrue(meeting.label.contains(expected), meeting.label)
+            // The place names the recording; the start is on the row's second line.
+            XCTAssertTrue(meeting.label.contains(expected) && !meeting.label.contains("\(expected) · "), meeting.label)
             capture("location-\(language)-\(appearance)-history")
             meeting.tap()
-            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", expected))
-                .firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 5), "The page title is the place alone")
             capture("location-\(language)-\(appearance)-detail")
+            guard language == "en", appearance == "light" else { continue }
+            // Saving the name unchanged would store the default title as a fixed one.
+            app.buttons["transcript.more"].tap()
+            app.buttons["Rename"].tap()
+            let save = app.navigationBars.buttons["Save"]
+            XCTAssertTrue(save.waitForExistence(timeout: 5))
+            XCTAssertFalse(save.isEnabled, "Save waits for a changed name")
+            let text = app.textViews["transcript.edit.text"]
+            text.tap(); text.typeText(" 2")
+            XCTAssertTrue(save.isEnabled, "A changed name can be saved")
+            capture("location-rename-changed")
+            app.navigationBars.buttons["Cancel"].tap()
+            XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 5), "Cancel keeps the place as the title")
         }
         #endif
     }

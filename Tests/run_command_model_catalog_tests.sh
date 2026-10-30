@@ -53,6 +53,7 @@ import subprocess
 import sys
 out = Path(sys.argv[1])
 fixture = Path('Tests/CommandModelCatalogTests.swift').read_text().split('@main enum CommandModelCatalogTests {', 1)[0]
+fixture = fixture.replace('final class UserDefaults {', 'class UserDefaults {')
 marker = '    var credentials: [String: String] = [:]'
 assert fixture.count(marker) == 1
 fixture = fixture.replace(marker, marker + '\n    let keychain: KeychainService\n    init(keychain: KeychainService) { self.keychain = keychain }')
@@ -61,6 +62,33 @@ assert fixture.count('    var loadedProviderAPIKeys: [String: String]? { self.cr
 fixture = fixture.replace('    var loadedProviderAPIKeys: [String: String]? { self.credentials }\n', '')
 fixture = fixture.replace('return self.credentials', 'return self.keychain.cachedKeys ?? self.credentials')
 (out / 'AdmissionMetadata.swift').write_text(fixture)
+# Keep credential admission on injected in-memory defaults. The concrete
+# profile and ownership types are production declarations. The surrounding
+# composition uses synthetic metadata and never opens installed preferences.
+(out / 'AdmissionProfileSupport.swift').write_text('''import Foundation
+nonisolated final class PrivateProfileDefaults: UserDefaults {
+    static var shared: UserDefaults { .standard }
+    var selectedProfile: PrivateProfileSnapshot { preconditionFailure("Unexpected live profile selection") }
+    static func bound(to profile: PrivateProfileSnapshot) -> UserDefaults {
+        preconditionFailure("Unexpected live profile binding")
+    }
+}
+extension AppBrand {
+    static let storageNamespace = "synthetic-unused-profile"
+    static var applicationSupportDirectory: URL {
+        URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("SyntheticAdmissionProfile-" + String(ProcessInfo.processInfo.processIdentifier))
+    }
+}
+@MainActor protocol PrivateProfileTransitionParticipant: AnyObject {
+    func prepareForPrivateProfileTransition() async throws
+}
+@MainActor final class PrivateProfileService {
+    static let shared = PrivateProfileService()
+    func register(_ participant: any PrivateProfileTransitionParticipant) {
+        preconditionFailure("Credential admission must not register an application service")
+    }
+}
+''')
 settings = Path('Sources/Fluid/Persistence/SettingsStore.swift').read_text()
 getter_start = settings.index('    var loadedProviderAPIKeys:')
 getter_end = settings.index('\n', getter_start)
@@ -75,6 +103,12 @@ def declaration(text, marker):
         depth += (text[end] == '{') - (text[end] == '}')
         end += 1
     return text[start:end]
+backend_key = next(line for line in settings.splitlines()
+    if line.strip().startswith('static let privateAIBackendPreferenceDefaultsKey ='))
+update_keys = declaration(Path('Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text(),
+    '    enum UpdateKeys {')
+(out / 'AdmissionSettingsKeyDependencies.swift').write_text('extension SettingsStore {\n'
+    + backend_key + '\n' + update_keys + '\n}\n')
 source = Path('Sources/Fluid/Services/Meeting/MeetingSummaryProvider.swift').read_text()
 baseline = os.environ.get('PICHI_SUMMARY_ADMISSION_BASELINE_REF')
 if baseline:
@@ -85,7 +119,7 @@ route = source[source.index('nonisolated struct MeetingSummaryRoute {'):source.i
 # resolver plus actual legacy RemoteService/LLMClient request admission.
 route = route[:route.index('    /// Provider selection is shared;')] + '}\n'
 remote = source[source.index('/// Uses a dedicated session'):]
-kind_source = Path('Sources/Fluid/Services/Meeting/MeetingSummaryController.swift').read_text()
+kind_source = Path('Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift').read_text()
 kind = declaration(kind_source, 'nonisolated enum MeetingSummaryKind:') + '\n'
 # The prompt uses the shared pure source-language contract. Keep the
 # actual declaration without linking capture, persistence or model services.
@@ -196,8 +230,12 @@ reprocess = normal[reprocess_start:reprocess_end]
 marker = 'dictationSlot: .primary\n                )'
 assert reprocess.count(marker) == 1
 reprocess = reprocess.replace(marker, 'dictationSlot: .primary, client: self.llmClient\n                )')
+# The source body returns Void; this harness returns the retained text for
+# assertions. Preserve every validity guard and adapt only its return value.
+reprocess = reprocess.replace('guard isOutputValid() else { return }', 'guard isOutputValid() else { return finalText }')
 reprocess_wrapper = '''
     func finishReprocess(_ normalizedTranscribedText: String) async -> String {
+        let isOutputValid: @MainActor () -> Bool = { self.privateOutputOperations.isCurrent && !Task.isCancelled }
         let appInfo = self.getCurrentAppInfo()
         var finalText = normalizedTranscribedText
         var aiFallbackReason: String?
@@ -209,6 +247,7 @@ reprocess_wrapper = '''
 block_start = normal.index('        let practiceModelID = route == .onboardingSandbox')
 block_end = normal.index('        // Normalize literal command and mention syntax', block_start)
 post_asr = normal[block_start:block_end]
+post_asr = post_asr.replace('if preserveConcealedCapture() { return }', 'if preserveConcealedCapture() { return finalText }')
 assert post_asr.count('stopSnapshot: stopSnapshot') == 1
 post_asr = post_asr.replace('stopSnapshot: stopSnapshot', 'stopSnapshot: stopSnapshot, client: self.llmClient')
 wrapper = '''
@@ -221,6 +260,7 @@ wrapper = '''
         let expectedOverlayLifecycleID: UInt64 = 1
         let pipelineID = "synthetic-normal-dictation"
         let promptOverride: String? = nil
+        func preserveConcealedCapture() -> Bool { !self.privateOutputOperations.isCurrent }
         var finalText = normalizedTranscribedText
         var postProcessingModel: String?
         var aiTokensPerSecond: Double?
@@ -232,7 +272,12 @@ policies = declaration(normal, 'nonisolated enum DictationAIFailurePresentationP
 (out / 'AdmissionNormalProcessor.swift').write_text('import Foundation\n' + policies + '\n@MainActor extension NormalDictationAdmissionOwner {\n'
     + processor + '\n' + plain_processor + '\n' + manual + '\n' + wrapper + post_asr + '\n        return finalText\n    }\n'
     + reprocess_wrapper + reprocess + '\n        return finalText\n    }\n}\n')
-(out / 'AdmissionStopSnapshot.swift').write_text(snapshot)
+context = declaration(Path('Sources/Fluid/Services/DictationContextCapture.swift').read_text(),
+    'nonisolated struct DictationTypingContext:')
+app_context = declaration(Path('Sources/Fluid/Services/PrivateAIIntegrationService.swift').read_text(),
+    '    struct AppContext:')
+(out / 'AdmissionStopSnapshot.swift').write_text('import Foundation\n' + context
+    + '\nextension PrivateAIIntegrationService {\n' + app_context + '\n}\n' + snapshot)
 selected_start = services.index('                selectedRoute: { [weak self] in')
 selected_start = services.index('\n', selected_start) + 1
 selected_end = services.index('\n                },\n                canWarm:', selected_start)
@@ -255,9 +300,14 @@ PY
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/AdmissionModuleCache" \
     "$task_test_dir/LanguageProjectionTests.swift" -o "$task_test_dir/language-tests"
 "$task_test_dir/language-tests"
+python3 -S Tests/Support/write_private_profile_standalone_types.py "$task_test_dir/AdmissionProfileTypes.swift"
 xcrun swiftc -parse-as-library -swift-version 5 -D PICHI_CREDENTIAL_TEST_BACKEND_ONLY \
     -module-cache-path "$task_test_dir/AdmissionModuleCache" \
     "$task_test_dir/ModelRepository.swift" "$task_test_dir/AdmissionMetadata.swift" \
+    "$task_test_dir/AdmissionProfileSupport.swift" "$task_test_dir/AdmissionProfileTypes.swift" \
+    "$task_test_dir/AdmissionSettingsKeyDependencies.swift" \
+    Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileOperationOwner.swift \
     "$task_test_dir/AdmissionCredentials.swift" "$task_test_dir/AdmissionRoute.swift" "$task_test_dir/AdmissionCommand.swift" \
     "$task_test_dir/AdmissionTemplateUI.swift" \
     "$task_test_dir/AdmissionDictation.swift" "$task_test_dir/AdmissionErrors.swift" \
@@ -268,6 +318,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -D PICHI_CREDENTIAL_TEST_BACKEND
     Tests/LocalAPICredentialAdmissionSupport.swift \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Persistence/KeychainService.swift \
+    Sources/Fluid/Persistence/SettingsStoreKeys.swift \
     Sources/Fluid/Persistence/SettingsStore+CommandMode.swift \
     Sources/Fluid/Services/CloudTextProvider.swift \
     Sources/Fluid/Services/LocalTextModelCatalog.swift \

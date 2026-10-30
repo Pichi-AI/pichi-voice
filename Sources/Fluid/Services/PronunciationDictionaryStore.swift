@@ -9,6 +9,7 @@ nonisolated struct PronunciationEnrollmentCapture: Codable, Equatable, Sendable 
     var sourceRecordingID: UUID?
     var sourceFocalRange: Range<Int>?
     var extractorVersion: String?
+    var capturedAt: Date? = nil
     var inspectionID: UUID?
     // nil identifies legacy enrollment; an empty vector is invalid.
     // swiftlint:disable:next discouraged_optional_collection
@@ -19,7 +20,7 @@ nonisolated struct PronunciationEnrollmentCapture: Codable, Equatable, Sendable 
 
     private enum CodingKeys: String, CodingKey {
         case values, sourceFrameCount, modelKey, originalAudioID, observedText
-        case sourceRecordingID, sourceFocalRange, extractorVersion, inspectionID, edgeEmbedding, edgeFrameCount
+        case sourceRecordingID, sourceFocalRange, extractorVersion, capturedAt, inspectionID, edgeEmbedding, edgeFrameCount
     }
 }
 
@@ -34,15 +35,35 @@ nonisolated struct PronunciationDictionaryProfile: Codable, Equatable, Identifia
 
     var hasOriginalAudio: Bool { self.enrollments.contains { $0.originalAudioID != nil } }
     var isEligibleForMatching: Bool {
-        (self.enrollments.count >= 3 || self.hasOriginalAudio) && self.enrollments.allSatisfy {
-            $0.extractorVersion == nil || $0.extractorVersion == "parakeet-encoder-mean-l2-v1"
+        (self.enrollments.count >= 3 || self.hasOriginalAudio) && self.enrollments.count <= 10 &&
+            Self.hasConsistentFeatures(self.enrollments, modelKey: self.modelKey, hiddenSize: self.hiddenSize)
+    }
+
+    /// Storage validates feature shape and provenance without interpreting a provider's recipe.
+    /// The matching adapter additionally validates its exact extractor version and model key.
+    static func hasConsistentFeatures(_ captures: [PronunciationEnrollmentCapture], modelKey: String, hiddenSize: Int) -> Bool {
+        guard !modelKey.isEmpty, (1...2048).contains(hiddenSize), !captures.isEmpty,
+              captures.allSatisfy({
+                  $0.modelKey == modelKey && $0.values.count == hiddenSize &&
+                      $0.values.allSatisfy(\.isFinite) && $0.sourceFrameCount > 0
+              }) else { return false }
+        let versions = Set(captures.compactMap(\.extractorVersion))
+        return versions.count <= 1 && versions.allSatisfy {
+            !$0.isEmpty && $0.utf8.count <= 128 &&
+                $0.unicodeScalars.allSatisfy { $0.isASCII && !CharacterSet.whitespacesAndNewlines.contains($0) && !CharacterSet.controlCharacters.contains($0) }
         }
     }
 
     var hasTemporalRecordings: Bool {
-        self.enrollments.count >= 3 && self.enrollments.prefix(3).allSatisfy {
+        self.matchingEnrollments.count >= 3 && self.matchingEnrollments.allSatisfy {
             $0.inspectionID != nil || $0.originalAudioID != nil
         }
+    }
+
+    /// Keep stored history chronological while a deliberate re-recording selects
+    /// the latest manual references. Reordering history would break future eviction.
+    var matchingEnrollments: [PronunciationEnrollmentCapture] {
+        PronunciationDictionaryStore.matchingEnrollments(self.enrollments)
     }
 
     var id: String { "\(self.dictionaryEntryID.uuidString):\(self.modelKey)" }
@@ -97,23 +118,31 @@ actor PronunciationDictionaryStore {
         private var selectedProfiles: [PronunciationDictionaryProfile]
         private var inspections: [UUID: DictionaryCaptureEvidenceFile]
         private var originals: [UUID: DictionaryCaptureEvidenceFile]
+        private var selectedReferences: [String: [PronunciationEnrollmentCapture]]
         private var closed = false
 
         fileprivate init(profile: PrivateProfileSnapshot, leaseID: UUID,
                          profiles: [PronunciationDictionaryProfile], omittedSharedProfileCount: Int = 0,
                          inspections: [UUID: DictionaryCaptureEvidenceFile],
-                         originals: [UUID: DictionaryCaptureEvidenceFile]) {
+                         originals: [UUID: DictionaryCaptureEvidenceFile],
+                         selectedReferences: [String: [PronunciationEnrollmentCapture]]) {
             self.profile = profile
             self.omittedSharedProfileCount = omittedSharedProfileCount
             self.leaseID = leaseID
             self.selectedProfiles = profiles
             self.inspections = inspections
             self.originals = originals
+            self.selectedReferences = selectedReferences
         }
 
         var profiles: [PronunciationDictionaryProfile] {
             self.lock.lock(); defer { self.lock.unlock() }
             return self.closed ? [] : self.selectedProfiles
+        }
+
+        func matchingEnrollments(for profile: PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] {
+            self.lock.lock(); defer { self.lock.unlock() }
+            return self.closed ? [] : self.selectedReferences[profile.id] ?? []
         }
 
         func inspection(for id: UUID) throws -> DictionaryAudioInspection {
@@ -132,7 +161,7 @@ actor PronunciationDictionaryStore {
             self.lock.lock(); defer { self.lock.unlock() }
             guard !self.closed, let id = capture.originalAudioID, let file = self.originals[id],
                   self.selectedProfiles.contains(where: {
-                      $0.dictionaryEntryID == entryID && $0.enrollments.prefix(3).contains(capture)
+                      $0.dictionaryEntryID == entryID && self.selectedReferences[$0.id]?.contains(capture) == true
                   }) else { throw PronunciationDictionaryStoreError.staleEvidence }
             return try file.read { try PronunciationDictionaryStore.decodeOriginalAudio($0, capture: capture, entryID: entryID) }
         }
@@ -150,6 +179,7 @@ actor PronunciationDictionaryStore {
             self.inspections.removeAll()
             self.originals.removeAll()
             self.selectedProfiles.removeAll()
+            self.selectedReferences.removeAll()
         }
 
         deinit { self.closeFiles() }
@@ -162,7 +192,8 @@ actor PronunciationDictionaryStore {
     /// excess optional candidates are omitted before the immutable snapshot is created. One
     /// fallback per otherwise unrepresented word precedes extra variants for an admitted word.
     nonisolated func admitCaptureRead(leaseID: UUID, modelKey: String, entryIDs: Set<UUID>,
-                                     includingSharedFamilies: Bool = false) throws -> CaptureRead {
+                                     includingSharedFamilies: Bool = false,
+                                     referenceSelection: @Sendable (PronunciationDictionaryProfile) -> [PronunciationEnrollmentCapture] = { $0.matchingEnrollments }) throws -> CaptureRead {
         try Task.checkCancellation()
         guard let profile = self.profile, PrivateProfileStorage.isReadable(profile),
               PrivateProfileStorage.acceptsNewWork else { throw PronunciationDictionaryStoreError.staleEvidence }
@@ -175,10 +206,9 @@ actor PronunciationDictionaryStore {
                 let document = try JSONDecoder().decode(Document.self, from: data)
                 guard document.version == 1 else { throw PronunciationDictionaryStoreError.inconsistentEnrollment }
                 func isValid(_ item: PronunciationDictionaryProfile) -> Bool {
-                    (1...2048).contains(item.hiddenSize) && item.enrollments.count <= 10 &&
-                        item.enrollments.allSatisfy {
-                            $0.modelKey == item.modelKey && $0.values.count == item.hiddenSize && $0.values.allSatisfy(\.isFinite)
-                        }
+                    item.enrollments.count <= 10 && PronunciationDictionaryProfile.hasConsistentFeatures(
+                        item.enrollments, modelKey: item.modelKey, hiddenSize: item.hiddenSize
+                    )
                 }
                 let exact = document.profiles.filter { $0.modelKey == modelKey && entryIDs.contains($0.dictionaryEntryID) }
                 guard exact.count <= 128, exact.allSatisfy(isValid) else {
@@ -210,6 +240,7 @@ actor PronunciationDictionaryStore {
         }
         var inspections: [UUID: DictionaryCaptureEvidenceFile] = [:]
         var originals: [UUID: DictionaryCaptureEvidenceFile] = [:]
+        var selectedReferences: [String: [PronunciationEnrollmentCapture]] = [:]
         var transferred = false
         defer {
             if !transferred {
@@ -219,7 +250,11 @@ actor PronunciationDictionaryStore {
         }
         func pinReferences(_ selected: PronunciationDictionaryProfile, optional: Bool) throws -> Bool {
             try Task.checkCancellation()
-            let captures = selected.enrollments.prefix(3)
+            let captures = referenceSelection(selected)
+            guard captures.count <= 3, captures.allSatisfy({ selected.enrollments.contains($0) }) else {
+                if optional { return false }
+                throw PronunciationDictionaryStoreError.inconsistentEnrollment
+            }
             let neededInspections = Set(captures.compactMap(\.inspectionID)).subtracting(inspections.keys)
             let neededOriginals = Set(captures.filter { $0.inspectionID == nil }.compactMap(\.originalAudioID)).subtracting(originals.keys)
             guard inspections.count + originals.count + neededInspections.count + neededOriginals.count <= 384 else {
@@ -250,6 +285,7 @@ actor PronunciationDictionaryStore {
             }
             for (id, file) in addedInspections { inspections[id] = file }
             for (id, file) in addedOriginals { originals[id] = file }
+            selectedReferences[selected.id] = captures
             committed = true
             return true
         }
@@ -278,7 +314,7 @@ actor PronunciationDictionaryStore {
         try Task.checkCancellation()
         let result = CaptureRead(profile: profile, leaseID: leaseID, profiles: profiles,
             omittedSharedProfileCount: sharedCandidateCount - (profiles.count - exact.count),
-            inspections: inspections, originals: originals)
+            inspections: inspections, originals: originals, selectedReferences: selectedReferences)
         transferred = true
         return result
     }
@@ -359,12 +395,13 @@ actor PronunciationDictionaryStore {
         modelKey: String,
         enrollments: [PronunciationEnrollmentCapture],
         automaticMatchingEnabled: Bool = false,
+        expectedExistingEnrollments: [PronunciationEnrollmentCapture]? = nil,
         canPersist: @Sendable () -> Bool = { true }
     ) throws {
         try self.requireAccess()
         guard canPersist() else { throw CancellationError() }
         guard let first = enrollments.first, !first.values.isEmpty else { return }
-        guard enrollments.allSatisfy({ $0.modelKey == modelKey && $0.values.count == first.values.count }) else {
+        guard PronunciationDictionaryProfile.hasConsistentFeatures(enrollments, modelKey: modelKey, hiddenSize: first.values.count) else {
             throw PronunciationDictionaryStoreError.inconsistentEnrollment
         }
         self.loadIfNeeded()
@@ -373,6 +410,9 @@ actor PronunciationDictionaryStore {
             $0.dictionaryEntryID == dictionaryEntryID && $0.modelKey == modelKey
         })
         let existingEnrollments = existingIndex.map { profiles[$0].enrollments } ?? []
+        if let expectedExistingEnrollments, existingEnrollments != expectedExistingEnrollments {
+            throw PronunciationDictionaryStoreError.staleEvidence
+        }
         var prepared = enrollments
         var writtenInspectionIDs: [UUID] = []
         do {
@@ -407,9 +447,7 @@ actor PronunciationDictionaryStore {
             }
         }
         let combinedEnrollments = existingEnrollments + prepared
-        guard combinedEnrollments.allSatisfy({
-            $0.modelKey == modelKey && $0.values.count == first.values.count
-        }) else {
+        guard PronunciationDictionaryProfile.hasConsistentFeatures(combinedEnrollments, modelKey: modelKey, hiddenSize: first.values.count) else {
             throw PronunciationDictionaryStoreError.inconsistentEnrollment
         }
         let profile = PronunciationDictionaryProfile(
@@ -449,6 +487,12 @@ actor PronunciationDictionaryStore {
             let rightManual = captures[rhs].originalAudioID == nil
             return leftManual == rightManual ? lhs < rhs : leftManual
         }.map { captures[$0] }
+    }
+
+    static func matchingEnrollments(_ captures: [PronunciationEnrollmentCapture]) -> [PronunciationEnrollmentCapture] {
+        let manual = Array(captures.filter { $0.originalAudioID == nil }.suffix(3))
+        let original = captures.filter { $0.originalAudioID != nil }.suffix(3 - manual.count)
+        return manual + original
     }
 
     /// Validated focal audio for legacy and new automatically learned references.
@@ -518,11 +562,7 @@ actor PronunciationDictionaryStore {
     func replaceAllProfiles(_ profiles: [PronunciationDictionaryProfile]) throws {
         try self.requireAccess()
         guard profiles.allSatisfy({ profile in
-            profile.hiddenSize > 0 &&
-                !profile.enrollments.isEmpty &&
-                profile.enrollments.allSatisfy {
-                    $0.modelKey == profile.modelKey && $0.values.count == profile.hiddenSize
-                }
+            PronunciationDictionaryProfile.hasConsistentFeatures(profile.enrollments, modelKey: profile.modelKey, hiddenSize: profile.hiddenSize)
         }) else {
             throw PronunciationDictionaryStoreError.inconsistentEnrollment
         }
@@ -654,7 +694,7 @@ actor PronunciationDictionaryStore {
             options: .atomic
         )
         var enrolled = capture
-        enrolled.extractorVersion = "parakeet-encoder-mean-l2-v1"
+        enrolled.extractorVersion = capture.extractorVersion ?? "parakeet-encoder-mean-l2-v1"
         enrolled.originalAudioID = evidenceID
         enrolled.observedText = evidence.observedText
         enrolled.sourceRecordingID = evidence.recordingID

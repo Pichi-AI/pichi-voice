@@ -122,6 +122,7 @@ final class MobileFirstUseModelTests: XCTestCase {
     private func services(settings: SettingsStore, capture: FirstUsePermissionProbe,
                           root: URL) -> AppServices {
         AppServices(store: MeetingSessionStore(rootDirectory: root), capture: capture, settings: settings,
+                    meetingModelResidency: MeetingModelResidencyCoordinator(),
                     microphoneResolver: { _ in .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone") })
     }
 
@@ -157,6 +158,34 @@ final class MobileFirstUseModelTests: XCTestCase {
         XCTAssertEqual(PichiMeetingProviderFactory.registeredLanguageCodes(for: SettingsStore.SpeechModel.gigaam.rawValue), ["ru"])
     }
 
+    func testInjectedServiceTerminationDoesNotCloseAnotherCompositionModelAdmission() async throws {
+        let (firstSettings, _, firstName) = try self.settings()
+        let (secondSettings, _, secondName) = try self.settings()
+        let firstRoot = FileManager.default.temporaryDirectory.appendingPathComponent(firstName)
+        let secondRoot = FileManager.default.temporaryDirectory.appendingPathComponent(secondName)
+        let first = self.services(settings: firstSettings, capture: FirstUsePermissionProbe(), root: firstRoot)
+        let second = self.services(settings: secondSettings, capture: FirstUsePermissionProbe(), root: secondRoot)
+        addTeardownBlock { @MainActor in
+            await first.shutdownForTermination()
+            await second.shutdownForTermination()
+            for root in [firstRoot, secondRoot] {
+                if FileManager.default.fileExists(atPath: root.path) { try FileManager.default.removeItem(at: root) }
+            }
+        }
+        XCTAssertFalse(first.asr.idleModelResidency === MeetingModelResidencyCoordinator.shared)
+        XCTAssertFalse(first.asr.idleModelResidency === second.asr.idleModelResidency)
+        let provider = FirstUseProvider()
+        second.asr.modelProvidersForTesting[.gigaam] = provider
+        await first.shutdownForTermination()
+        XCTAssertEqual(first.asr.idleModelResidency?.phase, .terminating)
+        XCTAssertEqual(second.asr.idleModelResidency?.phase, .normal)
+        try await second.asr.ensureAsrReady()
+        XCTAssertEqual(provider.installCount, 1)
+        XCTAssertEqual(provider.prepareCount, 1)
+        XCTAssertTrue(second.asr.isAsrReady)
+        XCTAssertNil(second.asr.activeExclusiveActivity)
+    }
+
     /// The simulator enforces no per-process memory limit and reports zero headroom, which
     /// must not read as exhaustion. A physical device keeps measuring it before preparation.
     func testGigaAMMeasuresProcessHeadroomOnlyOnPhysicalDevices() {
@@ -188,6 +217,7 @@ final class MobileFirstUseModelTests: XCTestCase {
         let replacement = FirstUseProvider()
         let capture = FirstUsePermissionProbe()
         let services = AppServices(store: MeetingSessionStore(rootDirectory: root), capture: capture, settings: settings,
+            meetingModelResidency: MeetingModelResidencyCoordinator(),
             microphoneResolver: { _ in entered.open(); try await release.wait(); return .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone") })
         services.asr.modelProvidersForTesting[.gigaam] = original
         services.asr.modelProvidersForTesting[.whisperTiny] = replacement

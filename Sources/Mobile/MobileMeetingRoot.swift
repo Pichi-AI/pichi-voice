@@ -133,11 +133,11 @@ struct MobileMeetingRoot: View {
         case meetings, settings
         var id: String { rawValue }
         var title: String {
-            switch self { case .meetings: return "Meetings"; case .settings: return "Settings" }
+            switch self { case .meetings: return "Recordings"; case .settings: return "Settings" }
         }
-        // The same symbols as the desktop sidebar sections.
+        // Settings matches the desktop sidebar; Recordings uses the waveform of a voice recorder.
         var symbol: String {
-            switch self { case .meetings: return "person.2.fill"; case .settings: return "gearshape" }
+            switch self { case .meetings: return "waveform"; case .settings: return "gearshape" }
         }
     }
 
@@ -203,9 +203,9 @@ struct MobileMeetingRoot: View {
                     switch kind {
                     case .segment(let segment):
                         result = try await coordinator.editTranscriptText(sessionID: draft.session.id, segmentID: segment.id, text: updated,
-                            expectedRevision: segment.revision)
+                            expectedRevision: segment.revision, expectedOwnership: draft.session.profileOwnership ?? .guest)
                     case .title:
-                        result = try await coordinator.renameSession(sessionID: draft.session.id, to: updated)
+                        result = try await coordinator.renameSession(sessionID: draft.session.id, to: updated, expectedOwnership: draft.session.profileOwnership ?? .guest)
                     case .paragraph:
                         // The picker opens a revision-checked member editor before saving.
                         throw MeetingDomainError.segmentNotFound
@@ -225,9 +225,9 @@ struct MobileMeetingRoot: View {
                 run(session: draft.session) {
                     let result: MeetingSession
                     if let segmentID = segmentIDs.first, segmentIDs.count == 1 {
-                        result = try await coordinator.reassignSegment(sessionID: draft.session.id, segmentID: segmentID, to: speakerID)
+                        result = try await coordinator.reassignSegment(sessionID: draft.session.id, segmentID: segmentID, to: speakerID, expectedOwnership: draft.session.profileOwnership ?? .guest)
                     } else {
-                        result = try await coordinator.reassignSegments(sessionID: draft.session.id, segmentIDs: segmentIDs, to: speakerID)
+                        result = try await coordinator.reassignSegments(sessionID: draft.session.id, segmentIDs: segmentIDs, to: speakerID, expectedOwnership: draft.session.profileOwnership ?? .guest)
                     }
                     acceptCommittedSession(result)
                 }
@@ -244,13 +244,13 @@ struct MobileMeetingRoot: View {
                     switch item {
                     case .meeting(let session):
                         guard canPresent(session) else { return }
-                        try await coordinator.deleteSession(id: session.id)
+                        try await coordinator.deleteSession(id: session.id, expectedOwnership: session.profileOwnership ?? .guest)
                         guard canPresent(session) else { return }
                         if historyPath.contains(session.id) { historyPath.removeAll() }
                         await refreshHistory()
                     case .audio(let session):
                         guard canPresent(session) else { return }
-                        acceptCommittedSession(try await coordinator.deleteAudio(sessionID: session.id))
+                        acceptCommittedSession(try await coordinator.deleteAudio(sessionID: session.id, expectedOwnership: session.profileOwnership ?? .guest))
                     }
                 }
             }
@@ -443,8 +443,9 @@ struct MobileMeetingRoot: View {
     private func recording(_ session: MeetingSession) -> some View {
         VStack(alignment: .leading, spacing: compactHeight ? 8 : 16) {
             recordingStatus(session)
-            if !compactHeight, canPresent(session) {
-                Text(session.displayTitle).font(theme.typography.sectionTitle).lineLimit(2)
+            // The band already says Recording; a title shows here when it names more than that.
+            if !compactHeight, canPresent(session), session.hasDistinctMobileTitle {
+                Text(session.mobileTitle).font(theme.typography.sectionTitle).lineLimit(2)
             }
             if canPresent(session) {
                 switch coordinator.liveTranscript.availability {
@@ -530,7 +531,7 @@ struct MobileMeetingRoot: View {
         VStack(alignment: .leading, spacing: 24) {
             Label(PichiLocalization.text("Preparing your transcript"), systemImage: "text.alignleft")
                 .font(theme.typography.sectionTitle)
-            if canPresent(session) { Text(session.displayTitle).font(theme.typography.title) }
+            if canPresent(session) { Text(session.mobileTitle).font(theme.typography.title) }
             ProgressView(PichiLocalization.text(stageTitle(stage)))
                 .accessibilityIdentifier("meeting.processing")
             Spacer()
@@ -562,17 +563,17 @@ struct MobileMeetingRoot: View {
                 VStack(alignment: .leading, spacing: 16) {
                     // Without transcript text the title belongs here; otherwise the transcript shows it.
                     if session.transcriptSegments.isEmpty {
-                        Text(session.displayTitle).font(theme.typography.title)
+                        Text(session.mobileTitle).font(theme.typography.title)
                     }
                     Text(PichiLocalization.text(session.state == .interrupted
-                        ? "Meeting transcription was interrupted" : "Meeting transcription failed"))
+                        ? "Transcription was interrupted" : "Transcription failed"))
                         .font(theme.typography.sectionTitle)
                     if let failure = session.failures.last {
                         Text(PichiLocalization.text(failure.message)).foregroundStyle(theme.palette.warning)
                     }
                     if session.transcriptSegments.isEmpty {
                         Text(PichiLocalization.text(session.hasRetryableAudio ? "Your captured audio is preserved"
-                            : "There is no transcript text or saved audio available for this meeting."))
+                            : "There is no transcript text or saved audio available for this recording."))
                             .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
                     }
                     if session.hasRetryableAudio {
@@ -619,7 +620,7 @@ struct MobileMeetingRoot: View {
                             .font(theme.typography.bodyStrong)
                         Text(concealedSummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     } else {
-                        Text(session.displayTitle).font(theme.typography.bodyStrong)
+                        Text(session.mobileTitle).font(theme.typography.bodyStrong)
                         Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     }
                     if let cloudPublication {
@@ -639,11 +640,11 @@ struct MobileMeetingRoot: View {
             if matches.isEmpty, historySnapshot.hasLoaded, historySnapshot.errorMessage == nil {
                 if search.isEmpty {
                     // The first meeting's hint is the empty list itself.
-                    ContentUnavailableView(PichiLocalization.text("Start your first meeting"), systemImage: "waveform",
-                        description: Text(PichiLocalization.text("Record a meeting and return to its transcript.")))
+                    ContentUnavailableView(PichiLocalization.text("Make your first recording"), systemImage: "waveform",
+                        description: Text(PichiLocalization.text("Record anything and come back to its transcript.")))
                         .accessibilityIdentifier("meetings.empty")
                 } else {
-                    ContentUnavailableView(PichiLocalization.text("No matching meetings"), systemImage: "magnifyingglass",
+                    ContentUnavailableView(PichiLocalization.text("No matching recordings"), systemImage: "magnifyingglass",
                         description: Text(PichiLocalization.text("Try a different title, app, or speaker.")))
                 }
             }
@@ -721,13 +722,10 @@ struct MobileMeetingRoot: View {
         }
     }
 
-    /// One secondary line: duration, participants and any unfinished state. A default title
-    /// already carries the date, so the date appears here only for a renamed meeting.
+    /// One secondary line: start, duration, participants and any unfinished state. The title
+    /// leaves the start out, so the date always appears here.
     private func historySummary(_ session: MeetingSession) -> String {
-        var parts: [String] = []
-        if !session.displayTitleIncludesStart {
-            parts.append(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
-        }
+        var parts = [session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale))]
         parts.append(MeetingTranscriptExporter.timestampText(session.duration))
         if !session.readableSpeakers.isEmpty {
             parts.append(PichiLocalization.format("%lld speakers", Int64(session.readableSpeakers.count)))
@@ -752,7 +750,7 @@ struct MobileMeetingRoot: View {
         return ScrollViewReader { reader in
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text(session.displayTitle).font(theme.typography.title)
+                    Text(session.mobileTitle).font(theme.typography.title)
                     HStack {
                         Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
                         Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
@@ -786,17 +784,17 @@ struct MobileMeetingRoot: View {
                                 Button(PichiLocalization.text("Export Audio")) { exportAudio(session) }
                                 Button(PichiLocalization.text("Delete Audio"), role: .destructive) { deletion = .audio(session) }
                             }
-                            Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.displayTitle) }
+                            Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.mobileTitle) }
                             if coordinator.canUndoCorrection(sessionID: session.id) {
                                 Button(PichiLocalization.text("Undo correction")) {
                                     run(session: session) {
-                                        let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
+                                        let updated = try await coordinator.undoTranscriptCorrection(sessionID: session.id, expectedOwnership: session.profileOwnership ?? .guest)
                                         acceptCommittedSession(updated)
                                     }
                                 }.disabled(!coordinator.isQuiescent || isBusy)
                                     .accessibilityIdentifier("transcript.undo")
                             }
-                            Button(PichiLocalization.text("Delete Meeting"), role: .destructive) { deletion = .meeting(session) }
+                            Button(PichiLocalization.text("Delete Recording"), role: .destructive) { deletion = .meeting(session) }
                         } label: { Label(PichiLocalization.text("More"), systemImage: "ellipsis").frame(minHeight: 44) }
                             .accessibilityIdentifier("transcript.more")
                         Spacer()
@@ -806,7 +804,7 @@ struct MobileMeetingRoot: View {
                     if !session.readableSpeakers.isEmpty {
                         Text(PichiLocalization.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
                             .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                        Text(PichiLocalization.text("The You label applies only to this meeting."))
+                        Text(PichiLocalization.text("The You label applies only to this recording."))
                             .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                         if UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact {
                             ScrollView(.horizontal) {
@@ -862,6 +860,9 @@ struct MobileMeetingRoot: View {
                     guard !Task.isCancelled else { return }
                     withAnimation { reader.scrollTo(draft.id, anchor: .bottom) }
                 }
+                .onChange(of: session.profileOwnership) { _, _ in
+                    playback.stop(); edit = nil; participantEdit = nil; speakerAssignment = nil
+                }
                 .task(id: readingInput) {
                     let job = privatePresentation.publications.start(affectsBusy: false, report: report) { admission in
                         let projection = try await MeetingTranscriptExporter.readingParagraphs(for: session)
@@ -899,7 +900,7 @@ struct MobileMeetingRoot: View {
             save: { name in
                 guard coordinator.isQuiescent, !isBusy else { return }
                 run(session: session) {
-                    let updated = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speaker.id, to: name)
+                    let updated = try await coordinator.renameSpeaker(sessionID: session.id, speakerID: speaker.id, to: name, expectedOwnership: session.profileOwnership ?? .guest)
                     acceptCommittedSession(updated)
                     if canPresent(session) { participantEdit = nil }
                 }
@@ -907,7 +908,7 @@ struct MobileMeetingRoot: View {
                 guard coordinator.isQuiescent, !isBusy else { return }
                 run(session: session) {
                     let updated = try await coordinator.setLocalUserSpeaker(sessionID: session.id,
-                        speakerID: speaker.isLocalUser ? nil : speaker.id)
+                        speakerID: speaker.isLocalUser ? nil : speaker.id, expectedOwnership: session.profileOwnership ?? .guest)
                     acceptCommittedSession(updated)
                     if canPresent(session) { participantEdit = nil }
                 }
@@ -963,7 +964,7 @@ struct MobileMeetingRoot: View {
                 if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
                     Button {
                         if isAudioExpanded { playback.stop() }
-                        else { playback.toggle(sessionID: session.id, segmentIDs: paragraph.segments.map(\.id)) }
+                        else { playback.toggle(session: session, segmentIDs: paragraph.segments.map(\.id)) }
                     } label: {
                         Image(systemName: isAudioExpanded ? "xmark" : "play.fill")
                             .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
@@ -1119,7 +1120,9 @@ struct MobileMeetingRoot: View {
         guard canPresent(session) else { return }
         runPrivate { admission in
             let redactor = settings.meetingPIIRedactionRequested ? try settings.transcriptPrivacyRedactor(wrapping: privacy) : nil
-            guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
+            guard let source = try await store.loadExistingSource(id: session.id,
+                expectedOwnership: session.profileOwnership ?? .guest) else { throw CocoaError(.fileNoSuchFile) }
+            let fresh = source.session
             guard privatePresentation.publications.canPublish(admission), canPresent(fresh) else { return }
             let output: MeetingSession
             if let redactor {
@@ -1138,11 +1141,14 @@ struct MobileMeetingRoot: View {
     private func exportAudio(_ session: MeetingSession) {
         guard canPresent(session) else { return }
         runPrivate { admission in
-            guard let fresh = try await store.load(id: session.id), canPresent(fresh),
+            guard let source = try await store.loadExistingSource(id: session.id,
+                expectedOwnership: session.profileOwnership ?? .guest) else { throw CocoaError(.fileNoSuchFile) }
+            let fresh = source.session
+            guard canPresent(fresh),
                   fresh.retention.audioDeletedAt == nil, fresh.hasFinalizedAudio
             else { throw CocoaError(.fileNoSuchFile) }
             guard privatePresentation.publications.canPublish(admission) else { return }
-            guard let directory = try await store.existingSessionDirectory(for: fresh.id) else { throw CocoaError(.fileNoSuchFile) }
+            let directory = source.directory
             guard privatePresentation.publications.canPublish(admission) else { return }
             let payload = try await MeetingSharePayload.audio(session: fresh, directory: directory)
             guard privatePresentation.publications.canPublish(admission) else { payload.cleanup(); return }
@@ -1153,7 +1159,9 @@ struct MobileMeetingRoot: View {
     private func exportProtectedTranscript(_ session: MeetingSession) {
         guard canPresent(session) else { return }
         runPrivate { admission in
-            guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
+            guard let source = try await store.loadExistingSource(id: session.id,
+                expectedOwnership: session.profileOwnership ?? .guest) else { throw CocoaError(.fileNoSuchFile) }
+            let fresh = source.session
             guard privatePresentation.publications.canPublish(admission), canPresent(fresh) else { return }
             let data = try await MeetingTranscriptExporter.protectedTranscriptJSONForSharing(for: fresh)
             guard privatePresentation.publications.canPublish(admission) else { return }
@@ -1187,11 +1195,11 @@ private final class MobilePrivatePresentationState: ObservableObject, PrivatePro
     @Published var transcriptReading: [MeetingTranscriptExporter.DisplayParagraph] = []
     enum Deletion {
         case meeting(MeetingSession), audio(MeetingSession)
-        var title: String { if case .audio = self { return "Delete Audio?" }; return "Delete Meeting" }
+        var title: String { if case .audio = self { return "Delete Audio?" }; return "Delete Recording" }
         var action: String { if case .audio = self { return "Delete Audio" }; return "Delete" }
         var message: String {
             if case .audio = self { return "The transcript stays; the audio files are deleted." }
-            return "Delete this meeting and its recordings?"
+            return "Delete this recording with its transcript and audio?"
         }
     }
 
@@ -1272,7 +1280,7 @@ private struct MeetingSearch: ViewModifier {
     @Binding var text: String
 
     func body(content: Content) -> some View {
-        if isAvailable { content.searchable(text: $text, prompt: PichiLocalization.text("Search meetings")) }
+        if isAvailable { content.searchable(text: $text, prompt: PichiLocalization.text("Search recordings")) }
         else { content }
     }
 }
@@ -1480,9 +1488,16 @@ private struct MeetingEditTextForm: View {
     let save: (MeetingEditDraft.Kind, String) -> Void
     @Environment(\.theme) private var theme
     @State private var text: String
+    private let original: String
     init(kind: MeetingEditDraft.Kind, text: String, cancel: @escaping () -> Void,
          save: @escaping (MeetingEditDraft.Kind, String) -> Void) {
         self.kind = kind; self.cancel = cancel; self.save = save; self._text = State(initialValue: text)
+        self.original = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    /// Saving an unchanged default name would store it as a fixed title without the start.
+    private var canSave: Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed != original
     }
     var body: some View {
         TextEditor(text: $text).font(theme.typography.body).padding().accessibilityIdentifier("transcript.edit.text")
@@ -1491,8 +1506,23 @@ private struct MeetingEditTextForm: View {
                 ToolbarItem(placement: .cancellationAction) { Button(PichiLocalization.text("Cancel"), action: cancel) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(PichiLocalization.text("Save")) { save(kind, text) }
-                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!canSave)
                 }
             }
+    }
+}
+
+extension MeetingSession {
+    /// A renamed recording, or one whose title names its place, rather than the default name.
+    var hasDistinctMobileTitle: Bool {
+        !displayTitleIncludesStart || location?.address(for: PichiLocalization.language) != nil
+    }
+
+    /// `displayTitle` without the start that rows and pages show next to it. A default title names
+    /// the place, or the in-room default, which the catalog calls Recording on iPhone and iPad.
+    /// Exports and search keep `displayTitle`.
+    var mobileTitle: String {
+        guard displayTitleIncludesStart else { return displayTitle }
+        return location?.address(for: PichiLocalization.language) ?? PichiLocalization.text("In-room meeting")
     }
 }

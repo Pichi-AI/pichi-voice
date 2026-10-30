@@ -78,7 +78,7 @@ final class MobileSettingsReviewUITests: XCTestCase {
                 XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 5))
             }
             // The Recording sheet on the start screen is the second entry to the same page.
-            openMeetings(title: language == "ru" ? "Встречи" : "Meetings")
+            openMeetings(title: language == "ru" ? "Записи" : "Recordings")
             let quickSettings = app.buttons["meeting.settings"]
             XCTAssertTrue(quickSettings.waitForExistence(timeout: 10))
             quickSettings.tap()
