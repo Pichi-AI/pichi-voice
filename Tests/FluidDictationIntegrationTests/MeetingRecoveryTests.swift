@@ -7906,6 +7906,22 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(restored.defaultTitleBase, "Meeting")
     }
 
+    func testGeneratedTitleKeepsTranscriptLanguageAndExcludesStartInEitherInterface() throws {
+        var (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        session.defaultTitleBase = "Meeting"
+        session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
+            candidateID: "discussion__questions", localizationKey: "Discussion of questions",
+            previousTitle: "Meeting with an old start", previousDefaultTitleBase: "Meeting", languageCode: "ru")
+        XCTAssertEqual(session.displayTitle(language: .russian), "Обсуждение вопросов")
+        XCTAssertEqual(session.displayTitle(language: .english), "Обсуждение вопросов")
+        XCTAssertFalse(session.displayTitleIncludesStart)
+        session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
+            candidateID: "discussion__questions", localizationKey: "Discussion of questions",
+            previousTitle: "Meeting with an old start", previousDefaultTitleBase: "Meeting", languageCode: "en")
+        XCTAssertEqual(session.displayTitle(language: .russian), "Discussion of questions")
+        XCTAssertEqual(session.displayTitle(language: .english), "Discussion of questions")
+    }
+
     func testOldMeetingWithoutAutomaticTitleMetadataKeepsItsTitle() throws {
         let (session, _, _, _) = self.makeCorrectionSession(state: .completed)
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(session)) as? [String: Any])
@@ -7971,7 +7987,7 @@ final class MeetingRecoveryTests: XCTestCase {
         session.defaultTitleBase = "Meeting"
         session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
             candidateID: "discussion__questions", localizationKey: "Discussion of questions",
-            previousTitle: "Original automatic title", previousDefaultTitleBase: "Meeting")
+            previousTitle: "Original automatic title", previousDefaultTitleBase: "Meeting", languageCode: "ru")
         try await store.create(session)
         let visible = session.displayTitle
         let coordinator = MeetingSessionCoordinator(

@@ -28,7 +28,7 @@ nonisolated enum MeetingAutomaticNaming {
         guard let artifact = source.automaticTitle,
               artifact.algorithmVersion == MeetingUniversalTitleEngine.algorithmVersion else { return source }
         guard MeetingUniversalTitleEngine.catalog.contains(where: {
-            $0.candidateID == artifact.candidateID && $0.localizationKey == artifact.localizationKey && !$0.isFallback
+            $0.candidateID == artifact.candidateID && $0.localizationKey == artifact.localizationKey
         }), artifact.languageCode.map({ PichiInterfaceLanguage(rawValue: $0) != nil }) != false else {
             // Do not localize arbitrary persisted text. This display-only normalization does
             // not overwrite an unknown or damaged artifact in the original manifest.
@@ -46,7 +46,7 @@ nonisolated enum MeetingAutomaticNaming {
             guard existing.algorithmVersion == MeetingUniversalTitleEngine.algorithmVersion,
                   existing.languageCode == nil,
                   MeetingUniversalTitleEngine.catalog.contains(where: {
-                      $0.candidateID == existing.candidateID && $0.localizationKey == existing.localizationKey && !$0.isFallback
+                      $0.candidateID == existing.candidateID && $0.localizationKey == existing.localizationKey
                   }) else { return source }
         }
         guard source.defaultTitleBase != nil,
@@ -87,7 +87,8 @@ nonisolated enum MeetingAutomaticNaming {
             return MeetingUniversalTitleEngine.Turn(speaker: presentation.participantID?.uuidString, text: paragraph.text)
         }
         let selected = MeetingUniversalTitleEngine.select(.init(text: text, turns: turns))
-        guard !selected.isFallback else { return source }
+        // A neutral recording fallback still needs a fixed content language. It adds
+        // no communicative-form or purpose claim, just like the engine's fallback.
         var session = source
         session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
             candidateID: selected.candidateID, localizationKey: selected.localizationKey,

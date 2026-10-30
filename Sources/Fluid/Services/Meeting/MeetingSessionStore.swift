@@ -288,7 +288,12 @@ actor MeetingSessionStore: MeetingSessionStoring {
         // A raw read may precede the facade's ownership filter. Never rename another
         // profile's shadowed manifest merely because it exists in this physical root.
         guard self.automaticTitleOwnership.matchesPersistedOwner(session.profileOwnership) else { return session }
-        if session.automaticTitle != nil { return MeetingAutomaticNaming.validatingMetadata(in: session) }
+        if session.automaticTitle != nil {
+            let validated = MeetingAutomaticNaming.validatingMetadata(in: session)
+            guard validated.automaticTitle == session.automaticTitle else { return validated }
+            // A supported old artifact can still need its content-language backfill.
+            // Existing frozen languages and future versions are no-ops in the helper.
+        }
         let named = MeetingAutomaticNaming.applying(to: session)
         guard named.automaticTitle != session.automaticTitle else { return session }
         do {

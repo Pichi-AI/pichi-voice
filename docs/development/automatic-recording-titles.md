@@ -8,10 +8,11 @@ names. Native diarization labels do not prove an exact participant count.
 
 `MeetingAutomaticNaming` admits completed, automatically named recordings with an
 end time, at least 30 minutes of duration and at least 1,500 readable characters.
-Short recordings and manually named records keep their existing titles. A
+Short recordings are not classified, and custom titles remain unchanged. A
 completed partial transcript can be named from its available reading; coverage
-and completeness metadata remain unchanged. Insufficient evidence retains the
-existing title. Additional work is bounded by 4 MiB of text and 50,000 segments.
+and completeness metadata remain unchanged. Insufficient semantic evidence uses
+the neutral audio-recording name in the transcript language. Additional work is
+bounded by 4 MiB of text and 50,000 segments.
 
 The adapter uses the existing transcript reading and speaker presentation. A new
 processing result awaits an owned utility task before publication; cancellation
