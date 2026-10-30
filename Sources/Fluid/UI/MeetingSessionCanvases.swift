@@ -357,6 +357,88 @@ private struct MeetingDocumentActionLabel: View {
     }
 }
 
+/// A cached reading projection keeps the original correction/playback members while the
+/// desktop renders one row per readable turn. Its source stamp rejects a retired session/edit.
+nonisolated struct MeetingResultTranscriptProjection: Equatable, Sendable {
+    struct Row: Identifiable, Equatable, Sendable {
+        let paragraph: MeetingTranscriptExporter.DisplayParagraph
+        let presentation: MeetingSpeakerPresentation
+        var id: MeetingTranscriptSegmentID { self.paragraph.id }
+        var memberIDs: [MeetingTranscriptSegmentID] { self.paragraph.segments.map(\.id) }
+    }
+
+    let source: MeetingTranscriptExporter.ReadingInput
+    private let readingRows: [Row]
+    private let rowsIncludingEchoes: [Row]
+
+    /// Row construction also walks the complete source. Keep it off the UI actor
+    /// with contextual grouping, and join cancellation before returning.
+    static func make(for session: MeetingSession) async throws -> Self {
+        try Task.checkCancellation()
+        let work = Task.detached(priority: .userInitiated) {
+            let paragraphs = try await MeetingTranscriptExporter.readingParagraphs(for: session)
+            try Task.checkCancellation()
+            let value = Self(session: session, paragraphs: paragraphs)
+            try Task.checkCancellation()
+            return value
+        }
+        return try await withTaskCancellationHandler {
+            let value = try await work.value
+            try Task.checkCancellation()
+            return value
+        } onCancel: { work.cancel() }
+    }
+
+    init(session: MeetingSession, paragraphs: [MeetingTranscriptExporter.DisplayParagraph]) {
+        self.source = MeetingTranscriptExporter.ReadingInput(session)
+        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        func row(_ paragraph: MeetingTranscriptExporter.DisplayParagraph) -> Row {
+            Row(paragraph: paragraph, presentation: MeetingTranscriptExporter.speakerPresentation(
+                for: paragraph, in: session, speakerNames: names))
+        }
+        self.readingRows = paragraphs.map(row)
+        // Revealing probable echoes is an evidence view: individual original members keep
+        // chronology even when an echo fell inside a normal reading turn. Single-member
+        // playback stays valid without inventing grouped intervals around excluded echoes.
+        let owners = Dictionary(self.readingRows.flatMap { value in
+            value.memberIDs.map { ($0, value.presentation) }
+        }, uniquingKeysWith: { first, _ in first })
+        self.rowsIncludingEchoes = session.transcriptSegments.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+        }.compactMap { _, member in
+            let paragraph = MeetingTranscriptExporter.DisplayParagraph(segments: [member])
+            if member.isEcho { return row(paragraph) }
+            guard let owner = owners[member.id] else { return nil }
+            return Row(paragraph: paragraph, presentation: owner)
+        }
+    }
+
+    func rows(matching source: MeetingTranscriptExporter.ReadingInput, includeEchoes: Bool) -> [Row] {
+        guard self.source == source else { return [] }
+        return includeEchoes ? self.rowsIncludingEchoes : self.readingRows
+    }
+}
+
+/// Multi-member reading rows still edit/name one original, revision-checked source member.
+/// This draft owns no mutation and can be dismissed without changing transcript evidence.
+nonisolated struct MeetingTranscriptMemberSelection: Identifiable {
+    enum Purpose { case editText, nameSpeaker }
+    let paragraph: MeetingTranscriptExporter.DisplayParagraph
+    let purpose: Purpose
+    var id: MeetingTranscriptSegmentID { self.paragraph.id }
+
+    func members(matching query: String) -> [MeetingTranscriptSegment] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return query.isEmpty ? self.paragraph.segments : self.paragraph.segments.filter {
+            $0.text.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    func member(id: MeetingTranscriptSegmentID) -> MeetingTranscriptSegment? {
+        self.paragraph.segments.first { $0.id == id }
+    }
+}
+
 struct MeetingResultCanvas: View {
     let session: MeetingSession
     let isQuiescent: Bool
@@ -365,7 +447,7 @@ struct MeetingResultCanvas: View {
     @StateObject private var playback = MeetingSegmentPlayback()
     let onCopyTranscript: (MeetingSession, Bool) -> Void
     let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat, Bool) -> Void
-    let onReassignSegment: (MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
+    let onReassignSegments: ([MeetingTranscriptSegmentID], SessionSpeakerID) -> Void
     var onEditTranscriptSegment: (MeetingTranscriptSegmentID, String, Int) async -> String? = { _, _, _ in "Transcript editing is unavailable." }
     let onNameUnknownSegment: (MeetingTranscriptSegmentID, String) -> Void
     let onUndo: () async -> Bool
@@ -384,6 +466,9 @@ struct MeetingResultCanvas: View {
     @Environment(\.undoManager) private var undoManager
     @StateObject private var correctionUndo = MeetingCorrectionUndoRegistration()
     @State private var pendingEditedSegment: MeetingTranscriptSegment?
+    @State private var pendingMemberSelection: MeetingTranscriptMemberSelection?
+    @State private var selectedMemberAction: (member: MeetingTranscriptSegment, purpose: MeetingTranscriptMemberSelection.Purpose)?
+    @State private var readingProjection: MeetingResultTranscriptProjection?
     @State private var pendingNameUnknownSegmentID: MeetingTranscriptSegmentID?
     @State private var pendingUnknownSpeakerName = ""
     @State private var isRenamingSession = false
@@ -428,45 +513,39 @@ struct MeetingResultCanvas: View {
         self.session.transcriptSegments.contains(where: \.isEcho)
     }
 
-    /// Single projection so shown and copied never disagree.
-    private func visibleSegments(sorted: [MeetingTranscriptSegment],
-        presentations: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation]) -> [MeetingTranscriptSegment] {
-        sorted.filter { $0.isEcho ? self.showsProbableEchoes : presentations[$0.id] != nil }
+    private func beginMemberAction(_ purpose: MeetingTranscriptMemberSelection.Purpose,
+                                   paragraph: MeetingTranscriptExporter.DisplayParagraph) {
+        guard self.isQuiescent else { return }
+        self.playback.stop()
+        if paragraph.segments.count == 1 {
+            self.selectMember(paragraph.firstSegment, purpose: purpose)
+        } else {
+            self.pendingMemberSelection = MeetingTranscriptMemberSelection(paragraph: paragraph, purpose: purpose)
+        }
     }
 
-    /// Preserve correction and playback members while sharing one full-session reading map.
-    /// Participant identity, rather than raw background evidence, controls visible headers.
-    private func rows(
-        for visibleSegments: [MeetingTranscriptSegment],
-        presentations: [MeetingTranscriptSegmentID: MeetingSpeakerPresentation]
-    ) -> [(segment: MeetingTranscriptSegment, presentation: MeetingSpeakerPresentation,
-           showsLabel: Bool, speaker: MeetingSessionSpeaker?)] {
-        let speakers = Dictionary(uniqueKeysWithValues: self.session.readableSpeakers.map { ($0.id, $0) })
-        var previousIdentity: String?
-        var previousTrack: MeetingAudioTrackID?
-        return visibleSegments.map { segment in
-            let presentation = presentations[segment.id]
-                ?? MeetingTranscriptExporter.speakerPresentation(for: segment, in: self.session)
-            if previousTrack != segment.sourceTrackID { previousIdentity = nil }
-            previousTrack = segment.sourceTrackID
-            let showsLabel = presentation.hasReadableParticipant && previousIdentity != presentation.identity
-            if presentation.hasReadableParticipant { previousIdentity = presentation.identity }
-            return (segment, presentation, showsLabel, presentation.participantID.flatMap { speakers[$0] })
+    private func selectMember(_ member: MeetingTranscriptSegment,
+                              purpose: MeetingTranscriptMemberSelection.Purpose) {
+        guard self.isQuiescent else { return }
+        switch purpose {
+        case .editText: self.pendingEditedSegment = member
+        case .nameSpeaker:
+            self.pendingNameUnknownSegmentID = member.id
+            self.pendingUnknownSpeakerName = ""
         }
     }
 
     var body: some View {
-        let sorted = self.session.transcriptSegments.sorted { $0.start.seconds < $1.start.seconds }
-        let presentations = MeetingTranscriptExporter.speakerPresentations(in: self.session)
-        let visibleSegments = self.visibleSegments(sorted: sorted, presentations: presentations)
-        let visibleSpeakerIDs = Set(visibleSegments.compactMap(\.speakerID))
+        let readingInput = MeetingTranscriptExporter.ReadingInput(self.session)
+        let isReadingCurrent = self.readingProjection?.source == readingInput
+        let rows = self.readingProjection?.rows(matching: readingInput, includeEchoes: self.showsProbableEchoes) ?? []
+        let visibleSpeakerIDs = Set(rows.compactMap { $0.presentation.participantID })
         let activeSpeakers = self.session.readableSpeakers.filter { visibleSpeakerIDs.contains($0.id) }
-        let rows = self.rows(for: visibleSegments, presentations: presentations)
         // One scroller preserves a readable document at short window heights.
         let document = ScrollView {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-                    self.documentHeader(hasText: !visibleSegments.isEmpty)
+                    self.documentHeader(hasText: !rows.isEmpty)
                     MeetingDocumentTabs(selection: Binding(get: { self.visibleDocumentSection }, set: { self.documentSection = $0 }), isEnabled: self.summaryActivity.selectionLock == nil)
                 }
 
@@ -480,8 +559,11 @@ struct MeetingResultCanvas: View {
                             detail: warning,
                             isSubtle: true
                         )
-                    } else if self.session.events.contains(where: { $0.kind == .transcriptCoverageIncomplete }) {
-                        MeetingAudioTranscriptNotice(text: "Some recorded audio was not transcribed.")
+                    }
+                    if self.session.events.contains(where: { $0.kind == .transcriptCoverageIncomplete }) {
+                        MeetingAudioTranscriptNotice(text: "Some recorded audio was not transcribed.",
+                            visibleDetail: MeetingTranscriptExporter.coverageDescription(in: self.session,
+                                language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language))
                     }
                     if !activeSpeakers.isEmpty {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
@@ -499,7 +581,10 @@ struct MeetingResultCanvas: View {
                             .font(self.theme.typography.caption)
                             .foregroundStyle(self.theme.palette.warning)
                     }
-                    if visibleSegments.isEmpty {
+                    if !isReadingCurrent {
+                        ProgressView(PichiLocalization.text("Preparing your transcript"))
+                            .padding(.vertical, self.theme.metrics.spacing.sm)
+                    } else if rows.isEmpty {
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                             Text("No transcript text")
                                 .font(self.theme.typography.bodyStrong)
@@ -513,52 +598,8 @@ struct MeetingResultCanvas: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
                         LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
-                            ForEach(rows, id: \.segment.id) { row in
-                                MeetingTranscriptSegmentRow(
-                                    segment: row.segment,
-                                    speakerName: MeetingTranscriptExporter.captionLabel(
-                                        for: row.presentation,
-                                        language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language
-                                    ) ?? "",
-                                    showsSpeakerLabel: row.showsLabel,
-                                    isUnknownSpeaker: row.presentation.participantID == nil,
-                                    speakerTint: row.speaker.flatMap { self.speakerTints[$0.id] },
-                                    onRenameSpeakerTapped: {
-                                        if let speaker = row.speaker {
-                                            self.presentAssignSpeakers(focusing: speaker.id)
-                                        } else {
-                                            self.pendingNameUnknownSegmentID = row.segment.id
-                                            self.pendingUnknownSpeakerName = ""
-                                        }
-                                    },
-                                    onNameUnknown: {
-                                        self.pendingNameUnknownSegmentID = row.segment.id
-                                        self.pendingUnknownSpeakerName = ""
-                                    },
-                                    reassignTargets: self.session.activeSpeakers.filter { $0.id != row.presentation.participantID },
-                                    isQuiescent: self.isQuiescent,
-                                    onReassign: { speakerID in self.onReassignSegment(row.segment.id, speakerID) },
-                                    canPlayAudio: self.session.retention.audioDeletedAt == nil && self.session.hasFinalizedAudio && self.isQuiescent,
-                                    isAudioExpanded: self.playback.activeSegmentID == row.segment.id,
-                                    playback: self.playback,
-                                    isLoadingAudio: self.playback.activeSegmentID == row.segment.id && self.playback.isLoading,
-                                    onPlayAudio: { self.playback.toggle(sessionID: self.session.id, segmentID: row.segment.id) },
-                                    isEditingText: self.pendingEditedSegment?.id == row.segment.id,
-                                    onEditText: { if self.isQuiescent { self.pendingEditedSegment = row.segment } },
-                                    onSaveText: { text in
-                                        guard let editing = self.pendingEditedSegment, editing.id == row.segment.id else {
-                                            return PichiLocalization.text("This paragraph is no longer being edited.")
-                                        }
-                                        let error = await self.onEditTranscriptSegment(editing.id, text, editing.revision)
-                                        if error == nil, self.pendingEditedSegment?.id == editing.id {
-                                            self.pendingEditedSegment = nil
-                                        }
-                                        return error
-                                    },
-                                    onCancelEditText: {
-                                        if self.pendingEditedSegment?.id == row.segment.id { self.pendingEditedSegment = nil }
-                                    }
-                                )
+                            ForEach(rows) { row in
+                                self.transcriptParagraph(row)
                             }
                         }
                         .padding(.bottom, self.theme.metrics.spacing.xxl)
@@ -580,19 +621,49 @@ struct MeetingResultCanvas: View {
         .onDisappear {
             self.playback.stop()
             self.correctionUndo.detach()
+            self.readingProjection = nil
+            self.pendingMemberSelection = nil
+            self.selectedMemberAction = nil
+            self.pendingEditedSegment = nil
         }
         .onChange(of: self.canRegisterUndo) { _, _ in self.refreshUndoRegistration() }
         .onChange(of: self.session.updatedAt) { _, _ in self.refreshUndoRegistration() }
         .onChange(of: self.undoManager) { _, _ in self.refreshUndoRegistration() }
         .onChange(of: self.session.id) { _, _ in
             self.playback.stop()
+            self.readingProjection = nil
+            self.pendingMemberSelection = nil
+            self.selectedMemberAction = nil
             self.pendingEditedSegment = nil
             self.refreshUndoRegistration()
+        }
+        .onChange(of: self.session.profileOwnership) { _, _ in
+            self.playback.stop()
+            self.pendingEditedSegment = nil
+            self.pendingMemberSelection = nil
+            self.selectedMemberAction = nil
+            self.pendingNameUnknownSegmentID = nil
+            self.isShowingAssignSpeakers = false
+            self.isRenamingSession = false
         }
         .onChange(of: self.session.retention.audioDeletedAt) { _, _ in self.playback.stop() }
         .onChange(of: self.isQuiescent) { _, value in if !value { self.playback.stop() } }
         .onChange(of: self.documentSection) { _, _ in self.playback.stop() }
         .onChange(of: self.showsProbableEchoes) { _, _ in self.playback.stop() }
+        .onChange(of: readingInput) { _, _ in self.playback.stop() }
+        .task(id: readingInput) {
+            self.readingProjection = nil
+            do {
+                let projection = try await MeetingResultTranscriptProjection.make(for: self.session)
+                try Task.checkCancellation()
+                self.readingProjection = projection
+            } catch is CancellationError {
+                // The shared reader joins its cancelled worker. A retired result never renders
+                // because both publication and the cached source stamp are checked.
+            } catch {
+                self.readingProjection = nil
+            }
+        }
         .task(id: self.copyRevision) {
             guard self.copied else { return }
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
@@ -644,6 +715,56 @@ struct MeetingResultCanvas: View {
                 onCancel: { self.isShowingAssignSpeakers = false }
             )
         }
+        .sheet(item: self.$pendingMemberSelection, onDismiss: {
+            let action = self.selectedMemberAction
+            self.selectedMemberAction = nil
+            if let action { self.selectMember(action.member, purpose: action.purpose) }
+        }) { selection in
+            MeetingTranscriptMemberPicker(selection: selection, onSelect: { id in
+                guard let member = selection.member(id: id), self.isQuiescent else { return }
+                self.selectedMemberAction = (member, selection.purpose)
+                self.pendingMemberSelection = nil
+            }, onCancel: { self.selectedMemberAction = nil; self.pendingMemberSelection = nil })
+        }
+    }
+
+    private func transcriptParagraph(_ row: MeetingResultTranscriptProjection.Row) -> some View {
+        let members = row.memberIDs
+        let editing = self.pendingEditedSegment.flatMap { members.contains($0.id) ? $0 : nil }
+        let speaker = self.session.activeSpeakers.first { $0.id == row.presentation.participantID }
+        let audioExpanded = self.playback.activeSegmentID == row.id
+        return MeetingTranscriptSegmentRow(
+            paragraph: row.paragraph,
+            speakerName: MeetingTranscriptExporter.captionLabel(for: row.presentation,
+                language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language) ?? "",
+            showsSpeakerLabel: row.paragraph.showsSpeakerLabel && row.presentation.hasReadableParticipant,
+            isUnknownSpeaker: row.presentation.participantID == nil,
+            speakerTint: row.presentation.participantID.flatMap { self.speakerTints[$0] },
+            onRenameSpeakerTapped: {
+                if let speaker { self.presentAssignSpeakers(focusing: speaker.id) }
+                else { self.beginMemberAction(.nameSpeaker, paragraph: row.paragraph) }
+            },
+            onNameUnknown: { self.beginMemberAction(.nameSpeaker, paragraph: row.paragraph) },
+            reassignTargets: self.session.activeSpeakers.filter { $0.id != row.presentation.participantID },
+            isQuiescent: self.isQuiescent,
+            onReassign: { speakerID in self.onReassignSegments(members, speakerID) },
+            canPlayAudio: self.session.retention.audioDeletedAt == nil && self.session.hasFinalizedAudio && self.isQuiescent,
+            isAudioExpanded: audioExpanded, playback: self.playback,
+            isLoadingAudio: audioExpanded && self.playback.isLoading,
+            onPlayAudio: { self.playback.toggle(session: self.session, segmentIDs: members) },
+            editingSegment: editing,
+            onEditText: { self.beginMemberAction(.editText, paragraph: row.paragraph) },
+            onSaveText: { text in
+                guard let editing, self.pendingEditedSegment?.id == editing.id else {
+                    return PichiLocalization.text("This paragraph is no longer being edited.")
+                }
+                let error = await self.onEditTranscriptSegment(editing.id, text, editing.revision)
+                if error == nil, self.pendingEditedSegment?.id == editing.id { self.pendingEditedSegment = nil }
+                return error
+            },
+            onCancelEditText: { self.pendingEditedSegment = nil }
+        )
+        .accessibilityIdentifier("transcript.paragraph.\(row.id.uuidString)")
     }
 
     /// Actions sit beside the title so the header has no empty corner above the tabs.
@@ -653,7 +774,7 @@ struct MeetingResultCanvas: View {
                 MeetingDocumentTitle(title: self.session.displayTitle)
                     .editableTitle(
                         self.session.displayTitle,
-                        id: String(describing: self.session.id),
+                        id: "\(self.session.profileOwnership?.profileID ?? MeetingProfileOwnership.guest.profileID):\(self.session.id)",
                         enabled: self.isQuiescent,
                         editorFont: .fluidSystem(.largeTitle, design: .serif).weight(.medium),
                         onRename: self.onRenameSession
@@ -1034,14 +1155,20 @@ private struct MeetingAudioTranscriptNotice: View {
     let text: String
     var detail: String? = nil
     var isSubtle = false
+    var visibleDetail: String? = nil
     @Environment(\.theme) private var theme
 
     var body: some View {
-        Label(PichiLocalization.text(self.text), systemImage: self.isSubtle ? "info.circle" : "exclamationmark.triangle")
-            .font(self.theme.typography.caption)
-            .foregroundStyle(self.isSubtle ? self.theme.palette.secondaryText : self.theme.palette.warning)
-            .fixedSize(horizontal: false, vertical: true)
-            .help(PichiLocalization.text(self.detail ?? self.text))
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
+            Label(PichiLocalization.text(self.text), systemImage: self.isSubtle ? "info.circle" : "exclamationmark.triangle")
+                .foregroundStyle(self.isSubtle ? self.theme.palette.secondaryText : self.theme.palette.warning)
+            if let visibleDetail {
+                Text(visibleDetail).foregroundStyle(self.theme.palette.secondaryText)
+            }
+        }
+        .font(self.theme.typography.caption)
+        .fixedSize(horizontal: false, vertical: true)
+        .help(PichiLocalization.text(self.detail ?? self.text))
     }
 }
 
@@ -1162,7 +1289,7 @@ private struct MeetingSpeakerChip: View {
 }
 
 private struct MeetingTranscriptSegmentRow: View {
-    let segment: MeetingTranscriptSegment
+    let paragraph: MeetingTranscriptExporter.DisplayParagraph
     let speakerName: String
     let showsSpeakerLabel: Bool
     let isUnknownSpeaker: Bool
@@ -1177,12 +1304,15 @@ private struct MeetingTranscriptSegmentRow: View {
     let playback: MeetingSegmentPlayback
     let isLoadingAudio: Bool
     let onPlayAudio: () -> Void
-    let isEditingText: Bool
+    let editingSegment: MeetingTranscriptSegment?
     let onEditText: () -> Void
     let onSaveText: (String) async -> String?
     let onCancelEditText: () -> Void
 
     @Environment(\.theme) private var theme
+
+    private var segment: MeetingTranscriptSegment { self.paragraph.firstSegment }
+    private var isEditingText: Bool { self.editingSegment != nil }
 
     var body: some View {
         HStack(alignment: .top, spacing: self.theme.metrics.spacing.lg) {
@@ -1229,14 +1359,15 @@ private struct MeetingTranscriptSegmentRow: View {
                     .accessibilityLabel(self.isAudioExpanded ? PichiLocalization.text("Close audio player") : PichiLocalization.format("Play audio chunk for %@", self.speakerName))
                 }
                 .frame(minHeight: 28)
-                if self.isEditingText {
+                if let editing = self.editingSegment {
                     MeetingTranscriptTextEditor(
-                        text: self.segment.text,
+                        text: editing.text,
                         onSave: self.onSaveText,
                         onCancel: self.onCancelEditText
                     )
+                    .id(editing.id)
                 } else {
-                    Text(self.segment.text)
+                    Text(self.paragraph.text)
                         .font(self.theme.typography.body)
                         .foregroundStyle(self.theme.palette.primaryText)
                         .lineSpacing(5)
@@ -1275,7 +1406,7 @@ private struct MeetingTranscriptSegmentRow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
-            "\(MeetingTranscriptExporter.timestampText(self.segment.start.seconds)), \(self.speakerName), \(self.segment.text)"
+            "\(MeetingTranscriptExporter.timestampText(self.segment.start.seconds)), \(self.speakerName), \(self.paragraph.text)"
         )
     }
 
@@ -1319,7 +1450,62 @@ private struct MeetingTranscriptSegmentRow: View {
     }
 }
 
-/// Inline paragraph editing: no sheet and no recording/model work. Keep the draft on save
+private struct MeetingTranscriptMemberPicker: View {
+    let selection: MeetingTranscriptMemberSelection
+    let onSelect: (MeetingTranscriptSegmentID) -> Void
+    let onCancel: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var query = ""
+
+    private var title: String {
+        switch self.selection.purpose {
+        case .editText: PichiLocalization.text("Choose text to edit")
+        case .nameSpeaker: PichiLocalization.text("Choose a fragment to name")
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+            Text(self.title).font(self.theme.typography.bodyStrong)
+                .foregroundStyle(self.theme.palette.primaryText)
+            TextField(PichiLocalization.text("Search transcript text"), text: self.$query)
+                .textFieldStyle(.roundedBorder)
+                .font(self.theme.typography.body)
+                .accessibilityIdentifier("transcript.memberSearch")
+            List(self.selection.members(matching: self.query)) { member in
+                Button {
+                    self.onSelect(member.id)
+                } label: {
+                    HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
+                        Text(MeetingTranscriptExporter.timestampText(member.start.seconds))
+                            .font(self.theme.typography.codeCaption)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                        Text(member.text).font(self.theme.typography.body)
+                            .foregroundStyle(self.theme.palette.primaryText)
+                            .lineLimit(3)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .contentShape(Rectangle())
+                    .padding(.vertical, self.theme.metrics.spacing.xs)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("transcript.member.\(member.id.uuidString)")
+            }
+            .listStyle(.plain)
+            HStack {
+                Spacer()
+                Button(PichiLocalization.text("Cancel"), role: .cancel, action: self.onCancel)
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(self.theme.metrics.spacing.xl)
+        .frame(minWidth: 460, idealWidth: 560, minHeight: 340, idealHeight: 480)
+        .background(self.theme.palette.windowBackground)
+        .accessibilityIdentifier("transcript.memberPicker")
+    }
+}
+
+/// Inline member editing: no recording/model work. Keep the draft on save
 /// failure; the caller holds the starting segment revision for stale-edit protection.
 struct MeetingTranscriptTextEditor: View {
     let onSave: (String) async -> String?

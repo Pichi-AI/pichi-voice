@@ -270,9 +270,10 @@ private final class MeetingViewPrivateProjection: ObservableObject, PrivateProfi
     @Published var actionErrorMessage: String?
     @Published var selectedHistorySessionID: MeetingSessionID?
     @Published var resumedSummarySession: MeetingSession?
-    @Published var pendingDeleteSessionID: MeetingSessionID?
-    @Published var pendingDeleteAudioSessionID: MeetingSessionID?
+    @Published var pendingDeleteSession: MeetingSession?
+    @Published var pendingDeleteAudioSession: MeetingSession?
     @Published var renameSessionID: MeetingSessionID?
+    @Published var renameSource: MeetingSession?
     @Published var renameDraft = ""
     @Published var searchText = ""
     private var epoch = UUID()
@@ -329,8 +330,8 @@ private final class MeetingViewPrivateProjection: ObservableObject, PrivateProfi
 
     func clearPayloads() {
         selectedHistorySessionID = nil; resumedSummarySession = nil
-        pendingDeleteSessionID = nil; pendingDeleteAudioSessionID = nil
-        renameSessionID = nil; renameDraft = ""; searchText = ""; actionErrorMessage = nil
+        pendingDeleteSession = nil; pendingDeleteAudioSession = nil
+        renameSessionID = nil; renameSource = nil; renameDraft = ""; searchText = ""; actionErrorMessage = nil
         isShowingMeetingSettings = false; pendingBackupSetupRefresh = false
         draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
         // Clear private titles and unsaved settings without writing into any profile's defaults.
@@ -450,20 +451,20 @@ struct MeetingTranscriptionView: View {
             onRecordAgain: { if self.privateState.accepts(projection) { self.recordAgain($0) } },
             onCopyTranscript: { if self.privateState.accepts(projection) { self.copyTranscript($0, includeEchoes: $1) } },
             onExportTranscript: { if self.privateState.accepts(projection) { self.exportTranscript($0, format: $1, includeEchoes: $2) } },
-            onReassignSegment: { if self.privateState.accepts(projection) { self.reassignSegment(sessionID: $0, segmentID: $1, to: $2) } },
-            onEditTranscriptSegment: { sessionID, segmentID, text, revision in
+            onReassignSegments: { if self.privateState.accepts(projection) { self.reassignSegments(source: $0, segmentIDs: $1, to: $2) } },
+            onEditTranscriptSegment: { source, segmentID, text, revision in
                 guard self.privateState.accepts(projection) else { return nil }
-                return await self.editTranscriptSegment(sessionID: sessionID, segmentID: segmentID, text: text, revision: revision)
+                return await self.editTranscriptSegment(source: source, segmentID: segmentID, text: text, revision: revision)
             },
-            onNameUnknownSegment: { if self.privateState.accepts(projection) { self.nameUnknownSegment(sessionID: $0, segmentID: $1, displayName: $2) } },
-            onUndoCorrection: { sessionID in
+            onNameUnknownSegment: { if self.privateState.accepts(projection) { self.nameUnknownSegment(source: $0, segmentID: $1, displayName: $2) } },
+            onUndoCorrection: { source in
                 guard self.privateState.accepts(projection) else { return false }
-                return await self.undoTranscriptCorrection(sessionID: sessionID)
+                return await self.undoTranscriptCorrection(source: source)
             },
-            onRenameSession: { if self.privateState.accepts(projection) { self.renameMeetingSession(sessionID: $0, to: $1) } },
-            onAssignSpeakers: { sessionID, edits in
+            onRenameSession: { if self.privateState.accepts(projection) { self.renameMeetingSession(source: $0, to: $1) } },
+            onAssignSpeakers: { source, edits in
                 guard self.privateState.accepts(projection) else { return nil }
-                return await self.assignSpeakers(sessionID: sessionID, edits: edits)
+                return await self.assignSpeakers(source: source, edits: edits)
             },
             canUndoCorrection: { self.privateState.accepts(projection) && self.coordinator.canUndoCorrection(sessionID: $0) },
             isQuiescent: self.coordinator.isQuiescent && self.summaryActivity.selectionLock == nil,
@@ -475,7 +476,7 @@ struct MeetingTranscriptionView: View {
             },
             summaryASRService: self.asrService,
             onOpenIntegrations: self.openMeetingIntegrations,
-            onSetLocalUserSpeaker: { if self.privateState.accepts(projection) { self.setLocalUserSpeaker(sessionID: $0, speakerID: $1) } }
+            onSetLocalUserSpeaker: { if self.privateState.accepts(projection) { self.setLocalUserSpeaker(source: $0, speakerID: $1) } }
         )
     }
 
@@ -500,9 +501,9 @@ struct MeetingTranscriptionView: View {
             onRevealAudio: { if self.privateState.accepts(projection) { self.revealCapturedAudio($0) } },
             onExportAudio: { if self.privateState.accepts(projection) { self.exportAudio($0) } },
             onExportTranscript: { if self.privateState.accepts(projection) { self.exportTranscript($0, format: $1, includeEchoes: false) } },
-            onDeleteAudioRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteAudioSessionID = $0 } },
-            onDeleteRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteSessionID = $0 } },
-            onRename: { if self.privateState.accepts(projection) { self.renameMeetingSession(sessionID: $0, to: $1) } },
+            onDeleteAudioRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteAudioSession = $0 } },
+            onDeleteRequest: { if self.privateState.accepts(projection) { self.privateState.pendingDeleteSession = $0 } },
+            onRename: { if self.privateState.accepts(projection) { self.renameMeetingSession(source: $0, to: $1) } },
             onRecordAgain: { if self.privateState.accepts(projection) { self.recordAgain($0) } },
             onOpenIntegrations: self.openMeetingIntegrations
         )
@@ -648,31 +649,31 @@ struct MeetingTranscriptionView: View {
 
     private var deleteMeetingIsPresented: Binding<Bool> {
         Binding(
-                        get: { self.privateState.pendingDeleteSessionID != nil },
-                        set: { if !$0 { self.privateState.pendingDeleteSessionID = nil } }
+                        get: { self.privateState.pendingDeleteSession != nil },
+                        set: { if !$0 { self.privateState.pendingDeleteSession = nil } }
                     )
     }
 
     private var deleteAudioIsPresented: Binding<Bool> {
         Binding(
-                        get: { self.privateState.pendingDeleteAudioSessionID != nil },
-                        set: { if !$0 { self.privateState.pendingDeleteAudioSessionID = nil } }
+                        get: { self.privateState.pendingDeleteAudioSession != nil },
+                        set: { if !$0 { self.privateState.pendingDeleteAudioSession = nil } }
                     )
     }
 
     @ViewBuilder
     private func deleteMeetingActions(projection: MeetingViewPrivateProjection.Stamp?) -> some View {
-        Button("Cancel", role: .cancel) { self.privateState.pendingDeleteSessionID = nil }
+        Button("Cancel", role: .cancel) { self.privateState.pendingDeleteSession = nil }
         Button("Delete", role: .destructive) {
-            if self.privateState.accepts(projection), let id = self.privateState.pendingDeleteSessionID { self.deleteSession(id: id) }
+            if self.privateState.accepts(projection), let source = self.privateState.pendingDeleteSession { self.deleteSession(source: source) }
         }
     }
 
     @ViewBuilder
     private func deleteAudioActions(projection: MeetingViewPrivateProjection.Stamp?) -> some View {
-        Button("Cancel", role: .cancel) { self.privateState.pendingDeleteAudioSessionID = nil }
+        Button("Cancel", role: .cancel) { self.privateState.pendingDeleteAudioSession = nil }
         Button("Delete Audio", role: .destructive) {
-            if self.privateState.accepts(projection), let id = self.privateState.pendingDeleteAudioSessionID { self.deleteAudio(id: id) }
+            if self.privateState.accepts(projection), let source = self.privateState.pendingDeleteAudioSession { self.deleteAudio(source: source) }
         }
     }
 
@@ -1139,11 +1140,11 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func reassignSegment(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, to speakerID: SessionSpeakerID) {
+    private func reassignSegments(source: MeetingSession, segmentIDs: [MeetingTranscriptSegmentID], to speakerID: SessionSpeakerID) {
         self.privateState.actionErrorMessage = nil
         self.privateState.run { stamp in
             do {
-                let saved = try await self.coordinator.reassignSegment(sessionID: sessionID, segmentID: segmentID, to: speakerID)
+                let saved = try await self.coordinator.reassignSegments(sessionID: source.id, segmentIDs: segmentIDs, to: speakerID, expectedOwnership: source.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return }
                 self.historySnapshot.applyCommitted(saved)
             } catch {
@@ -1153,12 +1154,12 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func setLocalUserSpeaker(sessionID: MeetingSessionID, speakerID: SessionSpeakerID?) {
+    private func setLocalUserSpeaker(source: MeetingSession, speakerID: SessionSpeakerID?) {
         guard self.coordinator.isQuiescent, self.summaryActivity.selectionLock == nil else { return }
         self.privateState.actionErrorMessage = nil
         self.privateState.run { stamp in
             do {
-                _ = try await self.coordinator.setLocalUserSpeaker(sessionID: sessionID, speakerID: speakerID)
+                _ = try await self.coordinator.setLocalUserSpeaker(sessionID: source.id, speakerID: speakerID, expectedOwnership: source.profileOwnership ?? .guest)
             } catch {
                 guard self.privateState.accepts(stamp) else { return }
                 self.privateState.actionErrorMessage = error.localizedDescription
@@ -1169,7 +1170,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func nameUnknownSegment(
-        sessionID: MeetingSessionID,
+        source: MeetingSession,
         segmentID: MeetingTranscriptSegmentID,
         displayName: String
     ) {
@@ -1177,9 +1178,9 @@ struct MeetingTranscriptionView: View {
         self.privateState.run { stamp in
             do {
                 let saved = try await self.coordinator.nameUnknownSegment(
-                    sessionID: sessionID,
+                    sessionID: source.id,
                     segmentID: segmentID,
-                    displayName: displayName
+                    displayName: displayName, expectedOwnership: source.profileOwnership ?? .guest
                 )
                 guard self.privateState.accepts(stamp) else { return }
                 self.historySnapshot.applyCommitted(saved)
@@ -1190,10 +1191,10 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func editTranscriptSegment(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID, text: String, revision: Int) async -> String? {
+    private func editTranscriptSegment(source: MeetingSession, segmentID: MeetingTranscriptSegmentID, text: String, revision: Int) async -> String? {
         await self.privateState.result { stamp in
             do {
-                let saved = try await self.coordinator.editTranscriptText(sessionID: sessionID, segmentID: segmentID, text: text, expectedRevision: revision)
+                let saved = try await self.coordinator.editTranscriptText(sessionID: source.id, segmentID: segmentID, text: text, expectedRevision: revision, expectedOwnership: source.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return nil }
                 self.historySnapshot.applyCommitted(saved)
                 return nil
@@ -1203,11 +1204,11 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func assignSpeakers(sessionID: MeetingSessionID, edits: MeetingSpeakerEdits) async -> String? {
+    private func assignSpeakers(source: MeetingSession, edits: MeetingSpeakerEdits) async -> String? {
         await self.privateState.result { stamp in
             self.privateState.actionErrorMessage = nil
             do {
-                let saved = try await self.coordinator.editSpeakers(sessionID: sessionID, edits: edits)
+                let saved = try await self.coordinator.editSpeakers(sessionID: source.id, edits: edits, expectedOwnership: source.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return nil }
                 self.historySnapshot.applyCommitted(saved)
                 return nil
@@ -1217,11 +1218,11 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func renameMeetingSession(sessionID: MeetingSessionID, to title: String) {
+    private func renameMeetingSession(source: MeetingSession, to title: String) {
         self.privateState.actionErrorMessage = nil
         self.privateState.run { stamp in
             do {
-                let saved = try await self.coordinator.renameSession(sessionID: sessionID, to: title)
+                let saved = try await self.coordinator.renameSession(sessionID: source.id, to: title, expectedOwnership: source.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return }
                 self.historySnapshot.applyCommitted(saved)
             } catch {
@@ -1231,30 +1232,30 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func undoTranscriptCorrection(sessionID: MeetingSessionID) async -> Bool {
+    private func undoTranscriptCorrection(source: MeetingSession) async -> Bool {
         await self.privateState.result { stamp in
             self.privateState.actionErrorMessage = nil
             do {
-                let saved = try await self.coordinator.undoTranscriptCorrection(sessionID: sessionID)
+                let saved = try await self.coordinator.undoTranscriptCorrection(sessionID: source.id, expectedOwnership: source.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return nil }
                 self.historySnapshot.applyCommitted(saved)
             } catch {
                 guard self.privateState.accepts(stamp) else { return nil }
                 self.privateState.actionErrorMessage = error.localizedDescription
             }
-            return self.coordinator.canUndoCorrection(sessionID: sessionID)
+            return self.coordinator.canUndoCorrection(sessionID: source.id)
         } ?? false
     }
 
-    private func deleteSession(id: MeetingSessionID) {
+    private func deleteSession(source: MeetingSession) {
         guard self.summaryActivity.selectionLock == nil else { return }
-        self.privateState.pendingDeleteSessionID = nil
+        self.privateState.pendingDeleteSession = nil
         self.privateState.actionErrorMessage = nil
         self.privateState.run { stamp in
             do {
-                try await self.coordinator.deleteSession(id: id)
+                try await self.coordinator.deleteSession(id: source.id, expectedOwnership: source.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return }
-                if self.privateState.selectedHistorySessionID == id { self.privateState.selectedHistorySessionID = nil }
+                if self.privateState.selectedHistorySessionID == source.id { self.privateState.selectedHistorySessionID = nil }
             } catch {
                 guard self.privateState.accepts(stamp) else { return }
                 self.privateState.actionErrorMessage = error.localizedDescription
@@ -1264,13 +1265,13 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private func deleteAudio(id: MeetingSessionID) {
+    private func deleteAudio(source: MeetingSession) {
         guard self.summaryActivity.selectionLock == nil else { return }
-        self.privateState.pendingDeleteAudioSessionID = nil
+        self.privateState.pendingDeleteAudioSession = nil
         self.privateState.actionErrorMessage = nil
         self.privateState.run { stamp in
             do {
-                _ = try await self.coordinator.deleteAudio(sessionID: id)
+                _ = try await self.coordinator.deleteAudio(sessionID: source.id, expectedOwnership: source.profileOwnership ?? .guest)
             } catch {
                 guard self.privateState.accepts(stamp) else { return }
                 self.privateState.actionErrorMessage = error.localizedDescription
@@ -1349,12 +1350,14 @@ struct MeetingTranscriptionView: View {
         self.privateState.run { stamp in
             do {
                 // Reload fresh: the passed-in session may predate a since-completed audio deletion.
-                let loaded = try await MeetingSessionStore.shared.load(id: session.id)
+                let loaded = try await MeetingSessionStore.shared.loadExistingSource(id: session.id,
+                    expectedOwnership: session.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return }
-                guard let freshSession = loaded else {
+                guard let source = loaded else {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
                     return
                 }
+                let freshSession = source.session
                 guard !freshSession.isLocalContentConcealed,
                       freshSession.retention.audioDeletedAt == nil,
                       freshSession.hasFinalizedAudio
@@ -1362,12 +1365,7 @@ struct MeetingTranscriptionView: View {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: audio for this recording has been deleted.")
                     return
                 }
-                let resolvedDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id)
-                guard self.privateState.accepts(stamp) else { return }
-                guard let directory = resolvedDirectory else {
-                    self.privateState.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
-                    return
-                }
+                let directory = source.directory
                 guard let firstAudioURL = MeetingAudioPresentation.firstPlaybackURL(
                     in: freshSession,
                     directory: directory
@@ -1399,12 +1397,14 @@ struct MeetingTranscriptionView: View {
         self.privateState.run { stamp in
             do {
                 // Reload fresh: the passed-in session may predate a since-completed audio deletion.
-                let loaded = try await MeetingSessionStore.shared.load(id: session.id)
+                let loaded = try await MeetingSessionStore.shared.loadExistingSource(id: session.id,
+                    expectedOwnership: session.profileOwnership ?? .guest)
                 guard self.privateState.accepts(stamp) else { return }
-                guard let freshSession = loaded else {
+                guard let source = loaded else {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
                     return
                 }
+                let freshSession = source.session
                 guard !freshSession.isLocalContentConcealed,
                       freshSession.retention.audioDeletedAt == nil,
                       freshSession.hasFinalizedAudio
@@ -1412,12 +1412,7 @@ struct MeetingTranscriptionView: View {
                     self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: audio for this recording has been deleted.")
                     return
                 }
-                let resolvedDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id)
-                guard self.privateState.accepts(stamp) else { return }
-                guard let sourceDirectory = resolvedDirectory else {
-                    self.privateState.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
-                    return
-                }
+                let sourceDirectory = source.directory
                 let profile = stamp.profile
                 // The shared exporter is joined, including its detached worker. Its final move
                 // currently has no cancellation gate; per-file reads still refuse a concealed owner.
@@ -1736,12 +1731,12 @@ struct MeetingTranscriptionCanvas: View {
     let onRecordAgain: (MeetingSession) -> Void
     let onCopyTranscript: (MeetingSession, Bool) -> Void
     let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat, Bool) -> Void
-    let onReassignSegment: (MeetingSessionID, MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
-    var onEditTranscriptSegment: (MeetingSessionID, MeetingTranscriptSegmentID, String, Int) async -> String? = { _, _, _, _ in PichiLocalization.text("Transcript editing is unavailable.") }
-    let onNameUnknownSegment: (MeetingSessionID, MeetingTranscriptSegmentID, String) -> Void
-    let onUndoCorrection: (MeetingSessionID) async -> Bool
-    let onRenameSession: (MeetingSessionID, String) -> Void
-    let onAssignSpeakers: (MeetingSessionID, MeetingSpeakerEdits) async -> String?
+    let onReassignSegments: (MeetingSession, [MeetingTranscriptSegmentID], SessionSpeakerID) -> Void
+    var onEditTranscriptSegment: (MeetingSession, MeetingTranscriptSegmentID, String, Int) async -> String? = { _, _, _, _ in PichiLocalization.text("Transcript editing is unavailable.") }
+    let onNameUnknownSegment: (MeetingSession, MeetingTranscriptSegmentID, String) -> Void
+    let onUndoCorrection: (MeetingSession) async -> Bool
+    let onRenameSession: (MeetingSession, String) -> Void
+    let onAssignSpeakers: (MeetingSession, MeetingSpeakerEdits) async -> String?
     let canUndoCorrection: (MeetingSessionID) -> Bool
     let isQuiescent: Bool
     let onRepairSetup: () -> Void
@@ -1750,7 +1745,7 @@ struct MeetingTranscriptionCanvas: View {
     let onCloseSelection: (() -> Void)?
     var summaryASRService: ASRService? = nil
     var onOpenIntegrations: (() -> Void)? = nil
-    var onSetLocalUserSpeaker: ((MeetingSessionID, SessionSpeakerID?) -> Void)? = nil
+    var onSetLocalUserSpeaker: ((MeetingSession, SessionSpeakerID?) -> Void)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -1862,23 +1857,23 @@ struct MeetingTranscriptionCanvas: View {
                             canUndo: self.canUndoCorrection(session.id),
                             onCopyTranscript: self.onCopyTranscript,
                             onExportTranscript: self.onExportTranscript,
-                            onReassignSegment: { segmentID, speakerID in
-                                self.onReassignSegment(session.id, segmentID, speakerID)
+                            onReassignSegments: { segmentIDs, speakerID in
+                                self.onReassignSegments(session, segmentIDs, speakerID)
                             },
                             onEditTranscriptSegment: { segmentID, text, revision in
-                                await self.onEditTranscriptSegment(session.id, segmentID, text, revision)
+                                await self.onEditTranscriptSegment(session, segmentID, text, revision)
                             },
                             onNameUnknownSegment: { segmentID, name in
-                                self.onNameUnknownSegment(session.id, segmentID, name)
+                                self.onNameUnknownSegment(session, segmentID, name)
                             },
-                            onUndo: { await self.onUndoCorrection(session.id) },
-                            onRenameSession: { title in self.onRenameSession(session.id, title) },
-                            onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
+                            onUndo: { await self.onUndoCorrection(session) },
+                            onRenameSession: { title in self.onRenameSession(session, title) },
+                            onAssignSpeakers: { names in await self.onAssignSpeakers(session, names) },
                             onClose: self.onCloseSelection,
                             summaryASRService: self.summaryASRService,
                             onOpenIntegrations: self.onOpenIntegrations,
                             onSetLocalUserSpeaker: self.onSetLocalUserSpeaker.map { callback in
-                                { speakerID in callback(session.id, speakerID) }
+                                { speakerID in callback(session, speakerID) }
                             }
                         )
                     }
@@ -1998,9 +1993,9 @@ private struct MeetingHistoryInspector: View {
     let onRevealAudio: (MeetingSession) -> Void
     let onExportAudio: (MeetingSession) -> Void
     let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat) -> Void
-    let onDeleteAudioRequest: (MeetingSessionID) -> Void
-    let onDeleteRequest: (MeetingSessionID) -> Void
-    let onRename: (MeetingSessionID, String) -> Void
+    let onDeleteAudioRequest: (MeetingSession) -> Void
+    let onDeleteRequest: (MeetingSession) -> Void
+    let onRename: (MeetingSession, String) -> Void
     let onRecordAgain: (MeetingSession) -> Void
     var onOpenIntegrations: (() -> Void)? = nil
 
@@ -2121,7 +2116,7 @@ private struct MeetingHistoryInspector: View {
                                             isQuiescent: self.isQuiescent,
                                             onSelect: { self.selectedSessionID = session.id },
                                             onRetry: { self.onRetry(session.id) },
-                                            onRename: { self.onRename(session.id, $0) },
+                                            onRename: { self.onRename(session, $0) },
                                             onRecordAgain: { self.onRecordAgain(session) }
                                         )
                                         .id(session.id)
@@ -2170,17 +2165,18 @@ private struct MeetingHistoryInspector: View {
         .background(self.theme.palette.sidebarBackground)
         .alert("Rename Meeting", isPresented: Binding(
             get: { self.privateState.renameSessionID != nil },
-            set: { if !$0 { self.privateState.renameSessionID = nil } }
+            set: { if !$0 { self.privateState.renameSessionID = nil; self.privateState.renameSource = nil } }
         )) {
             TextField("Meeting title", text: self.$privateState.renameDraft)
-            Button("Cancel", role: .cancel) { self.privateState.renameSessionID = nil }
+            Button("Cancel", role: .cancel) { self.privateState.renameSessionID = nil; self.privateState.renameSource = nil }
             Button("Rename") {
                 if self.privateState.accepts(projection), self.isQuiescent, let id = self.privateState.renameSessionID,
+                   let source = self.privateState.renameSource, source.id == id,
                    self.sessions.contains(where: { $0.id == id })
                 {
-                    self.onRename(id, self.privateState.renameDraft)
+                    self.onRename(source, self.privateState.renameDraft)
                 }
-                self.privateState.renameSessionID = nil
+                self.privateState.renameSessionID = nil; self.privateState.renameSource = nil
             }
             .disabled(!self.isQuiescent || self.privateState.renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
@@ -2204,6 +2200,7 @@ private struct MeetingHistoryInspector: View {
             guard self.privateState.accepts(projection) else { return }
             self.privateState.renameDraft = session.displayTitle
             self.privateState.renameSessionID = session.id
+            self.privateState.renameSource = session
         }
         .disabled(!self.isQuiescent)
         Divider()
@@ -2234,7 +2231,7 @@ private struct MeetingHistoryInspector: View {
         .disabled(session.transcriptSegments.isEmpty)
         if session.hasFinalizedAudio, session.retention.audioDeletedAt == nil, session.state == .completed {
             Button("Delete Audio (Keep Transcript)…", systemImage: "waveform.slash") {
-                self.onDeleteAudioRequest(session.id)
+                self.onDeleteAudioRequest(session)
             }
             .disabled(!self.isQuiescent)
         }
@@ -2244,7 +2241,7 @@ private struct MeetingHistoryInspector: View {
         }
         Divider()
         Button("Delete Meeting…", systemImage: "trash", role: .destructive) {
-            self.onDeleteRequest(session.id)
+            self.onDeleteRequest(session)
         }
         .disabled(!self.isQuiescent)
     }
@@ -2304,7 +2301,7 @@ private struct MeetingHistoryRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(self.session.displayTitle), \(self.statusText), \(self.sourceName)")
             .accessibilityAddTraits(self.isSelected ? .isSelected : [])
-            .editableTitle(self.session.displayTitle, id: String(describing: self.session.id), enabled: self.isQuiescent, onRename: self.onRename)
+            .editableTitle(self.session.displayTitle, id: "\(self.session.profileOwnership?.profileID ?? MeetingProfileOwnership.guest.profileID):\(self.session.id)", enabled: self.isQuiescent, onRename: self.onRename)
             if let actionLabel {
                 Button(actionLabel, action: self.performAction)
                     .buttonStyle(.borderless)
