@@ -92,6 +92,10 @@ final class GigaAMEncoderDictionaryLiveTests: XCTestCase {
             }
             let saved = await store.allProfiles()
             XCTAssertEqual(saved.count, manifest.terms.count)
+            for term in manifest.terms.keys {
+                let profile = try XCTUnwrap(saved.first { $0.label == manifest.terms[term] })
+                XCTAssertEqual(profile.enrollments.count, captures[term]?.count)
+            }
             var rows: [[String: Any]] = []
             for clip in manifest.cases where clip.kind != "reference" {
                 let samples = try Self.samples(clip.path)
