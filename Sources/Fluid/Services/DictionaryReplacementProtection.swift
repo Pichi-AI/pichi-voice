@@ -15,7 +15,11 @@ nonisolated enum DictionaryTranscriptReplacement {
         let trimSet = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
 
         for wordText in wordTexts {
-            let searchableWord = wordText.trimmingCharacters(in: trimSet)
+            let lexicalWord = wordText.trimmingCharacters(in: trimSet)
+            // Native CTC may emit punctuation as its own timed token. Preserve
+            // that token's index and require its exact surface as an anchor.
+            let searchableWord = lexicalWord.isEmpty
+                ? wordText.trimmingCharacters(in: .whitespacesAndNewlines) : lexicalWord
             guard !searchableWord.isEmpty, searchLocation <= source.length else { return text }
             let searchRange = NSRange(location: searchLocation, length: source.length - searchLocation)
             let range = source.range(of: searchableWord, options: .caseInsensitive, range: searchRange)
