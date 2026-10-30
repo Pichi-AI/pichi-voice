@@ -38,7 +38,10 @@ nonisolated enum SensitiveBusinessGroupCatalog {
                 "взятка",
                 "взяточник",
                 "взяточничество",
-                "коммерческий подкуп"
+                "коммерческий подкуп",
+                "незаконное вознаграждение",
+                "подкуп должностного лица",
+                "illegal kickback"
             ],
             contextualExamples: [
                 "Сколько нужно занести, чтобы проверку закрыли? Кому передать деньги?",
@@ -57,7 +60,7 @@ nonisolated enum SensitiveBusinessGroupCatalog {
             descriptionKey: "Hide expressions about arranged bidding, including prevention and training discussions. Ordinary tenders and technical specifications remain separate.",
             terms: [
                 "тендер для массовки",
-                "участник для массовки",
+                "участник тендера для массовки",
                 "подставной участник",
                 "подставная заявка",
                 "договорной тендер",
@@ -70,7 +73,8 @@ nonisolated enum SensitiveBusinessGroupCatalog {
                 "прикрывающая заявка",
                 "bid rigging",
                 "cover bidding",
-                "bid rotation"
+                "bid rotation",
+                "картельное соглашение"
             ],
             contextualExamples: [
                 "Победителя уже выбрали. Ты просто подайся для массовки, цену поставь выше нашей.",
@@ -104,7 +108,11 @@ nonisolated enum SensitiveBusinessGroupCatalog {
                 "CAC",
                 "LTV",
                 "EBITDA",
-                "burn rate"
+                "burn rate",
+                "юнит-экономика",
+                "валовая маржа",
+                "управленческая отчётность",
+                "прогноз выручки"
             ],
             contextualExamples: [
                 "После закупки, рекламы и доставки с продажи остаётся совсем немного. Сколько именно?",
@@ -136,7 +144,12 @@ nonisolated enum SensitiveBusinessGroupCatalog {
                 "due diligence",
                 "cap table",
                 "data room",
-                "опционный пул"
+                "опционный пул",
+                "сделка M&A",
+                "слияние и поглощение",
+                "pre-money",
+                "post-money",
+                "shareholder agreement"
             ],
             contextualExamples: [
                 "Поднимаем раунд, потом закрываем его с инвесторами. Без этой связи обычный раунд в игре ничего не говорит о сделке.",
@@ -169,7 +182,10 @@ nonisolated enum SensitiveBusinessGroupCatalog {
                 "годовой бонус сотрудника",
                 "выходное пособие",
                 "retention bonus",
-                "salary review"
+                "salary review",
+                "компенсационный пакет",
+                "оплата труда",
+                "индексация зарплаты"
             ],
             contextualExamples: [
                 "Сколько будет на руки после всех вычетов? И какая часть проходит официально?",
@@ -201,7 +217,9 @@ nonisolated enum SensitiveBusinessGroupCatalog {
                 "курс лечения",
                 "психиатрический диагноз",
                 "назначенный препарат",
-                "сведения о здоровье"
+                "сведения о здоровье",
+                "врачебная тайна",
+                "состояние здоровья"
             ],
             contextualExamples: [
                 "Врач сказал, что со мной, и назначил лечение. На работе подробности рассказывать не хочу.",

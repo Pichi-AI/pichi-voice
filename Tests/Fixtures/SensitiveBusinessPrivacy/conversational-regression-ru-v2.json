@@ -345,6 +345,49 @@
       "kind": "context-only-not-a-literal-rule",
       "text": "На бумаге одна сумма, а остальное работнику доплачивают отдельно.",
       "expectedMaskedSubstrings": []
+    },
+    {
+      "id": "conversation-45",
+      "groupID": "planned-transactions",
+      "kind": "literal-positive",
+      "text": "О слиянии и поглощении пока никому не говорим.",
+      "expectedMaskedSubstrings": [
+        "слиянии и поглощении"
+      ]
+    },
+    {
+      "id": "conversation-46",
+      "groupID": "employee-compensation",
+      "kind": "literal-positive",
+      "text": "Условия компенсационного пакета согласованы.",
+      "expectedMaskedSubstrings": [
+        "компенсационного пакета"
+      ]
+    },
+    {
+      "id": "conversation-47",
+      "groupID": "personal-health",
+      "kind": "literal-positive",
+      "text": "Это относится к врачебной тайне.",
+      "expectedMaskedSubstrings": [
+        "врачебной тайне"
+      ]
+    },
+    {
+      "id": "conversation-48",
+      "groupID": "commercial-metrics",
+      "kind": "literal-positive",
+      "text": "Данные управленческой отчётности остаются внутри компании.",
+      "expectedMaskedSubstrings": [
+        "управленческой отчётности"
+      ]
+    },
+    {
+      "id": "conversation-49",
+      "groupID": "procurement-collusion",
+      "kind": "benign-near-match",
+      "text": "Набираем участников для массовки в кино.",
+      "expectedMaskedSubstrings": []
     }
   ]
 }

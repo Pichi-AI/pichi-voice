@@ -4,7 +4,7 @@ Catalog revision: `sensitive-business-groups-ru-v2-conversational`. Research dat
 
 The conversational revision and its sources are documented in [Разговорная речь для групп приватности](conversational-business-language.md). The original v1 evaluation below is retained as historical evidence, not fresh validation of v2.
 
-The catalog supplies opt-in suggestions to the existing sensitive-word settings. It owns no persistence, inference engine, or transcription pipeline. Its six groups contain 97 expressions in total. `maximumCatalogTerms = 128` is separate from the existing limit of 128 private user entries; integration must not silently crowd out or truncate private entries. `defaultSelectedGroupIDs` is empty.
+The catalog supplies opt-in suggestions to the existing sensitive-word settings. It owns no persistence, inference engine, or transcription pipeline. Its six groups contain 115 expressions in total. `maximumCatalogTerms = 128` is separate from the existing limit of 128 private user entries; integration must not silently crowd out or truncate private entries. `defaultSelectedGroupIDs` is empty.
 
 `terms` are explicit expressions a user can review before selecting a group. They are data in their source language, not UI strings. `titleKey` and `descriptionKey` are interface localization keys. `contextualExamples` illustrate broader meanings and ambiguous business speech; they must never be silently turned into literal rules. All changes to selected vocabulary must be frozen in the existing attempt snapshot and fingerprint.
 
