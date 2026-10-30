@@ -159,6 +159,7 @@ executor_path = repo / 'Sources/Fluid/Services/TranscriptionExecutor.swift'
 executor_source = executor_path.read_text() if executor_path.exists() else source
 methods = '\n'.join(declaration(source, 'func', name) for name in (
     'transcribeSamplesForAPI', 'transcribeSamplesForAPIWithLease', 'transcribeFileForAPI', 'transcribeFileForAPIWithLease',
+    'refreshExecutionStatus',
 ))
 leases = '\n'.join(declaration(source, 'func', name) for name in (
     'acquireExclusiveActivity', 'releaseExclusiveActivity',
@@ -201,8 +202,16 @@ struct LocalAPIAudioDecoder {
         }
     }
 }
-final class Provider {
+protocol TranscriptionProvider: AnyObject {
+    var isReady: Bool { get }
+    var executionStatus: String? { get }
+}
+enum SettingsStore {
+    struct SpeechModel: Equatable { let id: String }
+}
+final class Provider: TranscriptionProvider {
     var isReady = true
+    var executionStatus: String? = "synthetic-execution-status"
     var prefersNativeFileTranscription = true
     var finalCalls: [[Float]] = []
     var fileCalls = 0
@@ -232,13 +241,22 @@ enum PrivateProfileStorage {
 @MainActor final class ASRService {
     var isTerminating = false
     var privateProfileResetInProgress = false
-    struct AdmittedProbe { let lease: ASRActivityLease; let provider: Provider; let profile: PrivateProfileSnapshot }
+    struct AdmittedProbe {
+        let lease: ASRActivityLease
+        let provider: Provider
+        let profile: PrivateProfileSnapshot
+        let model: SettingsStore.SpeechModel
+    }
     var admittedTranscription: AdmittedProbe?
     var activeActivityLease: ASRActivityLease?
     var activeExclusiveActivity: ASRExclusiveActivity?
     var deferredMeetingActivityLeaseRelease: ASRActivityLease?
     var providerResetPending = false
     var transcriptionProvider = Provider()
+    var selectedTranscriptionModel = SettingsStore.SpeechModel(id: "original-model")
+    var executionStatusModelID: String?
+    var executionStatus: String?
+    var executionStatusProviderID: ObjectIdentifier?
     private let transcriptionExecutor = TranscriptionExecutor()
     var hasCompletedFirstTranscription = false
     var isLoadingModel = true
@@ -252,7 +270,8 @@ enum PrivateProfileStorage {
         check(activeActivityLease == lease && admittedTranscription == nil, "Exact local API admission is required")
         let provider = transcriptionProvider
         provider.begins += 1
-        admittedTranscription = .init(lease: lease, provider: provider, profile: PrivateProfileStorage.current)
+        admittedTranscription = .init(lease: lease, provider: provider, profile: PrivateProfileStorage.current,
+            model: selectedTranscriptionModel)
         return provider
     }
     func endAdmittedTranscription(lease: ASRActivityLease) async {
@@ -296,6 +315,9 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
                     check(result.text == "sample result", "Sample result must be returned")
                 }
                 check(service.activeActivityLease == nil, "Successful API request must release the lease")
+                check(service.executionStatusModelID == "original-model"
+                    && service.executionStatusProviderID == ObjectIdentifier(service.transcriptionProvider),
+                    "Execution status retains the admitted model and provider")
                 passes += 1
             }
         }
@@ -358,6 +380,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
                 while !(await prepareGate.entered) { await Task.yield() }
                 check(original.begins == 1, "Admission precedes cold preparation")
                 let other = Provider(); service.transcriptionProvider = other
+                service.selectedTranscriptionModel = .init(id: "other-model")
                 PrivateProfileStorage.acceptsNewWork = false
                 PrivateProfileStorage.current = .init(id: "B")
                 if cancel { request.cancel() }
@@ -377,6 +400,8 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
                 } catch { check(cancel, "Only canceled synthetic API should fail") }
                 check(original.ends == 1 && other.ends == 0 && service.activeActivityLease == nil,
                     "Success and cancellation release exactly the original provider after joining")
+                check(service.executionStatusModelID == nil && service.executionStatusProviderID == nil,
+                    "The old attempt cannot publish status under a later model selection")
                 passes += 1
             }
         }

@@ -66,7 +66,6 @@ extension PrivateAIIntegrationService {
         let usesFluid1Boost: Bool
         let contextTokenLimit: Int
     }
-    struct AppContext { let appName: String; let bundleID: String; let windowTitle: String; let appVersion: String? }
     struct Response { let outputText: String; let tokensPerSecond: Double? = nil }
     @MainActor final class InertAdapter {
         private(set) var calls = 0
