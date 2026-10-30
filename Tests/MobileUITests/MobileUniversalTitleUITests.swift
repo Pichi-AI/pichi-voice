@@ -10,7 +10,9 @@ final class MobileUniversalTitleUITests: XCTestCase {
         #else
         continueAfterFailure = false
         let environment = ProcessInfo.processInfo.environment
-        let identifier = try XCTUnwrap(environment["PICHI_TITLE_FIXTURE_ID"])
+        guard let identifier = environment["PICHI_TITLE_FIXTURE_ID"], !identifier.isEmpty else {
+            throw XCTSkip("Stage an owned synthetic long recording and provide PICHI_TITLE_FIXTURE_ID")
+        }
         let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
         XCTAssertFalse(revision.isEmpty)
         let app = XCUIApplication()
