@@ -19,7 +19,7 @@ Path(sys.argv[1]).write_text('import Foundation\n' + errors + resource_error + '
 app = Path('Sources/Mobile/MobileApp.swift').read_text()
 methods = '\n'.join(declaration(app, marker) for marker in (
     '    func signalUIReady()', '    private func restoreInitialLocalStateIfReady()',
-    '    func setSceneActive('))
+    '    func setSceneActive(', '    private func updateIdlePreparation()'))
 view = app[app.index('struct PichiVoiceMobileApp: App'):]
 task = view[view.index('            }.task {'):view.index('            .onChange(of: scenePhase')]
 # Exercise the ordinary startup task. Debug review compositions have their own

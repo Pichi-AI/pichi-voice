@@ -70,6 +70,10 @@ private actor ReadinessSnapshotGate {
 }
 @MainActor final class IdleSceneCoordinatorProbe {
     let restore = IdleSceneRestoreProbe()
+    var hasPendingStart = false
+    var isRecording = false
+    var isProcessing = false
+    var isQuiescent = true
     func ensureRestored() async { await restore.wait() }
     func sweepExpiredAudio() async {}
 }
@@ -86,14 +90,45 @@ private actor ReadinessSnapshotGate {
     func notifySceneActive(_ active: Bool) async { sceneEvents.append(active) }
 }
 struct IdleSceneSettingsProbe {
-    struct Model { let rawValue = "synthetic-model" }
-    let selectedSpeechModel = Model()
+    struct Value { let rawValue: String }
+    struct RecordingDefaults { let languageCode: String? = "ru" }
+    let selectedSpeechModel = Value(rawValue: "synthetic-model")
+    let meetingTranscriptionBackendID = Value(rawValue: "synthetic-backend")
+    let meetingRecordingDefaults = RecordingDefaults()
+    let meetingPIIRedactionEnabled = true
+    let meetingSpeakerLabelsEnabled = false
+    let meetingSaveAudio = false
+    enum SpeakerMode: String { case off, streaming }
+    enum Mode { case inRoom }
+    func meetingSpeakerProcessingMode(for _: Mode) -> SpeakerMode { .off }
+}
+@MainActor final class IdleSceneASRProbe {
+    enum Activity { case meeting, other }
+    var activeExclusiveActivity: Activity?
+    var hasActiveModelPreparation = false
+    var supportsPreparedProviderAdoption = true
+    var idleModelResidency: UUID?
+}
+@MainActor final class IdleSceneResidencyProbe {
+    var isExclusive = false
+    var hasOrdinaryOperations = false
+}
+struct IdleScenePrivacyProbe {
+    let checkpointIdentity: String? = "synthetic-privacy"
+}
+nonisolated final class MeetingTimelineTrace: Sendable {
+    static let enabled = false
+    static let shared: MeetingTimelineTrace? = nil
+    func record(_ event: String, fields: [String: String]) {}
 }
 @MainActor final class IdleSceneHostProbe {
     let meetingSessionCoordinator = IdleSceneCoordinatorProbe()
     let privacyActivation = IdleScenePrivacyActivationProbe()
     let requiredResources = IdleSceneRequiredResourcesProbe()
     let cloudPublication: IdleSceneCloudProbe? = IdleSceneCloudProbe()
+    let asr = IdleSceneASRProbe()
+    let meetingModelResidency = IdleSceneResidencyProbe()
+    let transcriptPrivacy = IdleScenePrivacyProbe()
     let settings = IdleSceneSettingsProbe()
     var requiredPreparationTask: Task<Void, Never>?
     var isUIReady = false
@@ -102,18 +137,18 @@ struct IdleSceneSettingsProbe {
     var accountRestorationAllowed = true
     var isSceneActive = false
     var preparations = 0
+    var isPreparingIdleResources = false
+    var idleResourceRevision = UUID()
+    var lastIdleDecision: [String: String]?
     lazy var controller = MeetingIdlePreparationController<UUID>(prepare: { [weak self] in
         await MainActor.run { self?.preparations += 1 }
         return UUID()
     }, release: { _ in })
+    var idlePreparation: MeetingIdlePreparationController<UUID> { controller }
     // Authentication and encrypted persistence are independent tested services.
     // This explicit boundary controls only whether they admitted private startup.
     func restoreAccountBeforePrivateUI() async { hasRestoredAccount = accountRestorationAllowed }
-    func updateIdlePreparation() async {
-        await controller.update(.init(isSceneActive: isSceneActive,
-            isUIReady: isUIReady && hasRestoredInitialState && PrivateProfileStorage.acceptsNewWork,
-            preparationEnabled: true, configurationIdentity: "scene-lifecycle", hasRecordingActivity: false, hasOtherModelWork: false))
-    }
+    func observeIdleResourceStores() {}
 }
 
 @main
@@ -197,6 +232,24 @@ struct PrivacyIdlePreparationTests {
                 "Closed private-profile admission prevents initial local restoration and idle work")
             await host.controller.shutdown()
             PrivateProfileStorage.select(originalProfile)
+        }
+        do {
+            let host = IdleSceneHostProbe()
+            host.meetingModelResidency.hasOrdinaryOperations = true
+            await host.setSceneActive(true)
+            let initial = Task { await host.signalUIReady() }
+            await until { await MainActor.run { host.meetingSessionCoordinator.restore.entered } }
+            host.meetingSessionCoordinator.restore.finish()
+            await initial.value
+            await host.requiredPreparationTask?.value
+            await settle()
+            check(host.hasRestoredInitialState && host.preparations == 0,
+                "The composition's owned ordinary-operation state blocks idle preparation")
+            host.meetingModelResidency.hasOrdinaryOperations = false
+            await host.setSceneActive(true)
+            await until { await MainActor.run { host.preparations == 1 } }
+            check(host.preparations == 1, "Releasing owned residency admits exactly one optional preparation")
+            await host.controller.shutdown()
         }
         do {
             let host = IdleSceneHostProbe()
@@ -441,6 +494,6 @@ struct PrivacyIdlePreparationTests {
             await controller.update(state); await settle()
             check(attempts == 2, "Shutdown cannot restart optional preparation")
         }
-        print("Privacy idle preparation tests passed: \(assertions) assertions across 20 ownership/lifecycle scenarios")
+        print("Privacy idle preparation tests passed: \(assertions) assertions across 21 ownership/lifecycle scenarios")
     }
 }
