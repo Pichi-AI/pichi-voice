@@ -1,0 +1,34 @@
+{
+  "formatVersion": 1,
+  "libmorphRevision": "90a5a1a95d0edf693855f6b66759c8b66821865f",
+  "moonycodeRevision": "639553712ab068315ba9726d56989956962048b3",
+  "mtcGeneratorRevision": "cb2c4deb1f6d02e24b54eea827f5688c64b6879f",
+  "resourceIdentity": "libmorph-russian-v1/2d3251b2ccd9f7720888634a4175e9af70e341fff08e1b958dc4e371d55d5357",
+  "dictionaryBytes": 3841191,
+  "data": {
+    "classmap.bin": {
+      "bytes": 9696,
+      "sha256": "2900bb247252723d9b18f51d07f98cc90dcaba93256753b489dedf0a2189e223"
+    },
+    "flexTree.bin": {
+      "bytes": 438176,
+      "sha256": "7e71fb74c1c2e46b9029df37c7fa6d29e6f2242b2b7e6e45f6443bb93587cd3c"
+    },
+    "lidstree.bin": {
+      "bytes": 1011681,
+      "sha256": "c93383e2bf119c51a834c92495aa43d4a24150d5d3ad80ff919820ae9a12d4f1"
+    },
+    "mixTypes.bin": {
+      "bytes": 64,
+      "sha256": "997ae28e90afaebea3f6ce4b6f30c91a99c4d6b053ea45c27394554ed208a8ac"
+    },
+    "mxTables.bin": {
+      "bytes": 979,
+      "sha256": "c298f6e80b5387859d973dc3b1b10ccca132cf4de73795d9005a8244c4ef734b"
+    },
+    "stemtree.bin": {
+      "bytes": 2380595,
+      "sha256": "c930fc513f57280a0ebce55e30c81c872853cb1550283b2d86d2374de0a5a91b"
+    }
+  }
+}

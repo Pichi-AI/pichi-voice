@@ -1,0 +1,200 @@
+{
+  "Sources/CRussianMorphology/libmorph/api.h": {
+    "sourcePath": "api.h",
+    "sourceSHA256": "ee6d20b78076b244be52590aa371cce6046e650d129857dd245684b14c2f6ffb",
+    "vendoredSHA256": "ee6d20b78076b244be52590aa371cce6046e650d129857dd245684b14c2f6ffb",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/chartype.cpp": {
+    "sourcePath": "lang-rus/chartype.cpp",
+    "sourceSHA256": "8e1e63c220c1c4c5577fce43296c4d3fe2fe74290384f17a85cc724b7ddb5bac",
+    "vendoredSHA256": "8e1e63c220c1c4c5577fce43296c4d3fe2fe74290384f17a85cc724b7ddb5bac",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/chartype.h": {
+    "sourcePath": "lang-rus/chartype.h",
+    "sourceSHA256": "88f8ff0b14527a2059afe118aa8b8c38eb1c577fd2ea694cbbeef4464e0b1e2f",
+    "vendoredSHA256": "88f8ff0b14527a2059afe118aa8b8c38eb1c577fd2ea694cbbeef4464e0b1e2f",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/libdict/buildform.cpp": {
+    "sourcePath": "lang-rus/libdict/buildform.cpp",
+    "sourceSHA256": "08acf315f8ec1b48b5113bb17a985a1b35c9a86ffbd71ca034941df6541070b8",
+    "vendoredSHA256": "08acf315f8ec1b48b5113bb17a985a1b35c9a86ffbd71ca034941df6541070b8",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/libdict/buildform.hpp": {
+    "sourcePath": "lang-rus/libdict/buildform.hpp",
+    "sourceSHA256": "42b20dbebe4bc879484e2b30db5ea3c40ee2c67545ce4c342462859affd5318b",
+    "vendoredSHA256": "42b20dbebe4bc879484e2b30db5ea3c40ee2c67545ce4c342462859affd5318b",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/libdict/grammap.h": {
+    "sourcePath": "lang-rus/libdict/grammap.h",
+    "sourceSHA256": "5d70bca6d403ce795194cbded0bc4158c46837b0a7614a9d17644ab099bf05f0",
+    "vendoredSHA256": "5d70bca6d403ce795194cbded0bc4158c46837b0a7614a9d17644ab099bf05f0",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/libdict/lemmatize.cpp": {
+    "sourcePath": "lang-rus/libdict/lemmatize.cpp",
+    "sourceSHA256": "9dba82079835a0acb44cbb58eae3318c1b294be095d6c388084af60bbd6f84a8",
+    "vendoredSHA256": "9dba82079835a0acb44cbb58eae3318c1b294be095d6c388084af60bbd6f84a8",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/libdict/lemmatize.hpp": {
+    "sourcePath": "lang-rus/libdict/lemmatize.hpp",
+    "sourceSHA256": "13a8c61810b49a87d0d41fca1972d8fde1783241c8f622901f225ca083a45dd5",
+    "vendoredSHA256": "13a8c61810b49a87d0d41fca1972d8fde1783241c8f622901f225ca083a45dd5",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/libdict/mlmadefs.h": {
+    "sourcePath": "lang-rus/libdict/mlmadefs.h",
+    "sourceSHA256": "3dfa0f2ebf7f0d60b0ec904bb0a8d166b6699fa46b8c103b467ea0fb7e3dbaf1",
+    "vendoredSHA256": "3dfa0f2ebf7f0d60b0ec904bb0a8d166b6699fa46b8c103b467ea0fb7e3dbaf1",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/libdict/mlmamain.cpp": {
+    "sourcePath": "lang-rus/libdict/mlmamain.cpp",
+    "sourceSHA256": "95575ae7d79b6bd17104bf2fa30d27f81cec865f7397f7cf951762dbf6eb37a0",
+    "vendoredSHA256": "529f4e818228c583f25998a1e29c2554c43c635bece60cb25eb71bb5fdb0e934",
+    "modified": true
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/libdict/scanClass.hpp": {
+    "sourcePath": "lang-rus/libdict/scanClass.hpp",
+    "sourceSHA256": "3ef1656ff029d13ee03578501052204a490b52ee3d666ad60ccc2552e24afbee",
+    "vendoredSHA256": "3ef1656ff029d13ee03578501052204a490b52ee3d666ad60ccc2552e24afbee",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/lang-rus/libdict/wildClass.hpp": {
+    "sourcePath": "lang-rus/libdict/wildClass.hpp",
+    "sourceSHA256": "a90bb0874440c5d4edcb715f4e52230a752151c82f1b27195de572b49d6d8854",
+    "vendoredSHA256": "a90bb0874440c5d4edcb715f4e52230a752151c82f1b27195de572b49d6d8854",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/rus.h": {
+    "sourcePath": "rus.h",
+    "sourceSHA256": "6c4eb3ecc1120360a293e5371a0e19fcce91fdcc09ac6df9e6a9df75ceb22ebe",
+    "vendoredSHA256": "6c4eb3ecc1120360a293e5371a0e19fcce91fdcc09ac6df9e6a9df75ceb22ebe",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/buildforms.cpp": {
+    "sourcePath": "xmorph/buildforms.cpp",
+    "sourceSHA256": "be7cd9ce363213b43569428c948d8d7cf575b5a94ce3a8fe5cd2c77e9a760007",
+    "vendoredSHA256": "be7cd9ce363213b43569428c948d8d7cf575b5a94ce3a8fe5cd2c77e9a760007",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/buildforms.hpp": {
+    "sourcePath": "xmorph/buildforms.hpp",
+    "sourceSHA256": "26b2759c1e1faa5567f329ccb2ac75e42877096769387b75b64182f3cfbdef7d",
+    "vendoredSHA256": "26b2759c1e1faa5567f329ccb2ac75e42877096769387b75b64182f3cfbdef7d",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/capsheme.cpp": {
+    "sourcePath": "xmorph/capsheme.cpp",
+    "sourceSHA256": "9e23ee88ee314d5d012e7f84ffa9f578cbb2595c00a010d9c31605f2df0d0de3",
+    "vendoredSHA256": "9e23ee88ee314d5d012e7f84ffa9f578cbb2595c00a010d9c31605f2df0d0de3",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/capsheme.h": {
+    "sourcePath": "xmorph/capsheme.h",
+    "sourceSHA256": "8ea00381339025c2d234f90a0fe54e071c1d44026b61df697a080b5041065b2b",
+    "vendoredSHA256": "8ea00381339025c2d234f90a0fe54e071c1d44026b61df697a080b5041065b2b",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/charlist.h": {
+    "sourcePath": "xmorph/charlist.h",
+    "sourceSHA256": "df0329f9c7b5589600b4a2ba6f0048830b6d0a15a6a00748a1e5ed1f62d99a0f",
+    "vendoredSHA256": "df0329f9c7b5589600b4a2ba6f0048830b6d0a15a6a00748a1e5ed1f62d99a0f",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/codepages.hpp": {
+    "sourcePath": "xmorph/codepages.hpp",
+    "sourceSHA256": "d4fc8722c6927c35ea4425dc02daca230a7a7f082c510f210ccf0ea14c68e7d7",
+    "vendoredSHA256": "d4fc8722c6927c35ea4425dc02daca230a7a7f082c510f210ccf0ea14c68e7d7",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/mlfawide.hpp": {
+    "sourcePath": "xmorph/mlfawide.hpp",
+    "sourceSHA256": "d494bf56257be4d0fbded5dc23f3dbf754dc43cd61d1892be6799cdd25d8155a",
+    "vendoredSHA256": "d494bf56257be4d0fbded5dc23f3dbf754dc43cd61d1892be6799cdd25d8155a",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/mlmawide.hpp": {
+    "sourcePath": "xmorph/mlmawide.hpp",
+    "sourceSHA256": "68649d7ac6216535a88ad2f0519bedb1837dded5e26601b3123904d64a48a1a8",
+    "vendoredSHA256": "68649d7ac6216535a88ad2f0519bedb1837dded5e26601b3123904d64a48a1a8",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/scandict.h": {
+    "sourcePath": "xmorph/scandict.h",
+    "sourceSHA256": "2774d3a2e36078301d442e9ae5e2acfaef4fd16c31de92032b826e424722889b",
+    "vendoredSHA256": "2774d3a2e36078301d442e9ae5e2acfaef4fd16c31de92032b826e424722889b",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/typedefs.h": {
+    "sourcePath": "xmorph/typedefs.h",
+    "sourceSHA256": "83aaede4729d5a0b91e44a17743b1cae726b59a8fa432ac7f6f78bcb6de67848",
+    "vendoredSHA256": "83aaede4729d5a0b91e44a17743b1cae726b59a8fa432ac7f6f78bcb6de67848",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/libmorph/xmorph/wildscan.h": {
+    "sourcePath": "xmorph/wildscan.h",
+    "sourceSHA256": "827dda3315e1d91ed8a3d91901be67eafdf65f1eeb5528b537b570d16d4593aa",
+    "vendoredSHA256": "827dda3315e1d91ed8a3d91901be67eafdf65f1eeb5528b537b570d16d4593aa",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/moonycode/codes.h": {
+    "sourcePath": "codes.h",
+    "sourceSHA256": "5edf47b1d40b08ee9ca53c58cbf8ca41fcf2a1396e9cfbfc1fac33089713dc5b",
+    "vendoredSHA256": "5edf47b1d40b08ee9ca53c58cbf8ca41fcf2a1396e9cfbfc1fac33089713dc5b",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/moonycode/xlat/one_one.cpp": {
+    "sourcePath": "xlat/one_one.cpp",
+    "sourceSHA256": "7bccc21362aebeecd9b6866849b5e84a13b64180404adda642c02a4db6241e5a",
+    "vendoredSHA256": "7bccc21362aebeecd9b6866849b5e84a13b64180404adda642c02a4db6241e5a",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/moonycode/xlat/utf16_lo.cpp": {
+    "sourcePath": "xlat/utf16_lo.cpp",
+    "sourceSHA256": "c8a571c132a5399013c68582e0ab4bbba86bc1921522902a4f555ca1b69ca500",
+    "vendoredSHA256": "c8a571c132a5399013c68582e0ab4bbba86bc1921522902a4f555ca1b69ca500",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/moonycode/xlat/utf16_up.cpp": {
+    "sourcePath": "xlat/utf16_up.cpp",
+    "sourceSHA256": "089f7ae76e7f4034b6afa156d6332750e512612ba1e9c56766680a1cbd4e5f5f",
+    "vendoredSHA256": "089f7ae76e7f4034b6afa156d6332750e512612ba1e9c56766680a1cbd4e5f5f",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/moonycode/xlat/utf16win.cpp": {
+    "sourcePath": "xlat/utf16win.cpp",
+    "sourceSHA256": "31cc8223497300ff3de4450c115b2af945d525de17eb82985991a0f147346527",
+    "vendoredSHA256": "31cc8223497300ff3de4450c115b2af945d525de17eb82985991a0f147346527",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/moonycode/xlat/win_dos.cpp": {
+    "sourcePath": "xlat/win_dos.cpp",
+    "sourceSHA256": "5e5106440be1cb54e256600479af74b355f2844d080da1d179d98cc3570d89d7",
+    "vendoredSHA256": "5e5106440be1cb54e256600479af74b355f2844d080da1d179d98cc3570d89d7",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/moonycode/xlat/win_iso.cpp": {
+    "sourcePath": "xlat/win_iso.cpp",
+    "sourceSHA256": "d8af5207b19320998267eb221c58156eebaa41865a250b00ec3b449cd8bd38b3",
+    "vendoredSHA256": "d8af5207b19320998267eb221c58156eebaa41865a250b00ec3b449cd8bd38b3",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/moonycode/xlat/win_koi.cpp": {
+    "sourcePath": "xlat/win_koi.cpp",
+    "sourceSHA256": "a0eb1a95d0b0715680aa80a2f48f6a6977e10de2fe01b23ed9e3df156340ee6a",
+    "vendoredSHA256": "a0eb1a95d0b0715680aa80a2f48f6a6977e10de2fe01b23ed9e3df156340ee6a",
+    "modified": false
+  },
+  "Sources/CRussianMorphology/moonycode/xlat/win_mac.cpp": {
+    "sourcePath": "xlat/win_mac.cpp",
+    "sourceSHA256": "ebbc2c3ec720f92f4f8a5dcc33f22728e0569c568a70f9bcc7f6a3cdb2f4f8ce",
+    "vendoredSHA256": "ebbc2c3ec720f92f4f8a5dcc33f22728e0569c568a70f9bcc7f6a3cdb2f4f8ce",
+    "modified": false
+  }
+}
