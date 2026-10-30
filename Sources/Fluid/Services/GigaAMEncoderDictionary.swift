@@ -28,7 +28,7 @@ nonisolated enum GigaAMEncoderDictionary {
         case capacityExceeded, duplicateEntryID, wrongModel, wrongRecipe, invalidTerm
         case invalidReferences, uncalibrated, contrastBudget, invalidTranscript
         case noSearchHits, invalidWordSpan, protectedTextRule, confidentSource
-        case protectedContent, acousticRejected, ambiguous, compoundPreferred
+        case protectedContent, acousticRejected, recordedVariantCorroborated, ambiguous, compoundPreferred
         case overlapping, replacementFailed, accepted, invalidWindows, outsideOwnership, unconfirmedCompound
     }
 
@@ -291,12 +291,33 @@ nonisolated enum GigaAMEncoderDictionary {
                 let cut = try GigaAMEncoderFeatures(values: Array(features.values[
                     (hit.frames.lowerBound * GigaAMEncoderFeatures.dimension)..<(hit.frames.upperBound * GigaAMEncoderFeatures.dimension)
                 ]))
-                guard let match = try GigaAMAcousticMatcher.matchEncoder(query: cut, references: term.references,
-                    calibration: prepared.calibration, negativeReferences: term.negatives), match.accepted else {
+                guard let ordinary = try GigaAMAcousticMatcher.matchEncoder(query: cut, references: term.references,
+                    calibration: prepared.calibration, negativeReferences: term.negatives) else {
+                    diagnostics.append(.init(.acousticRejected, term.entryID)); continue
+                }
+                let match: GigaAMAcousticMatcher.Match
+                let effectiveLimit: Float
+                if ordinary.accepted {
+                    match = ordinary
+                    effectiveLimit = prepared.calibration.acceptanceDistance
+                } else if GigaAMDictionaryLexicalEvidence.observedStemSupport(
+                    heard: heard, canonical: term.label, observedVariants: term.observedVariants
+                ), let limit = prepared.calibration.corroboratedAcceptanceDistance,
+                   let corroborated = try GigaAMAcousticMatcher.matchEncoderCorroborated(
+                    query: cut, references: term.references, calibration: prepared.calibration,
+                    negativeReferences: term.negatives
+                   ), corroborated.accepted {
+                    // A complete user-recorded stem and a bounded grammatical
+                    // ending add independent evidence. Ordinary acoustic limits,
+                    // negative vetoes and all word/meaning guards remain intact.
+                    match = corroborated
+                    effectiveLimit = limit
+                    diagnostics.append(.init(.recordedVariantCorroborated, term.entryID))
+                } else {
                     diagnostics.append(.init(.acousticRejected, term.entryID)); continue
                 }
                 candidates.append(AcceptedSpan(entryID: term.entryID, label: term.label, wordRange: range,
-                    frameRange: hit.frames, distance: match.distance, acceptanceDistance: prepared.calibration.acceptanceDistance,
+                    frameRange: hit.frames, distance: match.distance, acceptanceDistance: effectiveLimit,
                     spellingSupport: lexical.phoneticSimilarity, canonicalSupport: lexical.canonicalSimilarity,
                     additionalComponentSupport: GigaAMDictionaryLexicalEvidence.supportsCanonicalComponents(heard: heard, canonical: term.label)))
             }
