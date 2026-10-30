@@ -31,7 +31,12 @@ final class MobileSetupUITests: XCTestCase {
             capture("guest-\(language)-welcome")
             let next = app.buttons["onboarding.next"]
             XCTAssertTrue(next.isHittable && next.isEnabled)
-            next.tap()
+            // Pinned argument-domain steps are presentation fixtures, not writable
+            // navigation state. The ordinary first-run test below verifies Next.
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
+                                   "-MobileSetupVersion", "0", "-MobileSetupStep", "1"]
+            app.launch()
             XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.1"].firstMatch.waitForExistence(timeout: 10))
             capture("guest-\(language)-voice-choice")
             app.terminate()
