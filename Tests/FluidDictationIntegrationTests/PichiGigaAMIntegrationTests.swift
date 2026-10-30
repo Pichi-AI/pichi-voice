@@ -199,6 +199,13 @@ extension PichiGigaAMIntegrationTests {
         let vetoed = GigaAMDictionaryAcoustics.Word(entryID: word.entryID, label: word.label, profileKey: word.profileKey,
             references: references, calibration: calibration, negatives: [anchor], anchors: word.anchors)
         XCTAssertNil(try GigaAMDictionaryAcoustics.acceptedDistance(query: anchor, word: vetoed, heard: "ошибка"))
+        let observed = GigaAMDictionaryAcoustics.Word(entryID: word.entryID, label: word.label, profileKey: word.profileKey,
+            references: references, calibration: calibration, negatives: [], observedSpellings: ["Бимчик"])
+        XCTAssertNotNil(try GigaAMDictionaryAcoustics.corroboratedDistance(query: anchor, word: observed, heard: "Бимчик!"))
+        XCTAssertNil(try GigaAMDictionaryAcoustics.corroboratedDistance(query: anchor, word: observed, heard: "Другое"))
+        let observedNegative = GigaAMDictionaryAcoustics.Word(entryID: word.entryID, label: word.label, profileKey: word.profileKey,
+            references: references, calibration: calibration, negatives: [anchor], observedSpellings: ["Бимчик"])
+        XCTAssertNil(try GigaAMDictionaryAcoustics.corroboratedDistance(query: anchor, word: observedNegative, heard: "Бимчик"))
     }
 
     nonisolated private static func acousticTone(_ frequency: Double, duration: Double) -> [Float] {

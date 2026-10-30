@@ -47,6 +47,7 @@ Sources/Fluid/Services/DictionaryAudioSpan.swift
 Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift
 Sources/Fluid/Services/DictionaryExperimentalMatcher.swift
 Sources/Fluid/Services/DictionaryLearningEvidence.swift
+Sources/Fluid/Services/DictionaryLexicalEvidence.swift
 Sources/Fluid/Services/DictionaryMatchPlayground.swift
 Sources/Fluid/Services/DictionaryNegativeExamples.swift
 Sources/Fluid/Services/DictionaryPronunciationDecision.swift

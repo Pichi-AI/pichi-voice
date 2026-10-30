@@ -9,7 +9,7 @@ import AppKit
 enum DictionaryLexicalEvidence {
     static func isUnknownTerm(_ text: String, requiredLanguages: [String]) -> Bool {
         #if os(macOS)
-        guard !text.isEmpty, text.count <= 80, text.rangeOfCharacter(from: .newlines) == nil,
+        guard !Task.isCancelled, !text.isEmpty, text.count <= 80, text.rangeOfCharacter(from: .newlines) == nil,
               !requiredLanguages.isEmpty else { return false }
         let components = text.precomposedStringWithCanonicalMapping.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.union(.nonBaseCharacters).inverted)
@@ -34,6 +34,7 @@ enum DictionaryLexicalEvidence {
             let wordLength = word.utf16.count
             var hasUnknownEvidence = false
             for language in available {
+                guard !Task.isCancelled else { return false }
                 let misspelling = checker.checkSpelling(
                     of: input, startingAt: 0, language: language, wrap: false,
                     inSpellDocumentWithTag: document, wordCount: nil

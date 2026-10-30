@@ -8,6 +8,9 @@ import PichiGigaAM
 nonisolated enum GigaAMDictionaryAcoustics {
     static let maximumWordCount = 4_096
     static let maximumReferencesBytes = 8 * 1_024 * 1_024
+    /// The registered GigaAM execution contract transcribes Russian; installed
+    /// lexicons for that language are required before using weaker evidence.
+    private static let requiredLexiconLanguages = ["ru"]
 
     struct Snapshot: Sendable {
         let modelKey: String
@@ -30,9 +33,12 @@ nonisolated enum GigaAMDictionaryAcoustics {
         let calibration: GigaAMAcousticMatcher.Calibration
         let negatives: [GigaAMAcousticFeatures]
         let anchors: [Anchor]
+        let observedSpellings: [String]
+        let observedKeys: [String]
 
         init(entryID: UUID, label: String, profileKey: String, references: [GigaAMAcousticFeatures],
-             calibration: GigaAMAcousticMatcher.Calibration, negatives: [GigaAMAcousticFeatures], anchors: [Anchor] = []) {
+             calibration: GigaAMAcousticMatcher.Calibration, negatives: [GigaAMAcousticFeatures], anchors: [Anchor] = [],
+             observedSpellings: [String] = []) {
             self.entryID = entryID
             self.label = label
             self.profileKey = profileKey
@@ -40,6 +46,8 @@ nonisolated enum GigaAMDictionaryAcoustics {
             self.calibration = calibration
             self.negatives = negatives
             self.anchors = anchors
+            self.observedSpellings = observedSpellings
+            self.observedKeys = observedSpellings.map(GigaAMDictionaryAcoustics.phoneticKey).filter { !$0.isEmpty }
         }
     }
 
@@ -54,6 +62,9 @@ nonisolated enum GigaAMDictionaryAcoustics {
                      snapshot.negatives?.revision.uuidString ?? ""]
         parts += snapshot.entries.map { $0.id.uuidString + ":" + $0.replacement }
         parts += snapshot.pronunciation?.profiles.map(DictionaryNegativeEvidenceResolver.profileKey) ?? []
+        parts += snapshot.pronunciation?.profiles.flatMap { profile in
+            profile.enrollments.map { ($0.observedText ?? "") + ":" + String($0.capturedAt?.timeIntervalSinceReferenceDate ?? 0) }
+        } ?? []
         return parts.map { "\($0.utf8.count):" + $0 }.joined()
     }
 
@@ -164,7 +175,8 @@ nonisolated enum GigaAMDictionaryAcoustics {
                         try? GigaAMAcousticFeatures(values: $0.values)
                     } ?? []
                 words.append(Word(entryID: entry.id, label: entry.replacement, profileKey: profileKey,
-                                  references: references, calibration: calibration, negatives: negatives, anchors: anchors))
+                                  references: references, calibration: calibration, negatives: negatives, anchors: anchors,
+                                  observedSpellings: profile.enrollments.compactMap(\.observedText)))
                 bytes += additional
             } catch is CancellationError { throw CancellationError() }
             catch {
@@ -206,6 +218,31 @@ nonisolated enum GigaAMDictionaryAcoustics {
         return best
     }
 
+    /// A weaker sound match is only a candidate when its spelling is already a
+    /// recorded error for this term. The caller additionally requires the local
+    /// lexicon to reject every source word; ordinary correctly spelled words stay.
+    static func corroboratedDistance(query: GigaAMAcousticFeatures, word: Word, heard: String,
+                                     normalizedHeard: String? = nil) throws -> Float? {
+        let heardKey = normalizedHeard ?? self.phoneticKey(heard)
+        guard !heardKey.isEmpty, !word.observedKeys.isEmpty,
+              DictionaryAudioSpan.resemblance(words: [heardKey], run: 0...0, targets: word.observedKeys) >= 0.8,
+              let match = try GigaAMAcousticMatcher.match(query: query, references: word.references,
+                calibration: word.calibration, negativeReferences: word.negatives) else { return nil }
+        let personalizedLimit = min(Float(0.20), max(word.calibration.acceptanceDistance,
+            word.calibration.referenceSpread * 1.35 + 0.025))
+        guard match.distance <= personalizedLimit else { return nil }
+        for negative in word.negatives {
+            if let distance = try GigaAMAcousticMatcher.distance(negative, query), distance <= match.distance + 0.01 { return nil }
+        }
+        return match.distance
+    }
+
+    private static func phoneticKey(_ text: String) -> String {
+        // Comparison-only transliteration; stored spellings and output are unchanged.
+        let latin = text.applyingTransform(.toLatin, reverse: false) ?? text
+        return DictionaryAudioSpan.normalized(latin.applyingTransform(.stripCombiningMarks, reverse: false) ?? latin)
+    }
+
     /// Candidate boundaries come from the immutable original ASR result. Corrections
     /// never consume a neighbouring word already owned by a text rule or another term.
     @concurrent static func correct(
@@ -228,6 +265,7 @@ nonisolated enum GigaAMDictionaryAcoustics {
             let features: GigaAMAcousticFeatures
         }
         var candidates: [Candidate] = []
+        var unknownSpellings: [String: Bool] = [:]
         // Reuse the existing accelerated subsequence matcher to locate the spoken
         // term. Native CTC emissions are approximate and can miss its acoustic edges;
         // they select the words to replace, not the crop used to recognize the sound.
@@ -271,7 +309,24 @@ nonisolated enum GigaAMDictionaryAcoustics {
                     guard lower >= 0, upper <= chunk.values.count, lower < upper else { continue }
                     let query = try GigaAMAcousticFeatures(values: Array(chunk.values[lower..<upper]))
                     let heard = range.map { source[$0].text }.joined(separator: " ")
-                    guard let distance = try self.acceptedDistance(query: query, word: word, heard: heard) else { continue }
+                    let heardKey = Self.phoneticKey(heard)
+                    let distance: Float
+                    if let strong = try self.acceptedDistance(query: query, word: word, heard: heard) {
+                        distance = strong
+                    } else {
+                        guard let supported = try self.corroboratedDistance(query: query, word: word, heard: heard, normalizedHeard: heardKey) else { continue }
+                        let unknown: Bool
+                        if let cached = unknownSpellings[heard] { unknown = cached }
+                        else {
+                            // Required lexicons are engine metadata. Missing local
+                            // coverage fails closed instead of assuming "unknown".
+                            unknown = await DictionaryLexicalEvidence.isUnknownTerm(heard, requiredLanguages: requiredLexiconLanguages)
+                            try Task.checkCancellation()
+                            unknownSpellings[heard] = unknown
+                        }
+                        guard unknown else { continue }
+                        distance = supported
+                    }
                     // Zero native confidence is unavailable, not a low-confidence
                     // signal. The independently calibrated acoustic limit still
                     // applies; no threshold is relaxed because of this missing field.
@@ -285,6 +340,10 @@ nonisolated enum GigaAMDictionaryAcoustics {
                             break
                         }
                         if let other = try self.acceptedDistance(query: query, word: competitor, heard: heard), other < distance + 0.01 {
+                            ambiguous = true
+                            break
+                        }
+                        if let other = try self.corroboratedDistance(query: query, word: competitor, heard: heard, normalizedHeard: heardKey), other < distance + 0.01 {
                             ambiguous = true
                             break
                         }
