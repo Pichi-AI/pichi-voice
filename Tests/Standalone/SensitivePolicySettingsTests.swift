@@ -97,11 +97,14 @@ struct SensitivePolicySettingsTests {
         for group in SensitiveBusinessGroupCatalog.groups {
             try admittedA.setSensitiveBusinessGroup(id: group.id, enabled: true)
         }
-        expect(SensitiveBusinessGroupCatalog.groups.flatMap(\.terms).count == 76, "Fixture catalog changed; review overflow setup")
+        let defaultTermCount = SensitiveBusinessGroupCatalog.groups.flatMap(\.terms).count
+        expect(defaultTermCount <= SensitiveBusinessGroupCatalog.maximumCatalogTerms, "Default catalog exceeds the active group budget")
+        let firstGroupCount = SensitiveBusinessGroupCatalog.group(id: "illicit-remuneration")!.terms.count
+        let overflowingCount = SensitiveBusinessGroupCatalog.maximumCatalogTerms - (defaultTermCount - firstGroupCount) + 1
         let beforeOverflow = saved(domains[0])
         tooMany {
             try admittedA.replaceSensitiveBusinessGroupTerms(id: "illicit-remuneration",
-                terms: (0..<80).map { "синтетика\($0)" })
+                terms: (0..<overflowingCount).map { "синтетика\($0)" })
         }
         expect(beforeOverflow.isEqual(saved(domains[0])), "Rejected edit changed persisted policy")
         _ = try admittedA.sensitiveDataDictionarySnapshot()

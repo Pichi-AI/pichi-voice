@@ -79,6 +79,7 @@ extension MeetingPrivacyContextTests {
         try check(dictionaryRedactor.checkpointIdentity?.contains(first.entries[0].phrase) == false, "Fingerprint exposed phrase text")
         try await sensitiveDictionaryWholeUnitSuite()
         try await sensitiveDictionaryWordFormsSuite()
+        try sensitiveBusinessConversationSuite()
         try await sensitiveDictionaryPersistenceSuite()
         try await sensitiveDictionaryProjectionSuite()
         print("Sensitive dictionary synthetic suites passed")
@@ -145,6 +146,39 @@ extension MeetingPrivacyContextTests {
         let legacy = Data("[{\"id\":\"00000000-0000-0000-0000-000000000001\",\"phrase\":\"взятка\"}]".utf8)
         let migrated = try JSONDecoder().decode([SensitiveDataDictionaryEntry].self, from: legacy)
         try check(migrated[0].matchMode == .wordForms, "Legacy dictionary did not gain word forms")
+    }
+
+    private static func sensitiveBusinessConversationSuite() throws {
+        struct Fixture: Decodable {
+            struct Case: Decodable {
+                let id: String; let groupID: String; let kind: String; let text: String
+                let expectedMaskedSubstrings: [String]
+            }
+            let cases: [Case]
+        }
+        let path = "Tests/Fixtures/SensitiveBusinessPrivacy/conversational-regression-ru-v2.json"
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+        for item in fixture.cases {
+            let snapshot = try TranscriptSensitiveDictionarySnapshot(entries: [], selectedGroupIDs: [item.groupID])
+            let spans = try snapshot.spans(in: item.text)
+            if item.expectedMaskedSubstrings.isEmpty {
+                try check(spans.isEmpty, "Conversational near-match or context-only rule overmasked: \(item.id)")
+            } else {
+                for fragment in item.expectedMaskedSubstrings {
+                    let target = (item.text as NSString).range(of: fragment)
+                    try check(target.location != NSNotFound && (target.location..<NSMaxRange(target)).allSatisfy { offset in
+                        spans.contains { NSLocationInRange(offset, $0.range) }
+                    }, "Conversational inflection or phrase missed: \(item.id)")
+                }
+            }
+        }
+        let terms = SensitiveBusinessGroupCatalog.groups.flatMap(\.terms)
+        try check(terms.count <= SensitiveBusinessGroupCatalog.maximumCatalogTerms,
+                  "Conversational catalog exceeded its admission budget")
+        for bare in ["занести", "занос", "отблагодарить", "благодарность", "интерес", "взаймы", "техничка", "договориться", "закрыть раунд", "продать долю"] {
+            try check(!terms.contains(bare), "An ambiguous cue became an unconditional rule")
+        }
+        print("Conversational catalog: \(fixture.cases.count) original lexical/negative/context-only cases passed")
     }
 
     private static func sensitiveDictionaryPersistenceSuite() async throws {
