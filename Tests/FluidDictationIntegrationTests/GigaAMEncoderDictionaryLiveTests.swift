@@ -50,7 +50,7 @@ final class GigaAMEncoderDictionaryLiveTests: XCTestCase {
             SettingsStore.CustomDictionaryEntry(triggers: [manifest.terms[$0]!.lowercased()], replacement: manifest.terms[$0]!)
         }
         settings.customDictionaryEntries = entries
-        let store = PronunciationDictionaryStore(fileURL: root.appendingPathComponent("pronunciation-dictionary-v1.json"))
+        let store = PronunciationDictionaryStore(fileURL: root.appendingPathComponent("pronunciation-dictionary-v1.json"), profile: profile)
         try await store.replaceAllProfiles([])
         let modelStore = PichiGigaAMModelStore(directory: URL(fileURLWithPath: modelPath),
             downloadDescriptor: GigaAMModelCatalog.downloadableModel,
