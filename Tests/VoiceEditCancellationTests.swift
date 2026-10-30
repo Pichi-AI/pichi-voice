@@ -141,7 +141,8 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
         }
 
         // Cancel queued OS delivery, and prove a new request still delivers normally.
-        for outcome in ["cancel", "stale", "success", "failure"] {
+        for outcome in ["cancel", "stale", "profile", "closed", "success", "failure"] {
+            let profile = PrivateProfileStorage.current
             let owner = VoiceEditOwner()
             owner.cancelledOutputLifecycleID = 6
             owner.restoreFocus = false
@@ -151,6 +152,8 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
             await self.waitUntil { owner.asr.resume != nil }
             if outcome == "cancel" { owner.cancelledOutputLifecycleID = 7 }
             if outcome == "stale" { owner.overlayLifecycleID = 8 }
+            if outcome == "profile" { PrivateProfileStorage.conceal(generation: UUID()) }
+            if outcome == "closed" { PrivateProfileStorage.closeAdmission() }
             owner.asr.failure = outcome == "failure"
             owner.asr.resume?.resume()
             await task.value
@@ -158,6 +161,7 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
             precondition(owner.hides == (outcome == "success" ? 1 : 0))
             precondition(owner.failures == (outcome == "failure" ? 1 : 0))
             precondition(owner.rewriteModeService.clears == (outcome == "failure" ? 0 : 1))
+            PrivateProfileStorage.select(profile)
         }
         // A new capture/draft during the awaited model/focus steps cannot change this output.
         for fails in [false,true] {
@@ -177,6 +181,6 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
             precondition(owner.rewriteModeService.rewrittenText=="newer pending draft" && owner.rewriteModeService.clears==0)
             precondition(fails ? owner.failedTranscript=="rewrite" : owner.menuBarManager.finishes==1)
         }
-        print("Voice Edit cancellation: 10 production-path scenarios passed")
+        print("Voice Edit cancellation: 12 production-path scenarios passed, including profile concealment and closed admission")
     }
 }

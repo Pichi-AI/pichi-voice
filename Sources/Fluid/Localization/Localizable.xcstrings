@@ -62386,6 +62386,42 @@
           }
         }
       }
+    },
+    "Fluid Speech Pro": {
+      "extractionState": "manual",
+      "comment": "Model name. Preserve this spelling in every language.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fluid Speech Pro"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fluid Speech Pro"
+          }
+        }
+      }
+    },
+    "Qwen3 ASR 1.7B": {
+      "extractionState": "manual",
+      "comment": "Model name. Preserve this spelling in every language.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3 ASR 1.7B"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3 ASR 1.7B"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
