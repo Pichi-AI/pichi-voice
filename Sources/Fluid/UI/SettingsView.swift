@@ -1541,7 +1541,7 @@ struct SettingsView: View {
 
                         self.settingsToggleRow(
                             title: "Enable Local API",
-                            description: "Expose a local HTTP endpoint on 127.0.0.1 so other apps on this Mac can send audio for transcription.",
+                            description: "Let other apps on this Mac transcribe audio, read transcription history and edit the dictionary through a local HTTP endpoint at 127.0.0.1.",
                             footnote: AppBrand.text("Changes take effect after you restart FluidVoice."),
                             isOn: Binding(
                                 get: { SettingsStore.shared.localAPIEnabled },

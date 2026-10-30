@@ -62353,19 +62353,19 @@
         }
       }
     },
-    "Expose a local HTTP endpoint on 127.0.0.1 so other apps on this Mac can send audio for transcription.": {
+    "Let other apps on this Mac transcribe audio, read transcription history and edit the dictionary through a local HTTP endpoint at 127.0.0.1.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Expose a local HTTP endpoint on 127.0.0.1 so other apps on this Mac can send audio for transcription."
+            "value": "Let other apps on this Mac transcribe audio, read transcription history and edit the dictionary through a local HTTP endpoint at 127.0.0.1."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Открыть локальный HTTP-эндпоинт на 127.0.0.1, чтобы другие приложения на этом Mac могли отправлять аудио на распознавание."
+            "value": "Разрешить другим приложениям на этом Mac распознавать аудио, читать историю расшифровок и изменять словарь через локальный HTTP-эндпоинт 127.0.0.1."
           }
         }
       }
