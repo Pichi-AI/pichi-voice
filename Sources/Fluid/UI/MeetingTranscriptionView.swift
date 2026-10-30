@@ -2291,7 +2291,7 @@ private struct MeetingHistoryRow: View {
                             .padding(.trailing, self.theme.metrics.spacing.xxl)
                         self.secondaryLine
                         if let place = self.session.savedLocationLabel(language: PichiLocalization.language) {
-                            Label(place, systemImage: "mappin.and.ellipse")
+                            Text(verbatim: place)
                                 .accessibilityLabel(place)
                                 .font(self.theme.typography.caption)
                                 .foregroundStyle(self.theme.palette.secondaryText)

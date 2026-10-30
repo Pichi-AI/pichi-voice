@@ -45,7 +45,7 @@ struct MeetingRecordingCanvas: View {
                         .lineLimit(1)
                         .help(self.sourceSummary)
                     if let place = self.session.savedLocationLabel(language: PichiLocalization.language) {
-                        Label(place, systemImage: "mappin.and.ellipse")
+                        Text(verbatim: place)
                             .accessibilityLabel(place)
                             .font(self.theme.typography.caption)
                             .foregroundStyle(self.theme.palette.secondaryText)
@@ -246,7 +246,7 @@ struct MeetingProcessingCanvas: View {
                 if !self.session.isLocalContentConcealed {
                     MeetingDocumentTitle(title: self.session.displayTitle)
                     if let place = self.session.savedLocationLabel(language: PichiLocalization.language) {
-                        Label(place, systemImage: "mappin.and.ellipse")
+                        Text(verbatim: place)
                             .accessibilityLabel(place)
                             .font(self.theme.typography.caption)
                             .foregroundStyle(self.theme.palette.secondaryText)
@@ -962,10 +962,10 @@ struct MeetingResultCanvas: View {
                     .fixedSize()
                     .help(self.session.startedAt.formatted(Date.FormatStyle(date: .complete, time: .shortened).locale(PichiLocalization.locale)))
                 Text("·").accessibilityHidden(true)
-                Label(Self.durationText(self.session.duration), systemImage: "clock")
+                Text(Self.durationText(self.session.duration))
                     .fixedSize()
                 Text("·").accessibilityHidden(true)
-                Label(self.sourceName, systemImage: self.session.mode == .onlineCall ? "macwindow" : "person.2")
+                Text(verbatim: self.sourceName)
                     .lineLimit(1)
                     .help("\(self.sourceName)\nMicrophone: \(self.session.selectedMicrophone.displayName)")
             }
@@ -978,7 +978,7 @@ struct MeetingResultCanvas: View {
                     PichiLocalization.format("microphone: %@", self.session.selectedMicrophone.displayName)
             )
             if let place = self.session.savedLocationLabel(language: PichiLocalization.language) {
-                Label(place, systemImage: "mappin.and.ellipse")
+                Text(verbatim: place)
                     .accessibilityLabel(place)
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)

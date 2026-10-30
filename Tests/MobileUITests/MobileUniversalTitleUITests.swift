@@ -44,6 +44,10 @@ final class MobileUniversalTitleUITests: XCTestCase {
                 let place = app.descendants(matching: .any).matching(identifier: "history.location.\(identifier)").firstMatch
                 XCTAssertTrue(place.exists, "The saved place stays visible alongside its semantic title")
                 XCTAssertEqual(place.label, expectedPlace)
+                XCTAssertEqual(title.frame.minX, metadata.frame.minX, accuracy: 1,
+                    "Title and start metadata share one leading text column")
+                XCTAssertEqual(title.frame.minX, place.frame.minX, accuracy: 1,
+                    "Place text has no extra icon gutter")
                 XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "history.location.\(englishIdentifier)").firstMatch.exists,
                                "A recording without geolocation must not inherit another recording's place")
                 capture(app, "title-list-\(language)-\(appearance)-\(revision.prefix(8))")
@@ -53,7 +57,11 @@ final class MobileUniversalTitleUITests: XCTestCase {
                 XCTAssertTrue(detailTitle.waitForExistence(timeout: 5))
                 XCTAssertEqual(detailTitle.label, expected, "No date or time is appended to the recording name")
                 XCTAssertEqual(app.staticTexts["transcript.metadata.start"].label, start)
-                XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "transcript.location").firstMatch.label, expectedPlace)
+                let detailStart = app.staticTexts["transcript.metadata.start"]
+                let detailPlace = app.descendants(matching: .any).matching(identifier: "transcript.location").firstMatch
+                XCTAssertEqual(detailPlace.label, expectedPlace)
+                XCTAssertEqual(detailTitle.frame.minX, detailStart.frame.minX, accuracy: 1)
+                XCTAssertEqual(detailTitle.frame.minX, detailPlace.frame.minX, accuracy: 1)
                 capture(app, "title-detail-\(language)-\(appearance)-\(revision.prefix(8))")
                 app.terminate()
             }
