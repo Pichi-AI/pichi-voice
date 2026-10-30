@@ -6,7 +6,7 @@ import Foundation
     static let shared = SettingsStore()
     enum SpeechModel: Hashable {
         case gigaam, appleSpeechAnalyzer, appleSpeech, parakeetTDT, parakeetTDTv2
-        case fluidParakeetMini, fluidParakeetPico, parakeetRealtime, cohereTranscribeSixBit
+        case fluidParakeetMini, fluidParakeetPico, fluidParakeetPro, parakeetRealtime, cohereTranscribeSixBit
         case nemotronOffline, nemotronStreaming, nemotronStreaming320, qwen3Asr, whisper
         var nemotronProviderMode: Int { 0 }
     }

@@ -13,10 +13,26 @@ import sys
 
 output = Path(sys.argv[1])
 support = Path('Tests/FileTranscriptRenameTests.swift').read_text().split('@main @MainActor struct FileTranscriptRenameTests {')[0]
-write = 'func set(_ value: Any?, forKey key: String) { self.values[key] = value }'
+write = 'override func set(_ value: Any?, forKey key: String) { self.lock.withLock { self.values[key] = value } }'
 assert support.count(write) == 1
-support = support.replace(write, 'func set(_ value: Any?, forKey key: String) { self.values[key] = value; RelativeDateTimeProbe.shared.recordWrite() }')
+support = support.replace(write, 'override func set(_ value: Any?, forKey key: String) { self.lock.withLock { self.values[key] = value }; RelativeDateTimeProbe.shared.recordWrite() }')
 (output / 'StandaloneSupport.swift').write_text(support)
+
+# Compile the same actual profile/defaults dependencies as the rename probe.
+account = Path('Sources/Fluid/Account/AccountDomain.swift').read_text()
+def declaration(marker):
+    assert account.count(marker) == 1, f'Ambiguous production declaration: {marker}'
+    start = account.index(marker)
+    end = account.index('{', start) + 1
+    depth = 1
+    while depth:
+        depth += (account[end] == '{') - (account[end] == '}')
+        end += 1
+    return account[start:end]
+(output / 'AccountValues.swift').write_text('import Foundation\n' + '\n'.join(declaration(marker) for marker in (
+    'nonisolated struct AccountIdentity:', 'nonisolated struct AccountContext:',
+    'nonisolated enum AccountError:',
+)) + '\n')
 
 source = Path('Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift').read_text()
 result = 'return formatter.localizedString(for: self.timestamp, relativeTo: reference)'
@@ -33,6 +49,10 @@ assert environment.count(boundary) == 1
 PY
 
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
+    "$task_test_dir/AccountValues.swift" \
+    Sources/Fluid/Account/PrivateProfileStorage.swift \
+    Sources/Fluid/Account/PrivateProfileDefaults.swift \
+    Tests/Support/StandaloneFileHistoryProfile.swift \
     "$task_test_dir/StandaloneSupport.swift" \
     "$task_test_dir/FileTranscriptionHistoryStore.swift" \
     "$task_test_dir/PageVisibilityEnvironment.swift" \
