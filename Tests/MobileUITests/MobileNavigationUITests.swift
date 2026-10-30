@@ -662,7 +662,7 @@ final class MobileNavigationUITests: XCTestCase {
         openNavigation("settings", title: "Settings")
         XCTAssertTrue(app.descendants(matching: .any)["settings.root"].firstMatch.waitForExistence(timeout: 5))
         // The root's last footer explains Replay onboarding and ends the scrollable list.
-        let lastFooter = app.staticTexts["Your meetings, models and voice profile are kept."].firstMatch
+        let lastFooter = app.staticTexts["Your recordings, models and voice profile are kept."].firstMatch
         if app.tabBars.firstMatch.exists {
             let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
             for step in 0..<4 where !lastFooter.exists || !app.windows.firstMatch.frame.contains(lastFooter.frame)
