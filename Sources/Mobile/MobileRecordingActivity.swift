@@ -304,7 +304,8 @@ final class MobileRecordingActivityOwner {
             productName: AppBrand.meetingName,
             liveStatus: PichiLocalization.text("Recording in progress"),
             interruptedStatus: PichiLocalization.text("Recording was interrupted"),
-            meetingKind: recording.mode == .inRoom ? PichiLocalization.text("Recording") : PichiLocalization.text("Online call"),
+            // The status already says Recording, so an in-room recording has no kind caption.
+            meetingKind: recording.mode == .inRoom ? "" : PichiLocalization.text("Online call"),
             accentLight: self.swatch(light),
             accentDark: self.swatch(dark),
             markAsset: BrandPackageStore.shared.hasOverride ? nil : AppBrand.distribution.markAsset,

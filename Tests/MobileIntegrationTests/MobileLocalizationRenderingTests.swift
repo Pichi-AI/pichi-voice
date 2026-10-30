@@ -62,10 +62,27 @@ final class MobileLocalizationRenderingTests: XCTestCase {
     func testMissingAddressUsesLocalizedFallbackAndDateWithoutAnotherLanguage() {
         var session = locationSession()
         session.location?.addresses.removeValue(forKey: "ru")
-        XCTAssertTrue(session.displayTitle(language: .russian).hasPrefix("Встреча в одной комнате · "))
+        // iPhone and iPad name the in-room default Recording through the catalog's device variation.
+        XCTAssertTrue(session.displayTitle(language: .russian).hasPrefix("Запись · "))
         XCTAssertFalse(session.displayTitle(language: .russian).contains("Example Street"))
         session.location = nil
-        XCTAssertTrue(session.displayTitle(language: .english).hasPrefix("In-room meeting · "))
+        XCTAssertTrue(session.displayTitle(language: .english).hasPrefix("Recording · "))
+    }
+
+    func testMobileTitleLeavesTheStartToRowsAndPages() {
+        var session = locationSession()
+        XCTAssertEqual(session.mobileTitle, session.location?.address(for: PichiLocalization.language))
+        XCTAssertTrue(session.displayTitle.hasPrefix("\(session.mobileTitle) · "))
+        XCTAssertTrue(session.hasDistinctMobileTitle)
+        session.location = nil
+        XCTAssertTrue(["Запись", "Recording"].contains(session.mobileTitle), session.mobileTitle)
+        XCTAssertTrue(session.displayTitle.hasPrefix("\(session.mobileTitle) · "))
+        XCTAssertFalse(session.hasDistinctMobileTitle)
+        session.defaultTitleBase = nil
+        session.title = "Мой план Ёё / My plan"
+        XCTAssertEqual(session.mobileTitle, session.title)
+        XCTAssertEqual(session.displayTitle, session.title)
+        XCTAssertTrue(session.hasDistinctMobileTitle)
     }
 
     func testWarmedCatalogKeepsPreferenceAndExplicitLocaleChangesLive() throws {

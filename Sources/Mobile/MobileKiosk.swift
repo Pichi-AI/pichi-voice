@@ -13,8 +13,9 @@ enum MobileMeetingRecordingActions {
         guard !Task.isCancelled && canStart() else { throw CancellationError() }
         try await privacyActivation.waitUntilReadyIfRequested()
         guard !Task.isCancelled && canStart() else { throw CancellationError() }
+        // The shared in-room default title, which the catalog calls Recording on iPhone and iPad.
         let configuration = try await coordinator.defaultConfiguration(mode: .inRoom,
-            title: PichiLocalization.text("Recording"))
+            title: PichiLocalization.text("In-room meeting"))
         guard !Task.isCancelled && canStart() else { throw CancellationError() }
         // A new meeting over an interrupted or failed one starts as Record Again: the old meeting
         // is resolved once capture runs, so its offer stops reopening, and stays if the start fails.

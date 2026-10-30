@@ -70,8 +70,12 @@ final class MobileFirstRunWalkthroughUITests: XCTestCase {
         XCTAssertTrue(start.waitForExistence(timeout: 5) && start.isHittable)
         let meeting = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "history.session.")).firstMatch
         XCTAssertTrue(meeting.exists)
+        // The default name leaves the start to the row's second line and to the page.
+        let name = language == "ru" ? "Запись" : "Recording"
+        XCTAssertTrue(meeting.label.contains(name) && !meeting.label.contains("\(name) · "), meeting.label)
         meeting.tap(); settle(); capture("13-meeting-again")
         XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[name].exists, "The page title is the default name alone")
     }
 
     private func open(_ section: String) {

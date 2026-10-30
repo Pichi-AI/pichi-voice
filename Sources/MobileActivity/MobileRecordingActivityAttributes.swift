@@ -32,6 +32,7 @@ nonisolated struct MobileRecordingActivityAttributes: ActivityAttributes, Sendab
     /// Shown once the system marks the activity stale: the process stopped refreshing it, so the
     /// recording cannot still be live.
     var interruptedStatus: String
+    /// Empty when the status already says what is recorded.
     var meetingKind: String
     var accentLight: Swatch
     var accentDark: Swatch

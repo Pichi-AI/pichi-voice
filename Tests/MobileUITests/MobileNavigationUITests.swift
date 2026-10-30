@@ -1906,12 +1906,25 @@ final class MobileNavigationUITests: XCTestCase {
             openNavigation("meetings", title: meetingsTitle)
             let meeting = app.buttons["history.session.\(fixtureID)"]
             XCTAssertTrue(meeting.waitForExistence(timeout: 10), "Stage LocationMeeting.json in the owned simulator")
-            XCTAssertTrue(meeting.label.contains(expected), meeting.label)
+            // The place names the recording; the start is on the row's second line.
+            XCTAssertTrue(meeting.label.contains(expected) && !meeting.label.contains("\(expected) · "), meeting.label)
             capture("location-\(language)-\(appearance)-history")
             meeting.tap()
-            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", expected))
-                .firstMatch.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 5), "The page title is the place alone")
             capture("location-\(language)-\(appearance)-detail")
+            guard language == "en", appearance == "light" else { continue }
+            // Saving the name unchanged would store the default title as a fixed one.
+            app.buttons["transcript.more"].tap()
+            app.buttons["Rename"].tap()
+            let save = app.navigationBars.buttons["Save"]
+            XCTAssertTrue(save.waitForExistence(timeout: 5))
+            XCTAssertFalse(save.isEnabled, "Save waits for a changed name")
+            let text = app.textViews["transcript.edit.text"]
+            text.tap(); text.typeText(" 2")
+            XCTAssertTrue(save.isEnabled, "A changed name can be saved")
+            capture("location-rename-changed")
+            app.navigationBars.buttons["Cancel"].tap()
+            XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 5), "Cancel keeps the place as the title")
         }
         #endif
     }

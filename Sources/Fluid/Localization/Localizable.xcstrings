@@ -209,15 +209,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A protected transcript export requires a completed meeting captured with sensitive data redaction enabled."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A protected transcript export requires a completed recording made with sensitive data redaction enabled."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A protected transcript export requires a completed recording made with sensitive data redaction enabled."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A protected transcript export requires a completed meeting captured with sensitive data redaction enabled."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для защищённого экспорта нужна завершённая встреча, записанная с включённым скрытием конфиденциальных данных."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для защищённого экспорта нужна завершённая запись, сделанная с включённым скрытием конфиденциальных данных."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для защищённого экспорта нужна завершённая запись, сделанная с включённым скрытием конфиденциальных данных."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для защищённого экспорта нужна завершённая встреча, записанная с включённым скрытием конфиденциальных данных."
+                }
+              }
+            }
           }
         }
       }
@@ -226,15 +262,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This meeting cannot be exported in the portable transcript format."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This recording cannot be exported in the portable transcript format."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This recording cannot be exported in the portable transcript format."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This meeting cannot be exported in the portable transcript format."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Эту встречу нельзя экспортировать в переносимом формате расшифровки."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Эту запись нельзя экспортировать в переносимом формате расшифровки."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Эту запись нельзя экспортировать в переносимом формате расшифровки."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Эту встречу нельзя экспортировать в переносимом формате расшифровки."
+                }
+              }
+            }
           }
         }
       }
@@ -9295,15 +9367,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Capture audio could not be normalized onto the meeting timeline."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Capture audio could not be normalized onto the recording timeline."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Capture audio could not be normalized onto the recording timeline."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Capture audio could not be normalized onto the meeting timeline."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось синхронизировать аудио со шкалой времени встречи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось синхронизировать аудио со шкалой времени записи."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось синхронизировать аудио со шкалой времени записи."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось синхронизировать аудио со шкалой времени встречи."
+                }
+              }
+            }
           }
         }
       }
@@ -10162,15 +10270,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose a supported meeting language from Recording settings."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Choose a supported language in Recording settings."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Choose a supported language in Recording settings."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Choose a supported meeting language from Recording settings."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выберите поддерживаемый язык встречи в настройках записи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выберите поддерживаемый язык в настройках записи."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выберите поддерживаемый язык в настройках записи."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выберите поддерживаемый язык встречи в настройках записи."
+                }
+              }
+            }
           }
         }
       }
@@ -18163,15 +18307,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "FluidVoice is tidying up meeting storage. Try again in a moment."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording storage is being tidied up. Try again in a moment."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording storage is being tidied up. Try again in a moment."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "FluidVoice is tidying up meeting storage. Try again in a moment."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "FluidVoice очищает хранилище встреч. Попробуйте ещё раз через несколько секунд."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Хранилище записей очищается. Попробуйте ещё раз через несколько секунд."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Хранилище записей очищается. Попробуйте ещё раз через несколько секунд."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "FluidVoice очищает хранилище встреч. Попробуйте ещё раз через несколько секунд."
+                }
+              }
+            }
           }
         }
       }
@@ -20449,15 +20629,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In-room meeting"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "In-room meeting"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Встреча в одной комнате"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Запись"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Запись"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Встреча в одной комнате"
+                }
+              }
+            }
           }
         }
       }
@@ -23029,15 +23245,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Встреча"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Запись"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Запись"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Встреча"
+                }
+              }
+            }
           }
         }
       }
@@ -23199,15 +23451,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting history could not be loaded."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recordings could not be loaded."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recordings could not be loaded."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting history could not be loaded."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось загрузить историю встреч."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось загрузить записи."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось загрузить записи."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось загрузить историю встреч."
+                }
+              }
+            }
           }
         }
       }
@@ -23336,15 +23624,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Another meeting recording is already active."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another recording is already in progress."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another recording is already in progress."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another meeting recording is already active."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Уже идёт запись другой встречи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Уже идёт другая запись."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Уже идёт другая запись."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Уже идёт запись другой встречи."
+                }
+              }
+            }
           }
         }
       }
@@ -23353,15 +23677,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "There is no active meeting recording."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "There is no recording in progress."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "There is no recording in progress."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "There is no active meeting recording."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сейчас нет активной записи встречи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас запись не идёт."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас запись не идёт."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас нет активной записи встречи."
+                }
+              }
+            }
           }
         }
       }
@@ -23370,15 +23730,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A different meeting recording is active."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A different recording is in progress."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A different recording is in progress."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "A different meeting recording is active."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сейчас активна запись другой встречи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас идёт другая запись."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас идёт другая запись."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сейчас активна запись другой встречи."
+                }
+              }
+            }
           }
         }
       }
@@ -23421,15 +23817,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Microphone permission is required to record this meeting."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Microphone permission is required to make this recording."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Microphone permission is required to make this recording."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Microphone permission is required to record this meeting."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Чтобы записать эту встречу, разрешите доступ к микрофону."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Чтобы сделать запись, разрешите доступ к микрофону."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Чтобы сделать запись, разрешите доступ к микрофону."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Чтобы записать эту встречу, разрешите доступ к микрофону."
+                }
+              }
+            }
           }
         }
       }
@@ -23455,15 +23887,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Not enough free space is available for recording. Free space for at least a one-hour recording and processing workspace, then try again."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Not enough free space is available for recording. Free space for at least a one-hour recording and processing workspace, then try again."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Недостаточно свободного места для записи встречи. Освободите место хотя бы для часа записи и её обработки, затем повторите попытку."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Недостаточно свободного места для записи. Освободите место хотя бы для часа записи и её обработки, затем повторите попытку."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Недостаточно свободного места для записи. Освободите место хотя бы для часа записи и её обработки, затем повторите попытку."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Недостаточно свободного места для записи встречи. Освободите место хотя бы для часа записи и её обработки, затем повторите попытку."
+                }
+              }
+            }
           }
         }
       }
@@ -23472,15 +23940,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting recording could not start. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording could not start. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording could not start. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting recording could not start. %@"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось начать запись встречи. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось начать запись. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось начать запись. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось начать запись встречи. %@"
+                }
+              }
+            }
           }
         }
       }
@@ -23489,15 +23993,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting recording could not stop cleanly. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording could not stop cleanly. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording could not stop cleanly. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting recording could not stop cleanly. %@"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось корректно остановить запись встречи. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось корректно остановить запись. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось корректно остановить запись. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось корректно остановить запись встречи. %@"
+                }
+              }
+            }
           }
         }
       }
@@ -23523,15 +24063,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting audio could not be saved. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording audio could not be saved. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording audio could not be saved. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting audio could not be saved. %@"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось сохранить звук встречи. %@"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось сохранить звук записи. %@"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось сохранить звук записи. %@"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Не удалось сохранить звук встречи. %@"
+                }
+              }
+            }
           }
         }
       }
@@ -23642,15 +24218,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting title cannot be empty."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording title cannot be empty."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recording title cannot be empty."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting title cannot be empty."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Название встречи не может быть пустым."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Название записи не может быть пустым."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Название записи не может быть пустым."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Название встречи не может быть пустым."
+                }
+              }
+            }
           }
         }
       }
@@ -38444,15 +39056,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The meeting has an invalid audio chunk manifest."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording has an invalid audio chunk manifest."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording has an invalid audio chunk manifest."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The meeting has an invalid audio chunk manifest."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Список аудиофрагментов встречи содержит ошибки."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиофрагментов записи содержит ошибки."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиофрагментов записи содержит ошибки."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиофрагментов встречи содержит ошибки."
+                }
+              }
+            }
           }
         }
       }
@@ -38461,15 +39109,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The meeting has an invalid audio track manifest."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording has an invalid audio track manifest."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording has an invalid audio track manifest."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The meeting has an invalid audio track manifest."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Список аудиодорожек встречи содержит ошибки."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиодорожек записи содержит ошибки."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиодорожек записи содержит ошибки."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Список аудиодорожек встречи содержит ошибки."
+                }
+              }
+            }
           }
         }
       }
@@ -38512,15 +39196,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The meeting transcript contains invalid references."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording transcript contains invalid references."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording transcript contains invalid references."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The meeting transcript contains invalid references."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расшифровка встречи содержит неверные ссылки."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка записи содержит неверные ссылки."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка записи содержит неверные ссылки."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка встречи содержит неверные ссылки."
+                }
+              }
+            }
           }
         }
       }
@@ -38721,15 +39441,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The selected model does not support live captions in this meeting language."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected model does not support live captions in this language."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected model does not support live captions in this language."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected model does not support live captions in this meeting language."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выбранная модель не поддерживает субтитры на этом языке встречи."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранная модель не поддерживает субтитры на этом языке."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранная модель не поддерживает субтитры на этом языке."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранная модель не поддерживает субтитры на этом языке встречи."
+                }
+              }
+            }
           }
         }
       }
@@ -38755,15 +39511,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The speaker is no longer part of this meeting."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The speaker is no longer part of this recording."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The speaker is no longer part of this recording."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The speaker is no longer part of this meeting."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Этого участника больше нет в данной встрече."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этого участника больше нет в этой записи."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этого участника больше нет в этой записи."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этого участника больше нет в данной встрече."
+                }
+              }
+            }
           }
         }
       }
@@ -39592,15 +40384,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This transcript line is no longer part of the meeting."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This transcript line is no longer part of the recording."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This transcript line is no longer part of the recording."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "This transcript line is no longer part of the meeting."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Этой строки расшифровки больше нет во встрече."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этой строки расшифровки больше нет в записи."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этой строки расшифровки больше нет в записи."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Этой строки расшифровки больше нет во встрече."
+                }
+              }
+            }
           }
         }
       }
@@ -45780,15 +46608,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "meeting transcription"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "recording transcription"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "recording transcription"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "meeting transcription"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расшифровка встречи"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка записи"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка записи"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расшифровка встречи"
+                }
+              }
+            }
           }
         }
       }
@@ -50838,15 +51702,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Another PCM window still owns the meeting inference runtime."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another PCM window still owns the recognition runtime."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another PCM window still owns the recognition runtime."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Another PCM window still owns the meeting inference runtime."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Распознавание предыдущего фрагмента PCM встречи ещё не завершено."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Распознавание предыдущего фрагмента PCM записи ещё не завершено."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Распознавание предыдущего фрагмента PCM записи ещё не завершено."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Распознавание предыдущего фрагмента PCM встречи ещё не завершено."
+                }
+              }
+            }
           }
         }
       }
@@ -50905,15 +51805,51 @@
     "Battery use and recognition speed depend on the device. Test longer meetings on your iPad.": {
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Battery use and recognition speed depend on the device. Test longer meetings on your iPad."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Battery use and recognition speed depend on the device. Test longer recordings on your iPad."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Battery use and recognition speed depend on the device. Test longer recordings on your iPhone."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Battery use and recognition speed depend on the device. Test longer meetings on your iPad."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные встречи на своём iPad."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные записи на своём iPad."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные записи на своём iPhone."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные встречи на своём iPad."
+                }
+              }
+            }
           }
         }
       }
@@ -51137,15 +52073,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting backend \"%@\" does not support %@ input."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recognition backend \"%@\" does not support %@ input."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recognition backend \"%@\" does not support %@ input."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting backend \"%@\" does not support %@ input."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Обработчик встречи «%@» не поддерживает аудиовход %@."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Движок распознавания «%@» не поддерживает аудиовход %@."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Движок распознавания «%@» не поддерживает аудиовход %@."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Обработчик встречи «%@» не поддерживает аудиовход %@."
+                }
+              }
+            }
           }
         }
       }
@@ -51154,15 +52126,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Meeting backend \"%@\" produced capabilities different from its registration."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recognition backend \"%@\" produced capabilities different from its registration."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Recognition backend \"%@\" produced capabilities different from its registration."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Meeting backend \"%@\" produced capabilities different from its registration."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Возможности обработчика встречи «%@» отличаются от зарегистрированных."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Возможности движка распознавания «%@» отличаются от зарегистрированных."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Возможности движка распознавания «%@» отличаются от зарегистрированных."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Возможности обработчика встречи «%@» отличаются от зарегистрированных."
+                }
+              }
+            }
           }
         }
       }
@@ -51387,15 +52395,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sensitive data redaction requires a compatible meeting backend."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Sensitive data redaction requires a compatible transcription backend."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Sensitive data redaction requires a compatible transcription backend."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Sensitive data redaction requires a compatible meeting backend."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для удаления чувствительных данных нужен совместимый движок встреч."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для удаления чувствительных данных нужен совместимый движок распознавания."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для удаления чувствительных данных нужен совместимый движок распознавания."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Для удаления чувствительных данных нужен совместимый движок встреч."
+                }
+              }
+            }
           }
         }
       }
@@ -51567,15 +52611,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed Whisper artifact changed after this recording was scheduled. Start a new processing run."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed Whisper artifact changed after this recording was scheduled. Start a new processing run."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Установленная модель Whisper изменилась после подготовки этой встречи. Запустите обработку заново."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель Whisper изменилась после подготовки этой записи. Запустите обработку заново."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель Whisper изменилась после подготовки этой записи. Запустите обработку заново."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель Whisper изменилась после подготовки этой встречи. Запустите обработку заново."
+                }
+              }
+            }
           }
         }
       }
@@ -51584,15 +52664,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The installed meeting model changed after this attempt was scheduled. Start a new processing run."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed recognition model changed after this attempt was scheduled. Start a new processing run."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed recognition model changed after this attempt was scheduled. Start a new processing run."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The installed meeting model changed after this attempt was scheduled. Start a new processing run."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Установленная модель встречи изменилась после подготовки этой попытки. Запустите обработку заново."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель распознавания изменилась после подготовки этой попытки. Запустите обработку заново."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель распознавания изменилась после подготовки этой попытки. Запустите обработку заново."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Установленная модель встречи изменилась после подготовки этой попытки. Запустите обработку заново."
+                }
+              }
+            }
           }
         }
       }
@@ -51601,15 +52717,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The meeting PCM window is outside the bounded inference contract."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording PCM window is outside the bounded inference contract."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The recording PCM window is outside the bounded inference contract."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The meeting PCM window is outside the bounded inference contract."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Фрагмент PCM встречи превышает допустимые ограничения распознавания."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Фрагмент PCM записи превышает допустимые ограничения распознавания."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Фрагмент PCM записи превышает допустимые ограничения распознавания."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Фрагмент PCM встречи превышает допустимые ограничения распознавания."
+                }
+              }
+            }
           }
         }
       }
@@ -51698,15 +52850,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The pinned recognition model files are unavailable. Restore them or start a new processing run."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The pinned recognition model files are unavailable. Restore them or start a new processing run."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Зафиксированные файлы модели для встречи недоступны. Восстановите их или запустите обработку заново."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Зафиксированные файлы модели распознавания недоступны. Восстановите их или запустите обработку заново."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Зафиксированные файлы модели распознавания недоступны. Восстановите их или запустите обработку заново."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Зафиксированные файлы модели для встречи недоступны. Восстановите их или запустите обработку заново."
+                }
+              }
+            }
           }
         }
       }
@@ -51715,15 +52903,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The selected meeting runtime does not support in-memory audio."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected recognition runtime does not support in-memory audio."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected recognition runtime does not support in-memory audio."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "The selected meeting runtime does not support in-memory audio."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранный движок распознавания не поддерживает распознавание аудио из памяти."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранный движок распознавания не поддерживает распознавание аудио из памяти."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
+                }
+              }
+            }
           }
         }
       }
@@ -52051,15 +53275,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Настройте свой голос, чтобы в следующих встречах ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Настройте свой голос, чтобы в следующих записях ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Настройте свой голос, чтобы в следующих записях ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Настройте свой голос, чтобы в следующих встречах ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+                }
+              }
+            }
           }
         }
       }
@@ -52068,15 +53328,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Today I am setting up my voice for meeting transcripts. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Today I am setting up my voice for transcripts of my recordings. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Today I am setting up my voice for transcripts of my recordings. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Today I am setting up my voice for meeting transcripts. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сегодня я настраиваю свой голос для расшифровки встреч. Я говорю в обычном темпе и держу микрофон на удобном расстоянии. Этот образец поможет приложению отличить мой голос от голосов других людей. Я могу удалить свой голосовой профиль в настройках в любое время."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сегодня я настраиваю свой голос для расшифровки записей. Я говорю в обычном темпе и держу микрофон на удобном расстоянии. Этот образец поможет приложению отличить мой голос от голосов других людей. Я могу удалить свой голосовой профиль в настройках в любое время."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сегодня я настраиваю свой голос для расшифровки записей. Я говорю в обычном темпе и держу микрофон на удобном расстоянии. Этот образец поможет приложению отличить мой голос от голосов других людей. Я могу удалить свой голосовой профиль в настройках в любое время."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Сегодня я настраиваю свой голос для расшифровки встреч. Я говорю в обычном темпе и держу микрофон на удобном расстоянии. Этот образец поможет приложению отличить мой голос от голосов других людей. Я могу удалить свой голосовой профиль в настройках в любое время."
+                }
+              }
+            }
           }
         }
       }
@@ -52136,15 +53432,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice sample is ready. Save to use it in future meetings."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Voice sample is ready. Save to use it in future recordings."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Voice sample is ready. Save to use it in future recordings."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Voice sample is ready. Save to use it in future meetings."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Образец голоса готов. Сохраните его, чтобы использовать в следующих встречах."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Образец голоса готов. Сохраните его, чтобы использовать в следующих записях."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Образец голоса готов. Сохраните его, чтобы использовать в следующих записях."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Образец голоса готов. Сохраните его, чтобы использовать в следующих встречах."
+                }
+              }
+            }
           }
         }
       }
@@ -52204,15 +53536,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Future meetings will use participant labels until you set up your voice again. Existing transcripts are unchanged."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Future recordings will use participant labels until you set up your voice again. Existing transcripts are unchanged."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Future recordings will use participant labels until you set up your voice again. Existing transcripts are unchanged."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Future meetings will use participant labels until you set up your voice again. Existing transcripts are unchanged."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "В следующих встречах будут использоваться метки участников, пока вы снова не настроите свой голос. Существующие расшифровки не изменятся."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "В следующих записях будут использоваться метки участников, пока вы снова не настроите свой голос. Существующие расшифровки не изменятся."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "В следующих записях будут использоваться метки участников, пока вы снова не настроите свой голос. Существующие расшифровки не изменятся."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "В следующих встречах будут использоваться метки участников, пока вы снова не настроите свой голос. Существующие расшифровки не изменятся."
+                }
+              }
+            }
           }
         }
       }
@@ -53262,15 +54630,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Speaker resources prepare automatically. Finish setup before an offline meeting."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Speaker resources prepare automatically. Finish setup before recording offline."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Speaker resources prepare automatically. Finish setup before recording offline."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Speaker resources prepare automatically. Finish setup before an offline meeting."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ресурсы определения участников готовятся автоматически. Завершите настройку перед встречей без интернета."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Ресурсы определения участников готовятся автоматически. Завершите настройку перед записью без интернета."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Ресурсы определения участников готовятся автоматически. Завершите настройку перед записью без интернета."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Ресурсы определения участников готовятся автоматически. Завершите настройку перед встречей без интернета."
+                }
+              }
+            }
           }
         }
       }
@@ -53486,15 +54890,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Use location for meeting addresses"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Use location for recording addresses"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Use location for recording addresses"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Use location for meeting addresses"
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Использовать геолокацию для адресов встреч"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Использовать геолокацию для адресов записей"
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Использовать геолокацию для адресов записей"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Использовать геолокацию для адресов встреч"
+                }
+              }
+            }
           }
         }
       }
@@ -53503,15 +54943,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Optional. Save the address where a meeting starts. Location is requested once per meeting, without background tracking."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Optional. Save the address where a recording starts. Location is requested once per recording, without background tracking."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Optional. Save the address where a recording starts. Location is requested once per recording, without background tracking."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Optional. Save the address where a meeting starts. Location is requested once per meeting, without background tracking."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Необязательно. Сохраняйте адрес, где начинается встреча. Геолокация запрашивается один раз на встречу, без отслеживания в фоне."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Необязательно. Сохраняйте адрес, где начинается запись. Геолокация запрашивается один раз на запись, без отслеживания в фоне."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Необязательно. Сохраняйте адрес, где начинается запись. Геолокация запрашивается один раз на запись, без отслеживания в фоне."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Необязательно. Сохраняйте адрес, где начинается встреча. Геолокация запрашивается один раз на встречу, без отслеживания в фоне."
+                }
+              }
+            }
           }
         }
       }
@@ -53520,15 +54996,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apple resolves the address. It is saved with the meeting and shown in your interface language."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple resolves the address. It is saved with the recording and shown in your interface language."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple resolves the address. It is saved with the recording and shown in your interface language."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple resolves the address. It is saved with the meeting and shown in your interface language."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apple определяет адрес. Он сохраняется вместе со встречей и отображается на языке интерфейса."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple определяет адрес. Он сохраняется вместе с записью и отображается на языке интерфейса."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple определяет адрес. Он сохраняется вместе с записью и отображается на языке интерфейса."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Apple определяет адрес. Он сохраняется вместе со встречей и отображается на языке интерфейса."
+                }
+              }
+            }
           }
         }
       }
@@ -53571,15 +55083,51 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Location access is denied. Allow it in system settings to save meeting addresses."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Location access is denied. Allow it in system settings to save recording addresses."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Location access is denied. Allow it in system settings to save recording addresses."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Location access is denied. Allow it in system settings to save meeting addresses."
+                }
+              }
+            }
           }
         },
         "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Доступ к геолокации запрещён. Разрешите его в системных настройках, чтобы сохранять адреса встреч."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Доступ к геолокации запрещён. Разрешите его в системных настройках, чтобы сохранять адреса записей."
+                }
+              },
+              "iphone": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Доступ к геолокации запрещён. Разрешите его в системных настройках, чтобы сохранять адреса записей."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Доступ к геолокации запрещён. Разрешите его в системных настройках, чтобы сохранять адреса встреч."
+                }
+              }
+            }
           }
         }
       }

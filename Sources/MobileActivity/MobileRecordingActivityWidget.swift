@@ -108,7 +108,7 @@ private struct MobileRecordingLockScreenView: View {
     }
 }
 
-/// The recording status with its symbol, followed by the meeting kind. A stale activity shows the
+/// The recording status with its symbol, followed by the meeting kind if any. A stale activity shows the
 /// interrupted status in secondary ink, without the accent that marks a live recording.
 private struct MobileActivityStatusLine: View {
     let attributes: MobileRecordingActivityAttributes
@@ -126,10 +126,12 @@ private struct MobileActivityStatusLine: View {
             .font(.system(.subheadline, design: self.attributes.bodyDesign.font).weight(.medium))
             .foregroundStyle(self.isStale ? AnyShapeStyle(.secondary) : AnyShapeStyle(self.accent))
             .lineLimit(1)
-            Text(verbatim: self.attributes.meetingKind)
-                .font(.system(.caption, design: self.attributes.bodyDesign.font))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            if !self.attributes.meetingKind.isEmpty {
+                Text(verbatim: self.attributes.meetingKind)
+                    .font(.system(.caption, design: self.attributes.bodyDesign.font))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
     }
 }

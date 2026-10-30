@@ -135,7 +135,7 @@ struct MobileMeetingRoot: View {
         var title: String {
             switch self { case .meetings: return "Recordings"; case .settings: return "Settings" }
         }
-        // The same symbols as the desktop sidebar sections.
+        // Settings matches the desktop sidebar; Recordings uses the waveform of a voice recorder.
         var symbol: String {
             switch self { case .meetings: return "waveform"; case .settings: return "gearshape" }
         }
@@ -445,7 +445,7 @@ struct MobileMeetingRoot: View {
             recordingStatus(session)
             // The band already says Recording; a title shows here when it names more than that.
             if !compactHeight, canPresent(session), session.hasDistinctMobileTitle {
-                Text(session.mobileTitle()).font(theme.typography.sectionTitle).lineLimit(2)
+                Text(session.mobileTitle).font(theme.typography.sectionTitle).lineLimit(2)
             }
             if canPresent(session) {
                 switch coordinator.liveTranscript.availability {
@@ -531,7 +531,7 @@ struct MobileMeetingRoot: View {
         VStack(alignment: .leading, spacing: 24) {
             Label(PichiLocalization.text("Preparing your transcript"), systemImage: "text.alignleft")
                 .font(theme.typography.sectionTitle)
-            if canPresent(session) { Text(session.mobileTitle()).font(theme.typography.title) }
+            if canPresent(session) { Text(session.mobileTitle).font(theme.typography.title) }
             ProgressView(PichiLocalization.text(stageTitle(stage)))
                 .accessibilityIdentifier("meeting.processing")
             Spacer()
@@ -563,7 +563,7 @@ struct MobileMeetingRoot: View {
                 VStack(alignment: .leading, spacing: 16) {
                     // Without transcript text the title belongs here; otherwise the transcript shows it.
                     if session.transcriptSegments.isEmpty {
-                        Text(session.mobileTitle()).font(theme.typography.title)
+                        Text(session.mobileTitle).font(theme.typography.title)
                     }
                     Text(PichiLocalization.text(session.state == .interrupted
                         ? "Transcription was interrupted" : "Transcription failed"))
@@ -608,7 +608,7 @@ struct MobileMeetingRoot: View {
         let matches = sessions.filter { session in
             // An encrypted meeting stays listed without its content, which search cannot match.
             if session.isLocalContentConcealed { return search.isEmpty && canAccessOwner(session) }
-            return search.isEmpty || session.mobileTitle(includingStart: true).localizedCaseInsensitiveContains(search)
+            return search.isEmpty || session.displayTitle.localizedCaseInsensitiveContains(search)
                 || session.readableSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
                 || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
         }
@@ -620,7 +620,7 @@ struct MobileMeetingRoot: View {
                             .font(theme.typography.bodyStrong)
                         Text(concealedSummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     } else {
-                        Text(session.mobileTitle()).font(theme.typography.bodyStrong)
+                        Text(session.mobileTitle).font(theme.typography.bodyStrong)
                         Text(historySummary(session)).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     }
                     if let cloudPublication {
@@ -750,7 +750,7 @@ struct MobileMeetingRoot: View {
         return ScrollViewReader { reader in
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text(session.mobileTitle()).font(theme.typography.title)
+                    Text(session.mobileTitle).font(theme.typography.title)
                     HStack {
                         Label(MeetingTranscriptExporter.timestampText(session.duration), systemImage: "clock")
                         Text(session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale)))
@@ -784,7 +784,7 @@ struct MobileMeetingRoot: View {
                                 Button(PichiLocalization.text("Export Audio")) { exportAudio(session) }
                                 Button(PichiLocalization.text("Delete Audio"), role: .destructive) { deletion = .audio(session) }
                             }
-                            Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.mobileTitle()) }
+                            Button(PichiLocalization.text("Rename")) { edit = MeetingEditDraft(session: session, kind: .title, text: session.mobileTitle) }
                             if coordinator.canUndoCorrection(sessionID: session.id) {
                                 Button(PichiLocalization.text("Undo correction")) {
                                     run(session: session) {
@@ -1155,7 +1155,7 @@ struct MobileMeetingRoot: View {
             guard privatePresentation.publications.canPublish(admission), canPresent(fresh) else { return }
             let data = try await MeetingTranscriptExporter.protectedTranscriptJSONForSharing(for: fresh)
             guard privatePresentation.publications.canPublish(admission) else { return }
-            let payload = try MeetingSharePayload.transcript(data: data, title: fresh.mobileTitle(includingStart: true), fileExtension: "json")
+            let payload = try MeetingSharePayload.transcript(data: data, title: fresh.displayTitle, fileExtension: "json")
             guard privatePresentation.publications.canPublish(admission) else { payload.cleanup(); return }
             share?.cleanup(); share = payload
         }
@@ -1478,9 +1478,16 @@ private struct MeetingEditTextForm: View {
     let save: (MeetingEditDraft.Kind, String) -> Void
     @Environment(\.theme) private var theme
     @State private var text: String
+    private let original: String
     init(kind: MeetingEditDraft.Kind, text: String, cancel: @escaping () -> Void,
          save: @escaping (MeetingEditDraft.Kind, String) -> Void) {
         self.kind = kind; self.cancel = cancel; self.save = save; self._text = State(initialValue: text)
+        self.original = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    /// Saving an unchanged default name would store it as a fixed title without the start.
+    private var canSave: Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed != original
     }
     var body: some View {
         TextEditor(text: $text).font(theme.typography.body).padding().accessibilityIdentifier("transcript.edit.text")
@@ -1489,7 +1496,7 @@ private struct MeetingEditTextForm: View {
                 ToolbarItem(placement: .cancellationAction) { Button(PichiLocalization.text("Cancel"), action: cancel) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(PichiLocalization.text("Save")) { save(kind, text) }
-                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!canSave)
                 }
             }
     }
@@ -1501,13 +1508,11 @@ extension MeetingSession {
         !displayTitleIncludesStart || location?.address(for: PichiLocalization.language) != nil
     }
 
-    /// The name a recording shows on mobile. A default title names the place, or "Recording", and
-    /// leaves out the start that rows and pages show next to it; exports and search keep the start.
-    func mobileTitle(includingStart: Bool = false) -> String {
+    /// `displayTitle` without the start that rows and pages show next to it. A default title names
+    /// the place, or the in-room default, which the catalog calls Recording on iPhone and iPad.
+    /// Exports and search keep `displayTitle`.
+    var mobileTitle: String {
         guard displayTitleIncludesStart else { return displayTitle }
-        let base = location?.address(for: PichiLocalization.language) ?? PichiLocalization.text("Recording")
-        guard includingStart else { return base }
-        let start = startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale))
-        return "\(base) · \(start)"
+        return location?.address(for: PichiLocalization.language) ?? PichiLocalization.text("In-room meeting")
     }
 }
