@@ -63,17 +63,23 @@ nonisolated struct MeetingSavedSummary: Codable {
     /// Upgrade before saving a rename, while the original title can still verify old files.
     /// Each upgrade remains valid even if a later write (including the rename) fails.
     static func migrateLegacySummaries(in directory: URL, for session: MeetingSession) throws {
-        let legacyHash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
-        let contentHash = MeetingSummaryInput.contentFingerprint(for: session)
+        // Most recordings have no legacy summary. Build large reading projections only
+        // after finding a candidate, and at most once for all summary kinds.
+        var legacyHash: String?
+        var contentHash: String?
         for kind in MeetingSummaryKind.allCases {
             let url = directory.appendingPathComponent("manual-summary-\(kind.rawValue).json")
             guard var saved = try? JSONDecoder().decode(Self.self, from: Data(contentsOf: url)),
                   saved.transcriptHashVersion == nil,
                   saved.providerID != nil,
-                  saved.promptVersion == MeetingSummaryInput.currentPromptVersion,
-                  saved.transcriptHash == legacyHash
+                  saved.promptVersion == MeetingSummaryInput.currentPromptVersion
             else { continue }
-            saved.transcriptHash = contentHash
+            let originalHash = legacyHash ?? MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+            legacyHash = originalHash
+            guard saved.transcriptHash == originalHash else { continue }
+            let migratedHash = contentHash ?? MeetingSummaryInput.contentFingerprint(for: session)
+            contentHash = migratedHash
+            saved.transcriptHash = migratedHash
             saved.transcriptHashVersion = Self.currentTranscriptHashVersion
             try JSONEncoder().encode(saved).write(to: url, options: .atomic)
         }
