@@ -3552,7 +3552,9 @@ extension DictationE2ETests {
         XCTAssertEqual(FluidAudioProvider.applyPronunciationMatches(result: result, matches: [match], profiles: [profile], labels: [id: "ChangedMeaning"]), result.text)
         var incompatible = profile
         incompatible.enrollments[0].extractorVersion = "another-vector-space"
-        XCTAssertFalse(incompatible.isEligibleForMatching)
+        XCTAssertTrue(incompatible.isEligibleForMatching, "Storage validates shape; the provider validates its feature recipe")
+        let matchingEntry = SettingsStore.CustomDictionaryEntry(id: id, triggers: ["FluidVoice"], replacement: "FluidVoice")
+        XCTAssertTrue(FluidAudioProvider.matchingProfiles([incompatible], entries: [matchingEntry], includeManual: true).isEmpty)
         let other = PronunciationDictionaryProfile(dictionaryEntryID: otherID, label: "Other", modelKey: "parakeet-v3", hiddenSize: 2, enrollments: [sample])
         let competitor = PronunciationWindowMatch(prototypeIndex: 1, score: 0.88, frameRange: 0..<6)
         XCTAssertEqual(
