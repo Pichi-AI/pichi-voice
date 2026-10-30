@@ -6,7 +6,7 @@ nonisolated enum MeetingAutomaticNaming {
     static let minimumDuration: TimeInterval = 1_800
     static let minimumTextCharacters = 1_500
     static let maximumTextBytes = 4 * 1_024 * 1_024
-    static let maximumSegments = 100_000
+    static let maximumSegments = 50_000
 
     /// New-result publication awaits this owned utility worker. Cancellation always joins it;
     /// an already-running bounded regex scan can finish before the caller rechecks admission.
