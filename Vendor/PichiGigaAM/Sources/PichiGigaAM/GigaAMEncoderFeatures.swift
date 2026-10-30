@@ -49,3 +49,24 @@ public struct GigaAMEncoderFeatures: Equatable, Sendable {
         return mean.map { Float($0 / norm) }
     }
 }
+
+/// A bounded feature window with a non-overlapping ownership interval. The
+/// encoder may use overlapping context while a spoken occurrence is corrected
+/// only once. Model fingerprints remain the admitted runtime's responsibility.
+public struct GigaAMEncoderWindow: Sendable {
+    public let offset: Double
+    public let ownership: Range<Double>
+    public let features: GigaAMEncoderFeatures
+
+    public init(offset: Double, ownership: Range<Double>, features: GigaAMEncoderFeatures) throws {
+        guard offset.isFinite, offset >= 0, ownership.lowerBound.isFinite,
+              ownership.upperBound.isFinite, ownership.lowerBound >= offset,
+              ownership.lowerBound < ownership.upperBound,
+              ownership.upperBound <= offset + Double(features.frameCount) * GigaAMEncoderFeatures.frameDuration + 0.081 else {
+            throw GigaAMAcousticError.invalidFeatures
+        }
+        self.offset = offset
+        self.ownership = ownership
+        self.features = features
+    }
+}

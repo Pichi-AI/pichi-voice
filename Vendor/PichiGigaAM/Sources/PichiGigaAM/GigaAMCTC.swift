@@ -22,13 +22,15 @@ public struct GigaAMTranscript: Sendable {
     public let words: [GigaAMWordTiming]
     public let endOfUtteranceProbability: Float?
     public let processingDuration: TimeInterval
+    public let encoderWindows: [GigaAMEncoderWindow]
 
-    public init(text: String, confidence: Float, words: [GigaAMWordTiming], endOfUtteranceProbability: Float?, processingDuration: TimeInterval) {
+    public init(text: String, confidence: Float, words: [GigaAMWordTiming], endOfUtteranceProbability: Float?, processingDuration: TimeInterval, encoderWindows: [GigaAMEncoderWindow] = []) {
         self.text = text
         self.confidence = confidence
         self.words = words
         self.endOfUtteranceProbability = endOfUtteranceProbability
         self.processingDuration = processingDuration
+        self.encoderWindows = encoderWindows
     }
 }
 
