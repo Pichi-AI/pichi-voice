@@ -103,7 +103,8 @@ extension SettingsStore {
         }
         var overrides = try admittedGroupOverrides()
         overrides[id] = terms
-        _ = try TranscriptSensitiveDictionarySnapshot(entries: [], selectedGroupIDs: Set(overrides.keys),
+        let entries = try TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey).entries
+        _ = try TranscriptSensitiveDictionarySnapshot(entries: entries, selectedGroupIDs: admittedBusinessGroups(),
             groupTermOverrides: overrides)
         let data = try JSONEncoder().encode(overrides)
         guard data.count <= TranscriptSensitiveDictionarySnapshot.maximumStoredBytes else {
@@ -116,6 +117,9 @@ extension SettingsStore {
     func resetSensitiveBusinessGroupTerms(id: String) throws {
         var overrides = try admittedGroupOverrides()
         overrides[id] = nil
+        let entries = try TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey).entries
+        _ = try TranscriptSensitiveDictionarySnapshot(entries: entries, selectedGroupIDs: admittedBusinessGroups(),
+            groupTermOverrides: overrides)
         objectWillChange.send()
         defaults.set(try JSONEncoder().encode(overrides), forKey: Self.sensitiveBusinessGroupOverridesKey)
     }

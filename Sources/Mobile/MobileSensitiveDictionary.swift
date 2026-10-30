@@ -170,7 +170,7 @@ private struct MobileSensitiveBusinessGroupSettings: View {
                     get: { settings.sensitiveBusinessGroupIDs.contains(group.id) },
                     set: { enabled in
                         do { try settings.setSensitiveBusinessGroup(id: group.id, enabled: enabled); error = nil }
-                        catch { error = PichiLocalization.text("Could not update privacy rules. The existing rules were kept.") }
+                        catch { self.error = PichiLocalization.text("Could not update privacy rules. The existing rules were kept.") }
                     }))
                     .accessibilityIdentifier("privacy.groups.\(group.id).enabled")
                 if let error { Text(error).font(theme.typography.caption).foregroundStyle(theme.palette.warning) }
@@ -300,7 +300,7 @@ private struct MobileSensitiveTopicSettings: View {
                         get: { settings.sensitiveTopicClassifierIDs.contains(group.id) },
                         set: { enabled in
                             do { try settings.setSensitiveTopicClassifier(id: group.id, enabled: enabled); error = nil }
-                            catch { error = PichiLocalization.text("Could not update privacy rules. The existing rules were kept.") }
+                            catch { self.error = PichiLocalization.text("Could not update privacy rules. The existing rules were kept.") }
                         }))
                         .accessibilityIdentifier("privacy.topics.\(group.id).enabled")
                 }
@@ -327,7 +327,7 @@ private struct MobileSensitiveTopicSettings: View {
                     let access = url.startAccessingSecurityScopedResource()
                     defer { if access { url.stopAccessingSecurityScopedResource() } }
                     do { try settings.importSensitiveTopicClassifier(from: url); error = nil }
-                    catch { error = PichiLocalization.text("Could not import the local topic model. The existing model and rules were kept.") }
+                    catch { self.error = PichiLocalization.text("Could not import the local topic model. The existing model and rules were kept.") }
                 }
             }
     }
