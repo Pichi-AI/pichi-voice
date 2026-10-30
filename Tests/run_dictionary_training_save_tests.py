@@ -25,6 +25,10 @@ readiness = source[source.index('    private var trainingProgress:'):source.inde
 already_correct = source[source.index('    private var trainingAlreadyCorrectWithoutReplacement:'):source.index('    private var trainingReadinessProgress:')]
 can_save = source[source.index('    private var canAddTrainedReplacement:'):source.index('    private var shouldPulseTrainedReplacementButton:')]
 merge = source[source.index('enum CustomDictionaryTrainingMerge {'):source.index('private struct ReplacementConfirmation:')]
+spelling_policy_source = (repo / 'Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift').read_text()
+spelling_policy = spelling_policy_source[spelling_policy_source.index('nonisolated enum DictionaryTrainingSpellingPolicy {'):]
+store_source = (repo / 'Sources/Fluid/Services/PronunciationDictionaryStore.swift').read_text()
+retained = store_source[store_source.index('    static func retainedEnrollments('):store_source.index('    static func matchingEnrollments(')]
 settings = (repo / 'Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text()
 entry_start = settings.rfind('\n', 0, settings.index('struct CustomDictionaryEntry:')) + 1
 brace = settings.index('{', entry_start)
@@ -43,34 +47,43 @@ nonisolated final class UserDefaults: @unchecked Sendable {
     func string(forKey key: String) -> String? { nil }
     func set(_ value: Any?, forKey key: String) { fatalError("Unexpected preference write") }
 }
-final class SettingsStore: @unchecked Sendable {
+final nonisolated class SettingsStore: @unchecked Sendable {
     static let shared = SettingsStore()
+    enum SpeechModel { case parakeet, gigaam
+        var learnsDictionarySpellingsAutomatically: Bool { self == .parakeet }
+    }
+    var selectedSpeechModel = SpeechModel.parakeet
     var customDictionaryEntries: [CustomDictionaryEntry] = []
     var punctuationDictionaryPrefix = "original"
     ENTRY
 }
-struct PrivateProfileSnapshot: Equatable, Sendable { let id = UUID() }
-enum PrivateProfileStorage {
-    static var current = PrivateProfileSnapshot()
-    static var acceptsNewWork = true
+nonisolated struct PrivateProfileSnapshot: Equatable, Sendable { let id = UUID() }
+nonisolated enum PrivateProfileStorage {
+    nonisolated(unsafe) static var current = PrivateProfileSnapshot()
+    nonisolated(unsafe) static var acceptsNewWork = true
     static func isReadable(_ profile: PrivateProfileSnapshot) -> Bool { profile == current }
 }
-struct PronunciationEnrollmentCapture: Equatable, Sendable { var modelKey = "test" }
-enum DictionaryMatcherExperiment {
-    static var sharedFeaturesEnabled = true
-    static var generation = UUID().uuidString
+nonisolated struct PronunciationEnrollmentCapture: Equatable, Sendable { var modelKey = "test"; var originalAudioID: UUID? }
+nonisolated struct PronunciationDictionaryProfile: Sendable {
+    let dictionaryEntryID: UUID
+    let modelKey: String
+    let enrollments: [PronunciationEnrollmentCapture]
 }
-struct VoiceTrainingAliasFilter {
+nonisolated enum DictionaryMatcherExperiment {
+    nonisolated(unsafe) static var sharedFeaturesEnabled = true
+    nonisolated(unsafe) static var generation = UUID().uuidString
+}
+nonisolated struct VoiceTrainingAliasFilter {
     struct Result {
         let accepted: [String]
         let rejected: [String] = []
         var rejectionMessage: String { "Replacement found these words: “the”. These single words are too broad to replace automatically. Add a manual replacement if intended." }
         init(accepted: [String]) { self.accepted = accepted }
     }
-    static var response: Result?
+    nonisolated(unsafe) static var response: Result?
     static func filter(_ values: [String], manuallyConfirmed: Set<String> = []) async -> Result { response ?? Result(accepted: values) }
 }
-final class DebugLogger {
+final nonisolated class DebugLogger {
     static let shared = DebugLogger()
     func info(_ message: String, source: String) {}
     func error(_ message: String, source: String) {}
@@ -88,27 +101,49 @@ actor PronunciationDictionaryStore {
     var forceFailure = false
     var writes: [UUID] = []
     var calls = 0
-    func configure(gate: Gate?, lateGate: Gate? = nil, failure: Bool = false) {
-        self.gate = gate; self.lateGate = lateGate; forceFailure = failure; writes = []; calls = 0
+    var storedProfiles: [PronunciationDictionaryProfile] = []
+    func configure(gate: Gate?, lateGate: Gate? = nil, failure: Bool = false, profiles: [PronunciationDictionaryProfile] = []) {
+        self.gate = gate; self.lateGate = lateGate; forceFailure = failure; writes = []; calls = 0; storedProfiles = profiles
     }
-    func upsert(dictionaryEntryID: UUID, label: String, modelKey: String, enrollments: [PronunciationEnrollmentCapture], automaticMatchingEnabled: Bool, canPersist: @Sendable () -> Bool) async throws {
+    func profiles(modelKey: String) -> [PronunciationDictionaryProfile] { storedProfiles.filter { $0.modelKey == modelKey } }
+    RETAINED
+    func upsert(dictionaryEntryID: UUID, label: String, modelKey: String, enrollments: [PronunciationEnrollmentCapture], automaticMatchingEnabled: Bool, expectedExistingEnrollments: [PronunciationEnrollmentCapture]? = nil, canPersist: @Sendable () -> Bool) async throws {
         calls += 1
         guard canPersist() else { throw CancellationError() }
         if let gate { await gate.pause() }
         guard canPersist(), !forceFailure else { throw CancellationError() }
+        if let expectedExistingEnrollments {
+            let existing = storedProfiles.first { $0.dictionaryEntryID == dictionaryEntryID && $0.modelKey == modelKey }?.enrollments ?? []
+            guard existing == expectedExistingEnrollments else { throw CancellationError() }
+        }
         writes.append(dictionaryEntryID)
         if let lateGate { await lateGate.pause() }
     }
 }
 PROGRESS
 MERGE
+SPELLING_POLICY
+@MainActor final class ASRSaveValidator {
+    var validationResult = true
+    var validationCalls = 0
+    var validatedCaptures: [PronunciationEnrollmentCapture] = []
+    func validateDictionaryPronunciations(_ captures: [PronunciationEnrollmentCapture]) async throws -> Bool {
+        validationCalls += 1
+        validatedCaptures = captures
+        return validationResult
+    }
+}
 @MainActor final class SaveHarness {
+    let settings = SettingsStore.shared
+    let asr = ASRSaveValidator()
     let profile = PrivateProfileStorage.current
     var isProfileVisible: Bool { PrivateProfileStorage.isReadable(profile) && PrivateProfileStorage.acceptsNewWork }
     READINESS
     ALREADY_CORRECT
     CAN_SAVE
     var trainingSampleCount = 3
+    var savedPronunciationCount = 0
+    var trainingAcousticCorrection = false
     var isTrainingRecording = false
     var isTrainingProcessing = false
     var trainingSaveID: UUID?
@@ -146,6 +181,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             PrivateProfileStorage.current = PrivateProfileSnapshot()
             PrivateProfileStorage.acceptsNewWork = true
             SettingsStore.shared.customDictionaryEntries = entries
+            SettingsStore.shared.selectedSpeechModel = .parakeet
             DictionaryMatcherExperiment.sharedFeaturesEnabled = true
             DictionaryMatcherExperiment.generation = UUID().uuidString
             VoiceTrainingAliasFilter.response = nil
@@ -286,6 +322,25 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             check(await PronunciationDictionaryStore.shared.writes.isEmpty, "Text-only training must not write profiles")
             passes += 1
         }
+        // A provider's negative acoustic verdict must keep the real wizard in
+        // recording state without entering either persistence path.
+        do {
+            let original = baseline()
+            let view = reset(original)
+            SettingsStore.shared.selectedSpeechModel = .gigaam
+            view.wizardStep = .review
+            view.asr.validationResult = false
+            await PronunciationDictionaryStore.shared.configure(gate: nil)
+            await view.addTrainedReplacement()
+            let calls = await PronunciationDictionaryStore.shared.calls
+            let profiles = await PronunciationDictionaryStore.shared.writes
+            check(view.asr.validationCalls == 1, "Acoustic-only save must consult the provider validator")
+            check(calls == 0 && profiles.isEmpty && view.writes == 0, "Failed acoustic validation must not write profiles or text rules")
+            check(SettingsStore.shared.customDictionaryEntries == original, "Failed validation preserves the dictionary")
+            check(view.trainingHasError && view.wizardStep == .recording && view.trainingStatusMessage.contains("do not sound consistent"), "Failed validation must request new recordings")
+            check(view.trainingPronunciationEnrollments.count == 3 && !view.isTrainingProcessing && view.trainingSaveID == nil, "Failed validation retains captures and releases busy state")
+            passes += 1
+        }
         // Three spelling examples may save even when voice enrollment is incomplete.
         // The actual readiness calculation must keep zero, one and two voice examples
         // out of profile persistence, even with pronunciation learning enabled.
@@ -302,6 +357,25 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             check(SettingsStore.shared.customDictionaryEntries.first?.id == original.first?.id, "Spelling fallback retains the existing entry identity")
             check(SettingsStore.shared.customDictionaryEntries.last == original.last, "Spelling fallback preserves unrelated rules")
             check(!view.trainingHasError && !view.isTrainingProcessing && view.trainingSaveID == nil, "Spelling fallback finishes cleanly")
+            passes += 1
+        }
+        // An original corrected occurrence plus two new recordings uses the
+        // actual combined-readiness and retention code before provider validation.
+        do {
+            let original = baseline()
+            let view = reset(original)
+            SettingsStore.shared.selectedSpeechModel = .gigaam
+            view.savedPronunciationCount = 1
+            view.trainingPronunciationEnrollments = Array(repeating: PronunciationEnrollmentCapture(), count: 2)
+            let saved = PronunciationEnrollmentCapture(originalAudioID: UUID())
+            await PronunciationDictionaryStore.shared.configure(gate: nil, profiles: [
+                .init(dictionaryEntryID: original[0].id, modelKey: saved.modelKey, enrollments: [saved])
+            ])
+            await view.addTrainedReplacement()
+            let writes = await PronunciationDictionaryStore.shared.writes
+            check(view.asr.validationCalls == 1 && view.asr.validatedCaptures.count == 3 && view.asr.validatedCaptures.contains(saved), "Saved original audio must participate in the three-recording validation")
+            check(writes == [original[0].id] && view.writes == 1 && view.wizardStep == .saved, "One saved plus two fresh acoustic examples must complete under the existing entry")
+            check(SettingsStore.shared.customDictionaryEntries == original, "Acoustic-only training must not silently authorize new global text spellings")
             passes += 1
         }
         // Filtering cannot create a text rule when no safe aliases and no ready voice exist.
@@ -389,11 +463,12 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
             check(view.wizardStep == .saved && !view.trainingHasError, "New voice samples must still complete successfully")
             passes += 1
         }
-        // Insufficient spellings use the production save gate, even with enough voice examples.
+        // In spelling-only mode, inactive voice captures cannot bypass the spelling gate.
         do {
             let original = baseline()
             let view = reset(original)
             view.trainingSampleCount = 2
+            view.activePronunciationMatching = false
             await PronunciationDictionaryStore.shared.configure(gate: nil)
             await view.addTrainedReplacement()
             let calls = await PronunciationDictionaryStore.shared.calls
@@ -453,7 +528,7 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
         print("PASS \(passes) dictionary save scenarios using the production save method, readiness and merge code")
     }
 }
-'''.replace('ENTRY', entry).replace('PROGRESS', progress).replace('MERGE', merge).replace('READINESS', readiness).replace('ALREADY_CORRECT', already_correct).replace('CAN_SAVE', can_save).replace('METHOD', method).replace('PREFIX_SAVE', prefix_save)
+'''.replace('ENTRY', entry).replace('PROGRESS', progress).replace('MERGE', merge).replace('READINESS', readiness).replace('ALREADY_CORRECT', already_correct).replace('CAN_SAVE', can_save).replace('METHOD', method).replace('PREFIX_SAVE', prefix_save).replace('SPELLING_POLICY', spelling_policy).replace('RETAINED', retained)
 swift = swift.replace('check(await PronunciationDictionaryStore.shared.writes.isEmpty,', 'let textOnlyWrites = await PronunciationDictionaryStore.shared.writes\n            check(textOnlyWrites.isEmpty,')
 isolation_swift = r'''
 import Foundation
@@ -481,12 +556,15 @@ actor SnapshotReader {
 with tempfile.TemporaryDirectory(prefix="dictionary-regression-", dir=repo / ".build") as directory:
     root = Path(directory)
     (root / 'dictionary-proof.swift').write_text(swift)
-    subprocess.run([
-        'xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(root / 'ModuleCache'),
-        str(repo/'Sources/Fluid/Localization/PichiLocalization.swift'),
-        str(root/'dictionary-proof.swift'), '-o', str(root/'dictionary-proof'),
-    ], check=True, timeout=60)
-    subprocess.run([str(root/'dictionary-proof')], check=True, timeout=60)
+    for isolation in ([], ['-default-isolation', 'MainActor']):
+        executable = root / ('dictionary-proof-main-actor' if isolation else 'dictionary-proof-default')
+        subprocess.run([
+            'xcrun', 'swiftc', '-parse-as-library', '-swift-version', '5',
+            *isolation, '-module-cache-path', str(root / 'ModuleCache'),
+            str(repo/'Sources/Fluid/Localization/PichiLocalization.swift'),
+            str(root/'dictionary-proof.swift'), '-o', str(executable),
+        ], check=True, timeout=60)
+        subprocess.run([str(executable)], check=True, timeout=60)
     (root / 'dictionary-isolation.swift').write_text(isolation_swift)
     subprocess.run([
         'xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(root / 'ModuleCache'), '-swift-version', '6',
