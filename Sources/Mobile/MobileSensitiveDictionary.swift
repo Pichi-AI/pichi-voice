@@ -12,7 +12,7 @@ struct MobileSensitiveDictionaryEdit: Identifiable {
 /// privacy adapter, never a view-only replacement of transcript text.
 struct MobileSensitiveDictionarySettings: View {
     let edit: (SensitiveDataDictionaryEntry?) -> Void
-    @ObservedObject private var settings = SettingsStore.shared
+    @StateObject private var settings = SettingsStore.shared.boundToCurrentPrivateProfile()
     @Environment(\.theme) private var theme
     @State private var error: String?
 
@@ -85,7 +85,7 @@ struct MobileSensitiveDictionarySettings: View {
 
 struct MobileSensitiveDictionaryEditor: View {
     let entry: SensitiveDataDictionaryEntry?
-    @ObservedObject private var settings = SettingsStore.shared
+    @StateObject private var settings = SettingsStore.shared.boundToCurrentPrivateProfile()
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
     @State private var phrase: String
@@ -158,7 +158,7 @@ struct MobileSensitiveDictionaryEditor: View {
 /// A stable destination owns its controls; catalog vocabulary stays unmodified user-facing data.
 private struct MobileSensitiveBusinessGroupSettings: View {
     let group: SensitiveBusinessGroup
-    @ObservedObject private var settings = SettingsStore.shared
+    @StateObject private var settings = SettingsStore.shared.boundToCurrentPrivateProfile()
     @Environment(\.theme) private var theme
     @State private var error: String?
     @State private var editingExpressions = false
@@ -169,7 +169,7 @@ private struct MobileSensitiveBusinessGroupSettings: View {
                 Toggle(PichiLocalization.text("Hide this group's expressions"), isOn: Binding(
                     get: { settings.sensitiveBusinessGroupIDs.contains(group.id) },
                     set: { enabled in
-                        do { try settings.setSensitiveBusinessGroup(id: group.id, enabled: enabled); error = nil }
+                        do { try settings.setSensitiveBusinessGroup(id: group.id, enabled: enabled); self.error = nil }
                         catch { self.error = PichiLocalization.text("Could not update privacy rules. The existing rules were kept.") }
                     }))
                     .accessibilityIdentifier("privacy.groups.\(group.id).enabled")
@@ -210,7 +210,7 @@ private struct MobileSensitiveBusinessGroupSettings: View {
 /// Drafts do not change enabled rules until the existing settings operation saves them.
 private struct MobileSensitiveBusinessGroupEditor: View {
     let group: SensitiveBusinessGroup
-    @ObservedObject private var settings = SettingsStore.shared
+    @StateObject private var settings = SettingsStore.shared.boundToCurrentPrivateProfile()
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
     @State private var expressions: String
@@ -237,7 +237,7 @@ private struct MobileSensitiveBusinessGroupEditor: View {
                     MobileSettingsFooter(PichiLocalization.text("Use one expression per line. Groups can contain up to 128 expressions in total. Changes stay on this device and apply to new recordings."))
                 }
                 Section {
-                    Button { expressions = group.terms.joined(separator: "\n"); error = nil } label: {
+                    Button { expressions = group.terms.joined(separator: "\n"); self.error = nil } label: {
                         Text(PichiLocalization.text("Restore suggested expressions"))
                             .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityIdentifier("privacy.groups.\(group.id).restore")
@@ -270,14 +270,14 @@ private struct MobileSensitiveBusinessGroupEditor: View {
             else { try settings.replaceSensitiveBusinessGroupTerms(id: group.id, terms: terms) }
             dismiss()
         } catch {
-            error = PichiLocalization.text("Could not save group expressions. Use unique expressions of up to 16 words and 256 characters, with at most 128 expressions across all groups. The existing rules were kept.")
+            self.error = PichiLocalization.text("Could not save group expressions. Use unique expressions of up to 16 words and 256 characters, with at most 128 expressions across all groups. The existing rules were kept.")
         }
     }
 }
 
 /// The Form owns one importer presentation. All operations use the shared settings service.
 private struct MobileSensitiveTopicSettings: View {
-    @ObservedObject private var settings = SettingsStore.shared
+    @StateObject private var settings = SettingsStore.shared.boundToCurrentPrivateProfile()
     @Environment(\.theme) private var theme
     @State private var importing = false
     @State private var error: String?
@@ -299,7 +299,7 @@ private struct MobileSensitiveTopicSettings: View {
                     Toggle(PichiLocalization.text(group.titleKey), isOn: Binding(
                         get: { settings.sensitiveTopicClassifierIDs.contains(group.id) },
                         set: { enabled in
-                            do { try settings.setSensitiveTopicClassifier(id: group.id, enabled: enabled); error = nil }
+                            do { try settings.setSensitiveTopicClassifier(id: group.id, enabled: enabled); self.error = nil }
                             catch { self.error = PichiLocalization.text("Could not update privacy rules. The existing rules were kept.") }
                         }))
                         .accessibilityIdentifier("privacy.topics.\(group.id).enabled")
@@ -322,11 +322,11 @@ private struct MobileSensitiveTopicSettings: View {
             .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
                 switch result {
                 case .failure:
-                    error = PichiLocalization.text("Could not import the local topic model. The existing model and rules were kept.")
+                    self.error = PichiLocalization.text("Could not import the local topic model. The existing model and rules were kept.")
                 case .success(let url):
                     let access = url.startAccessingSecurityScopedResource()
                     defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    do { try settings.importSensitiveTopicClassifier(from: url); error = nil }
+                    do { try settings.importSensitiveTopicClassifier(from: url); self.error = nil }
                     catch { self.error = PichiLocalization.text("Could not import the local topic model. The existing model and rules were kept.") }
                 }
             }

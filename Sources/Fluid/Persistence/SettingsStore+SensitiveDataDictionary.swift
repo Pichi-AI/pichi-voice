@@ -10,6 +10,13 @@ extension SettingsStore {
     private static let sensitiveBusinessGroupOverridesKey = "SensitiveBusinessGroupOverrides"
     private static let sensitiveTopicConfigurationKey = "SensitiveTopicClassifierConfiguration"
 
+    private func requireSensitivePolicyMutationAdmission() throws {
+        if let scoped = defaults as? PrivateProfileDefaults {
+            guard PrivateProfileStorage.acceptsNewWork,
+                  PrivateProfileStorage.isReadable(scoped.selectedProfile) else { throw CancellationError() }
+        }
+    }
+
     private struct TopicConfiguration: Codable {
         let artifact: Data
         let digest: String
@@ -36,6 +43,7 @@ extension SettingsStore {
     }
 
     func replaceSensitiveDataDictionaryEntries(_ entries: [SensitiveDataDictionaryEntry]) throws {
+        try requireSensitivePolicyMutationAdmission()
         let snapshot = try TranscriptSensitiveDictionarySnapshot(entries: entries)
         objectWillChange.send()
         try snapshot.persist(in: defaults, key: Self.sensitiveDataDictionaryDefaultsKey)
@@ -75,6 +83,7 @@ extension SettingsStore {
     }
 
     func setSensitiveBusinessGroup(id: String, enabled: Bool) throws {
+        try requireSensitivePolicyMutationAdmission()
         var ids = try admittedBusinessGroups()
         if enabled { ids.insert(id) } else { ids.remove(id) }
         let entries = try TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey).entries
@@ -98,6 +107,7 @@ extension SettingsStore {
     }
 
     func replaceSensitiveBusinessGroupTerms(id: String, terms: [String]) throws {
+        try requireSensitivePolicyMutationAdmission()
         guard SensitiveBusinessGroupCatalog.groups.contains(where: { $0.id == id }) else {
             throw SensitiveDataDictionaryError.invalidStoredData
         }
@@ -115,6 +125,7 @@ extension SettingsStore {
     }
 
     func resetSensitiveBusinessGroupTerms(id: String) throws {
+        try requireSensitivePolicyMutationAdmission()
         var overrides = try admittedGroupOverrides()
         overrides[id] = nil
         let entries = try TranscriptSensitiveDictionarySnapshot.read(from: defaults, key: Self.sensitiveDataDictionaryDefaultsKey).entries
@@ -143,6 +154,7 @@ extension SettingsStore {
     }
 
     func importSensitiveTopicClassifier(from url: URL) throws {
+        try requireSensitivePolicyMutationAdmission()
         let data = try SensitiveTopicClassifierSnapshot.readArtifact(at: url)
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let model = try SensitiveTopicClassifierSnapshot(data: data, expectedSHA256: digest, selectedTopicIDs: [])
@@ -155,6 +167,7 @@ extension SettingsStore {
     }
 
     func setSensitiveTopicClassifier(id: String, enabled: Bool) throws {
+        try requireSensitivePolicyMutationAdmission()
         guard var configuration = try topicConfiguration(), configuration.availableIDs.contains(id) else {
             throw SensitiveTopicClassifierError.unsupportedTopic
         }

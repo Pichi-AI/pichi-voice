@@ -20,6 +20,21 @@ private struct DictionaryOverlappingRedactor: TranscriptTextRedacting {
     }
 }
 
+/// A deterministic contextual contract tests publication scheduling independently
+/// of learned-model quality. Only the detector's interface is synthetic here.
+private struct WholeUnitDictionaryTestRedactor: TranscriptTextRedacting {
+    nonisolated func durablePublicationLimit(in text: String) throws -> Int? {
+        guard let last = text.lastIndex(of: ".") else { return 0 }
+        return NSRange(text.startIndex...last, in: text).length
+    }
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let spans: [TranscriptRedactedSpan] = text.contains("секретная тема")
+            ? [.init(range: NSRange(location: 0, length: text.utf16.count), replacement: "[СКРЫТО]")] : []
+        return .init(text: spans.isEmpty ? text : "[СКРЫТО]", spans: spans,
+            provisionalSafeUTF16: spans.isEmpty ? try durablePublicationLimit(in: text) : 0)
+    }
+}
+
 extension MeetingPrivacyContextTests {
     static func sensitiveDictionarySuite() async throws {
         func dictionary(_ phrases: [String]) throws -> TranscriptSensitiveDictionarySnapshot {
@@ -62,10 +77,47 @@ extension MeetingPrivacyContextTests {
         let empty = TranscriptDictionaryRedactor(wrapped: DictionaryEchoRedactor(), dictionary: try dictionary([]))
         try check(empty.checkpointIdentity == "synthetic-model-v1" && empty.supportsSpeechBoundaryAdmission, "Empty dictionary broke checkpoint compatibility")
         try check(dictionaryRedactor.checkpointIdentity?.contains(first.entries[0].phrase) == false, "Fingerprint exposed phrase text")
+        try await sensitiveDictionaryWholeUnitSuite()
         try await sensitiveDictionaryWordFormsSuite()
         try await sensitiveDictionaryPersistenceSuite()
         try await sensitiveDictionaryProjectionSuite()
         print("Sensitive dictionary synthetic suites passed")
+    }
+
+    private static func sensitiveDictionaryWholeUnitSuite() async throws {
+        let detector = WholeUnitDictionaryTestRedactor()
+        let track = UUID()
+        let words = (0..<50).map { segment("обычно", track: track, start: $0) }
+        let context = MeetingTranscriptPrivacyContext(redactor: detector)
+        let pending = try await context.redact(.init(segments: words))
+        try check(pending.segments.isEmpty && pending.livePreview == nil,
+                  "Contextual phrase beginning escaped the ordinary 32-token tail")
+        try check(try await context.admitSpeechBoundary() == nil, "Silence sealed a contextual sentence")
+        _ = try await context.finish()
+        for (count, unfinished) in [(130, true), (250, false)] {
+            var input = MeetingLiveTranscriptSnapshot.empty
+            input.revision = 1
+            input.utterances = (0..<count).map { index in
+                let text = unfinished ? (index == 0 ? "секретная тема" : index == count - 1 ? "конец." : "продолжение") : "обычная реплика."
+                return .init(id: UUID(), speaker: index % 2 == 0 ? .you : .them, text: text,
+                    start: Double(index), end: Double(index + 1))
+            }
+            let publisher = MeetingLivePrivacyPublication()
+            var failures = 0
+            var publications: [MeetingLiveTranscriptSnapshot] = []
+            publisher.submit(input, generation: UUID(), using: detector, latestSnapshot: { input },
+                publish: { snapshot, _ in publications.append(snapshot) }, failed: { _ in failures += 1 })
+            await publisher.waitForCurrentWork()
+            if unfinished {
+                try check(failures == 1 && publications.isEmpty,
+                    "Oversized unsealed contextual unit leaked a page suffix or stalled")
+            } else {
+                try check(failures == 0 && publications.last?.utterances.count == count,
+                    "Completed contextual pages failed to make bounded progress")
+            }
+            await publisher.stop()
+        }
+        print("Whole-unit privacy: >32-token strict hold, >100-row fail-closed and 250-row progress passed")
     }
 
     private static func sensitiveDictionaryWordFormsSuite() async throws {
