@@ -104,7 +104,7 @@ final class MobileSetupUITests: XCTestCase {
         capture("flow-08-skipped-location")
         app.buttons["onboarding.next"].tap()
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["Начните первую встречу"].firstMatch.waitForExistence(timeout: 10),
+        XCTAssertTrue(app.staticTexts["Сделайте первую запись"].firstMatch.waitForExistence(timeout: 10),
                       "A completed first setup opens the empty Meetings list with its first-meeting hint")
         capture("flow-09-normal-app")
         app.terminate()
@@ -124,7 +124,7 @@ final class MobileSetupUITests: XCTestCase {
                 app.terminate()
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
                 app.launch()
-                let title = language == "ru" ? "Начните первую встречу" : "Start your first meeting"
+                let title = language == "ru" ? "Сделайте первую запись" : "Make your first recording"
                 XCTAssertTrue(app.staticTexts[title].firstMatch.waitForExistence(timeout: 10))
                 for (orientation, name) in [(UIDeviceOrientation.portrait, "portrait"), (.landscapeLeft, "landscape")] {
                     XCUIDevice.shared.orientation = orientation
@@ -228,7 +228,7 @@ final class MobileSetupUITests: XCTestCase {
         for (orientation, name) in [(UIDeviceOrientation.portrait, "portrait"), (.landscapeLeft, "landscape")] {
             XCUIDevice.shared.orientation = orientation
             XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.0"].firstMatch.waitForExistence(timeout: 15))
-            let highlight = app.staticTexts["Текст встречи во время разговора"]
+            let highlight = app.staticTexts["Текст во время записи"]
             XCTAssertTrue(highlight.waitForExistence(timeout: 5))
             XCTAssertGreaterThanOrEqual(highlight.frame.height, 18, "The highlights must not shrink with the hero")
             XCTAssertTrue(app.buttons["onboarding.next"].isHittable)

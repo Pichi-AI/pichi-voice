@@ -43909,23 +43909,6 @@
         }
       }
     },
-    "Your meetings, models and voice profile are kept.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your meetings, models and voice profile are kept."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Встречи, модели и голосовой профиль сохранятся."
-          }
-        }
-      }
-    },
     "Your mic will record the room.": {
       "extractionState": "manual",
       "localizations": {
@@ -50868,23 +50851,6 @@
         }
       }
     },
-    "Applies to past meetings too. Transcripts are always kept.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Applies to past meetings too. Transcripts are always kept."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Применяется и к прошлым встречам. Расшифровки сохраняются всегда."
-          }
-        }
-      }
-    },
     "Audio recordings and transcripts are stored on this device.": {
       "extractionState": "manual",
       "localizations": {
@@ -50965,40 +50931,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Изменения применяются к новым встречам. Срок хранения аудио применяется и к существующим записям."
-          }
-        }
-      }
-    },
-    "Delete Meeting": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete Meeting"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Удалить встречу"
-          }
-        }
-      }
-    },
-    "Delete this meeting and its recordings?": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete this meeting and its recordings?"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Удалить эту встречу и её записи?"
           }
         }
       }
@@ -52867,23 +52799,6 @@
         }
       }
     },
-    "Ready to meet": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ready to meet"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Всё готово к встрече"
-          }
-        }
-      }
-    },
     "Setup progress": {
       "extractionState": "manual",
       "localizations": {
@@ -52914,23 +52829,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Записывайте разговоры, следите за текстом во время речи и возвращайтесь к любому моменту позже. Вся обработка выполняется на этом устройстве."
-          }
-        }
-      }
-    },
-    "Live meeting transcripts": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Live meeting transcripts"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Текст встречи во время разговора"
           }
         }
       }
@@ -53016,40 +52914,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ресурсы для определения речи и участников готовятся автоматически. Устанавливаются файлы, без загрузки всех моделей в память."
-          }
-        }
-      }
-    },
-    "Your meeting setup is ready": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your meeting setup is ready"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Настройка для встреч завершена"
-          }
-        }
-      }
-    },
-    "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new meetings."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Начните запись, чтобы видеть текст и участников. Выбранные настройки хранения аудио и очистки данных применяются к новым встречам."
           }
         }
       }
@@ -53275,23 +53139,6 @@
         }
       }
     },
-    "Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new meetings.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new meetings."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Добавьте имена, слова и фразы, которые нужно скрывать при включённой очистке. Словарь хранится на этом устройстве и применяется к новым встречам."
-          }
-        }
-      }
-    },
     "Add word or phrase": {
       "extractionState": "manual",
       "localizations": {
@@ -53407,23 +53254,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подготовка записи…"
-          }
-        }
-      }
-    },
-    "Selected for new meetings. Text and speaker labels update during recording.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Selected for new meetings. Text and speaker labels update during recording."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выбрано для новых встреч. Текст и участники обновляются во время записи."
           }
         }
       }
@@ -58799,23 +58629,6 @@
         }
       }
     },
-    "Start your first meeting": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Start your first meeting"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Начните первую встречу"
-          }
-        }
-      }
-    },
     "On": {
       "extractionState": "manual",
       "localizations": {
@@ -58829,23 +58642,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Включено"
-          }
-        }
-      }
-    },
-    "Record a meeting and return to its transcript.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Record a meeting and return to its transcript."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Запишите встречу и вернитесь к её тексту."
           }
         }
       }
@@ -59564,23 +59360,6 @@
         }
       }
     },
-    "Microphone, language and meeting location": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Microphone, language and meeting location"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Микрофон, язык и место встречи"
-          }
-        }
-      }
-    },
     "Speaker labels and your voice": {
       "extractionState": "manual",
       "localizations": {
@@ -59628,23 +59407,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Только запись, полный доступ по паролю"
-          }
-        }
-      }
-    },
-    "The model will be removed from this device. Meetings and transcripts stay.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The model will be removed from this device. Meetings and transcripts stay."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модель будет удалена с этого устройства. Встречи и расшифровки сохранятся."
           }
         }
       }
@@ -60210,23 +59972,6 @@
         }
       }
     },
-    "Only recording stays available: start, stop and your own voice setup. Meetings, transcripts and settings open with the administrator password.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Only recording stays available: start, stop and your own voice setup. Meetings, transcripts and settings open with the administrator password."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Остаётся только запись: начать, остановить и настроить свой голос. Встречи, расшифровки и настройки открываются паролем администратора."
-          }
-        }
-      }
-    },
     "For a shared device in a meeting room. Recording and storage settings can't be changed in restricted mode, so check them first.": {
       "extractionState": "manual",
       "localizations": {
@@ -60291,6 +60036,448 @@
           "stringUnit": {
             "state": "translated",
             "value": "Распознавание русской речи с автоматической пунктуацией и нормализацией текста. Работает локально через Core ML."
+          }
+        }
+      }
+    },
+    "Search recordings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск записей"
+          }
+        }
+      }
+    },
+    "No matching recordings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записи не найдены"
+          }
+        }
+      }
+    },
+    "Make your first recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Make your first recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сделайте первую запись"
+          }
+        }
+      }
+    },
+    "Record anything and come back to its transcript.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record anything and come back to its transcript."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запишите что угодно и возвращайтесь к расшифровке."
+          }
+        }
+      }
+    },
+    "Delete Recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить запись"
+          }
+        }
+      }
+    },
+    "Delete this recording with its transcript and audio?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete this recording with its transcript and audio?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить эту запись вместе с расшифровкой и аудио?"
+          }
+        }
+      }
+    },
+    "Applies to past recordings too. Transcripts are always kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applies to past recordings too. Transcripts are always kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Применяется и к прошлым записям. Расшифровки сохраняются всегда."
+          }
+        }
+      }
+    },
+    "Microphone, language and location": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone, language and location"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон, язык и местоположение"
+          }
+        }
+      }
+    },
+    "Recording location": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording location"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Место записи"
+          }
+        }
+      }
+    },
+    "Selected for new recordings. Text and speaker labels update during recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected for new recordings. Text and speaker labels update during recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрано для новых записей. Текст и участники обновляются во время записи."
+          }
+        }
+      }
+    },
+    "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start a recording to see text and participant labels. Your choices for audio storage and data cleanup apply to new recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начните запись, чтобы видеть текст и участников. Выбранные настройки хранения аудио и очистки данных применяются к новым записям."
+          }
+        }
+      }
+    },
+    "The model will be removed from this device. Recordings and transcripts stay.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model will be removed from this device. Recordings and transcripts stay."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель будет удалена с этого устройства. Записи и расшифровки сохранятся."
+          }
+        }
+      }
+    },
+    "Your recordings, models and voice profile are kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your recordings, models and voice profile are kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записи, модели и голосовой профиль сохранятся."
+          }
+        }
+      }
+    },
+    "Your setup is ready": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your setup is ready"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройка завершена"
+          }
+        }
+      }
+    },
+    "Live transcripts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live transcripts"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст во время записи"
+          }
+        }
+      }
+    },
+    "Record anything. Come back to every word.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record anything. Come back to every word."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывайте что угодно и возвращайтесь к каждому слову."
+          }
+        }
+      }
+    },
+    "Only recording stays available: start, stop and your own voice setup. Recordings, transcripts and settings open with the administrator password.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only recording stays available: start, stop and your own voice setup. Recordings, transcripts and settings open with the administrator password."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остаётся только запись: начать, остановить и настроить свой голос. Записи, расшифровки и настройки открываются паролем администратора."
+          }
+        }
+      }
+    },
+    "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройте свой голос, чтобы в следующих записях ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+          }
+        }
+      }
+    },
+    "The You label applies only to this recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The You label applies only to this recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отметка «Вы» применяется только к этой записи."
+          }
+        }
+      }
+    },
+    "There is no transcript text or saved audio available for this recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is no transcript text or saved audio available for this recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой записи нет текста расшифровки или сохранённого аудио."
+          }
+        }
+      }
+    },
+    "Transcription failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось расшифровать запись"
+          }
+        }
+      }
+    },
+    "Transcription was interrupted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription was interrupted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расшифровка записи прервана"
+          }
+        }
+      }
+    },
+    "Recording in progress": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording in progress"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Идёт запись"
+          }
+        }
+      }
+    },
+    "Recording was interrupted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording was interrupted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись прервана"
+          }
+        }
+      }
+    },
+    "Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add names, words or phrases that should also be hidden when data cleanup is enabled. The dictionary stays on this device and applies to new recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавьте имена, слова и фразы, которые нужно скрывать при включённой очистке. Словарь хранится на этом устройстве и применяется к новым записям."
+          }
+        }
+      }
+    },
+    "Recordings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записи"
           }
         }
       }

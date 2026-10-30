@@ -14,7 +14,7 @@ enum MobileMeetingRecordingActions {
         try await privacyActivation.waitUntilReadyIfRequested()
         guard !Task.isCancelled && canStart() else { throw CancellationError() }
         let configuration = try await coordinator.defaultConfiguration(mode: .inRoom,
-            title: PichiLocalization.text("In-room meeting"))
+            title: PichiLocalization.text("Recording"))
         guard !Task.isCancelled && canStart() else { throw CancellationError() }
         // A new meeting over an interrupted or failed one starts as Record Again: the old meeting
         // is resolved once capture runs, so its offer stops reopening, and stays if the start fails.
@@ -152,7 +152,7 @@ struct MobileKioskRoot: View {
                     .accessibilityHidden(true)
                 Text(PichiLocalization.text("Would you like to set up your voice?"))
                     .font(theme.typography.title).multilineTextAlignment(.center)
-                Text(PichiLocalization.text("Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."))
+                Text(PichiLocalization.text("Set up your voice so matching speech is labelled You in future recordings. The voice profile stays on this device."))
                     .font(theme.typography.body).foregroundStyle(theme.palette.secondaryText)
                     .multilineTextAlignment(.center)
                 VStack(spacing: theme.metrics.spacing.md) {
@@ -333,7 +333,7 @@ struct MobileKioskSettings: View {
         Form {
             // What the mode is comes first; what to check before turning it on is the footer.
             Section {
-                Text(PichiLocalization.text("Only recording stays available: start, stop and your own voice setup. Meetings, transcripts and settings open with the administrator password."))
+                Text(PichiLocalization.text("Only recording stays available: start, stop and your own voice setup. Recordings, transcripts and settings open with the administrator password."))
             } footer: {
                 MobileSettingsFooter(PichiLocalization.text("For a shared device in a meeting room. Recording and storage settings can't be changed in restricted mode, so check them first."))
             }

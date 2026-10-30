@@ -77,7 +77,7 @@ final class MobileFirstRunWalkthroughUITests: XCTestCase {
     private func open(_ section: String) {
         let sidebar = app.buttons["navigation.\(section)"]
         if sidebar.exists && sidebar.isHittable { sidebar.tap(); return }
-        let titles = ["meetings": ["Встречи", "Meetings"], "settings": ["Настройки", "Settings"]][section] ?? []
+        let titles = ["meetings": ["Записи", "Recordings"], "settings": ["Настройки", "Settings"]][section] ?? []
         let tab = app.tabBars.buttons.matching(NSPredicate(format: "label IN %@", titles)).firstMatch
         XCTAssertTrue(tab.waitForExistence(timeout: 5), "\(section) must be reachable")
         tab.tap()

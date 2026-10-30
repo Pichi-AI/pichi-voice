@@ -302,9 +302,9 @@ final class MobileRecordingActivityOwner {
         return Attributes(
             sessionID: recording.sessionID,
             productName: AppBrand.meetingName,
-            liveStatus: PichiLocalization.text("Meeting recording in progress"),
-            interruptedStatus: PichiLocalization.text("Meeting recording was interrupted"),
-            meetingKind: recording.mode == .inRoom ? PichiLocalization.text("In-room meeting") : PichiLocalization.text("Online call"),
+            liveStatus: PichiLocalization.text("Recording in progress"),
+            interruptedStatus: PichiLocalization.text("Recording was interrupted"),
+            meetingKind: recording.mode == .inRoom ? PichiLocalization.text("Recording") : PichiLocalization.text("Online call"),
             accentLight: self.swatch(light),
             accentDark: self.swatch(dark),
             markAsset: BrandPackageStore.shared.hasOverride ? nil : AppBrand.distribution.markAsset,

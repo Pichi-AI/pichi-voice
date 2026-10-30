@@ -41,7 +41,7 @@ struct MobileSettingsRoot: View {
                 Section {
                     NavigationLink(value: MobileSettingsDestination.recording) {
                         MobileSettingsRowLabel(PichiLocalization.text("Recording"),
-                            summary: PichiLocalization.text("Microphone, language and meeting location"), systemImage: "mic.fill")
+                            summary: PichiLocalization.text("Microphone, language and location"), systemImage: "mic.fill")
                     }.accessibilityIdentifier("settings.recording")
                     NavigationLink(value: MobileSettingsDestination.participants) {
                         MobileSettingsRowLabel(PichiLocalization.text("Participants"),
@@ -93,7 +93,7 @@ struct MobileSettingsRoot: View {
                     .disabled(!canReplaySetup || privateProfile.isTransitioning)
                     .accessibilityIdentifier("settings.replaySetup")
                 } footer: {
-                    MobileSettingsFooter(PichiLocalization.text("Your meetings, models and voice profile are kept."))
+                    MobileSettingsFooter(PichiLocalization.text("Your recordings, models and voice profile are kept."))
                 }
             }
         }.listStyle(.insetGrouped).mobileSettingsPage().accessibilityIdentifier("settings.root")
@@ -304,7 +304,7 @@ struct MobileRecordingSettings: View {
             Section {
                 MeetingLocationSettingsContent(asFormRows: true)
             } header: {
-                Text(PichiLocalization.text("Meeting location"))
+                Text(PichiLocalization.text("Recording location"))
             } footer: {
                 MobileSettingsFooter(MeetingLocationExplanation.paragraphs)
             }
@@ -427,7 +427,7 @@ private struct MobileVoiceEngineSettings: View {
         } else {
             if installed.contains(model.id) {
                 if settings.selectedSpeechModel == model {
-                    Label(PichiLocalization.text("Selected for new meetings. Text and speaker labels update during recording."),
+                    Label(PichiLocalization.text("Selected for new recordings. Text and speaker labels update during recording."),
                           systemImage: "checkmark.circle.fill")
                         .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
                         .accessibilityIdentifier("model.selected.\(model.id)")
@@ -456,7 +456,7 @@ private struct MobileVoiceEngineSettings: View {
                             Task { do { try await asr.clearModelCache(for: model); await refresh() } catch { reportError(error) } }
                         }.accessibilityIdentifier("model.delete.confirm")
                     } message: {
-                        Text(PichiLocalization.text("The model will be removed from this device. Meetings and transcripts stay."))
+                        Text(PichiLocalization.text("The model will be removed from this device. Recordings and transcripts stay."))
                     }
             } else if model.supportsAutomaticDownload {
                 Button(PichiLocalization.text("Download")) {
@@ -508,7 +508,7 @@ private struct MobilePrivacySettings: View {
                 Text(PichiLocalization.text("Audio storage"))
             } footer: {
                 if settings.meetingSaveAudio {
-                    MobileSettingsFooter(PichiLocalization.text("Applies to past meetings too. Transcripts are always kept."),
+                    MobileSettingsFooter(PichiLocalization.text("Applies to past recordings too. Transcripts are always kept."),
                         MobileAudioPrivacyControls.retainedAudioExplanation)
                 } else {
                     MobileSettingsFooter(MobileAudioPrivacyControls.memoryOnlyExplanation)
