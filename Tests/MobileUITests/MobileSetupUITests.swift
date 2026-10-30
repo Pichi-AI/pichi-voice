@@ -17,9 +17,13 @@ final class MobileSetupUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
-    /// Presentation acceptance of the ordinary guest distribution, without
-    /// preparing ASR, enrolling a voice or starting microphone capture.
-    func testGuestDistributionSetupPagesWithoutAccount() throws {
+    /// Pinned-page presentation with the account expectation taken from the frozen
+    /// distribution. No sign-in, ASR preparation, voice enrollment or capture occurs.
+    func testDistributionSetupPagesKeepAccountOptional() throws {
+        let accountExpectation = try XCTUnwrap(
+            ProcessInfo.processInfo.environment["PICHI_SETUP_EXPECT_ACCOUNT_CONFIGURATION"],
+            "Derive the account expectation from the frozen app's packaged distribution")
+        XCTAssertTrue(["configured", "unconfigured"].contains(accountExpectation))
         let app = XCUIApplication()
         defer { app.terminate() }
         for (language, appearance) in [("en", "light"), ("ru", "dark")] {
@@ -47,9 +51,17 @@ final class MobileSetupUITests: XCTestCase {
                                    "-MobileSetupVersion", "0", "-MobileSetupStep", "6"]
             app.launch()
             XCTAssertTrue(app.descendants(matching: .any)["onboarding.step.6"].firstMatch.waitForExistence(timeout: 15))
-            XCTAssertFalse(app.buttons["account.signIn"].exists,
-                           "The guest distribution must not offer an unconfigured or local SSO server")
-            XCTAssertFalse(app.buttons["account.continueAsGuest"].exists)
+            if accountExpectation == "configured" {
+                XCTAssertTrue(app.buttons["account.signIn"].exists,
+                              "A configured distribution offers optional sign-in")
+                let guest = app.buttons["account.continueAsGuest"]
+                XCTAssertTrue(guest.exists && guest.isEnabled,
+                              "A configured account must not prevent continuing as a guest")
+            } else {
+                XCTAssertFalse(app.buttons["account.signIn"].exists,
+                               "The guest distribution must not offer an unconfigured or local SSO server")
+                XCTAssertFalse(app.buttons["account.continueAsGuest"].exists)
+            }
             XCTAssertEqual(app.alerts.count, 0)
             capture("guest-\(language)-ready-page")
             app.terminate()
