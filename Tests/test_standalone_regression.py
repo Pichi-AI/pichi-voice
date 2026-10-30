@@ -60,7 +60,7 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertEqual(len(RUNNER.PROBES), 97)
         self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 66)
         self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 17)
-        self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 13)
+        self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 14)
         for name, interpreter in (("account_session", "sh"), ("mobile_account", "sh"), ("publication_consent", "bash"), ("publication_outbox", "bash")):
             matching = [probe for probe in RUNNER.PROBES if probe.name == name]
             self.assertEqual(len(matching), 1)
