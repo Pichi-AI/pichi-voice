@@ -9,6 +9,36 @@ import FluidAudio
 
 @MainActor
 final class CustomDictionaryManualEntryTests: XCTestCase {
+    func testSelectableHistoryTextTracksItsFinalWidthAcrossResize() async throws {
+        let text = NSAttributedString(
+            string: String(repeating: "Открой модель гигам и проверь качество распознавания. ", count: 3),
+            attributes: [.font: NSFont.systemFont(ofSize: 16)]
+        )
+        let host = NSHostingView(rootView: DictionarySelectableTranscript(text: text, onCorrect: { _ in })
+            .frame(maxWidth: .infinity, alignment: .leading))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.orderOut(nil) }
+        func transcript(in view: NSView) -> DictionarySelectableTextView? {
+            if let value = view as? DictionarySelectableTextView { return value }
+            return view.subviews.lazy.compactMap { transcript(in: $0) }.first
+        }
+        for width in [320.0, 900.0, 360.0] {
+            window.setContentSize(NSSize(width: width, height: 500))
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+            host.layoutSubtreeIfNeeded()
+            let view = try XCTUnwrap(transcript(in: host))
+            let container = try XCTUnwrap(view.textContainer)
+            let manager = try XCTUnwrap(view.layoutManager)
+            manager.ensureLayout(for: container)
+            XCTAssertTrue(container.widthTracksTextView)
+            XCTAssertEqual(container.containerSize.width, view.bounds.width, accuracy: 1)
+            XCTAssertLessThanOrEqual(manager.usedRect(for: container).height, view.bounds.height + 1)
+        }
+    }
+
     func testAcousticCorrectionDoesNotGloballyReplaceAnotherValidTerm() {
         let triggers = DictionaryTrainingSpellingPolicy.exactTriggers(
             accepted: ["BIMCheck"], manuallyConfirmed: [], acousticCorrection: true

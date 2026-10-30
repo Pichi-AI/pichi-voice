@@ -16,7 +16,7 @@ struct DictionarySelectableTranscript: NSViewRepresentable {
         view.drawsBackground = false
         view.textContainerInset = .zero
         view.textContainer?.lineFragmentPadding = 0
-        view.textContainer?.widthTracksTextView = false
+        view.textContainer?.widthTracksTextView = true
         view.isHorizontallyResizable = false
         view.isVerticallyResizable = true
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
