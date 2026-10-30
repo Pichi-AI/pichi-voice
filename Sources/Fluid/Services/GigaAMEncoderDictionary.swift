@@ -29,7 +29,7 @@ nonisolated enum GigaAMEncoderDictionary {
         case invalidReferences, uncalibrated, contrastBudget, invalidTranscript
         case noSearchHits, invalidWordSpan, protectedTextRule, confidentSource
         case protectedContent, acousticRejected, ambiguous, compoundPreferred
-        case overlapping, replacementFailed, accepted, invalidWindows, outsideOwnership
+        case overlapping, replacementFailed, accepted, invalidWindows, outsideOwnership, unconfirmedCompound
     }
 
     struct Diagnostic: Sendable {
@@ -52,6 +52,7 @@ nonisolated enum GigaAMEncoderDictionary {
         let acceptanceDistance: Float
         let spellingSupport: Double
         var frameOffset = 0
+        var canonicalSupport: Double = 0
         var absoluteFrameRange: Range<Int> {
             (self.frameOffset + self.frameRange.lowerBound)..<(self.frameOffset + self.frameRange.upperBound)
         }
@@ -150,7 +151,7 @@ nonisolated enum GigaAMEncoderDictionary {
                 candidates.append(AcceptedSpan(entryID: span.entryID, label: span.label,
                     wordRange: first...last, frameRange: span.frameRange, distance: span.distance,
                     acceptanceDistance: span.acceptanceDistance, spellingSupport: span.spellingSupport,
-                    frameOffset: offsets[index]))
+                    frameOffset: offsets[index], canonicalSupport: span.canonicalSupport))
             }
         }
         // Only connected overlapping word spans can compete. Do not run a
@@ -294,7 +295,7 @@ nonisolated enum GigaAMEncoderDictionary {
                 }
                 candidates.append(AcceptedSpan(entryID: term.entryID, label: term.label, wordRange: range,
                     frameRange: hit.frames, distance: match.distance, acceptanceDistance: prepared.calibration.acceptanceDistance,
-                    spellingSupport: lexical.phoneticSimilarity))
+                    spellingSupport: lexical.phoneticSimilarity, canonicalSupport: lexical.canonicalSimilarity))
             }
         }
         let arbitration = self.arbitrate(candidates)
@@ -317,10 +318,19 @@ nonisolated enum GigaAMEncoderDictionary {
             $0.frameRange.upperBound <= GigaAMEncoderFeatures.maximumFrames &&
             $0.frameOffset >= 0 && $0.frameOffset <= self.maximumAbsoluteFrames &&
             $0.frameOffset + $0.frameRange.upperBound <= self.maximumAbsoluteFrames &&
-            $0.spellingSupport.isFinite && (0...1).contains($0.spellingSupport) }
+            $0.spellingSupport.isFinite && (0...1).contains($0.spellingSupport) &&
+            $0.canonicalSupport.isFinite && (0...1).contains($0.canonicalSupport) }
         var diagnostics: [Diagnostic] = []
-        let complete = candidates.filter { prefix in
-            let dominated = candidates.contains { full in self.compound(full, dominates: prefix) }
+        let confirmed = candidates.filter { full in
+            let unconfirmed = candidates.contains { prefix in
+                self.compoundRelation(full, prefix: prefix) && self.covers(full, prefix: prefix) &&
+                    !self.compound(full, dominates: prefix)
+            }
+            if unconfirmed { diagnostics.append(.init(.unconfirmedCompound, full.entryID)) }
+            return !unconfirmed
+        }
+        let complete = confirmed.filter { prefix in
+            let dominated = confirmed.contains { full in self.compound(full, dominates: prefix) }
             if dominated { diagnostics.append(.init(.compoundPreferred, prefix.entryID)) }
             return !dominated
         }
@@ -346,18 +356,34 @@ nonisolated enum GigaAMEncoderDictionary {
     }
 
     private static func compound(_ full: AcceptedSpan, dominates prefix: AcceptedSpan) -> Bool {
-        guard full.entryID != prefix.entryID, full.wordRange.lowerBound <= prefix.wordRange.lowerBound,
-              full.wordRange.upperBound >= prefix.wordRange.upperBound, full.absoluteFrameRange.overlaps(prefix.absoluteFrameRange) else { return false }
-        let fullKey = GigaAMDictionaryLexicalEvidence.phoneticKey(full.label)
-        let prefixKey = GigaAMDictionaryLexicalEvidence.phoneticKey(prefix.label)
-        return !prefixKey.isEmpty && fullKey.count > prefixKey.count && fullKey.hasPrefix(prefixKey) &&
-            (full.spellingSupport >= 0.8 || full.quality > prefix.quality)
+        guard self.compoundRelation(full, prefix: prefix), self.covers(full, prefix: prefix),
+              full.canonicalSupport >= 0.8 else { return false }
+        let fullComponents = GigaAMDictionaryLexicalEvidence.componentKeys(full.label)?.count ?? Int.max
+        let extraWords = (full.wordRange.upperBound > prefix.wordRange.upperBound || full.wordRange.count >= fullComponents) &&
+            full.absoluteFrameRange.upperBound >= prefix.absoluteFrameRange.upperBound
+        let extraAudio = full.absoluteFrameRange.lowerBound <= prefix.absoluteFrameRange.lowerBound + 1 &&
+            full.absoluteFrameRange.upperBound > prefix.absoluteFrameRange.upperBound
+        return extraWords || extraAudio
+    }
+
+    private static func covers(_ full: AcceptedSpan, prefix: AcceptedSpan) -> Bool {
+        full.entryID != prefix.entryID && full.wordRange.lowerBound == prefix.wordRange.lowerBound &&
+            full.wordRange.upperBound >= prefix.wordRange.upperBound && full.absoluteFrameRange.overlaps(prefix.absoluteFrameRange)
+    }
+
+    private static func compoundRelation(_ full: AcceptedSpan, prefix: AcceptedSpan) -> Bool {
+        guard full.entryID != prefix.entryID,
+              let fullComponents = GigaAMDictionaryLexicalEvidence.componentKeys(full.label),
+              let prefixComponents = GigaAMDictionaryLexicalEvidence.componentKeys(prefix.label),
+              !prefixComponents.isEmpty, fullComponents.count > prefixComponents.count else { return false }
+        return fullComponents.starts(with: prefixComponents)
     }
 
     private static func wordRange(frames: Range<Int>, words: [GigaAMWordTiming]) -> ClosedRange<Int>? {
         let start = Double(frames.lowerBound) * GigaAMEncoderFeatures.frameDuration
         let end = Double(frames.upperBound) * GigaAMEncoderFeatures.frameDuration
         let touched = words.indices.filter {
+            guard words[$0].text.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { return false }
             let overlap = max(0, min(end, words[$0].end) - max(start, words[$0].start))
             return overlap >= min(0.04, (words[$0].end - words[$0].start) * 0.5) &&
                 overlap / (words[$0].end - words[$0].start) >= 0.5

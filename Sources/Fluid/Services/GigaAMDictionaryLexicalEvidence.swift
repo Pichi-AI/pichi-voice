@@ -87,6 +87,12 @@ nonisolated enum GigaAMDictionaryLexicalEvidence {
         return result.count <= 160 ? result : ""
     }
 
+    /// Component boundaries are required for registered compound relationships;
+    /// a scalar spelling prefix does not make two different words a compound.
+    static func componentKeys(_ text: String) -> [String]? {
+        self.tokens(text)?.map(\.key)
+    }
+
     private static func tokens(_ text: String) -> [Token]? {
         guard !text.isEmpty, text.count <= 80, text.rangeOfCharacter(from: .newlines) == nil else { return nil }
         guard let regex = try? NSRegularExpression(pattern: #"[\p{L}\p{M}\p{N}]+(?:['’][\p{L}\p{M}\p{N}]+)*"#) else { return nil }

@@ -77,10 +77,31 @@ struct DictionaryMatchFrames: Sendable {
         let prefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: prefixID, label: "Alpha", wordRange: 0...0,
             frameRange: 0..<6, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1)
         let full = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...0,
-            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 0.8)
+            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 0.8, canonicalSupport: 1)
         let compound = GigaAMEncoderDictionary.arbitrate([prefix, full])
         precondition(compound.accepted.count == 1 && compound.accepted[0].entryID == fullID,
             "Complete accepted compound defeats prefix even when prefix quality is slightly better")
+        let scalarPrefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: UUID(), label: "Alphabet", wordRange: 0...0,
+            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1)
+        precondition(GigaAMEncoderDictionary.arbitrate([prefix, scalarPrefix]).accepted.isEmpty,
+            "A scalar spelling prefix does not authorize compound dominance")
+        let truncated = GigaAMDictionaryLexicalEvidence.compare(heard: "Alpha", canonical: "Alpha Desktop", observedVariants: ["Alpha"])!
+        precondition(truncated.phoneticSimilarity == 1 && truncated.canonicalSimilarity < 0.8)
+        let aliasExpansion = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...0,
+            frameRange: 0..<10, distance: 0.001, acceptanceDistance: 0.3, spellingSupport: truncated.phoneticSimilarity,
+            canonicalSupport: truncated.canonicalSimilarity)
+        precondition(GigaAMEncoderDictionary.arbitrate([prefix, aliasExpansion]).accepted.map(\.entryID) == [prefixID],
+            "A truncated observed alias and lower distance cannot authorize an extra component")
+        let noExtraAudio = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...0,
+            frameRange: 0..<6, distance: 0.001, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1)
+        precondition(GigaAMEncoderDictionary.arbitrate([prefix, noExtraAudio]).accepted.map(\.entryID) == [prefixID],
+            "An extra component needs an extra matched word or trailing audio")
+        let twoWordPrefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: prefixID, label: "Alpha", wordRange: 0...1,
+            frameRange: 0..<10, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 0.5)
+        let twoWordFull = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 0...1,
+            frameRange: 0..<10, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1, canonicalSupport: 1)
+        precondition(GigaAMEncoderDictionary.arbitrate([twoWordPrefix, twoWordFull]).accepted.map(\.entryID) == [fullID],
+            "Two actual matched words can prove the complete compound even if the prefix hit consumed both")
         let other = GigaAMEncoderDictionary.AcceptedSpan(entryID: UUID(), label: "Beta", wordRange: 0...0,
             frameRange: 0..<6, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 1)
         precondition(GigaAMEncoderDictionary.arbitrate([prefix, other]).accepted.isEmpty, "Unrelated near-equal labels stay ambiguous")
@@ -96,6 +117,7 @@ struct DictionaryMatchFrames: Sendable {
             windows: [laterWindow], modelKey: model, words: prepared.words, entries: [])
         precondition(repeated.text == "Alfa Alpha" && repeated.accepted.count == 1 && repeated.accepted[0].wordRange == 1...1)
         precondition(repeated.accepted[0].frameOffset == 500 && repeated.accepted[0].absoluteFrameRange.lowerBound >= 500)
+        precondition(repeated.accepted[0].canonicalSupport > 0, "Current-source canonical evidence survives window mapping")
         let claimedAcrossWindow = try await GigaAMEncoderDictionary.correct(
             transcript: self.transcript("Do Alfa", [("Do", 19.8, 19.96), ("Alfa", 20, 20.24)]),
             windows: [laterWindow], modelKey: model, words: prepared.words,
@@ -116,7 +138,7 @@ struct DictionaryMatchFrames: Sendable {
         let crossPrefix = GigaAMEncoderDictionary.AcceptedSpan(entryID: prefixID, label: "Alpha", wordRange: 5...5,
             frameRange: 250..<260, distance: 0.146, acceptanceDistance: 0.3, spellingSupport: 1)
         let crossFull = GigaAMEncoderDictionary.AcceptedSpan(entryID: fullID, label: "Alpha Desktop", wordRange: 5...5,
-            frameRange: 0..<20, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 0.8, frameOffset: 250)
+            frameRange: 0..<20, distance: 0.147, acceptanceDistance: 0.3, spellingSupport: 0.8, frameOffset: 250, canonicalSupport: 1)
         precondition(GigaAMEncoderDictionary.arbitrate([crossPrefix, crossFull]).accepted.first?.entryID == fullID,
             "Cross-window compounds compare absolute audio frames")
         let misaligned = try GigaAMEncoderWindow(offset: 0.01, ownership: 0.01..<0.25, features: reference)
@@ -141,6 +163,20 @@ struct DictionaryMatchFrames: Sendable {
         }
         do { _ = try await cancelled.value; preconditionFailure("Cancelled window work must not return accepted output") }
         catch is CancellationError {}
+        for mark in [".", ",", "?"] {
+            let separated = try await GigaAMEncoderDictionary.correct(
+                transcript: self.transcript("🙂 , Alfa" + mark, [(",", 0, 0.04), ("Alfa", 0.04, 0.20), (mark, 0.20, 0.24)]),
+                features: reference, modelKey: model, words: prepared.words, entries: [])
+            precondition(separated.text == "🙂 , Alpha" + mark && separated.accepted.first?.wordRange == 1...1,
+                "Separate leading/trailing punctuation must survive lexical replacement")
+        }
+        let punctuationOnly = try await GigaAMEncoderDictionary.correct(transcript: self.transcript("?", [("?", 0, 0.24)]),
+            features: reference, modelKey: model, words: prepared.words, entries: [])
+        precondition(punctuationOnly.accepted.isEmpty && punctuationOnly.text == "?")
+        let compoundPunctuation = try await GigaAMEncoderDictionary.correct(
+            transcript: self.transcript("Alfa Desk?", [("Alfa", 0, 0.08), ("Desk", 0.08, 0.20), ("?", 0.20, 0.24)]),
+            features: reference, modelKey: model, words: compoundPrepared.words, entries: [])
+        precondition(compoundPunctuation.text == "Alpha Desktop?" && compoundPunctuation.accepted.first?.wordRange == 0...1)
         print("PASS: native encoder matching, protected UTF16 edits, compounds, repeated-word window ordinals, ownership deduplication, absolute frames, global rules, budgets and joined cancellation")
     }
 }
