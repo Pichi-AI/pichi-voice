@@ -137,7 +137,7 @@ struct MobileMeetingRoot: View {
         }
         // The same symbols as the desktop sidebar sections.
         var symbol: String {
-            switch self { case .meetings: return "person.2.fill"; case .settings: return "gearshape" }
+            switch self { case .meetings: return "waveform"; case .settings: return "gearshape" }
         }
     }
 
@@ -443,7 +443,8 @@ struct MobileMeetingRoot: View {
     private func recording(_ session: MeetingSession) -> some View {
         VStack(alignment: .leading, spacing: compactHeight ? 8 : 16) {
             recordingStatus(session)
-            if !compactHeight, canPresent(session) {
+            // The band already says Recording; a title shows here when it names more than that.
+            if !compactHeight, canPresent(session), session.hasDistinctMobileTitle {
                 Text(session.mobileTitle()).font(theme.typography.sectionTitle).lineLimit(2)
             }
             if canPresent(session) {
@@ -1495,6 +1496,11 @@ private struct MeetingEditTextForm: View {
 }
 
 extension MeetingSession {
+    /// A renamed recording, or one whose title names its place, rather than the default name.
+    var hasDistinctMobileTitle: Bool {
+        !displayTitleIncludesStart || location?.address(for: PichiLocalization.language) != nil
+    }
+
     /// The name a recording shows on mobile. A default title names the place, or "Recording", and
     /// leaves out the start that rows and pages show next to it; exports and search keep the start.
     func mobileTitle(includingStart: Bool = false) -> String {
