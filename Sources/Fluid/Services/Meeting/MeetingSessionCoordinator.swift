@@ -2630,7 +2630,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 ))
             }
             session.state = .completed
-            session = MeetingAutomaticNaming.applying(to: session)
+            session = await MeetingAutomaticNaming.applyingInBackground(to: session)
+            guard self.operationGeneration == generation,
+                  !Task.isCancelled || result.postProcessing != nil else { throw CancellationError() }
             session.updatedAt = Date()
             do {
                 let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.resultPersist)
@@ -2638,9 +2640,13 @@ final class MeetingSessionCoordinator: ObservableObject {
                 defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.resultPersist, since: began,
                     samples: session.transcriptSegments.count, succeeded: succeeded) }
                 await self.flushQueuedPersistence()
+                guard self.operationGeneration == generation,
+                      !Task.isCancelled || result.postProcessing != nil else { throw CancellationError() }
                 try await self.store.save(session)
                 succeeded = true
             }
+            guard self.operationGeneration == generation,
+                  !Task.isCancelled || result.postProcessing != nil else { throw CancellationError() }
             let publishBegan = MeetingPCMRuntimeDiagnostics.beginDetailed(.resultPublish)
             self.removeCheckpoint(sessionDirectory: sessionDirectory, removeRetainedState: result.isComplete)
             self.activeSession = nil

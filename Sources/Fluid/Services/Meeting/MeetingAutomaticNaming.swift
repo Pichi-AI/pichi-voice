@@ -8,6 +8,20 @@ nonisolated enum MeetingAutomaticNaming {
     static let maximumTextBytes = 4 * 1_024 * 1_024
     static let maximumSegments = 100_000
 
+    /// New-result publication awaits this owned utility worker. Cancellation always joins it;
+    /// an already-running bounded regex scan can finish before the caller rechecks admission.
+    static func applyingInBackground(to source: MeetingSession) async -> MeetingSession {
+        let worker = Task.detached(priority: .utility) {
+            guard !Task.isCancelled else { return source }
+            return self.applying(to: source)
+        }
+        return await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
     /// Validate supported derived metadata at the existing application reading boundary.
     /// Unknown versions remain untouched and display their persisted title snapshot.
     static func validatingMetadata(in source: MeetingSession) -> MeetingSession {

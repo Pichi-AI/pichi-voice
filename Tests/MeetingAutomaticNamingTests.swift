@@ -37,6 +37,8 @@ extension MeetingSessionStoreCheckpointTests {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
         let named = MeetingAutomaticNaming.applying(to: original)
+        let background = await MeetingAutomaticNaming.applyingInBackground(to: original)
+        check(background == named, "Joined utility naming produces the same immutable result as the pure engine")
         check(named.automaticTitle != nil, "A completed long default-named recording receives an automatic title")
         check(named.automaticTitle?.previousTitle == original.title
               && named.automaticTitle?.previousDefaultTitleBase == original.defaultTitleBase,
