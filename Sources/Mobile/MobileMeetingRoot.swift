@@ -663,7 +663,20 @@ struct MobileMeetingRoot: View {
                 }
         }
         .overlay {
-            if matches.isEmpty, historySnapshot.hasLoaded, historySnapshot.errorMessage == nil {
+            if matches.isEmpty, !historySnapshot.hasLoaded {
+                VStack(spacing: theme.metrics.spacing.lg) {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(theme.palette.accent)
+                    Text(PichiLocalization.text("Loading recordings…"))
+                        .font(theme.typography.bodySmall)
+                        .foregroundStyle(theme.palette.secondaryText)
+                }
+                .padding(theme.metrics.spacing.xl)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("history.loading")
+            } else if matches.isEmpty, historySnapshot.errorMessage == nil {
                 if search.isEmpty {
                     // The first meeting's hint is the empty list itself.
                     ContentUnavailableView(PichiLocalization.text("Make your first recording"), systemImage: "waveform",
