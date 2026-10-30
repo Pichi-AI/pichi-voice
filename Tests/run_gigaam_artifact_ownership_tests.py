@@ -30,6 +30,7 @@ with tempfile.TemporaryDirectory(prefix="pichi-gigaam-artifact-ownership-") as t
         str(catalog), str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMResourcePolicy.swift"),
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMFrontend.swift"),
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAcousticFeatures.swift"),
+        str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMEncoderFeatures.swift"),
         str(repo / "Vendor/PichiGigaAM/Sources/PichiGigaAM/GigaAMAcousticMatcher.swift"), str(runtime), "-o", str(library),
     ], check=True, cwd=repo)
     progress_source = temporary / "PreparationProgress.swift"
