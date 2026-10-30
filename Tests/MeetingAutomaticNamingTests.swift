@@ -2,7 +2,7 @@ import Foundation
 
 extension MeetingSessionStoreCheckpointTests {
     /// Real session codecs, reading projection, filesystem store and synthetic encryption key.
-    /// This fixture performs no inference, audio access, network access or account lookup.
+    /// This fixture performs no speech inference, audio access, network access or account lookup.
     static func checkAutomaticNaming(root: URL, check: (Bool, String) -> Void) async throws {
         let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
             machTimebaseDenominator: 1, firstPresentationTime: nil)
@@ -37,6 +37,50 @@ extension MeetingSessionStoreCheckpointTests {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
         let named = MeetingAutomaticNaming.applying(to: original)
+        let russian = "Мы обсуждаем планы на следующий месяц. Нужно определить задачи и договориться о следующих шагах. Давайте сначала ответим на вопросы, затем выберем подходящий вариант. "
+        let english = "We are discussing plans for the next month. We need to define the tasks and agree on the next steps. Let us answer the questions first, then choose the best option. "
+        for (text, expected) in [
+            (String(repeating: russian, count: 40), "ru"),
+            (String(repeating: english, count: 40), "en"),
+            (String(repeating: english, count: 8) + String(repeating: russian, count: 32), "ru"),
+            (String(repeating: russian, count: 8) + String(repeating: english, count: 32), "en"),
+            (String(repeating: russian + " API GPU SQL CRM GitHub PostgreSQL. ", count: 40), "ru"),
+            (String(repeating: english, count: 100) + String(repeating: russian, count: 4_000), "ru")
+        ] {
+            let analysis = MeetingTitleLanguage.analyze(text)
+            check(analysis.languageCode == expected, "Dominant transcript language follows distributed content, not interface, greeting or technical abbreviations")
+            check(analysis.sampleCount <= MeetingTitleLanguage.maximumSamples
+                  && analysis.analyzedScalars <= MeetingTitleLanguage.maximumSamples * MeetingTitleLanguage.maximumSampleScalars,
+                  "Language identification retains a bounded set of distributed samples")
+        }
+        check(MeetingTitleLanguage.analyze("123 456").languageCode == "und",
+              "Unrecognized language remains explicit instead of borrowing an interface preference")
+        check(named.automaticTitle?.languageCode == "ru", "The generated artifact stores the dominant Russian transcript language")
+
+        // This resource fixture exercises actual Foundation lookup with both caller languages.
+        let bundleRoot = root.appendingPathComponent("title-language.bundle")
+        for (language, value) in [("en", "Discussion of questions"), ("ru", "Обсуждение вопросов")] {
+            let folder = bundleRoot.appendingPathComponent(language + ".lproj")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try "\"Discussion of questions\" = \"\(value)\";\n".write(to: folder.appendingPathComponent("Localizable.strings"), atomically: true, encoding: .utf8)
+        }
+        let info: [String: Any] = ["CFBundleIdentifier": "invalid.synthetic.title-language", "CFBundleDevelopmentRegion": "en", "CFBundleLocalizations": ["en", "ru"]]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: bundleRoot.appendingPathComponent("Info.plist"))
+        let bundle = Bundle(path: bundleRoot.path)!
+        check(named.displayTitle(language: .english, bundle: bundle) == "Обсуждение вопросов"
+              && named.displayTitle(language: .russian, bundle: bundle) == "Обсуждение вопросов",
+              "Russian recording titles remain Russian when the interface language changes")
+        var englishRecording = original
+        englishRecording.languageCode = "ru"
+        for index in englishRecording.transcriptSegments.indices {
+            englishRecording.transcriptSegments[index].text = "I agree, let me answer, what do you think about this question? This question is important. We should answer the question before choosing a solution. " + String(repeating: english, count: 3)
+        }
+        let englishNamed = MeetingAutomaticNaming.applying(to: englishRecording)
+        check(englishNamed.automaticTitle?.languageCode == "en", "Recognition settings cannot replace the actual majority language")
+        let englishKey = englishNamed.automaticTitle!.localizationKey
+        check(englishNamed.displayTitle(language: .russian, bundle: bundle) == englishKey
+              && englishNamed.displayTitle(language: .english, bundle: bundle) == englishKey,
+              "English recording titles remain English in either interface language")
         let background = await MeetingAutomaticNaming.applyingInBackground(to: original)
         check(background == named, "Joined utility naming produces the same immutable result as the pure engine")
         check(named.automaticTitle != nil, "A completed long default-named recording receives an automatic title")
@@ -65,8 +109,14 @@ extension MeetingSessionStoreCheckpointTests {
         var unchanged = named
         unchanged.title = original.title; unchanged.automaticTitle = nil
         check(unchanged == original, "Automatic naming changes no transcript, speaker, timing, location or privacy evidence")
-        check(named.displayTitle(language: .english).hasPrefix(named.automaticTitle!.localizationKey + " · "),
-              "Generated titles take precedence over location while preserving recording dates")
+        check(!named.displayTitle(language: .english).contains(" · ") && !named.displayTitleIncludesStart,
+              "Generated names contain no recording date or time; separate metadata owns the start")
+        check(!original.displayTitle(language: .english).contains(" · ") && !original.displayTitleIncludesStart,
+              "Default automatic names also leave their start out of the visible title")
+        var online = original
+        online.mode = .onlineCall; online.defaultTitleBase = "Synthetic call"
+        check(online.displayTitle(language: .english) == "Synthetic call",
+              "Default online call names retain their bare base without a timestamp")
         let decoder = JSONDecoder(), encoder = JSONEncoder()
         check(try decoder.decode(MeetingSession.self, from: encoder.encode(named)) == named,
               "Generated metadata and original names survive the existing schema-1 codec")
@@ -74,6 +124,22 @@ extension MeetingSessionStoreCheckpointTests {
         legacyObject.removeValue(forKey: "automaticTitle")
         let legacy = try decoder.decode(MeetingSession.self, from: JSONSerialization.data(withJSONObject: legacyObject))
         check(legacy == original, "Old recordings decode without inventing automatic-title provenance")
+        var oldArtifactObject = try JSONSerialization.jsonObject(with: encoder.encode(named)) as! [String: Any]
+        var oldArtifact = oldArtifactObject["automaticTitle"] as! [String: Any]
+        oldArtifact.removeValue(forKey: "languageCode"); oldArtifactObject["automaticTitle"] = oldArtifact
+        var oldGenerated = try decoder.decode(MeetingSession.self, from: JSONSerialization.data(withJSONObject: oldArtifactObject))
+        oldGenerated.title = "Обсуждение вопросов · old generated start"
+        check(oldGenerated.automaticTitle?.languageCode == nil
+              && oldGenerated.displayTitle(language: .english, bundle: bundle) == "Обсуждение вопросов",
+              "Earlier generated snapshots retain their stored language while dropping only their known date suffix")
+        let backfilled = MeetingAutomaticNaming.applying(to: oldGenerated)
+        check(backfilled.automaticTitle?.languageCode == "ru"
+              && backfilled.automaticTitle?.candidateID == oldGenerated.automaticTitle?.candidateID
+              && backfilled.automaticTitle?.previousTitle == oldGenerated.automaticTitle?.previousTitle
+              && backfilled.automaticTitle?.previousDefaultTitleBase == oldGenerated.automaticTitle?.previousDefaultTitleBase,
+              "Language backfill preserves the prior candidate and original-title rollback metadata")
+        check(MeetingAutomaticNaming.applying(to: backfilled) == backfilled,
+              "An already frozen recording title never follows later interface changes")
 
         var partial = original
         partial.transcriptIsComplete = false

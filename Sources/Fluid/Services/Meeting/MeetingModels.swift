@@ -1150,6 +1150,19 @@ nonisolated struct MeetingAutomaticTitle: Codable, Equatable, Sendable {
     let localizationKey: String
     let previousTitle: String
     let previousDefaultTitleBase: String?
+    /// Dominant transcript language frozen at generation, independent of interface language.
+    /// Nil is the backward-compatible representation of an earlier title artifact.
+    let languageCode: String?
+
+    init(algorithmVersion: String, candidateID: String, localizationKey: String,
+         previousTitle: String, previousDefaultTitleBase: String?, languageCode: String? = nil) {
+        self.algorithmVersion = algorithmVersion
+        self.candidateID = candidateID
+        self.localizationKey = localizationKey
+        self.previousTitle = previousTitle
+        self.previousDefaultTitleBase = previousDefaultTitleBase
+        self.languageCode = languageCode
+    }
 }
 
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
@@ -1266,24 +1279,26 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 
     var displayTitle: String { self.displayTitle(language: PichiLocalization.language) }
 
-    /// A default in-room title is composed with its start time, so lists need not repeat the date.
-    var displayTitleIncludesStart: Bool { self.defaultTitleBase != nil && self.mode == .inRoom }
+    /// Start information belongs to the separate metadata row, never automatic title copy.
+    var displayTitleIncludesStart: Bool { false }
 
     func displayTitle(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
         if let automaticTitle = self.automaticTitle {
             guard automaticTitle.algorithmVersion == MeetingAutomaticTitle.supportedAlgorithmVersion else { return self.title }
-            let base = PichiLocalization.text(automaticTitle.localizationKey, language: language, bundle: bundle)
-            guard self.displayTitleIncludesStart else { return base }
-            let date = self.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened)
-                .locale(language.locale))
-            return "\(base) · \(date)"
+            guard let rawLanguage = automaticTitle.languageCode,
+                  let titleLanguage = PichiInterfaceLanguage(rawValue: rawLanguage) else {
+                // Earlier generated snapshots already retain their original output language.
+                // Remove only the separator our prior automatic renderer appended. The
+                // admitted store read backfills a real dominant language from this recording.
+                if let separator = self.title.range(of: " · ") { return String(self.title[..<separator.lowerBound]) }
+                return self.title
+            }
+            return PichiLocalization.text(automaticTitle.localizationKey, language: titleLanguage, bundle: bundle)
         }
-        guard self.displayTitleIncludesStart else { return self.title }
-        let base = self.location?.address(for: language)
+        guard let defaultBase = self.defaultTitleBase else { return self.title }
+        guard self.mode == .inRoom else { return defaultBase }
+        return self.location?.address(for: language)
             ?? PichiLocalization.text("In-room meeting", language: language, bundle: bundle)
-        let date = self.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened)
-            .locale(language.locale))
-        return "\(base) · \(date)"
     }
 
     var effectiveSpeakerProcessingMode: MeetingSpeakerProcessingMode {

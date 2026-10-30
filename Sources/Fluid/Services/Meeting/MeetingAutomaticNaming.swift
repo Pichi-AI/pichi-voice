@@ -29,7 +29,7 @@ nonisolated enum MeetingAutomaticNaming {
               artifact.algorithmVersion == MeetingUniversalTitleEngine.algorithmVersion else { return source }
         guard MeetingUniversalTitleEngine.catalog.contains(where: {
             $0.candidateID == artifact.candidateID && $0.localizationKey == artifact.localizationKey && !$0.isFallback
-        }) else {
+        }), artifact.languageCode.map({ PichiInterfaceLanguage(rawValue: $0) != nil }) != false else {
             // Do not localize arbitrary persisted text. This display-only normalization does
             // not overwrite an unknown or damaged artifact in the original manifest.
             var session = source
@@ -41,8 +41,15 @@ nonisolated enum MeetingAutomaticNaming {
     }
 
     static func applying(to source: MeetingSession) -> MeetingSession {
-        guard source.automaticTitle == nil,
-              source.defaultTitleBase != nil,
+        let existing = source.automaticTitle
+        if let existing {
+            guard existing.algorithmVersion == MeetingUniversalTitleEngine.algorithmVersion,
+                  existing.languageCode == nil,
+                  MeetingUniversalTitleEngine.catalog.contains(where: {
+                      $0.candidateID == existing.candidateID && $0.localizationKey == existing.localizationKey && !$0.isFallback
+                  }) else { return source }
+        }
+        guard source.defaultTitleBase != nil,
               source.state == .completed,
               !source.isLocalContentConcealed,
               let endedAt = source.endedAt,
@@ -64,6 +71,16 @@ nonisolated enum MeetingAutomaticNaming {
         let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: ordered, in: source)
         let text = paragraphs.map(\.text).joined(separator: "\n\n")
         guard text.count >= self.minimumTextCharacters, text.utf8.count <= self.maximumTextBytes else { return source }
+        let languageCode = MeetingTitleLanguage.analyze(text).languageCode
+        if let existing {
+            var session = source
+            session.automaticTitle = .init(algorithmVersion: existing.algorithmVersion,
+                candidateID: existing.candidateID, localizationKey: existing.localizationKey,
+                previousTitle: existing.previousTitle, previousDefaultTitleBase: existing.previousDefaultTitleBase,
+                languageCode: languageCode)
+            session.title = session.displayTitle
+            return session
+        }
         let names = Dictionary(source.activeSpeakers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
         let turns = paragraphs.map { paragraph in
             let presentation = MeetingTranscriptExporter.speakerPresentation(for: paragraph, in: source, speakerNames: names)
@@ -74,10 +91,11 @@ nonisolated enum MeetingAutomaticNaming {
         var session = source
         session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
             candidateID: selected.candidateID, localizationKey: selected.localizationKey,
-            previousTitle: source.title, previousDefaultTitleBase: source.defaultTitleBase)
-        // Persist a useful current-language snapshot for existing non-UI readers. UI rendering
-        // resolves the stable catalog key without translating any recorded speech.
-        session.title = session.displayTitle(language: PichiLocalization.language)
+            previousTitle: source.title, previousDefaultTitleBase: source.defaultTitleBase,
+            languageCode: languageCode)
+        // Freeze the transcript-language snapshot for non-UI readers as well. Interface
+        // preferences never translate generated titles or recorded speech.
+        session.title = session.displayTitle
         return session
     }
 }

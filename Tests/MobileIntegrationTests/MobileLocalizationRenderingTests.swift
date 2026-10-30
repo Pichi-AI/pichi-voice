@@ -35,8 +35,8 @@ final class MobileLocalizationRenderingTests: XCTestCase {
 
     func testSavedLocationFollowsInterfaceLanguageWithoutChangingTranscriptLanguage() throws {
         let session = locationSession()
-        XCTAssertTrue(session.displayTitle(language: .russian).hasPrefix("ул. Примерная, 1, Примерск · "))
-        XCTAssertTrue(session.displayTitle(language: .english).hasPrefix("1 Example Street, Example City · "))
+        XCTAssertEqual(session.displayTitle(language: .russian), "ул. Примерная, 1, Примерск")
+        XCTAssertEqual(session.displayTitle(language: .english), "1 Example Street, Example City")
         XCTAssertNotEqual(session.displayTitle(language: .english), session.displayTitle(language: .russian))
         let restored = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(session))
         XCTAssertEqual(restored.location, session.location)
@@ -59,24 +59,25 @@ final class MobileLocalizationRenderingTests: XCTestCase {
         XCTAssertEqual(restored.displayTitle(language: .english), session.title)
     }
 
-    func testMissingAddressUsesLocalizedFallbackAndDateWithoutAnotherLanguage() {
+    func testMissingAddressUsesLocalizedFallbackWithoutStartOrAnotherLanguage() {
         var session = locationSession()
         session.location?.addresses.removeValue(forKey: "ru")
-        // iPhone and iPad name the in-room default Recording through the catalog's device variation.
-        XCTAssertTrue(session.displayTitle(language: .russian).hasPrefix("Запись · "))
+        // The installed catalog calls the in-room default Recording on iPhone and iPad.
+        XCTAssertEqual(session.displayTitle(language: .russian), "Запись")
         XCTAssertFalse(session.displayTitle(language: .russian).contains("Example Street"))
         session.location = nil
-        XCTAssertTrue(session.displayTitle(language: .english).hasPrefix("Recording · "))
+        XCTAssertEqual(session.displayTitle(language: .english), "Recording")
     }
 
     func testMobileTitleLeavesTheStartToRowsAndPages() {
         var session = locationSession()
         XCTAssertEqual(session.mobileTitle, session.location?.address(for: PichiLocalization.language))
-        XCTAssertTrue(session.displayTitle.hasPrefix("\(session.mobileTitle) · "))
+        XCTAssertEqual(session.displayTitle, session.mobileTitle)
+        XCTAssertFalse(session.displayTitleIncludesStart)
         XCTAssertTrue(session.hasDistinctMobileTitle)
         session.location = nil
         XCTAssertTrue(["Запись", "Recording"].contains(session.mobileTitle), session.mobileTitle)
-        XCTAssertTrue(session.displayTitle.hasPrefix("\(session.mobileTitle) · "))
+        XCTAssertEqual(session.displayTitle, session.mobileTitle)
         XCTAssertFalse(session.hasDistinctMobileTitle)
         session.defaultTitleBase = nil
         session.title = "Мой план Ёё / My plan"

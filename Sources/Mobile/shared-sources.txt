@@ -228,3 +228,5 @@ Sources/MobileActivity/MobileRecordingActivityAttributes.swift
 Sources/Fluid/Services/Meeting/MeetingUniversalTitleEngine.swift
 
 Sources/Fluid/Services/Meeting/MeetingAutomaticNaming.swift
+
+Sources/Fluid/Services/Meeting/MeetingTitleLanguage.swift

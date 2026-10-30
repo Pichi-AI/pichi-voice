@@ -14,10 +14,11 @@ final class MobileUniversalTitleUITests: XCTestCase {
             throw XCTSkip("Stage an owned synthetic long recording and provide PICHI_TITLE_FIXTURE_ID")
         }
         let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        let englishIdentifier = try XCTUnwrap(environment["PICHI_TITLE_ENGLISH_FIXTURE_ID"])
         XCTAssertFalse(revision.isEmpty)
         let app = XCUIApplication()
         defer { app.terminate() }
-        for (language, expected) in [("ru", "Обсуждение вопросов"), ("en", "Discussion of questions")] {
+        for language in ["ru", "en"] {
             for appearance in ["light", "dark"] {
                 app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
                     "-MobileSetupVersion", "1", "-MobileMeetingBehaviorVersion", "1",
@@ -27,12 +28,25 @@ final class MobileUniversalTitleUITests: XCTestCase {
                 app.launch()
                 let row = app.buttons["history.session.\(identifier)"]
                 XCTAssertTrue(row.waitForExistence(timeout: 20), "Cold history must load the staged session")
-                XCTAssertTrue(row.label.contains(expected), row.label)
+                let expected = "Обсуждение вопросов"
+                let title = app.staticTexts["history.title.\(identifier)"]
+                XCTAssertTrue(title.waitForExistence(timeout: 5))
+                XCTAssertEqual(title.label, expected, "A Russian recording keeps a bare Russian title in either interface")
+                let englishTitle = app.staticTexts["history.title.\(englishIdentifier)"]
+                XCTAssertTrue(englishTitle.waitForExistence(timeout: 5))
+                XCTAssertEqual(englishTitle.label, "Discussion of questions", "The second recording follows its English speech")
+                let start = Date(timeIntervalSince1970: 1_700_000_000).formatted(
+                    Date.FormatStyle(date: .abbreviated, time: .shortened).locale(Locale(identifier: language)))
+                let metadata = app.staticTexts["history.metadata.\(identifier)"]
+                XCTAssertTrue(metadata.exists)
+                XCTAssertTrue(metadata.label.contains(start), "The visible metadata must include start date and clock time")
                 capture(app, "title-list-\(language)-\(appearance)-\(revision.prefix(8))")
                 row.tap()
                 XCTAssertTrue(app.buttons["transcript.more"].waitForExistence(timeout: 10))
-                XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", expected))
-                    .firstMatch.waitForExistence(timeout: 5))
+                let detailTitle = app.staticTexts["transcript.title"]
+                XCTAssertTrue(detailTitle.waitForExistence(timeout: 5))
+                XCTAssertEqual(detailTitle.label, expected, "No date or time is appended to the recording name")
+                XCTAssertEqual(app.staticTexts["transcript.metadata.start"].label, start)
                 capture(app, "title-detail-\(language)-\(appearance)-\(revision.prefix(8))")
                 app.terminate()
             }
