@@ -46,6 +46,7 @@ files = {
     'Sources/Fluid/Services/CloudPublication/PichiProtectedPublicationSource.swift': [
         'nonisolated enum PichiPublicationWithholdingReason:'],
     'Sources/Fluid/Services/CloudPublication/PichiPublicationWire.swift': [
+        'nonisolated enum PichiPublicationBillingState:',
         'nonisolated enum PichiPublicationAnalysisState:', 'nonisolated struct PichiPublicationReceipt:',
         'nonisolated struct PichiPublicationAssessment:', 'nonisolated struct PichiPublicationAssessmentOptions:'],
     'Sources/Fluid/Account/AccountDomain.swift': [

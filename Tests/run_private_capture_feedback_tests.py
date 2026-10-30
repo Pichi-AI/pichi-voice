@@ -61,6 +61,7 @@ def main():
     if args.unjoined_discovery:
         service_start = service_start.replace("PrivateProfileOperationOwner(registerForTransitions: true)", "PrivateProfileOperationOwner(registerForTransitions: false)")
     coordinator = (ROOT / "Sources/Fluid/Services/Meeting/MeetingSessionCoordinator.swift").read_text()
+    meeting_models = (ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text()
     partial_start = menu.index("        asrService.$partialTranscription")
     partial_end = menu.index("            .store(in: &self.cancellables)", partial_start) + len("            .store(in: &self.cancellables)")
     partial = menu[partial_start:partial_end]
@@ -179,11 +180,14 @@ def main():
 typealias MeetingSessionID = UUID
 enum MeetingProcessingStage: Equatable { case synthetic }
 struct MeetingSessionFailure: Equatable { let message: String }
-''' + declaration(coordinator, "enum MeetingCoordinatorState:") + r'''
+''' + declaration(coordinator, "enum MeetingCoordinatorState:") + "\n" + declaration(meeting_models, "nonisolated struct MeetingProfileOwnership:") + r'''
 struct MeetingSession {
     struct Application { let displayName: String }
     var capturedApplication: Application?
     var startedAt: Date?
+    var requiresEncryptedPersistence: Bool? = nil
+    var profileOwnership: MeetingProfileOwnership? = nil
+''' + declaration(meeting_models, "    var isLocalContentConcealed:") + r'''
 }
 @MainActor final class MeetingSessionCoordinator {
     @Published var state: MeetingCoordinatorState = .idle
@@ -283,6 +287,10 @@ enum MeetingCoordinatorError: Error { case featureDisabled }
     var stopMeetingRecordingHandler: (() -> Void)?
     var isProcessingActive = false, overlayVisible = false
     var hasDeferredStopMenuRefresh = false, hasDeferredStoppedRecordingState = false
+    // Only ownership clearing is observed here; dictionary request validity has its own probe.
+    var pendingDictionaryWordTrainingRequest: UUID?
+    var dictionaryWordTrainingRequestID: UUID?
+    var dictionaryWordTrainingExpiry: Task<Void, Never>?
     var menuUpdates = 0, iconUpdates = 0, pendingCancellations = 0
     var presentations: [MeetingMenuPresentation] = []
     init() {
