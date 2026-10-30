@@ -256,11 +256,13 @@ private struct MobileSensitiveBusinessGroupEditor: View {
                     ToolbarItem(placement: .cancellationAction) {
                         Button { dismiss() } label: {
                             Text(PichiLocalization.text("Cancel")).font(theme.typography.body)
+                                .fixedSize(horizontal: true, vertical: false)
                         }.buttonStyle(.plain).accessibilityIdentifier("privacy.groups.\(group.id).cancel")
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button { save() } label: {
                             Text(PichiLocalization.text("Save")).font(theme.typography.body)
+                                .fixedSize(horizontal: true, vertical: false)
                         }.buttonStyle(.plain).accessibilityIdentifier("privacy.groups.\(group.id).save")
                     }
                 }

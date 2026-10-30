@@ -654,7 +654,10 @@ final class MobileNavigationUITests: XCTestCase {
             if element.exists && element.isHittable { return }
             // A returned Form may retain its old offset. Search from the top.
             for _ in 0..<7 { scroll.swipeDown() }
-            for _ in 0..<12 where !element.exists || !element.isHittable { scroll.swipeUp() }
+            for _ in 0..<40 where !element.exists || !element.isHittable {
+                scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.70))
+                    .press(forDuration: 0.05, thenDragTo: scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.57)))
+            }
             XCTAssertTrue(element.exists && element.isHittable)
         }
         for (language, appearance) in [("ru", "light"), ("ru", "dark"), ("en", "light")] {
