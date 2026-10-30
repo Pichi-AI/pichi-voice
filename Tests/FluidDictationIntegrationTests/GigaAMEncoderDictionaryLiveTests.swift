@@ -82,7 +82,8 @@ final class GigaAMEncoderDictionaryLiveTests: XCTestCase {
             }
             for term in manifest.terms.keys.sorted() {
                 let values = try XCTUnwrap(captures[term])
-                XCTAssertEqual(values.count, 3)
+                XCTAssertTrue((3...10).contains(values.count))
+                XCTAssertEqual(GigaAMDictionaryAcoustics.activeCaptures(values).count, 3)
                 let valid = try await provider.validateDictionaryPronunciations(values)
                 XCTAssertTrue(valid)
                 let entry = try XCTUnwrap(entries.first { $0.replacement == manifest.terms[term] })
