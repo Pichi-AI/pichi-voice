@@ -50,6 +50,10 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
     Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
+    Sources/Fluid/Services/Meeting/MeetingAutomaticNaming.swift \
+    Sources/Fluid/Services/Meeting/MeetingUniversalTitleEngine.swift \
+    Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift \
+    Sources/Fluid/Services/Meeting/MeetingSavedSummary.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingCipher.swift \
     Sources/Fluid/Services/Meeting/MeetingRecordingKeychainStore.swift \

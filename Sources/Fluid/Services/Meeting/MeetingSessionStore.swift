@@ -234,11 +234,11 @@ actor MeetingSessionStore: MeetingSessionStoring {
         guard self.fileSystem.manager.fileExists(atPath: url.path) else { return nil }
         let session = try self.decodeSession(at: url)
         let reconciled = try self.reconcileTrackManifests(in: session)
-        let migrated = self.migrateCanonicalTranscriptTimelineIfNeeded(reconciled)
-        if migrated != session {
-            try self.writeSession(migrated)
+        let timeline = self.migrateCanonicalTranscriptTimelineIfNeeded(reconciled)
+        if timeline != session {
+            try self.writeSession(timeline)
         }
-        return migrated
+        return self.migrateAutomaticTitle(in: timeline)
     }
 
     /// Reading transcript/history never opens or hashes audio. Recovery and audio consumers
@@ -252,9 +252,27 @@ actor MeetingSessionStore: MeetingSessionStoring {
         let url = self.sessionManifestURL(for: id)
         guard self.fileSystem.manager.fileExists(atPath: url.path) else { return nil }
         let session = try self.decodeSession(at: url)
-        let migrated = self.migrateCanonicalTranscriptTimelineIfNeeded(session)
-        if migrated != session { try self.writeSession(migrated) }
-        return migrated
+        let timeline = self.migrateCanonicalTranscriptTimelineIfNeeded(session)
+        if timeline != session { try self.writeSession(timeline) }
+        return self.migrateAutomaticTitle(in: timeline)
+    }
+
+    /// The actor serializes this one-record migration with renames and other manifest writes.
+    /// Read paths retain their existing no-audio contract and use the same encrypted writer.
+    private func migrateAutomaticTitle(in session: MeetingSession) -> MeetingSession {
+        if session.automaticTitle != nil { return MeetingAutomaticNaming.validatingMetadata(in: session) }
+        let named = MeetingAutomaticNaming.applying(to: session)
+        guard named.automaticTitle != session.automaticTitle else { return session }
+        do {
+            try MeetingSavedSummary.migrateLegacySummaries(in: self.sessionDirectoryURL(for: session.id), for: session)
+            try self.writeSession(named)
+            return named
+        } catch {
+            // A cosmetic title upgrade must not remove otherwise readable history.
+            DebugLogger.shared.warning("Could not update automatic meeting title: \(error.localizedDescription)",
+                source: "MeetingSessionStore")
+            return session
+        }
     }
 
     func loadHistory() async throws -> [MeetingSession] {

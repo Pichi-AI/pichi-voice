@@ -7757,6 +7757,32 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
     }
 
+    func testRenameGeneratedSessionToVisibleTitleBecomesExplicit() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var (session, _, _, _) = self.makeCorrectionSession(state: .completed)
+        session.defaultTitleBase = "Meeting"
+        session.automaticTitle = .init(algorithmVersion: MeetingUniversalTitleEngine.algorithmVersion,
+            candidateID: "discussion__questions", localizationKey: "Discussion of questions",
+            previousTitle: "Original automatic title", previousDefaultTitleBase: "Meeting")
+        try await store.create(session)
+        let visible = session.displayTitle
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: StubCaptureController(), processing: StubProcessingController(), audioArbiter: StubArbiter()
+        )
+
+        let renamed = try await coordinator.renameSession(sessionID: session.id, to: visible)
+        XCTAssertEqual(renamed.title, visible)
+        XCTAssertNil(renamed.defaultTitleBase)
+        XCTAssertNil(renamed.automaticTitle)
+        let saved = try await store.loadTranscript(id: session.id)
+        XCTAssertEqual(saved?.title, visible)
+        XCTAssertNil(saved?.automaticTitle)
+        XCTAssertNil(saved?.defaultTitleBase)
+        XCTAssertFalse(coordinator.canUndoCorrection(sessionID: session.id))
+    }
+
     func testRenameLocatedSessionToStoredTitleBecomesExplicitAndSurvivesReload() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

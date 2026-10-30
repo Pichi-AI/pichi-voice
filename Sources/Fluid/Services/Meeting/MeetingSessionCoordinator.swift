@@ -1598,7 +1598,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw MeetingDomainError.emptyMeetingTitle }
-        guard target.displayTitle != trimmed else { return target }
+        guard target.displayTitle != trimmed || target.automaticTitle != nil else { return target }
 
         if let directory = try await self.store.existingSessionDirectory(for: sessionID) {
             let snapshot = target
@@ -1609,6 +1609,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         target.title = trimmed
         target.defaultTitleBase = nil
+        target.automaticTitle = nil
         target.updatedAt = Date()
         try await self.store.save(target)
 
@@ -2629,6 +2630,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 ))
             }
             session.state = .completed
+            session = MeetingAutomaticNaming.applying(to: session)
             session.updatedAt = Date()
             do {
                 let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.resultPersist)
