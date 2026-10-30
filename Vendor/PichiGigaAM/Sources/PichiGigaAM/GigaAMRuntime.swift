@@ -30,6 +30,8 @@ public actor GigaAMRuntime {
     }
 
     public var isReady: Bool { self.session != nil || self.coreML?.isLoaded == true || self.gguf?.isLoaded == true }
+    public static var encoderFeatureAPIAvailable: Bool { TranscribeCpp.Session.nativeEncoderFeatureAPIAvailable }
+    public var supportsEncoderFeatureCapture: Bool { self.gguf?.supportsEncoderFeatures == true }
 
     public func load(descriptor: GigaAMModelDescriptor, directory: URL, executionProvider: GigaAMExecutionProvider = .automatic) throws {
         try autoreleasepool {
@@ -235,17 +237,17 @@ public actor GigaAMRuntime {
 
     /// Audio is 16 kHz mono float PCM. Long inputs use overlapping, bounded windows.
     /// Every word keeps its CTC-derived timing; midpoint ownership avoids duplicated overlap.
-    public func transcribe(_ samples: [Float]) async throws -> GigaAMTranscript {
+    public func transcribe(_ samples: [Float], captureEncoderFeatures: Bool = false) async throws -> GigaAMTranscript {
         try Task.checkCancellation()
         let cancellation = TranscribeCpp.CancellationToken()
         return try await withTaskCancellationHandler {
-            try self.transcribeWithFallback(samples, cancellation: cancellation)
+            try self.transcribeWithFallback(samples, cancellation: cancellation, captureEncoderFeatures: captureEncoderFeatures)
         } onCancel: { cancellation.cancel() }
     }
 
-    private func transcribeWithFallback(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken) throws -> GigaAMTranscript {
+    private func transcribeWithFallback(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken, captureEncoderFeatures: Bool) throws -> GigaAMTranscript {
         let start = ProcessInfo.processInfo.systemUptime
-        do { return try self.transcribeAttempt(samples, cancellation: cancellation) }
+        do { return try self.transcribeAttempt(samples, cancellation: cancellation, captureEncoderFeatures: captureEncoderFeatures) }
         catch {
             try Task.checkCancellation()
             if samples.allSatisfy(\.isFinite), Self.permitsExecutionFallback(error),
@@ -256,10 +258,10 @@ public actor GigaAMRuntime {
                         try self.loadGGUFCPU(native, reason: .acceleratorInferenceFailed)
                     }
                 } catch { self.unload(); throw error }
-                let result = try self.transcribeAttempt(samples, cancellation: cancellation)
+                let result = try self.transcribeAttempt(samples, cancellation: cancellation, captureEncoderFeatures: captureEncoderFeatures)
                 return GigaAMTranscript(text: result.text, confidence: result.confidence, words: result.words,
                                         endOfUtteranceProbability: result.endOfUtteranceProbability,
-                                        processingDuration: ProcessInfo.processInfo.systemUptime - start)
+                                        processingDuration: ProcessInfo.processInfo.systemUptime - start, encoderWindows: result.encoderWindows)
             }
             guard samples.allSatisfy(\.isFinite), Self.permitsExecutionFallback(error),
                   self.executionStatus?.backend == .gpu, let native = self.coreML else { throw error }
@@ -278,14 +280,14 @@ public actor GigaAMRuntime {
             }
             self.executionStatus = .init(backend: .cpu, fallbackReason: .acceleratorInferenceFailed)
             // Re-run the complete input to avoid mixing internal window backends.
-            let result = try self.transcribeAttempt(samples, cancellation: cancellation)
+            let result = try self.transcribeAttempt(samples, cancellation: cancellation, captureEncoderFeatures: captureEncoderFeatures)
             return GigaAMTranscript(text: result.text, confidence: result.confidence, words: result.words,
                                     endOfUtteranceProbability: result.endOfUtteranceProbability,
-                                    processingDuration: ProcessInfo.processInfo.systemUptime - start)
+                                    processingDuration: ProcessInfo.processInfo.systemUptime - start, encoderWindows: result.encoderWindows)
         }
     }
 
-    private func transcribeAttempt(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken) throws -> GigaAMTranscript {
+    private func transcribeAttempt(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken, captureEncoderFeatures: Bool) throws -> GigaAMTranscript {
         try Task.checkCancellation()
         guard samples.allSatisfy(\.isFinite) else { throw GigaAMError.invalidAudio }
         guard self.isReady else { throw GigaAMError.notPrepared }
@@ -294,13 +296,17 @@ public actor GigaAMRuntime {
         let coreSamples = 20 * GigaAMFrontend.sampleRate
         let overlapSamples = GigaAMFrontend.sampleRate
         var words: [GigaAMWordTiming] = []
+        var encoderWindows: [GigaAMEncoderWindow] = []
+        var featureBytes = 0
+        // Optional correction/learning keeps the existing fifteen-minute bound.
+        var capture = captureEncoderFeatures && samples.count <= 900 * GigaAMFrontend.sampleRate
         var finalProbability: Float?
         for coreStart in stride(from: 0, to: samples.count, by: coreSamples) {
             try Task.checkCancellation()
             let coreEnd = min(samples.count, coreStart + coreSamples)
             let windowStart = max(0, coreStart - overlapSamples)
             let windowEnd = min(samples.count, coreEnd + overlapSamples)
-            let output = try self.infer(Array(samples[windowStart..<windowEnd]), cancellation: cancellation)
+            let output = try self.infer(Array(samples[windowStart..<windowEnd]), cancellation: cancellation, captureEncoderFeatures: capture)
             let offset = Double(windowStart) / Double(GigaAMFrontend.sampleRate)
             let lower = Double(coreStart) / Double(GigaAMFrontend.sampleRate)
             let upper = Double(coreEnd) / Double(GigaAMFrontend.sampleRate)
@@ -308,6 +314,21 @@ public actor GigaAMRuntime {
                 let midpoint = (word.start + word.end) / 2 + offset
                 guard midpoint >= lower, midpoint < upper else { continue }
                 words.append(GigaAMWordTiming(text: word.text, start: word.start + offset, end: word.end + offset, confidence: word.confidence))
+            }
+            for window in output.encoderWindows {
+                let ownLower = max(lower, window.ownership.lowerBound + offset)
+                let ownUpper = min(upper, window.ownership.upperBound + offset)
+                guard ownLower < ownUpper else { continue }
+                let bytes = window.features.values.count * MemoryLayout<Float>.size
+                guard bytes <= 128 * 1_024 * 1_024 - featureBytes, encoderWindows.count < 256 else {
+                    encoderWindows.removeAll()
+                    featureBytes = 0
+                    capture = false
+                    break
+                }
+                encoderWindows.append(try GigaAMEncoderWindow(offset: window.offset + offset,
+                    ownership: ownLower..<ownUpper, features: window.features))
+                featureBytes += bytes
             }
             finalProbability = output.endOfUtteranceProbability
         }
@@ -318,22 +339,49 @@ public actor GigaAMRuntime {
             words: words,
             // EOU is meaningful for an isolated current utterance, not long meeting audio.
             endOfUtteranceProbability: samples.count <= 8 * GigaAMFrontend.sampleRate ? finalProbability : nil,
-            processingDuration: ProcessInfo.processInfo.systemUptime - start
+            processingDuration: ProcessInfo.processInfo.systemUptime - start, encoderWindows: encoderWindows
         )
     }
 
-    private func infer(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken) throws -> GigaAMTranscript {
+    private static func encoderWindows(_ snapshot: TranscribeCpp.EncoderFeatureSnapshot?, duration: Double) throws -> [GigaAMEncoderWindow] {
+        guard let snapshot else { return [] }
+        guard snapshot.dimension == GigaAMEncoderFeatures.dimension, snapshot.sampleRate == 16_000,
+              snapshot.frameHopSamples == 640, snapshot.recipeVersion == 1,
+              snapshot.values.count == snapshot.frameCount * snapshot.dimension,
+              snapshot.frameCount <= 600,
+              abs(snapshot.frameCount - Int(ceil(duration / 0.04))) <= 1 else { throw GigaAMError.invalidOutput }
+        var windows: [GigaAMEncoderWindow] = []
+        for coreStart in stride(from: 0, to: snapshot.frameCount, by: 250) {
+            try Task.checkCancellation()
+            let lower = max(0, coreStart - 62), upper = min(snapshot.frameCount, coreStart + 312)
+            let ownStart = Double(coreStart) * 0.04
+            let ownEnd = min(duration, Double(min(snapshot.frameCount, coreStart + 250)) * 0.04)
+            guard ownStart < ownEnd else { continue }
+            let features = try GigaAMEncoderFeatures(values: Array(snapshot.values[(lower * 768)..<(upper * 768)]))
+            windows.append(try GigaAMEncoderWindow(offset: Double(lower) * 0.04,
+                ownership: ownStart..<ownEnd, features: features))
+        }
+        return windows
+    }
+
+    private func infer(_ samples: [Float], cancellation: TranscribeCpp.CancellationToken, captureEncoderFeatures: Bool) throws -> GigaAMTranscript {
         // A model call can create autoreleased Objective-C tensors and backing buffers.
         // Only the Swift transcript escapes this bounded window.
         try autoreleasepool {
             guard self.isReady else { throw GigaAMError.notPrepared }
             let start = ProcessInfo.processInfo.systemUptime
             if let native = self.gguf {
-                let words = try native.predict(samples, cancellationToken: cancellation)
+                let output = try native.predictDetailed(samples, cancellationToken: cancellation,
+                    captureEncoderFeatures: captureEncoderFeatures)
                 try Task.checkCancellation()
-                return GigaAMTranscript(text: words.map(\.text).joined(separator: " "), confidence: 0,
-                                        words: words, endOfUtteranceProbability: nil,
-                                        processingDuration: ProcessInfo.processInfo.systemUptime - start)
+                let windows: [GigaAMEncoderWindow]
+                do { windows = try Self.encoderWindows(output.encoderFeatures, duration: Double(samples.count) / 16_000) }
+                catch is CancellationError { throw CancellationError() }
+                catch { windows = [] } // Optional features cannot invalidate usable ASR.
+                return GigaAMTranscript(text: output.words.map(\.text).joined(separator: " "), confidence: 0,
+                                        words: output.words, endOfUtteranceProbability: nil,
+                                        processingDuration: ProcessInfo.processInfo.systemUptime - start,
+                                        encoderWindows: windows)
             }
             guard let vocabulary = self.vocabulary else { throw GigaAMError.notPrepared }
             let features = self.frontend.features(samples)
